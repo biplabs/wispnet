@@ -1,6 +1,6 @@
 use std::{os::unix::fs::PermissionsExt, path::Path, process::Stdio, time::Duration};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     time::timeout,
 };
 use wipsnet_core::{config::TransportConfig, identity::Identity};
@@ -141,6 +141,174 @@ async fn native_catalog_and_service_need_no_peer_address() {
     .await
     .unwrap();
     assert_eq!(output, "response");
+    let probe = command(&client_config, &["peer-probe", "--peer", &pin], b"").await;
+    let probe: serde_json::Value = serde_json::from_str(&probe).unwrap();
+    assert_eq!(probe["selected_path"], "relay");
+    assert_eq!(probe["relay_status"], "connected");
+    assert_eq!(probe["generation"], catalog["generation"]);
+    assert_eq!(probe["service_count"], 1);
+    assert_eq!(probe["client"], peer.to_string());
+    let mut watcher = tokio::process::Command::new(env!("CARGO_BIN_EXE_wipsnet"))
+        .args(["peer-watch", "--config"])
+        .arg(&client_config)
+        .args(["--peer", &pin])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut lines = BufReader::new(watcher.stdout.take().unwrap()).lines();
+    let first = timeout(Duration::from_secs(5), lines.next_line())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let first: serde_json::Value = serde_json::from_str(&first).unwrap();
+    assert_eq!(first["ok"], true);
+    assert_eq!(first["client"], probe["client"]);
+    let status = tokio::process::Command::new("kill")
+        .args(["-USR1", &watcher.id().unwrap().to_string()])
+        .status()
+        .await
+        .unwrap();
+    assert!(status.success());
+    let changed = timeout(Duration::from_secs(5), lines.next_line())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let changed: serde_json::Value = serde_json::from_str(&changed).unwrap();
+    assert_eq!(changed["ok"], true);
+    assert_eq!(changed["client"], first["client"]);
+    assert_eq!(changed["generation"], first["generation"]);
+    assert_eq!(changed["revision"], first["revision"]);
+    let (mut store, owner) = host::owner_store(&host_state, identity.endpoint_id()).unwrap();
+    store
+        .host_mutate(
+            identity.endpoint_id(),
+            &owner,
+            Mutation::Revoke {
+                expected_revision: 2,
+                peer,
+            },
+        )
+        .unwrap();
+    drop(store);
+    drop(owner);
+    let denied = timeout(Duration::from_secs(8), lines.next_line())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let denied: serde_json::Value = serde_json::from_str(&denied).unwrap();
+    assert_eq!(denied["ok"], false);
+    assert!(denied.get("generation").is_none());
+    assert!(denied.get("services").is_none());
+    assert_eq!(denied["client"], probe["client"]);
+    let status = tokio::process::Command::new("kill")
+        .args(["-TERM", &watcher.id().unwrap().to_string()])
+        .status()
+        .await
+        .unwrap();
+    assert!(status.success());
+    assert!(
+        timeout(Duration::from_secs(2), watcher.wait())
+            .await
+            .unwrap()
+            .unwrap()
+            .success()
+    );
+    // Graceful cancellation releases this installation's exclusive key lease.
+    let initialized = command(&client_config, &["identity-init"], b"").await;
+    assert!(initialized.contains(&peer.to_string()));
     host.shutdown().await;
     relay.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn native_direct_probe_reports_path_without_backend_or_relay() {
+    let temporary = tempfile::tempdir().unwrap();
+    let client_config = temporary.path().join("client.toml");
+    std::fs::write(
+        &client_config,
+        format!(
+            "schema_version=1\ndevice_name='direct-client'\nstate_dir='{}'\nlog_level='info'\n",
+            temporary.path().join("client").display()
+        ),
+    )
+    .unwrap();
+    let initialized = command(&client_config, &["identity-init"], b"").await;
+    let client = initialized
+        .split("Endpoint ID: ")
+        .nth(1)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let state = temporary.path().join("host");
+    std::fs::create_dir(&state).unwrap();
+    std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let key = Identity::generate();
+    host::initialize(&state, key.endpoint_id()).unwrap();
+    let (mut store, owner) = host::owner_store(&state, key.endpoint_id()).unwrap();
+    store
+        .host_mutate(
+            key.endpoint_id(),
+            &owner,
+            Mutation::Approve {
+                expected_revision: 0,
+                peer: client,
+                name: "direct-client".into(),
+            },
+        )
+        .unwrap();
+    drop(store);
+    drop(owner);
+    let config = TransportConfig {
+        bind_addr: "127.0.0.1:0".parse().unwrap(),
+        relay_url: None,
+        relay_only: false,
+        relay_ca_file: None,
+        max_connections: 8,
+        max_streams: 8,
+        max_streams_per_connection: 4,
+    };
+    let host = wipsnet_agent::tunnel::TunnelHost::bind_host(
+        key.secret_key(),
+        &config,
+        Authority::open(&state, key.endpoint_id()).unwrap(),
+    )
+    .await
+    .unwrap();
+    let pin = key.endpoint_id().to_string();
+    let address = host.endpoint().bound_sockets()[0].to_string();
+    let outsider = Identity::generate();
+    let endpoint = wipsnet_agent::tunnel::bind_client(outsider.secret_key())
+        .await
+        .unwrap();
+    let target =
+        wipsnet_agent::tunnel::peer_target(key.endpoint_id(), None, Some(address.parse().unwrap()))
+            .unwrap();
+    let mismatch =
+        wipsnet_agent::diagnostics::probe(&endpoint, outsider.endpoint_id(), target, false)
+            .await
+            .unwrap_err();
+    assert_eq!(
+        mismatch,
+        wipsnet_agent::tunnel::TunnelError::Transport("diagnostic target identity mismatch")
+    );
+    endpoint.close().await;
+    let result = command(
+        &client_config,
+        &["peer-probe", "--peer", &pin, "--address", &address],
+        b"",
+    )
+    .await;
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["selected_path"], "direct");
+    assert_eq!(result["relay_status"], "disabled");
+    assert_eq!(result["service_count"], 0);
+    assert_eq!(result["host"], pin);
+    assert!(result.get("services").is_none());
+    host.shutdown().await;
 }

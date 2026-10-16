@@ -109,7 +109,10 @@ A separate [native lifecycle harness](native-relay-validation.md) runs the real
 Linux agent/CLI and authorized Android native CLI over a temporary USB relay
 mapping. It verifies per-host approval, host/relay restart, wrong pins, independent
 offline-peer failure and host-local persistent revocation. The ordinary hook runs
-its Linux mode; hardware checks are opt-in.
+its Linux mode; hardware checks are opt-in. Its LAN extension verifies a physical Android direct
+path and HTTP bytes, then direct → USB relay → direct through one persistent
+endpoint with explicit Android network-change notifications; see
+[peer diagnostics](peer-diagnostics.md).
 
 These are local test deadlines, not internet recovery or availability guarantees.
 #13 remains open for pairing integration (#17), physical two-host/tablet cold

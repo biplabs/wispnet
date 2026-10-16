@@ -39,7 +39,9 @@ path matches the NDK example above. The harness refuses an ambiguous/unauthorize
 device and uses ADB `reverse --no-rebind` so it cannot replace an existing mapping.
 Only a uniquely named `/data/local/tmp/wipsnet-relay-*` directory and its own
 mapping are removed afterward. Remote CLI processes also have a 12-second
-on-device timeout. No device browser, Wi-Fi, cellular or display setting changes.
+on-device timeout. The default run changes no browser, Wi-Fi, cellular or display settings.
+Wi-Fi interruption is separately opt-in with `--wifi-cycle`; cleanup restores
+Wi-Fi and waits for its IPv4 connection.
 
 Android mode builds the native CLI from current source with that NDK before
 copying it to the device, so an older artifact cannot silently pass the hook.
@@ -56,6 +58,39 @@ The default hook requires no attached device and runs the Linux version. An
 explicitly enabled hardware test fails if its build, NDK tools or authorized
 device is missing. The hook uses the sole authorized device; use the standalone
 `--serial` command when explicit selection is needed.
+
+## Physical LAN and Wi-Fi interruption
+
+Connect the authorized device to the computer's LAN. Select a computer IPv4
+address reachable on that LAN and a free UDP port already allowed by its local
+firewall; the harness never changes firewall rules. For example:
+
+```sh
+python3 scripts/relay_smoke.py --android --lan-address HOST_LAN_IP --lan-port 60303 --wifi-cycle
+# Faster fresh-state LAN/handoff iteration, skipping earlier lifecycle cases:
+python3 scripts/relay_smoke.py --android --lan-address HOST_LAN_IP --lan-port 60303 --wifi-cycle --lan-only
+```
+
+The direct test disables client relays and checks both the selected UDP path and
+actual HTTP response bytes. The subsequent watch enables direct and relay paths,
+keeps one process/endpoint/key alive, briefly disables Wi-Fi, verifies relay
+fallback, restores Wi-Fi, and verifies a selected direct path again. It sends
+SIGUSR1 after each interface transition to exercise Iroh's required Android
+network-change notification API. The backup relay remains reachable through USB;
+this is not a cellular or unrelated-Wi-Fi relay test. Direct service bytes are
+checked again after recovery. Watch is bounded by an on-device 180-second timeout
+and its exact owned PID is terminated during cleanup.
+
+A failed test also restores Wi-Fi and removes only owned temporary resources.
+Recovery is checked within 30 seconds after each interface state becomes usable;
+Wi-Fi reconnection itself has a separate 45-second fixture bound. No user key,
+pin, grant, or authority generation/revision is replaced. A selected direct path
+can coexist with an unavailable relay; diagnostics report these separately.
+
+To include this case in the hook, set `WIPSNET_ANDROID_RELAY_TEST=1`,
+`WIPSNET_ANDROID_LAN_ADDRESS=HOST_LAN_IP`, `WIPSNET_ANDROID_LAN_PORT=60303`, and
+`WIPSNET_ANDROID_WIFI_CYCLE=1`. A requested LAN/Wi-Fi case without Android mode
+fails rather than being silently skipped. The default hook does not cycle Wi-Fi.
 
 ## What the harness verifies
 
@@ -82,15 +117,19 @@ device is missing. The hook uses the sole authorized device; use the standalone
 
 ## Hardware evidence and limits
 
-The authorized tablet (`arm64-v8a`, Android API 34) passed the native relay run
-with Wi-Fi disabled, including per-host approval, HTTP service access, host/relay
-restart and host-local persistent revocation. The device generated its own key
-and temporary device files/USB mappings were removed afterward.
+The authorized tablet (`arm64-v8a`, Android API 34) passed native USB-relay
+lifecycle checks and physical LAN direct control/HTTP access. A single native
+watch process then selected direct → relay → direct during a Wi-Fi off/on cycle
+with explicit network callbacks, unchanged identity and catalog, followed by
+successful direct HTTP access. Wi-Fi was restored and temporary files/USB mappings
+were removed. The chosen UDP port was already permitted by the host's UFW rules;
+an arbitrary ephemeral port was not reliably reachable through that firewall.
 
-This is native Android CLI/USB evidence. It does not implement or validate an APK,
-Android foreground/background lifecycle, Keystore/JNI DNS integration, QR pairing,
-Wi-Fi/cellular handoff, a real two-computer power-off test, or physical LAN direct
-paths. Both host processes ran on the same Linux computer and were alternately
-absent. The relay was a local TLS server reached through USB on Android, not a
-cloud deployment or relay-hostname/DNS test on that device. Those remain #12,
-#17, #18 and #13/#14 acceptance work; #13 is not closed by this harness.
+This remains native Android CLI evidence. It does not implement or validate an
+APK, Android foreground/background lifecycle, Keystore/JNI DNS integration,
+automatic app network-callback registration, QR pairing, cellular or unrelated
+Wi-Fi handoff, or a real two-computer power-off test. Both target host processes
+ran on one Linux computer and were alternately absent. The fallback relay was a
+local TLS server reached over USB, not a cloud deployment or a relay-hostname/DNS
+test on Android. Those remain #12, #17, #18 and #13/#14 acceptance work; #13 is
+not closed by this harness.

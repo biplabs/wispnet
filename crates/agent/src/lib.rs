@@ -2,6 +2,7 @@
 use std::future::Future;
 use wipsnet_core::config::Config;
 pub mod control;
+pub mod diagnostics;
 pub mod identity;
 pub mod tunnel;
 

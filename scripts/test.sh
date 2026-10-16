@@ -1,6 +1,10 @@
 #!/bin/sh
 set -eu
 cd "$(git rev-parse --show-toplevel)"
+if { [ -n "${WIPSNET_ANDROID_LAN_ADDRESS:-}" ] || [ "${WIPSNET_ANDROID_WIFI_CYCLE:-0}" = 1 ]; } && [ "${WIPSNET_ANDROID_RELAY_TEST:-0}" != 1 ]; then
+    echo "Android LAN/Wi-Fi checks require WIPSNET_ANDROID_RELAY_TEST=1." >&2
+    exit 1
+fi
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
@@ -11,7 +15,14 @@ python3 scripts/smoke.py
 python3 scripts/registry_smoke.py
 python3 scripts/host_smoke.py
 if [ "${WIPSNET_ANDROID_RELAY_TEST:-0}" = 1 ]; then
-    python3 scripts/relay_smoke.py --android
+    set -- --android
+    if [ -n "${WIPSNET_ANDROID_LAN_ADDRESS:-}" ]; then
+        set -- "$@" --lan-address "$WIPSNET_ANDROID_LAN_ADDRESS" --lan-port "${WIPSNET_ANDROID_LAN_PORT:-0}"
+    fi
+    if [ "${WIPSNET_ANDROID_WIFI_CYCLE:-0}" = 1 ]; then
+        set -- "$@" --wifi-cycle
+    fi
+    python3 scripts/relay_smoke.py "$@"
 else
     python3 scripts/relay_smoke.py
 fi

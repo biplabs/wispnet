@@ -1,6 +1,6 @@
 use std::{env, path::PathBuf, process::ExitCode};
 use tracing_subscriber::prelude::*;
-use wipsnet_agent::{identity::FileIdentityStore, tunnel};
+use wipsnet_agent::{diagnostics, identity::FileIdentityStore, tunnel};
 use wipsnet_core::{
     config::Config,
     identity::{EndpointId, IdentityStore},
@@ -13,9 +13,10 @@ Enroll: wipsnet enroll --config /absolute/path/device.toml --invitation /private
 Host: wipsnet <host-init|host-status> --config /absolute/path/host.toml
 Host change: wipsnet host-mutate --config /absolute/path/host.toml --request /absolute/path/request.json
 Catalog: wipsnet host-catalog --config /absolute/path/client.toml --peer PUBLIC_ID [--address IP:UDP_PORT]
+Probe: wipsnet <peer-probe|peer-watch> --config /absolute/path/client.toml --peer PUBLIC_ID [--address IP:UDP_PORT]
 Reset: wipsnet identity-reset --config /absolute/path/config.toml --expect-id PUBLIC_ID
 Tunnel: wipsnet tunnel --config /absolute/path/config.toml --peer PUBLIC_ID [--address IP:UDP_PORT] --service SERVICE_ID
-Tunnel mode relays raw stdin/stdout. It is not a browser gateway. Use enroll for invitation pairing; see docs/enrollment.md.";
+Tunnel mode relays raw stdin/stdout. It is not a browser gateway. Independent hosts use local approval; target-bound pairing is tracked in #17. See docs/per-host-control.md.";
 
 fn main() -> ExitCode {
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -48,14 +49,19 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     let host_mutate = args.first().is_some_and(|a| a == "host-mutate");
-    let host_catalog = args.first().is_some_and(|a| a == "host-catalog");
+    let peer_read = args.first().is_some_and(|a| {
+        matches!(
+            a.to_str(),
+            Some("host-catalog" | "peer-probe" | "peer-watch")
+        )
+    });
     let enroll = args.first().is_some_and(|a| a == "enroll");
     let backup = args.first().is_some_and(|a| a == "registry-backup");
     let reset = args.first().is_some_and(|a| a == "identity-reset");
     let tunnel_mode = args.first().is_some_and(|a| a == "tunnel");
     let invalid_arguments = if host_mutate {
         args.len() != 5 || args[1] != "--config" || args[3] != "--request"
-    } else if host_catalog {
+    } else if peer_read {
         !matches!(args.len(), 5 | 7)
             || args[1] != "--config"
             || args[3] != "--peer"
@@ -95,6 +101,8 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             | "host-status"
             | "host-mutate"
             | "host-catalog"
+            | "peer-probe"
+            | "peer-watch"
             | "tunnel"
     ) {
         return Err(USAGE.into());
@@ -212,7 +220,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     }
-    if mode == "host-catalog" {
+    if matches!(mode, "host-catalog" | "peer-probe" | "peer-watch") {
         let peer: EndpointId = args[4]
             .to_str()
             .ok_or("invalid peer")?
@@ -229,19 +237,64 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             None
         };
+        let target = tunnel::peer_target(peer, config.transport.as_ref(), address)?;
         let store = FileIdentityStore::new(&config.state_dir)?;
         let _lease = store.lease()?;
         let identity = store.load()?;
         let endpoint =
             tunnel::bind_configured_client(identity.secret_key(), config.transport.as_ref())
                 .await?;
+        let relay_configured = config
+            .transport
+            .as_ref()
+            .is_some_and(|c| c.relay_url.is_some());
+        if mode == "peer-watch" {
+            // One identity lease and endpoint for the whole watch. Only fresh,
+            // bounded read-only catalog probes are repeated; never service ops.
+            let mut term =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+            let mut interrupt =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+            let mut network =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1())?;
+            loop {
+                let report = tokio::select! {
+                    _ = term.recv() => break,
+                    _ = interrupt.recv() => break,
+                    _ = network.recv() => {
+                        // Android's native route monitor cannot deliver system
+                        // callbacks. This bridge represents the app notification.
+                        endpoint.network_change().await;
+                        continue;
+                    }
+                    result = diagnostics::probe(&endpoint, peer, target.clone(), relay_configured) => {
+                        match result {
+                            Ok(report) => report,
+                            Err(error) => serde_json::json!({"event":"probe", "ok":false, "host":peer,
+                                "client":endpoint.id(), "relay_status":diagnostics::relay_state(&endpoint, relay_configured),
+                                "error":error.to_string()})
+                        }
+                    }
+                };
+                println!("{report}");
+                tokio::select! {
+                    _ = term.recv() => break,
+                    _ = interrupt.recv() => break,
+                    _ = network.recv() => endpoint.network_change().await,
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+                }
+            }
+            endpoint.close().await;
+            return Ok(());
+        }
         let result = async {
-            let connection = wipsnet_agent::control::connect_target(
-                &endpoint,
-                tunnel::peer_target(peer, config.transport.as_ref(), address)?,
-            )
-            .await?;
-            wipsnet_agent::control::catalog_on(&connection, peer).await
+            if mode == "peer-probe" {
+                return diagnostics::probe(&endpoint, peer, target, relay_configured).await;
+            }
+            let connection = wipsnet_agent::control::connect_target(&endpoint, target).await?;
+            let catalog = wipsnet_agent::control::catalog_on(&connection, peer).await?;
+            serde_json::to_value(catalog)
+                .map_err(|_| tunnel::TunnelError::Transport("invalid catalog"))
         }
         .await;
         endpoint.close().await;
