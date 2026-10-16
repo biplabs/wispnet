@@ -1,7 +1,7 @@
 //! Standalone packet relay: no application/node identity or persistent registry.
 use iroh_relay::server::{
-    Access, AccessControl, CertConfig, ClientRateLimit, ClientRequest, ConnectionId, RelayConfig,
-    Server, ServerConfig, TlsConfig,
+    Access, AccessControl, AcmeConfig, CertConfig, ClientRateLimit, ClientRequest, ConnectionId,
+    RelayConfig, Server, ServerConfig, TlsConfig,
 };
 use rustls_pki_types::pem::PemObject;
 use serde::Deserialize;
@@ -23,8 +23,10 @@ use zeroize::Zeroizing;
 #[serde(deny_unknown_fields)]
 struct Config {
     listen: SocketAddr,
-    certificate: PathBuf,
-    private_key: PathBuf,
+    certificate: Option<PathBuf>,
+    private_key: Option<PathBuf>,
+    acme_hostname: Option<String>,
+    acme_cache: Option<PathBuf>,
     max_connections: usize,
 }
 
@@ -89,6 +91,63 @@ impl AccessControl for Admission {
     }
 }
 
+fn certificate_config(config: &Config) -> Result<CertConfig, &'static str> {
+    let tls_builder = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .map_err(|_| "relay TLS configuration failed")?
+    .with_no_client_auth();
+    let result = match (
+        &config.certificate,
+        &config.private_key,
+        &config.acme_hostname,
+        &config.acme_cache,
+    ) {
+        (Some(certificate), Some(private_key), None, None) => {
+            let certificates = read_protected(certificate, false)?;
+            let certificates = rustls_pki_types::CertificateDer::pem_slice_iter(&certificates)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| "invalid relay certificate")?;
+            let key = Zeroizing::new(read_protected(private_key, true)?);
+            let key = rustls_pki_types::PrivateKeyDer::from_pem_slice(&key)
+                .map_err(|_| "invalid relay private key")?;
+            CertConfig::Manual {
+                server_config: tls_builder
+                    .with_single_cert(certificates, key)
+                    .map_err(|_| "relay certificate/key mismatch")?,
+            }
+        }
+        (None, None, Some(hostname), Some(cache)) => {
+            if !hostname.contains('.')
+                || hostname.len() > 253
+                || !hostname
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+                || !cache.is_absolute()
+            {
+                return Err("invalid ACME hostname/cache");
+            }
+            let meta = std::fs::symlink_metadata(cache).map_err(|_| "ACME cache unavailable")?;
+            // SAFETY: geteuid has no preconditions.
+            if !meta.is_dir()
+                || meta.uid() != unsafe { libc::geteuid() }
+                || meta.mode() & 0o077 != 0
+            {
+                return Err("unsafe ACME cache");
+            }
+            CertConfig::LetsEncrypt {
+                acme_config: AcmeConfig::letsencrypt(true)
+                    .domains(vec![hostname.clone()])
+                    .cache_path(cache.clone()),
+                server_config_builder: tls_builder,
+            }
+        }
+        _ => return Err("choose exactly one complete manual or ACME TLS configuration"),
+    };
+    Ok(result)
+}
+
 async fn serve(path: &Path) -> Result<(), &'static str> {
     let bytes = Zeroizing::new(read_protected(path, true)?);
     let text = std::str::from_utf8(&bytes).map_err(|_| "invalid relay configuration")?;
@@ -96,21 +155,7 @@ async fn serve(path: &Path) -> Result<(), &'static str> {
     if config.listen.port() == 0 || !(1..=1024).contains(&config.max_connections) {
         return Err("invalid relay listener or connection limit");
     }
-    let certificates = read_protected(&config.certificate, false)?;
-    let certificates = rustls_pki_types::CertificateDer::pem_slice_iter(&certificates)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| "invalid relay certificate")?;
-    let key = Zeroizing::new(read_protected(&config.private_key, true)?);
-    let key = rustls_pki_types::PrivateKeyDer::from_pem_slice(&key)
-        .map_err(|_| "invalid relay private key")?;
-    let tls = rustls::ServerConfig::builder_with_provider(Arc::new(
-        rustls::crypto::ring::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()
-    .map_err(|_| "relay TLS configuration failed")?
-    .with_no_client_auth()
-    .with_single_cert(certificates, key)
-    .map_err(|_| "relay certificate/key mismatch")?;
+    let certificate_config = certificate_config(&config)?;
     // Auxiliary HTTP stays loopback-only on an ephemeral port. QUIC and metrics
     // listeners remain disabled; only the configured TLS port is exposed.
     let mut relay = RelayConfig::new(
@@ -118,10 +163,7 @@ async fn serve(path: &Path) -> Result<(), &'static str> {
             .parse::<SocketAddr>()
             .expect("constant address"),
     );
-    relay.tls = Some(TlsConfig::new(
-        config.listen,
-        CertConfig::Manual { server_config: tls },
-    ));
+    relay.tls = Some(TlsConfig::new(config.listen, certificate_config));
     relay.access = Arc::new(Admission {
         current: AtomicUsize::new(0),
         maximum: config.max_connections,
@@ -196,5 +238,39 @@ mod tests {
         let hard = root.path().join("hard");
         std::fs::hard_link(&key, &hard).unwrap();
         assert!(read_protected(&key, true).is_err());
+    }
+    #[test]
+    fn tls_mode_never_silently_falls_back_or_accepts_mixed_settings() {
+        let mut config = Config {
+            listen: "127.0.0.1:8443".parse().unwrap(),
+            max_connections: 2,
+            certificate: None,
+            private_key: None,
+            acme_hostname: None,
+            acme_cache: None,
+        };
+        assert_eq!(
+            certificate_config(&config).unwrap_err(),
+            "choose exactly one complete manual or ACME TLS configuration"
+        );
+        config.certificate = Some("/not-read.pem".into());
+        assert_eq!(
+            certificate_config(&config).unwrap_err(),
+            "choose exactly one complete manual or ACME TLS configuration"
+        );
+        config.private_key = Some("/not-read.key".into());
+        config.acme_hostname = Some("relay.example.test".into());
+        config.acme_cache = Some("/not-read".into());
+        assert_eq!(
+            certificate_config(&config).unwrap_err(),
+            "choose exactly one complete manual or ACME TLS configuration"
+        );
+        config.certificate = None;
+        config.private_key = None;
+        config.acme_cache = Some("relative/cache".into());
+        assert_eq!(
+            certificate_config(&config).unwrap_err(),
+            "invalid ACME hostname/cache"
+        );
     }
 }

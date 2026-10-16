@@ -64,6 +64,7 @@ def main():
     parser.add_argument("--relay-url", help="existing HTTPS relay; skips all local relay and TCP forwarding fixtures")
     parser.add_argument("--relay-ca-file", type=Path, help="public certificate for an existing private-CA relay")
     parser.add_argument("--restart-desktop-relay", action="store_true", help="restart only wipsnet-relay.service on the selected SSH host")
+    parser.add_argument("--require-external-tablet", action="store_true", help="require distinct verified tablet/home egress before and after the existing-relay scenario")
     parser.add_argument("--serial", help="authorized ADB serial; omit only when exactly one device is connected")
     ndk_default = os.environ.get("WIPSNET_ANDROID_NDK", str(Path.home() / "Android/Sdk/ndk/27.2.12479018"))
     parser.add_argument("--ndk", type=Path, default=Path(ndk_default))
@@ -81,6 +82,10 @@ def main():
                    if len(line.split()) == 2 and line.split()[1] == "device"]
         assert len(devices) == 1, "specify --serial when there is not exactly one authorized device"
         args.serial = devices[0]
+    def external_preflight():
+        assert args.relay_url == "https://relay.wispnet.app", "external preflight requires the fixed deployed public relay"
+        subprocess.run(["python3",str(ROOT/"scripts/external_network_preflight.py"),"--serial",args.serial],check=True)
+    if args.require_external_tablet: external_preflight()
     assert args.ssh_host and not args.ssh_host.startswith("-") and all(c.isalnum() or c in ".-_@" for c in args.ssh_host)
     assert BINARY.is_file() and FIXTURE.is_file()
     android_binary = ROOT / "target/aarch64-linux-android/debug/wipsnet"
@@ -307,6 +312,7 @@ shutil.rmtree(root)
             try: stop(fixture)
             except BaseException as error: errors.append(error)
             if errors: raise RuntimeError("physical fixture cleanup failed") from errors[0]
+    if args.require_external_tablet: external_preflight()
     print("Two physical Linux hosts/Android native relay checks passed; temporary node resources removed",flush=True)
 
 if __name__=="__main__":

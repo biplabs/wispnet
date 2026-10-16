@@ -15,23 +15,23 @@ client, grants service access, or owns a node identity.
 | Public CA certificate (client trust) | `~/.local/share/wipsnet-relay/relay-ca.pem` |
 | Server TLS certificate | `~/.local/share/wipsnet-relay/relay-cert.pem` |
 | CA private key (desktop only) | `~/.local/share/wipsnet-relay/relay-ca-key.pem` |
-| Relay TLS private key | `~/.local/share/wipsnet-relay/relay-key.pem` |
+| Private-CA server TLS key (retained fallback) | `~/.local/share/wipsnet-relay/relay-key.pem` |
+| Automatic public TLS account/certificate cache | `~/.local/share/wipsnet-relay/acme/` |
 | User service | `~/.config/systemd/user/wipsnet-relay.service` |
 
 The protected relay directories contain no `host.sqlite3`, owner token, node
-secret key, service configuration or pairing capabilities. The TLS key is created
-on desktop, mode 0600, and never copied to clients or committed. This deployment
-uses a temporary private CA and a separate server certificate valid for 30 days. Clients explicitly
-trust its public certificate; TLS verification remains enabled. Replace/renew the
-certificate before expiry and restart the relay. A WebPKI certificate can replace
-it later without changing any node identity or permissions. The installer reuses
-existing TLS material and checks its hostname/expiry; it does not silently rotate
-trust or import node state.
+secret key, service configuration or pairing capabilities. Relay TLS/account keys
+are generated on desktop and never copied to clients or committed. The current
+public endpoint uses automatic Let's Encrypt certificates and normal WebPKI
+verification. Clients no longer need `relay_ca_file` for this public endpoint.
+The original private CA/server files remain protected for an explicit manual-mode
+fallback; selecting that fallback would require clients to configure its trust
+root again. There is no silent TLS fallback or verification bypass.
 
 Install from this checkout with a trusted SSH alias:
 
 ```sh
-python3 scripts/install_desktop_relay.py --ssh-host desktop.home \
+python3 scripts/install_desktop_relay.py --acme --ssh-host desktop.home \
   --hostname relay.wispnet.app --lan-ip 192.168.1.26
 ```
 
@@ -40,7 +40,9 @@ and enables only `wipsnet-relay.service` in the SSH user's systemd account. Desk
 has user lingering enabled, so this service can run independently of login. No
 sudo is needed. Existing Caddy/WispShell services and node state are untouched.
 The source unit is `deploy/relay/wipsnet-relay.service`; systemd applies a 256 MiB
-memory limit, restart-on-failure and filesystem hardening. Relay admission is
+memory limit, restart-on-failure and filesystem hardening. Only the protected
+ACME cache is writable inside the home directory; the relay and node configuration
+remain read-only to the service sandbox. Relay admission is
 limited to 64 authenticated connections, with 1 MiB/s incoming rate per connection
 and a 2 MiB burst. This is not a claim of pre-authentication DoS protection.
 Third-party payload/identity trace logging is not enabled; lifecycle logs contain
@@ -55,16 +57,18 @@ The relay listens on `0.0.0.0:8443`; auxiliary HTTP is loopback-only, and relay
 QUIC/metrics listeners are disabled. No UDP or port 80 forwarding is required for
 this TLS WebSocket relay. Existing desktop listeners on 80/443 are preserved.
 
-Copy only `relay-ca.pem` over trusted SSH to a protected local path on each
-client/host. Configure its own node state separately:
+For the current public-certificate deployment, configure each node separately:
 
 ```toml
 [transport]
 bind_addr = "0.0.0.0:7779"
 relay_url = "https://relay.wispnet.app"
-relay_ca_file = "/absolute/path/to/relay-ca.pem"
 relay_only = false
 ```
+
+Remove an old `relay_ca_file` override when selecting public WebPKI trust; that
+override deliberately replaces the normal trust roots. A manual/private-CA relay
+still requires the explicit public CA certificate at a protected client path.
 
 Use `relay_only=true` to verify the relay path with no peer UDP transport. There
 is no automatic node config rewrite or global authority configuration. Relocating
@@ -76,13 +80,12 @@ it does not migrate identities, catalogs, owner approvals or grants.
 The local pre-push suite builds/tests the relay and checks verified TLS, wrong
 hostname rejection, unsafe TLS-key rejection, graceful shutdown and absence of
 node/application state. To run the physical application test against this
-already-installed relay, build the current Linux and Android CLI first, obtain
-the public certificate via SSH, then run:
+already-installed relay, build the current Linux and Android CLI first, then run:
 
 ```sh
 python3 scripts/physical_relay_smoke.py --ssh-host desktop.home \
   --serial AUTHORIZED_ADB_SERIAL --relay-url https://relay.wispnet.app \
-  --relay-ca-file /absolute/path/to/relay-ca.pem --restart-desktop-relay
+  --restart-desktop-relay
 ```
 
 The existing-relay mode creates no local relay, SSH reverse forward or USB
@@ -102,9 +105,9 @@ policy; the asynchronous lookup has a three-second deadline. A timed-out OS
 lookup may finish later on its blocking worker. This does not implement APK/JNI
 lifecycle, Keystore or cellular acceptance.
 
-Tests from these computers/tablet on the home LAN through the public hostname
-exercise the router's public address/hairpin forwarding. They do not establish
-reachability from an unrelated external network. Desktop's **node** can stop
+Home-LAN tests through the public hostname exercise public-address/hairpin
+forwarding. The subsequent [phone-hotspot test](external-relay-validation.md)
+verified the tablet through an unrelated mobile network. Desktop's **node** can stop
 while its relay keeps running; powering off desktop removes the temporary relay
 and therefore breaks relay-dependent paths, the expected single-relay v1
 limitation. Whole-machine-off independence requires relocating that relay first.
@@ -128,3 +131,18 @@ client directions, host restart, independent relay restart/recovery and local
 revocation isolation passed. No SSH/USB traffic forwarding was used. The server
 certificate installed during this run expires 2026-11-15; the temporary CA must
 also be checked before renewal. Existing WispShell services remained active.
+
+
+The relay was subsequently switched explicitly to ACME/WebPKI on 2026-10-16 for
+external-network testing. Let's Encrypt issued a certificate for
+`relay.wispnet.app` (issuer YE1), initially valid until 2027-01-14. The pinned Iroh
+ACME implementation renews and caches certificates using TLS-ALPN-01 through the
+existing external TCP 443 → internal 8443 mapping; port 80 and DNS API credentials
+are not needed. Keep that forwarding and DNS valid for renewal. Protected cached
+account/certificate files were reused across independent relay restarts.
+
+Manual mode is still available by omitting `--acme`. Relay config accepts either
+`certificate` plus `private_key`, or `acme_hostname` plus `acme_cache`, never a
+partial/mixed configuration. ACME starts asynchronously; service startup alone
+is not certificate issuance proof. Confirm `curl --fail https://relay.wispnet.app/ping`
+without custom trust after installing/updating public mode.

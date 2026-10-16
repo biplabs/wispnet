@@ -13,6 +13,7 @@ node --test sites/relay-compatibility/test/*.test.js
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
+cargo test -p wipsnet-cli --example external_network_probe --locked
 cargo build --workspace --locked
 cargo build -p wipsnet-cli --example relay_fixture --locked
 python3 -m unittest discover -s scripts -p test_relay_network_audit.py

@@ -20,6 +20,7 @@ def main():
     parser.add_argument('--ssh-host',required=True)
     parser.add_argument('--hostname',required=True)
     parser.add_argument('--lan-ip',required=True)
+    parser.add_argument('--acme',action='store_true',help='use publicly trusted automatic TLS-ALPN certificates through external port 443')
     args=parser.parse_args()
     assert args.ssh_host and not args.ssh_host.startswith('-') and all(c.isalnum() or c in '.-_@' for c in args.ssh_host)
     assert all(c.isalnum() or c in '.-' for c in args.hostname) and '.' in args.hostname and not args.hostname.startswith('-')
@@ -38,11 +39,11 @@ for item in sys.argv[1:]:
  if p.exists() or p.is_symlink():
   m=p.lstat();assert p.is_dir() and not p.is_symlink() and m.st_uid==os.getuid() and m.st_mode&0o077==0,'unsafe relay directory'
  else: p.mkdir(mode=0o700,parents=True)
-""",base,config,tls)
+""",base,config,tls,tls+'/acme')
     certificate=tls+'/relay-cert.pem';key=tls+'/relay-key.pem'
     ca=tls+'/relay-ca.pem';ca_key=tls+'/relay-ca-key.pem'
     present=remote('test','-f',key,ok=None).returncode==0
-    if not present:
+    if not present and not args.acme:
         # All secret keys are generated on desktop. The CA is distinct from
         # the server leaf: WebPKI correctly rejects CA certificates as leaves.
         remote('python3','-c',"""import os,pathlib,secrets,subprocess,sys,tempfile
@@ -61,8 +62,9 @@ with tempfile.TemporaryDirectory(dir=pathlib.Path(key).parent) as tmp:
  openssl('x509','-req','-in',csr,'-CA',ca,'-CAkey',ca_key,'-set_serial',str(secrets.randbits(128)),
   '-days','30','-out',cert,'-extfile',ext)
 """,key,certificate,ca_key,ca,args.hostname,args.lan_ip)
-    remote('openssl','x509','-in',certificate,'-noout','-checkhost',args.hostname)
-    remote('openssl','x509','-in',certificate,'-noout','-checkend','86400')
+    if not args.acme:
+        remote('openssl','x509','-in',certificate,'-noout','-checkhost',args.hostname)
+        remote('openssl','x509','-in',certificate,'-noout','-checkend','86400')
     with tempfile.TemporaryDirectory(prefix='wipsnet-relay-install-') as temporary:
         root=Path(temporary);binary=root/'wipsnet-relay'
         shutil.copyfile(ROOT/'target/debug/wipsnet-relay',binary);run(['strip','--strip-debug',binary])
@@ -71,6 +73,8 @@ with tempfile.TemporaryDirectory(dir=pathlib.Path(key).parent) as tmp:
 p=sys.argv[1];os.chmod(p+'.next',0o700);os.replace(p+'.next',p)
 """,base+'/wipsnet-relay')
     text=f"listen='0.0.0.0:8443'\ncertificate='{certificate}'\nprivate_key='{key}'\nmax_connections=64\n"
+    if args.acme:
+        text=f"listen='0.0.0.0:8443'\nmax_connections=64\nacme_hostname='{args.hostname}'\nacme_cache='{tls}/acme'\n"
     remote('python3','-c',"""import os,sys
 p=sys.argv[1];f=os.open(p+'.next',os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
 with os.fdopen(f,'w') as out: out.write(sys.stdin.read())
@@ -86,8 +90,9 @@ os.replace(p+'.next',p)
     remote('systemctl','--user','enable','wipsnet-relay.service')
     remote('systemctl','--user','restart','wipsnet-relay.service')
     remote('systemctl','--user','is-active','wipsnet-relay.service')
-    remote('curl','--silent','--show-error','--fail','--cacert',ca,f'https://{args.lan_ip}:8443/ping')
+    if not args.acme: remote('curl','--silent','--show-error','--fail','--cacert',ca,f'https://{args.lan_ip}:8443/ping')
+    else: print('ACME started; verify the public HTTPS endpoint after issuance',flush=True)
     print('Standalone relay installed: TCP 8443; remote TLS key retained; no node state touched',flush=True)
-    print('Public CA certificate: '+args.ssh_host+':'+ca,flush=True)
+    if not args.acme: print('Public CA certificate: '+args.ssh_host+':'+ca,flush=True)
 
 if __name__=='__main__':main()

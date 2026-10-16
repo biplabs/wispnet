@@ -12,6 +12,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
+ReadWritePaths=%h/.local/share/wipsnet-relay/acme
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 UMask=0077
 MemoryMax=256M
