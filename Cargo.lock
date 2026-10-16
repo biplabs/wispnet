@@ -4043,6 +4043,7 @@ dependencies = [
  "wipsnet-agent",
  "wipsnet-core",
  "wipsnet-registry",
+ "zeroize",
 ]
 
 [[package]]
@@ -4053,6 +4054,7 @@ dependencies = [
  "serde",
  "toml",
  "url",
+ "zeroize",
 ]
 
 [[package]]

@@ -1,4 +1,4 @@
-//! Linux identity storage. Parent directories must be controlled by this UID.
+//! Native Unix identity storage (Linux and Android shell harness). Parent directories must be controlled by this UID.
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
@@ -66,9 +66,21 @@ impl FileIdentityStore {
 
     fn lock(&self, name: &str) -> Result<File, IdentityError> {
         let file = self.private_file(name, true)?;
-        file.try_lock().map_err(|_| {
-            IdentityError("identity is in use; stop the agent or retry the operation")
-        })?;
+        #[cfg(target_os = "android")]
+        let locked = {
+            use std::os::fd::AsRawFd;
+            // SAFETY: fd is live for this call; flock has no pointer arguments.
+            // Rust std file locking is unsupported on Android. The lease remains
+            // exclusive until File closes, including on cancellation/process exit.
+            unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) == 0 }
+        };
+        #[cfg(not(target_os = "android"))]
+        let locked = file.try_lock().is_ok();
+        if !locked {
+            return Err(IdentityError(
+                "identity is in use or locking is unavailable; stop the agent or retry the operation",
+            ));
+        }
         Ok(file)
     }
 

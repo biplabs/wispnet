@@ -110,3 +110,7 @@ runs the local Linux checks; Android and release builds remain explicit manual c
 The [registry API guide](registry-api.md) covers `registry-init`, HTTPS deployment,
 owner administration, `registry-directory` and `registry-backup`. The pre-push
 suite includes a native-process registry backup/restore and authorization smoke.
+
+The [enrollment guide](enrollment.md) covers invitation codes, explicit owner
+approval, signed device proofs and the optional physical Android native harness.
+The local registry smoke uses OpenSSL for a disposable test certificate.

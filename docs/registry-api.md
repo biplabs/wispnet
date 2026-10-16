@@ -87,7 +87,8 @@ values, tokens, paths, or SQLite messages.
 | `GET /readyz` | Public | 200 only with initialized controller and healthy database |
 | `GET /v1/directory` | Owner | Full directory, grants and current revision |
 | `GET /v1/directory` | Device | Own device ID, services it hosts or is granted; grant lists only for services it hosts |
-| `POST /v1/mutations` | Owner | Enroll, revoke, assign service/grants, publish route |
+| `POST /v1/mutations` | Owner | Revoke, assign service/grants, publish route |
+| `/v1/enrollment/*` | Owner or invitation, per endpoint | [Invitation, proof, approval and completion](enrollment.md) |
 | `POST /v1/mutations` | Device | Publish route for a service it owns |
 
 Unknown API versions return 404. Errors include `unauthorized` (401), `forbidden`
@@ -105,41 +106,32 @@ policy synchronization and stale-cache enforcement remain separate backlog work.
 Mutation examples (public endpoint IDs are lowercase hex):
 
 ```json
-{"op":"enroll","expected_revision":0,"device":"PUBLIC_ENDPOINT_ID"}
 {"op":"service","expected_revision":1,"id":"website","host":"PUBLIC_ENDPOINT_ID","grants":[]}
 {"op":"publish","expected_revision":2,"id":"website","address":"192.0.2.10:7779"}
 {"op":"revoke","expected_revision":3,"device":"PUBLIC_ENDPOINT_ID"}
 ```
 
-Enrollment returns `{ "revision": 1, "token": "..." }` once. Other mutations
-return only the new revision. Duplicate enrollment conflicts rather than rotating
-a token. If an enrollment response is lost, revoke that device then enroll again
-using the latest revision. This is owner-controlled manual provisioning; #7 adds
-expiring invitations and proof of device key possession. Giving a token to a
-person/device is a deliberate owner action. Tokens alone authenticate this API;
-a stolen token must be revoked. Owner/admin credentials must never go to devices.
+New devices enroll through the [invitation workflow](enrollment.md), with proof of
+key possession and owner approval. The former direct `enroll` mutation is
+rejected. Owner/admin credentials must never go to devices. Revocation removes
+access to this API immediately; runtime service policy synchronization remains #9.
 
 ## Owner tool and device startup
 
-Use the HTTPS-only stdlib tool to avoid putting credentials into shell arguments
-or displaying newly enrolled tokens. Obtain a device's public endpoint ID using
-`wipsnet identity-init`/`status`, then write its enrollment JSON into a file:
+Use the HTTPS-only owner tool to read directory/revision data and submit service
+or revocation mutations without putting credentials into shell arguments:
 
 ```sh
 python3 scripts/registry_admin.py --origin https://controller.example.com \
   --owner-token /private/controller/owner.token
 python3 scripts/registry_admin.py --origin https://controller.example.com \
-  --owner-token /private/controller/owner.token \
-  --mutation /private/enroll.json --credential-out /private/new-device.token
+  --owner-token /private/controller/owner.token --mutation /private/service.json
 ```
 
-The first command reads the owner directory and current revision. The second
-writes the returned token directly into a new 0600 file. Deliver it to the
-intended device through a secure channel, preserving mode 0600 and current-user
-ownership. Keep its parent directory private. Use the same mutation tool without
-`--credential-out` for service assignments, route publication and revocation.
-It rejects HTTP, redirects and occupied credential output paths. Like any owner
-client it may display private directory metadata; run it in a trusted terminal.
+See [enrollment](enrollment.md) for `--invitation-out`, pending request listing and
+approval. A device receives its own credential only after signed completion.
+The owner tool rejects HTTP, redirects and occupied invitation output paths.
+Directory metadata is private; run it in a trusted terminal.
 
 ```sh
 target/debug/wipsnet registry-directory --config /absolute/path/device.toml
@@ -155,7 +147,8 @@ retain the existing development mode using static service grants.
 
 ## Recovery and verification
 
-Schema 2 migrates schema 1 transactionally, preserving directory/revision data.
+Schema 3 migrates earlier schemas transactionally, preserving existing credentials,
+directory and revision data while adding invitations and named device history.
 Future versions are refused. See [storage and recovery](registry-storage.md).
 The database backup includes owner/device credential hashes and policy, but the
 owner's raw credential file must be backed up separately. Device credentials

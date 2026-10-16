@@ -99,3 +99,9 @@ A real loopback Iroh integration test reloads two stored keys and checks each
 authenticated remote ID; dialing a real peer with a different expected ID fails
 or times out within the test bound. Discovery and relay services are disabled.
 This does not establish internet/relay reachability or service authorization.
+
+The native Android enrollment harness uses this same private filesystem format
+under the shell UID in a temporary private directory. Its exclusive lease uses
+OS `flock` because Rust standard file locking is unsupported on Android. The
+[physical harness](enrollment.md) verifies on-device key creation and cross-process
+reset protection; app-scoped Android Keystore wrapping remains #12.

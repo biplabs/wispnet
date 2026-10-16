@@ -154,10 +154,6 @@ pub struct DirectoryService {
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Mutation {
-    Enroll {
-        expected_revision: u64,
-        device: EndpointId,
-    },
     Revoke {
         expected_revision: u64,
         device: EndpointId,
@@ -177,10 +173,7 @@ pub enum Mutation {
 impl Mutation {
     fn revision(&self) -> u64 {
         match self {
-            Self::Enroll {
-                expected_revision, ..
-            }
-            | Self::Revoke {
+            Self::Revoke {
                 expected_revision, ..
             }
             | Self::Service {
@@ -213,6 +206,7 @@ pub enum ControlError {
     Conflict,
     Forbidden,
     NotReady,
+    RateLimited,
 }
 impl From<Error> for ControlError {
     fn from(e: Error) -> Self {
@@ -303,30 +297,13 @@ impl Store {
         if expected != revision as u64 {
             return Err(ControlError::Conflict);
         }
-        let mut credential = None;
         match mutation {
-            Mutation::Enroll { device, .. } => {
-                let count: u32 = tx.query_row("SELECT count(*) FROM devices", [], |r| r.get(0))?;
-                if count >= 1024 {
-                    return Err(ControlError::Invalid);
-                }
-                let exists: bool = tx.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM devices WHERE id=?1)",
-                    [device.to_string()],
-                    |r| r.get(0),
-                )?;
-                if exists {
-                    return Err(ControlError::Conflict);
-                }
-                let secret = token();
-                tx.execute("INSERT INTO devices VALUES(?1)", [device.to_string()])?;
-                tx.execute(
-                    "INSERT INTO device_tokens VALUES(?1,?2)",
-                    params![device.to_string(), hash(&secret)],
-                )?;
-                credential = Some(secret.to_string());
-            }
             Mutation::Revoke { device, .. } => {
+                tx.execute(
+                    "UPDATE device_records SET state='revoked', revoked_at=?2 WHERE device=?1",
+                    params![device.to_string(), crate::enrollment::now() as i64],
+                )?;
+                tx.execute("UPDATE invitations SET state='revoked',nonce=NULL WHERE device=?1 AND state='enrolled'",[device.to_string()])?;
                 tx.execute("DELETE FROM grants WHERE device=?1", [device.to_string()])?;
                 tx.execute("DELETE FROM services WHERE host=?1", [device.to_string()])?;
                 if tx.execute("DELETE FROM devices WHERE id=?1", [device.to_string()])? == 0 {
@@ -413,7 +390,7 @@ impl Store {
         tx.commit()?;
         Ok(Updated {
             revision: expected + 1,
-            token: credential,
+            token: None,
         })
     }
 }
@@ -421,4 +398,45 @@ impl From<rusqlite::Error> for ControlError {
     fn from(_: rusqlite::Error) -> Self {
         Self::Storage
     }
+}
+
+/// Reserve private credential storage before committing remote enrollment.
+pub fn credential_temp(path: &Path) -> Result<tempfile::NamedTempFile, Error> {
+    use std::os::unix::fs::MetadataExt;
+    let parent = path.parent().ok_or(Error::InvalidInput)?;
+    let meta = std::fs::symlink_metadata(parent).map_err(|_| Error::Storage)?;
+    if !meta.is_dir() || meta.mode() & 0o777 != 0o700 || meta.uid() != unsafe { libc::geteuid() } {
+        return Err(Error::Storage);
+    }
+    tempfile::NamedTempFile::new_in(parent).map_err(|_| Error::Storage)
+}
+pub fn read_invitation(path: &Path) -> Result<wipsnet_core::enrollment::Invitation, Error> {
+    if !path.is_absolute() {
+        return Err(Error::InvalidInput);
+    }
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|_| Error::Storage)?;
+    let meta = file.metadata().map_err(|_| Error::Storage)?;
+    if !meta.is_file()
+        || meta.nlink() != 1
+        || meta.mode() & 0o777 != 0o600
+        || meta.uid() != unsafe { libc::geteuid() }
+        || meta.len() > 4096
+    {
+        return Err(Error::Storage);
+    }
+    let mut bytes = Zeroizing::new(Vec::new());
+    file.take(4097)
+        .read_to_end(&mut bytes)
+        .map_err(|_| Error::Storage)?;
+    let invitation: wipsnet_core::enrollment::Invitation =
+        serde_json::from_slice(&bytes).map_err(|_| Error::InvalidInput)?;
+    if !invitation.valid() {
+        return Err(Error::InvalidInput);
+    }
+    Ok(invitation)
 }

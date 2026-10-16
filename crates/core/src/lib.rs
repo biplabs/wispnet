@@ -1,5 +1,6 @@
 //! Platform-neutral configuration and protocol foundations.
 pub mod config;
+pub mod enrollment;
 pub mod identity;
 
 pub mod protocol;

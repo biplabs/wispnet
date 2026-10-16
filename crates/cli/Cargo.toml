@@ -11,6 +11,7 @@ wipsnet-agent.workspace = true
 wipsnet-registry.workspace = true
 tokio = { workspace = true, features = ["io-std", "io-util"] }
 tracing.workspace = true
+zeroize.workspace = true
 tracing-subscriber.workspace = true
 
 [[bin]]

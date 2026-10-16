@@ -20,6 +20,7 @@ struct App {
     store: Arc<Mutex<Store>>,
     capacity: Arc<Semaphore>,
     requests: Arc<Semaphore>,
+    enrollment_rate: Arc<Mutex<(std::time::Instant, u32)>>,
 }
 #[derive(Serialize)]
 struct Failure {
@@ -44,6 +45,7 @@ impl IntoResponse for ControlError {
             Self::Invalid => fail(StatusCode::BAD_REQUEST, "invalid_input"),
             Self::Conflict => fail(StatusCode::CONFLICT, "revision_conflict"),
             Self::Forbidden => fail(StatusCode::FORBIDDEN, "forbidden"),
+            Self::RateLimited => fail(StatusCode::TOO_MANY_REQUESTS, "rate_limited"),
             Self::NotReady => fail(StatusCode::SERVICE_UNAVAILABLE, "not_ready"),
         }
     }
@@ -53,6 +55,7 @@ pub fn router(store: Store) -> Router {
         store: Arc::new(Mutex::new(store)),
         capacity: Arc::new(Semaphore::new(16)),
         requests: Arc::new(Semaphore::new(16)),
+        enrollment_rate: Arc::new(Mutex::new((std::time::Instant::now(), 0))),
     };
     Router::new()
         .route(
@@ -62,6 +65,10 @@ pub fn router(store: Store) -> Router {
         .route("/readyz", get(readiness))
         .route("/v1/directory", get(directory))
         .route("/v1/mutations", post(mutate))
+        .route("/v1/enrollment", get(enrollments))
+        .route("/v1/enrollment/admin", post(enrollment_admin))
+        .route("/v1/enrollment/challenge", post(enrollment_challenge))
+        .route("/v1/enrollment/proof", post(enrollment_proof))
         .fallback(|| async { fail(StatusCode::NOT_FOUND, "not_found") })
         .method_not_allowed_fallback(|| async {
             fail(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed")
@@ -74,6 +81,21 @@ async fn bounds(State(app): State<App>, request: Request, next: Next) -> Respons
     let Ok(_permit) = app.requests.try_acquire() else {
         return fail(StatusCode::SERVICE_UNAVAILABLE, "busy");
     };
+    if matches!(
+        request.uri().path(),
+        "/v1/enrollment/challenge" | "/v1/enrollment/proof"
+    ) {
+        let Ok(mut budget) = app.enrollment_rate.lock() else {
+            return ControlError::Storage.into_response();
+        };
+        if budget.0.elapsed() >= std::time::Duration::from_secs(60) {
+            *budget = (std::time::Instant::now(), 0);
+        }
+        if budget.1 >= 60 {
+            return ControlError::RateLimited.into_response();
+        }
+        budget.1 += 1;
+    }
     if request.headers().contains_key(header::ORIGIN) {
         return fail(StatusCode::FORBIDDEN, "browser_origin_forbidden");
     }
@@ -171,6 +193,85 @@ async fn mutate(State(app): State<App>, request: Request) -> Response {
         },
         Ok(None) => fail(StatusCode::UNAUTHORIZED, "unauthorized"),
         Err(_) => ControlError::Storage.into_response(),
+    })
+    .await
+}
+
+async fn json<T: serde::de::DeserializeOwned>(request: Request) -> Result<T, Response> {
+    use axum::extract::FromRequest;
+    match Json::<T>::from_request(request, &()).await {
+        Ok(Json(value)) => Ok(value),
+        Err(e) if e.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+            Err(fail(StatusCode::PAYLOAD_TOO_LARGE, "body_too_large"))
+        }
+        Err(_) => Err(fail(StatusCode::BAD_REQUEST, "invalid_json")),
+    }
+}
+async fn enrollments(State(app): State<App>, request: Request) -> Response {
+    let Some(secret) = bearer(&request) else {
+        return fail(StatusCode::UNAUTHORIZED, "unauthorized");
+    };
+    work(app, move |store| match store.authenticate(&secret) {
+        Ok(Some(crate::control::Principal::Owner)) => {
+            match store.enrollments(crate::enrollment::now()) {
+                Ok(data) => Json(data).into_response(),
+                Err(e) => e.into_response(),
+            }
+        }
+        Ok(Some(_)) => ControlError::Forbidden.into_response(),
+        _ => fail(StatusCode::UNAUTHORIZED, "unauthorized"),
+    })
+    .await
+}
+async fn enrollment_admin(State(app): State<App>, request: Request) -> Response {
+    let Some(secret) = bearer(&request) else {
+        return fail(StatusCode::UNAUTHORIZED, "unauthorized");
+    };
+    let operation = match json::<crate::enrollment::Admin>(request).await {
+        Ok(value) => value,
+        Err(e) => return e,
+    };
+    work(app, move |store| match store.authenticate(&secret) {
+        Ok(Some(crate::control::Principal::Owner)) => {
+            match store.enrollment_admin(operation, crate::enrollment::now()) {
+                Ok(data) => Json(data).into_response(),
+                Err(e) => e.into_response(),
+            }
+        }
+        Ok(Some(_)) => ControlError::Forbidden.into_response(),
+        _ => fail(StatusCode::UNAUTHORIZED, "unauthorized"),
+    })
+    .await
+}
+async fn enrollment_challenge(State(app): State<App>, request: Request) -> Response {
+    let Some(secret) = bearer(&request) else {
+        return fail(StatusCode::UNAUTHORIZED, "unauthorized");
+    };
+    let claim = match json::<wipsnet_core::enrollment::Claim>(request).await {
+        Ok(value) => value,
+        Err(e) => return e,
+    };
+    work(app, move |store| {
+        match store.enrollment_challenge(&secret, claim, crate::enrollment::now()) {
+            Ok(data) => Json(data).into_response(),
+            Err(e) => e.into_response(),
+        }
+    })
+    .await
+}
+async fn enrollment_proof(State(app): State<App>, request: Request) -> Response {
+    let Some(secret) = bearer(&request) else {
+        return fail(StatusCode::UNAUTHORIZED, "unauthorized");
+    };
+    let proof = match json::<wipsnet_core::enrollment::Proof>(request).await {
+        Ok(value) => value,
+        Err(e) => return e,
+    };
+    work(app, move |store| {
+        match store.enrollment_proof(&secret, proof, crate::enrollment::now()) {
+            Ok(data) => Json(data).into_response(),
+            Err(e) => e.into_response(),
+        }
     })
     .await
 }

@@ -83,7 +83,7 @@ impl Store {
                 CREATE TABLE services (id TEXT PRIMARY KEY, host TEXT NOT NULL REFERENCES devices(id));
                 CREATE TABLE grants (service TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE, device TEXT NOT NULL REFERENCES devices(id), PRIMARY KEY(service,device));
                 PRAGMA user_version=1;")?,
-            1 | 2 => {},
+            1..=3 => {},
             _ => return Err(Error::UnsupportedSchema),
         }
         if version < 2 {
@@ -91,6 +91,12 @@ impl Store {
                 CREATE TABLE device_tokens (device TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE, hash TEXT NOT NULL UNIQUE);
                 CREATE TABLE routes (service TEXT PRIMARY KEY REFERENCES services(id) ON DELETE CASCADE, address TEXT NOT NULL);
                 PRAGMA user_version=2;")?;
+        }
+        if version < 3 {
+            tx.execute_batch("CREATE TABLE device_records(device TEXT PRIMARY KEY, name TEXT NOT NULL, state TEXT NOT NULL, enrolled_at INTEGER NOT NULL, revoked_at INTEGER);
+                INSERT INTO device_records SELECT id,'legacy','enrolled',0,NULL FROM devices;
+                CREATE TABLE invitations(id TEXT PRIMARY KEY, hash TEXT NOT NULL UNIQUE, origin TEXT NOT NULL, expires INTEGER NOT NULL, state TEXT NOT NULL, device TEXT, name TEXT, nonce TEXT, challenge_expires INTEGER, purpose TEXT, window INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0);
+                PRAGMA user_version=3;")?;
         }
         tx.commit()?;
         Ok(Self(db))
@@ -317,7 +323,7 @@ mod tests {
             ),
             Err(Error::InvalidInput)
         );
-        store.0.pragma_update(None, "user_version", 3).unwrap();
+        store.0.pragma_update(None, "user_version", 4).unwrap();
         drop(store);
         assert!(matches!(Store::open(&path), Err(Error::UnsupportedSchema)));
     }

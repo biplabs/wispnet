@@ -9,9 +9,10 @@ use wipsnet_core::{
 const USAGE: &str = "Wipsnet development CLI
 Usage: wipsnet <check|identity-init|status|agent|registry|registry-init|registry-backup|registry-directory> --config /absolute/path/config.toml
 Backup: wipsnet registry-backup --config /absolute/path/config.toml --output /absolute/path/new-backup.sqlite3
+Enroll: wipsnet enroll --config /absolute/path/device.toml --invitation /private/invitation.json
 Reset: wipsnet identity-reset --config /absolute/path/config.toml --expect-id PUBLIC_ID
 Tunnel: wipsnet tunnel --config /absolute/path/config.toml --peer PUBLIC_ID --address IP:UDP_PORT --service SERVICE_ID
-Tunnel mode relays raw stdin/stdout. It is not a browser gateway. Invitation enrollment is not implemented.";
+Tunnel mode relays raw stdin/stdout. It is not a browser gateway. Use enroll for invitation pairing; see docs/enrollment.md.";
 
 fn main() -> ExitCode {
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -43,6 +44,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         println!("{USAGE}");
         return Ok(());
     }
+    let enroll = args.first().is_some_and(|a| a == "enroll");
     let backup = args.first().is_some_and(|a| a == "registry-backup");
     let reset = args.first().is_some_and(|a| a == "identity-reset");
     let tunnel_mode = args.first().is_some_and(|a| a == "tunnel");
@@ -52,6 +54,8 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             || args[3] != "--peer"
             || args[5] != "--address"
             || args[7] != "--service"
+    } else if enroll {
+        args.len() != 5 || args[1] != "--config" || args[3] != "--invitation"
     } else if backup {
         args.len() != 5 || args[1] != "--config" || args[3] != "--output"
     } else if reset {
@@ -74,6 +78,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             | "registry-init"
             | "registry-backup"
             | "registry-directory"
+            | "enroll"
             | "tunnel"
     ) {
         return Err(USAGE.into());
@@ -141,6 +146,83 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     }
+    if mode == "enroll" {
+        use std::io::Write;
+        let controller = config
+            .controller
+            .as_ref()
+            .ok_or("controller section required")?;
+        let invitation = wipsnet_registry::control::read_invitation(&PathBuf::from(&args[4]))?;
+        if wipsnet_core::config::controller_origin(&controller.origin)?.as_str()
+            != invitation.controller
+        {
+            return Err("invitation controller differs from configured HTTPS origin".into());
+        }
+        config.prepare_state()?;
+        let store = FileIdentityStore::new(&config.state_dir)?;
+        let _lease = store.lease()?;
+        let identity = store.initialize()?;
+        if controller
+            .credential_file
+            .try_exists()
+            .map_err(|_| "cannot inspect device credential")?
+        {
+            let secret = wipsnet_registry::control::read_token(&controller.credential_file)?;
+            let client = wipsnet_registry::client::Client::configured(controller, secret)?;
+            client.directory(Some(identity.endpoint_id())).await?;
+            println!("Already enrolled; existing identity and credential retained");
+            return Ok(());
+        }
+        let mut temporary =
+            wipsnet_registry::control::credential_temp(&controller.credential_file)?;
+        let client = wipsnet_registry::client::Client::configured(
+            controller,
+            zeroize::Zeroizing::new(invitation.code.clone()),
+        )?;
+        let mut outcome = client
+            .enroll(&invitation, &config.device_name, identity.secret_key())
+            .await?;
+        if outcome.state == "enrolled" {
+            let secret = zeroize::Zeroizing::new(
+                outcome
+                    .token
+                    .take()
+                    .ok_or("missing enrollment credential")?,
+            );
+            temporary
+                .write_all(secret.as_bytes())
+                .map_err(|_| "cannot write device credential")?;
+            temporary
+                .as_file()
+                .sync_all()
+                .map_err(|_| "cannot sync device credential")?;
+            temporary
+                .persist_noclobber(&controller.credential_file)
+                .map_err(
+                    |_| "cannot commit device credential; ask owner to revoke before retrying",
+                )?;
+            std::fs::File::open(
+                controller
+                    .credential_file
+                    .parent()
+                    .ok_or("credential parent required")?,
+            )
+            .and_then(|f| f.sync_all())
+            .map_err(|_| "cannot sync credential directory")?;
+            println!(
+                "Enrolled device: {}\nEndpoint ID: {}",
+                config.device_name,
+                identity.endpoint_id()
+            );
+        } else {
+            println!(
+                "Pending owner approval\nDevice: {}\nEndpoint ID: {}\nRerun enroll with the same invitation after approval",
+                config.device_name,
+                identity.endpoint_id()
+            );
+        }
+        return Ok(());
+    }
     if mode == "registry-directory" {
         let controller = config
             .controller
@@ -148,7 +230,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             .ok_or("controller section required")?;
         let identity = FileIdentityStore::new(&config.state_dir)?.load()?;
         let secret = wipsnet_registry::control::read_token(&controller.credential_file)?;
-        let client = wipsnet_registry::client::Client::new(&controller.origin, secret)?;
+        let client = wipsnet_registry::client::Client::configured(controller, secret)?;
         let directory = client.directory(Some(identity.endpoint_id())).await?;
         println!(
             "Mesh: {}\nRevision: {}\nAuthorized services: {}",

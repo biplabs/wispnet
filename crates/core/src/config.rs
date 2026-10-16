@@ -41,6 +41,9 @@ fn default_mesh() -> String {
 pub struct ControllerConfig {
     pub origin: String,
     pub credential_file: PathBuf,
+    /// Optional independently provisioned trust root for a private HTTPS controller.
+    #[serde(default)]
+    pub ca_certificate_file: Option<PathBuf>,
 }
 
 /// Parse an out-of-band controller origin without accepting embedded authority.
@@ -233,6 +236,11 @@ impl Config {
         }
         if let Some(controller) = &config.controller
             && (controller_origin(&controller.origin).is_err()
+                || controller.ca_certificate_file.as_ref().is_some_and(|p| {
+                    !p.is_absolute()
+                        || p.components()
+                            .any(|c| matches!(c, std::path::Component::ParentDir))
+                })
                 || !controller.credential_file.is_absolute()
                 || controller
                     .credential_file

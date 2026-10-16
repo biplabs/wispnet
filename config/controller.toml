@@ -7,3 +7,7 @@ log_level = "info"
 # Supplied out of band; never resolved through the Wipsnet service directory.
 origin = "https://controller.example.com"
 credential_file = "/home/CHANGE_ME/.local/state/wipsnet/device.token"
+
+# For a private HTTPS controller only: provision this trusted root independently.
+# Invitations never carry trust roots, and certificate/hostname checks stay on.
+# ca_certificate_file = "/home/CHANGE_ME/.local/state/wipsnet/controller-root.pem"

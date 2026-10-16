@@ -10,3 +10,4 @@ serde.workspace = true
 toml.workspace = true
 iroh-base.workspace = true
 url = "=2.5.8"
+zeroize.workspace = true

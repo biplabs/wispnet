@@ -6,7 +6,10 @@ use axum::{
 use serde_json::{Value, json};
 use std::os::unix::fs::PermissionsExt;
 use tower::ServiceExt;
-use wipsnet_core::identity::{EndpointId, Identity};
+use wipsnet_core::{
+    enrollment::{Challenge, Proof},
+    identity::Identity,
+};
 use wipsnet_registry::{api, control, store::Store};
 
 fn fixture() -> (tempfile::TempDir, Router, String) {
@@ -43,18 +46,54 @@ async fn request(
         .unwrap();
     (status, serde_json::from_slice(&bytes).unwrap())
 }
-async fn enroll(app: &Router, owner: &str, revision: u64, id: EndpointId) -> String {
+async fn enroll(app: &Router, owner: &str, revision: u64, key: &Identity) -> String {
     let (status, body) = request(
         app,
         "POST",
-        "/v1/mutations",
+        "/v1/enrollment/admin",
         Some(owner),
-        json!({"op":"enroll","expected_revision":revision,"device":id}),
+        json!({"op":"invite","controller":"https://controller.example","ttl_seconds":600}),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["revision"], revision + 1);
-    body["token"].as_str().unwrap().to_owned()
+    assert_eq!(status, StatusCode::OK);
+    let invitation = &body["invitation"];
+    let id = invitation["invitation"].as_str().unwrap();
+    let code = invitation["code"].as_str().unwrap();
+    for completing in [false, true] {
+        let (status, body) = request(
+            app,
+            "POST",
+            "/v1/enrollment/challenge",
+            Some(code),
+            json!({"invitation":id,"device":key.endpoint_id(),"name":"test-device"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let challenge: Challenge = serde_json::from_value(body["challenge"].clone()).unwrap();
+        let proof = Proof {
+            invitation: id.into(),
+            device: key.endpoint_id(),
+            name: "test-device".into(),
+            nonce: challenge.nonce.clone(),
+            signature: key.secret_key().sign(&challenge.signing_bytes()),
+        };
+        let (status, body) = request(
+            app,
+            "POST",
+            "/v1/enrollment/proof",
+            Some(code),
+            serde_json::to_value(proof).unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        if completing {
+            assert_eq!(body["revision"], revision + 1);
+            return body["token"].as_str().unwrap().into();
+        }
+        assert_eq!(body["state"], "pending");
+        assert_eq!(request(app,"POST","/v1/enrollment/admin",Some(owner),json!({"op":"approve","invitation":id,"device":key.endpoint_id(),"name":"test-device","expected_revision":revision})).await.0,StatusCode::OK);
+    }
+    unreachable!()
 }
 #[tokio::test]
 async fn roles_directory_ownership_revision_and_revocation() {
@@ -73,14 +112,16 @@ async fn roles_directory_ownership_revision_and_revocation() {
             .0,
         StatusCode::UNAUTHORIZED
     );
-    let host = Identity::generate().endpoint_id();
-    let guest = Identity::generate().endpoint_id();
-    let outsider = Identity::generate().endpoint_id();
-    let host_token = enroll(&app, &owner, 0, host).await;
-    let guest_token = enroll(&app, &owner, 1, guest).await;
-    let outsider_token = enroll(&app, &owner, 2, outsider).await;
+    let host_key = Identity::generate();
+    let guest_key = Identity::generate();
+    let outsider_key = Identity::generate();
+    let host = host_key.endpoint_id();
+    let guest = guest_key.endpoint_id();
+    let outsider = outsider_key.endpoint_id();
+    let host_token = enroll(&app, &owner, 0, &host_key).await;
+    let guest_token = enroll(&app, &owner, 1, &guest_key).await;
+    let outsider_token = enroll(&app, &owner, 2, &outsider_key).await;
     for mutation in [
-        json!({"op":"enroll","expected_revision":3,"device":Identity::generate().endpoint_id()}),
         json!({"op":"service","expected_revision":3,"id":"stolen","host":guest,"grants":[guest]}),
         json!({"op":"revoke","expected_revision":3,"device":host}),
     ] {
@@ -91,6 +132,30 @@ async fn roles_directory_ownership_revision_and_revocation() {
             StatusCode::FORBIDDEN
         );
     }
+    assert_eq!(
+        request(
+            &app,
+            "POST",
+            "/v1/enrollment/admin",
+            Some(&guest_token),
+            json!({"op":"invite","controller":"https://controller.example","ttl_seconds":600})
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        request(
+            &app,
+            "POST",
+            "/v1/mutations",
+            Some(&owner),
+            json!({"op":"enroll","expected_revision":3,"device":Identity::generate().endpoint_id()})
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
     let policy =
         json!({"op":"service","expected_revision":3,"id":"website","host":host,"grants":[guest]});
     assert_eq!(
@@ -232,27 +297,19 @@ async fn request_unknown(app: &Router, owner: &str) -> StatusCode {
         .await
         .0
 }
-#[test]
-fn migration_bootstrap_restart_and_backup_preserve_authority() {
+#[tokio::test]
+async fn migration_bootstrap_restart_and_backup_preserve_authority() {
     let (dir, app, owner) = fixture();
+    let host_key = Identity::generate();
+    let device_token = enroll(&app, &owner, 0, &host_key).await;
     drop(app);
     let path = dir.path().join("db");
     let credential = dir.path().join("owner.token");
     let mut store = Store::open(&path).unwrap();
     control::initialize(&mut store, &credential, "test-mesh").unwrap();
     assert!(control::initialize(&mut store, &credential, "different").is_err());
-    let host = Identity::generate().endpoint_id();
-    let update = store
-        .mutate(
-            control::Principal::Owner,
-            control::Mutation::Enroll {
-                expected_revision: 0,
-                device: host,
-            },
-        )
-        .unwrap();
-    let device_token = update.token.as_ref().unwrap();
-    assert!(store.authenticate(device_token).unwrap().is_some());
+    let host = host_key.endpoint_id();
+    assert!(store.authenticate(&device_token).unwrap().is_some());
     let backup = dir.path().join("backup");
     store.backup(&backup).unwrap();
     drop(store);
@@ -262,7 +319,7 @@ fn migration_bootstrap_restart_and_backup_preserve_authority() {
         Some(control::Principal::Owner)
     ));
     assert!(
-        matches!(restored.authenticate(device_token).unwrap(),Some(control::Principal::Device(id)) if id==host)
+        matches!(restored.authenticate(&device_token).unwrap(),Some(control::Principal::Device(id)) if id==host)
     );
     assert_eq!(
         restored
@@ -292,9 +349,49 @@ fn version_one_migrates_without_losing_existing_directory() {
         store.replace(0, &[host], &[]).unwrap();
     }
     let db = rusqlite::Connection::open(&path).unwrap();
-    db.execute_batch("DROP TABLE routes; DROP TABLE device_tokens; DROP TABLE controller; PRAGMA user_version=1;").unwrap();
+    db.execute_batch("DROP TABLE invitations; DROP TABLE device_records; DROP TABLE routes; DROP TABLE device_tokens; DROP TABLE controller; PRAGMA user_version=1;").unwrap();
     drop(db);
     let mut migrated = Store::open(&path).unwrap();
     assert_eq!(migrated.snapshot().unwrap().devices, vec![host]);
     assert!(!migrated.initialized().unwrap());
+}
+
+#[tokio::test]
+async fn public_enrollment_budget_does_not_block_owner_review() {
+    let (_dir, app, owner) = fixture();
+    let code = control::token();
+    let id = control::token();
+    let key = Identity::generate();
+    for _ in 0..60 {
+        assert_eq!(
+            request(
+                &app,
+                "POST",
+                "/v1/enrollment/challenge",
+                Some(&code),
+                json!({"invitation":&*id,"device":key.endpoint_id(),"name":"test"})
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+    }
+    assert_eq!(
+        request(
+            &app,
+            "POST",
+            "/v1/enrollment/challenge",
+            Some(&code),
+            json!({"invitation":&*id,"device":key.endpoint_id(),"name":"test"})
+        )
+        .await
+        .0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        request(&app, "GET", "/v1/enrollment", Some(&owner), Value::Null)
+            .await
+            .0,
+        StatusCode::OK
+    );
 }

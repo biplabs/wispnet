@@ -15,7 +15,7 @@ pub async fn run(
     let identity = store.load()?;
     if let Some(controller) = &config.controller {
         let secret = wipsnet_registry::control::read_token(&controller.credential_file)?;
-        let client = wipsnet_registry::client::Client::new(&controller.origin, secret)?;
+        let client = wipsnet_registry::client::Client::configured(controller, secret)?;
         let directory = client.directory(Some(identity.endpoint_id())).await?;
         tracing::info!(
             component = "agent",

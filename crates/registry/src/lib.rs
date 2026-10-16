@@ -2,6 +2,7 @@
 pub mod api;
 pub mod client;
 pub mod control;
+pub mod enrollment;
 pub mod store;
 use std::future::Future;
 use wipsnet_core::config::Config;

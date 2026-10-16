@@ -4,8 +4,8 @@
 The `registry` CLI opens `registry.sqlite3` in the configured state directory,
 checks integrity, and logs the current revision before waiting for shutdown.
 The authenticated loopback API and HTTPS deployment are documented in
-[registry API](registry-api.md). Enrollment invitations and key-possession proofs
-remain #7; the current owner manually provisions device credentials.
+[registry API](registry-api.md). The [enrollment guide](enrollment.md) covers short-lived invitations, proof of
+key possession and explicit approval.
 
 The database belongs in a current-user-owned directory with mode 0700. It opens
 only a regular, singly linked, current-user-owned file with mode 0600, refusing
@@ -13,7 +13,7 @@ final-component symlinks. The private directory must remain trusted; these check
 do not protect against another process running as the same user replacing paths.
 SQLite is bundled for a reproducible native build. Android packaging is separate.
 
-Schema version 2 uses SQLite `user_version`. Schema 1 migrates transactionally;
+Schema version 3 uses SQLite `user_version`. Earlier schemas migrate transactionally;
 unknown future versions fail closed. A new
 database starts at revision 0. Devices use Iroh public endpoint IDs; services use
 the tunnel protocol's bounded service IDs. Foreign keys require every service

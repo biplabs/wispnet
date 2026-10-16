@@ -41,6 +41,140 @@ impl Client {
             secret,
         })
     }
+    pub fn configured(
+        config: &wipsnet_core::config::ControllerConfig,
+        secret: Zeroizing<String>,
+    ) -> Result<Self, Error> {
+        let mut client = Self::new(&config.origin, secret)?;
+        if let Some(path) = &config.ca_certificate_file {
+            use std::io::Read;
+            use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(path)
+                .map_err(|_| Error::InvalidController)?;
+            let metadata = file.metadata().map_err(|_| Error::InvalidController)?;
+            if !metadata.is_file()
+                || metadata.len() > 16384
+                || metadata.nlink() != 1
+                || metadata.mode() & 0o022 != 0
+                || ![0, unsafe { libc::geteuid() }].contains(&metadata.uid())
+            {
+                return Err(Error::InvalidController);
+            }
+            let mut pem = Vec::new();
+            file.take(16385)
+                .read_to_end(&mut pem)
+                .map_err(|_| Error::InvalidController)?;
+            let certificate =
+                reqwest::Certificate::from_pem(&pem).map_err(|_| Error::InvalidController)?;
+            client.http = http_builder()
+                .add_root_certificate(certificate)
+                .build()
+                .map_err(|_| Error::Transport)?;
+        }
+        Ok(client)
+    }
+    async fn enrollment_post<T: serde::Serialize>(
+        &self,
+        path: &str,
+        body: &T,
+    ) -> Result<crate::enrollment::Outcome, Error> {
+        let response = self
+            .http
+            .post(
+                self.origin
+                    .join(path)
+                    .map_err(|_| Error::InvalidController)?,
+            )
+            .bearer_auth(&*self.secret)
+            .json(body)
+            .send()
+            .await
+            .map_err(|_| Error::Transport)?;
+        if response.status() != reqwest::StatusCode::OK {
+            return Err(Error::Rejected);
+        }
+        let mut response = response;
+        let mut bytes = zeroize::Zeroizing::new(Vec::new());
+        while let Some(chunk) = response.chunk().await.map_err(|_| Error::Transport)? {
+            if bytes.len() + chunk.len() > 16384 {
+                return Err(Error::InvalidResponse);
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        serde_json::from_slice(&bytes).map_err(|_| Error::InvalidResponse)
+    }
+    pub async fn enroll(
+        &self,
+        invitation: &wipsnet_core::enrollment::Invitation,
+        name: &str,
+        key: &wipsnet_core::identity::SecretKey,
+    ) -> Result<crate::enrollment::Outcome, Error> {
+        use wipsnet_core::enrollment::{Claim, Proof};
+        if !invitation.valid()
+            || invitation.controller != self.origin.as_str()
+            || !wipsnet_core::enrollment::valid_name(name)
+            || invitation.expires_at <= crate::enrollment::now()
+        {
+            return Err(Error::InvalidResponse);
+        }
+        let mut outcome = self
+            .enrollment_post(
+                "v1/enrollment/challenge",
+                &Claim {
+                    invitation: invitation.invitation.clone(),
+                    device: key.public(),
+                    name: name.into(),
+                },
+            )
+            .await?;
+        if outcome.state == "pending" && outcome.challenge.is_none() && outcome.token.is_none() {
+            return Ok(outcome);
+        }
+        let challenge = outcome.challenge.take().ok_or(Error::InvalidResponse)?;
+        if !matches!(
+            (&*outcome.state, &challenge.purpose),
+            ("issued", wipsnet_core::enrollment::Purpose::Request)
+                | ("approved", wipsnet_core::enrollment::Purpose::Complete)
+        ) || !challenge.matches(invitation, key.public(), name, crate::enrollment::now())
+        {
+            return Err(Error::InvalidResponse);
+        }
+        let completing = matches!(
+            challenge.purpose,
+            wipsnet_core::enrollment::Purpose::Complete
+        );
+        let signature = key.sign(&challenge.signing_bytes());
+        let reply = self
+            .enrollment_post(
+                "v1/enrollment/proof",
+                &Proof {
+                    invitation: invitation.invitation.clone(),
+                    device: key.public(),
+                    name: name.into(),
+                    nonce: challenge.nonce,
+                    signature,
+                },
+            )
+            .await?;
+        let valid = reply.challenge.is_none()
+            && if completing {
+                reply.state == "enrolled"
+                    && reply.revision.is_some_and(|r| r > 0 && r < i64::MAX as u64)
+                    && reply
+                        .token
+                        .as_ref()
+                        .is_some_and(|s| crate::control::valid_token(s))
+            } else {
+                reply.state == "pending" && reply.revision.is_none() && reply.token.is_none()
+            };
+        if !valid {
+            return Err(Error::InvalidResponse);
+        }
+        Ok(reply)
+    }
     pub async fn directory(&self, expected_device: Option<EndpointId>) -> Result<Directory, Error> {
         let url = self
             .origin
@@ -215,10 +349,10 @@ mod tests {
         task.await.unwrap();
     }
     #[tokio::test]
-    async fn owner_tool_writes_enrollment_credential_without_printing_it() {
+    async fn owner_tool_writes_invitation_without_printing_its_code() {
         use std::os::unix::fs::PermissionsExt;
         let secret = crate::control::token();
-        let data = serde_json::json!({"revision":1,"token":&*secret}).to_string();
+        let data = serde_json::json!({"state":"issued","invitation":{"version":1,"controller":"https://localhost/","mesh":"test","invitation":&*crate::control::token(),"code":&*secret,"expires_at":9999999999u64}}).to_string();
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{data}",
             data.len()
@@ -234,7 +368,7 @@ mod tests {
         std::fs::write(&certificate, pem).unwrap();
         std::fs::write(
             &mutation,
-            serde_json::json!({"op":"enroll","expected_revision":0,"device":wipsnet_core::identity::Identity::generate().endpoint_id()}).to_string(),
+            serde_json::json!({"op":"invite","ttl_seconds":600}).to_string(),
         )
         .unwrap();
         let destination = output.clone();
@@ -248,7 +382,7 @@ mod tests {
                 .arg(owner)
                 .arg("--mutation")
                 .arg(mutation)
-                .arg("--credential-out")
+                .arg("--invitation-out")
                 .arg(destination)
                 .env("SSL_CERT_FILE", certificate)
                 .output()
@@ -262,7 +396,11 @@ mod tests {
             String::from_utf8_lossy(&result.stderr)
         );
         assert!(!String::from_utf8_lossy(&result.stdout).contains(&*secret));
-        assert_eq!(std::fs::read_to_string(&output).unwrap(), *secret);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&output).unwrap())
+                .unwrap()["code"],
+            *secret
+        );
         assert_eq!(
             std::fs::metadata(output).unwrap().permissions().mode() & 0o777,
             0o600
