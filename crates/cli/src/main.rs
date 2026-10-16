@@ -12,9 +12,9 @@ Backup: wipsnet registry-backup --config /absolute/path/config.toml --output /ab
 Enroll: wipsnet enroll --config /absolute/path/device.toml --invitation /private/invitation.json
 Host: wipsnet <host-init|host-status> --config /absolute/path/host.toml
 Host change: wipsnet host-mutate --config /absolute/path/host.toml --request /absolute/path/request.json
-Catalog: wipsnet host-catalog --config /absolute/path/client.toml --peer PUBLIC_ID --address IP:UDP_PORT
+Catalog: wipsnet host-catalog --config /absolute/path/client.toml --peer PUBLIC_ID [--address IP:UDP_PORT]
 Reset: wipsnet identity-reset --config /absolute/path/config.toml --expect-id PUBLIC_ID
-Tunnel: wipsnet tunnel --config /absolute/path/config.toml --peer PUBLIC_ID --address IP:UDP_PORT --service SERVICE_ID
+Tunnel: wipsnet tunnel --config /absolute/path/config.toml --peer PUBLIC_ID [--address IP:UDP_PORT] --service SERVICE_ID
 Tunnel mode relays raw stdin/stdout. It is not a browser gateway. Use enroll for invitation pairing; see docs/enrollment.md.";
 
 fn main() -> ExitCode {
@@ -56,13 +56,16 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
     let invalid_arguments = if host_mutate {
         args.len() != 5 || args[1] != "--config" || args[3] != "--request"
     } else if host_catalog {
-        args.len() != 7 || args[1] != "--config" || args[3] != "--peer" || args[5] != "--address"
-    } else if tunnel_mode {
-        args.len() != 9
+        !matches!(args.len(), 5 | 7)
             || args[1] != "--config"
             || args[3] != "--peer"
-            || args[5] != "--address"
-            || args[7] != "--service"
+            || (args.len() == 7 && args[5] != "--address")
+    } else if tunnel_mode {
+        !matches!(args.len(), 7 | 9)
+            || args[1] != "--config"
+            || args[3] != "--peer"
+            || (args.len() == 9 && args[5] != "--address")
+            || args[args.len() - 2] != "--service"
     } else if enroll {
         args.len() != 5 || args[1] != "--config" || args[3] != "--invitation"
     } else if backup {
@@ -102,12 +105,21 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             .ok_or("invalid public endpoint ID")?
             .parse()
             .map_err(|_| "invalid public endpoint ID")?;
-        let address: std::net::SocketAddr = args[6]
+        let address = if args.len() == 9 {
+            Some(
+                args[6]
+                    .to_str()
+                    .ok_or("invalid peer socket address")?
+                    .parse::<std::net::SocketAddr>()
+                    .map_err(|_| "invalid peer socket address")?,
+            )
+        } else {
+            None
+        };
+        let service = args[args.len() - 1]
             .to_str()
-            .ok_or("invalid peer socket address")?
-            .parse()
-            .map_err(|_| "invalid peer socket address")?;
-        let service = args[8].to_str().ok_or("invalid service ID")?.to_owned();
+            .ok_or("invalid service ID")?
+            .to_owned();
         wipsnet_core::protocol::request(&service).map_err(tunnel::TunnelError::Status)?;
         Some((peer, address, service))
     } else {
@@ -206,17 +218,29 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             .ok_or("invalid peer")?
             .parse()
             .map_err(|_| "invalid peer")?;
-        let address: std::net::SocketAddr = args[6]
-            .to_str()
-            .ok_or("invalid address")?
-            .parse()
-            .map_err(|_| "invalid address")?;
+        let address = if args.len() == 7 {
+            Some(
+                args[6]
+                    .to_str()
+                    .ok_or("invalid address")?
+                    .parse::<std::net::SocketAddr>()
+                    .map_err(|_| "invalid address")?,
+            )
+        } else {
+            None
+        };
         let store = FileIdentityStore::new(&config.state_dir)?;
         let _lease = store.lease()?;
         let identity = store.load()?;
-        let endpoint = tunnel::bind_client(identity.secret_key()).await?;
+        let endpoint =
+            tunnel::bind_configured_client(identity.secret_key(), config.transport.as_ref())
+                .await?;
         let result = async {
-            let connection = wipsnet_agent::control::connect(&endpoint, peer, address).await?;
+            let connection = wipsnet_agent::control::connect_target(
+                &endpoint,
+                tunnel::peer_target(peer, config.transport.as_ref(), address)?,
+            )
+            .await?;
             wipsnet_agent::control::catalog_on(&connection, peer).await
         }
         .await;
@@ -414,9 +438,15 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             let store = FileIdentityStore::new(&config.state_dir)?;
             let _lease = store.lease()?;
             let identity = store.load()?;
-            let endpoint = tunnel::bind_client(identity.secret_key()).await?;
+            let endpoint =
+                tunnel::bind_configured_client(identity.secret_key(), config.transport.as_ref())
+                    .await?;
             let operation = async {
-                let connection = tunnel::connect(&endpoint, peer, address).await?;
+                let connection = tunnel::connect_target(
+                    &endpoint,
+                    tunnel::peer_target(peer, config.transport.as_ref(), address)?,
+                )
+                .await?;
                 let stream = tunnel::open_service(&connection, &service).await?;
                 let (mut reader, mut writer) = tokio::io::split(stream);
                 let mut input = tokio::io::stdin();

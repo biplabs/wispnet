@@ -73,6 +73,9 @@ where
 }
 fn limits() -> TransportConfig {
     TransportConfig {
+        relay_url: None,
+        relay_only: false,
+        relay_ca_file: None,
         bind_addr: "127.0.0.1:0".parse().unwrap(),
         max_connections: 8,
         max_streams: 16,

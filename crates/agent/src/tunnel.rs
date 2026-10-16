@@ -1,4 +1,4 @@
-//! Direct authenticated service transport. Browser access protection belongs to #10.
+//! Authenticated direct/explicit-relay service transport. Browser access protection belongs to #10.
 use iroh::{
     Endpoint, EndpointAddr,
     endpoint::{Connection, QuicTransportConfig, RecvStream, SendStream, presets},
@@ -157,18 +157,18 @@ impl TunnelHost {
         if matches!(services, Services::Host(_)) {
             alpns.push(wipsnet_core::host::ALPN.to_vec());
         }
-        let endpoint = Endpoint::builder(presets::Minimal)
-            .secret_key(secret.clone())
-            .clear_ip_transports()
-            .bind_addr(config.bind_addr)
-            .map_err(|_| TunnelError::Transport("invalid transport bind address"))?
+        let mut builder = configured_builder(secret, Some(config))?.clear_ip_transports();
+        if !config.relay_only {
+            builder = builder
+                .bind_addr(config.bind_addr)
+                .map_err(|_| TunnelError::Transport("invalid transport bind address"))?;
+        }
+        let endpoint = builder
             .alpns(alpns)
             .transport_config(quic_config(config.max_streams_per_connection))
             .bind()
             .await
-            .map_err(|_| {
-                TunnelError::Transport("cannot bind Iroh endpoint; check UDP address/port")
-            })?;
+            .map_err(|_| TunnelError::Transport("cannot bind Iroh endpoint"))?;
         let counts = ActiveCounts::default();
         let (stop, receiver) = watch::channel(false);
         let worker = tokio::spawn(serve(
@@ -500,13 +500,122 @@ impl Drop for ServiceStream {
     }
 }
 
+fn configured_builder(
+    secret: &SecretKey,
+    config: Option<&TransportConfig>,
+) -> Result<iroh::endpoint::Builder, TunnelError> {
+    let mut builder = Endpoint::builder(presets::Minimal).secret_key(secret.clone());
+    if let Some(config) = config {
+        config
+            .validate()
+            .map_err(|_| TunnelError::Transport("invalid relay configuration"))?;
+        if let Some(url) = &config.relay_url {
+            let relay: iroh::RelayUrl = url
+                .parse()
+                .map_err(|_| TunnelError::Transport("invalid relay URL"))?;
+            builder = builder.relay_mode(iroh::RelayMode::custom([relay]));
+        }
+        if let Some(path) = &config.relay_ca_file {
+            use rustls_pki_types::pem::PemObject;
+            use std::io::Read;
+            use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(path)
+                .map_err(|_| TunnelError::Transport("cannot read relay trust root"))?;
+            let meta = file
+                .metadata()
+                .map_err(|_| TunnelError::Transport("cannot inspect relay trust root"))?;
+            if !meta.is_file()
+                || meta.len() > 16384
+                || meta.nlink() != 1
+                || meta.mode() & 0o022 != 0
+                || (meta.uid() != 0 && meta.uid() != unsafe { libc::geteuid() })
+            {
+                return Err(TunnelError::Transport("unsafe relay trust root file"));
+            }
+            let mut bytes = Vec::new();
+            file.take(16385)
+                .read_to_end(&mut bytes)
+                .map_err(|_| TunnelError::Transport("cannot read relay trust root"))?;
+            let cert = rustls_pki_types::CertificateDer::from_pem_slice(&bytes)
+                .map_err(|_| TunnelError::Transport("invalid relay trust root"))?;
+            builder = builder.ca_tls_config(iroh_relay::tls::CaTlsConfig::custom_roots([cert]));
+        }
+        if config.relay_only {
+            builder = builder.clear_ip_transports();
+        }
+    }
+    Ok(builder)
+}
+
+/// A pinned peer plus explicit relay and optional direct hint. No lookup service.
+pub fn peer_target(
+    peer: EndpointId,
+    config: Option<&TransportConfig>,
+    address: Option<std::net::SocketAddr>,
+) -> Result<EndpointAddr, TunnelError> {
+    if let Some(config) = config {
+        config
+            .validate()
+            .map_err(|_| TunnelError::Transport("invalid relay configuration"))?;
+    }
+    let mut target = EndpointAddr::new(peer);
+    if let Some(url) = config.and_then(|c| c.relay_url.as_ref()) {
+        target = target.with_relay_url(
+            url.parse()
+                .map_err(|_| TunnelError::Transport("invalid relay URL"))?,
+        );
+    }
+    if let Some(address) = address {
+        target = target.with_ip_addr(address);
+    }
+    if address.is_none() && config.and_then(|c| c.relay_url.as_ref()).is_none() {
+        return Err(TunnelError::Transport(
+            "target requires configured relay or direct address",
+        ));
+    }
+    Ok(target)
+}
 pub async fn bind_client(secret: &SecretKey) -> Result<Endpoint, TunnelError> {
-    Endpoint::builder(presets::Minimal)
-        .secret_key(secret.clone())
+    bind_configured_client(secret, None).await
+}
+pub async fn bind_configured_client(
+    secret: &SecretKey,
+    config: Option<&TransportConfig>,
+) -> Result<Endpoint, TunnelError> {
+    configured_builder(secret, config)?
         .transport_config(quic_config(8))
         .bind()
         .await
         .map_err(|_| TunnelError::Transport("cannot bind client endpoint"))
+}
+/// Only fixed diagnostics are exposed; relay-supplied errors may contain untrusted text.
+pub(crate) fn connection_failure(endpoint: &Endpoint, fallback: &'static str) -> TunnelError {
+    use iroh::Watcher;
+    let relays = endpoint.home_relay_status().get();
+    if relays.iter().any(|r| r.auth_denied_reason().is_some()) {
+        TunnelError::Transport("configured relay denied endpoint admission")
+    } else if !relays.is_empty() && !relays.iter().any(|r| r.is_connected()) {
+        TunnelError::Transport("configured relay unavailable; direct peer path also failed")
+    } else {
+        TunnelError::Transport(fallback)
+    }
+}
+pub async fn connect_target(
+    endpoint: &Endpoint,
+    target: EndpointAddr,
+) -> Result<Connection, TunnelError> {
+    timeout(HANDSHAKE_TIMEOUT, endpoint.connect(target, protocol::ALPN))
+        .await
+        .map_err(|_| connection_failure(endpoint, "service peer connection timeout"))?
+        .map_err(|_| {
+            connection_failure(
+                endpoint,
+                "service peer unavailable or identity/ALPN mismatch",
+            )
+        })
 }
 pub async fn connect(
     endpoint: &Endpoint,

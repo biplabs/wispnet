@@ -70,6 +70,14 @@ pub fn controller_origin(origin: &str) -> Result<url::Url, ConfigError> {
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TransportConfig {
+    /// Explicit private relay; Minimal never enables public discovery or default relays.
+    #[serde(default)]
+    pub relay_url: Option<String>,
+    #[serde(default)]
+    pub relay_only: bool,
+    /// PEM trust root for a privately operated HTTPS relay.
+    #[serde(default)]
+    pub relay_ca_file: Option<PathBuf>,
     pub bind_addr: std::net::SocketAddr,
     #[serde(default = "default_connections")]
     pub max_connections: usize,
@@ -97,6 +105,25 @@ pub struct ServiceConfig {
 }
 impl TransportConfig {
     pub fn validate(&self) -> Result<(), ConfigError> {
+        if let Some(relay) = &self.relay_url {
+            controller_origin(relay).map_err(|_| {
+                ConfigError(
+                    "relay must be an HTTPS origin without credentials, path, query or fragment",
+                )
+            })?;
+        }
+        if (self.relay_only || self.relay_ca_file.is_some()) && self.relay_url.is_none() {
+            return Err(ConfigError(
+                "relay-only mode and relay CA require an explicit relay URL",
+            ));
+        }
+        if self
+            .relay_ca_file
+            .as_ref()
+            .is_some_and(|p| !p.is_absolute())
+        {
+            return Err(ConfigError("relay CA file must be absolute"));
+        }
         if !(1..=128).contains(&self.max_connections)
             || !(1..=256).contains(&self.max_streams)
             || !(1..=32).contains(&self.max_streams_per_connection)
@@ -413,6 +440,31 @@ unknown = 'value'",
         ] {
             assert!(Config::parse(&format!("{base}{transport}{legacy}")).is_err());
         }
+    }
+    #[test]
+    fn relay_configuration_is_explicit_https_and_redacted() {
+        let base = format!("{}\n[transport]\nbind_addr='127.0.0.1:0'\n", valid());
+        for extra in [
+            "relay_only=true",
+            "relay_ca_file='/private/ca.pem'",
+            "relay_url='http://relay.example'",
+            "relay_url='https://user:SECRET-SENTINEL@relay.example'",
+            "relay_url='https://relay.example/path'",
+            "relay_url='https://relay.example/?SECRET-SENTINEL'",
+            "relay_url='https://relay.example:0'",
+            "relay_url='https://relay.example'\nrelay_ca_file='relative.pem'",
+        ] {
+            let error = Config::parse(&format!("{base}{extra}"))
+                .err()
+                .expect("invalid relay accepted");
+            assert!(!error.to_string().contains("SECRET-SENTINEL"));
+        }
+        assert!(
+            Config::parse(&format!(
+                "{base}relay_url='https://relay.example'\nrelay_only=true"
+            ))
+            .is_ok()
+        );
     }
     #[test]
     fn errors_never_echo_sensitive_input() {

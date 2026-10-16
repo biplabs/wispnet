@@ -3,10 +3,10 @@
 [ADR 0002](decisions/0002-per-host-authority.md) is the accepted architecture.
 This checkpoint adds an explicit independent-host configuration, protected local
 administration, a host-local SQLite authority and a bounded Iroh catalog protocol
-on the service endpoint. It does not complete #16: configured-relay addressing
-(#13), target-bound invitation migration (#17), the complete service record model
+on the service endpoint. It does not complete #16: full network-change/relay evidence (#13), target-bound invitations (#17), the complete service record model
 (#8), aggregate catalog synchronization and active-session cancellation (#9)
-remain open. The current test path uses direct UDP hints on loopback/LAN.
+remain open. Direct UDP and explicit TLS relay paths are tested locally; see
+[relay connectivity](relay-connectivity.md).
 
 ## Initialize each host independently
 
@@ -25,7 +25,7 @@ target/debug/wipsnet agent --config /absolute/path/host.toml
 `schema_version = 2` selects independent host authority and requires a transport
 section. It rejects legacy controller/registry sections and static service arrays,
 so there is no hidden remote preflight or static-grant fallback. Schema-1 commands
-remain the explicitly pre-migration foundation for regression/migration work;
+remain the earlier foundation for regression checks;
 they are not the new architecture. Earlier `registry`, `registry-init`, `enroll`
 and `registry-directory` commands are rejected with schema-2 configurations.
 
@@ -121,9 +121,9 @@ target/debug/wipsnet host-catalog --config /absolute/path/client.toml \
 
 The client's config/state belongs to its own persistent identity. The supplied
 EndpointId is the expected peer pin; an IP hint never substitutes for it. This
-command needs no pre-downloaded catalog or third machine. Explicit configured
-relay bootstrap using only the pin/relay remains #13, so current IP hints are
-still required in this development command.
+command needs no pre-downloaded catalog or third machine. With an explicit `transport.relay_url`, omit `--address` to connect using only
+the pinned identity and relay. The optional address is one direct hint. See
+[relay connectivity](relay-connectivity.md) for configuration and tested limits.
 
 The endpoint advertises `wipsnet/service/1` and `wipsnet/control/1`. Control uses
 one request per bidirectional stream: a 32-bit big-endian length, bounded JSON
@@ -171,7 +171,6 @@ the healthy peer. No production migration/import behavior is claimed.
 
 Rust tests cover host/token separation, malformed/wrong-protocol requests,
 concurrent control/service use on one endpoint, bounded frames, cancellation and
-owned-task shutdown. This is local Linux/direct evidence, not physical power-off
-on two separate computers, Android app validation, relay reachability, relay wipe
-recovery, target-bound invitation pairing or bounded cancellation of active
+owned-task shutdown. This is local Linux evidence, including a real TLS relay fixture, not physical power-off
+on two separate computers, Android app validation, deployed-relay wipe/rebuild recovery, target-bound invitation pairing or bounded cancellation of active
 service streams. Those remain the named follow-up issues and release gates.

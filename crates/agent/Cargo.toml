@@ -16,3 +16,11 @@ libc.workspace = true
 iroh.workspace = true
 tokio = { workspace = true, features = ["time", "sync", "net", "io-util"] }
 serde_json = "=1.0.150"
+
+iroh-relay = { version = "=1.3.0", default-features = false, features = ["tls-ring"] }
+rustls-pki-types = "=1.15.1"
+
+[dev-dependencies]
+iroh-relay = { version = "=1.3.0", default-features = false, features = ["server"] }
+rcgen = "=0.14.8"
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std"] }

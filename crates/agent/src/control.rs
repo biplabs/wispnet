@@ -80,16 +80,18 @@ pub async fn connect(
     expected: EndpointId,
     address: SocketAddr,
 ) -> Result<Connection, TunnelError> {
-    timeout(
-        HANDSHAKE_TIMEOUT,
-        endpoint.connect(
-            EndpointAddr::new(expected).with_ip_addr(address),
-            host::ALPN,
-        ),
-    )
-    .await
-    .map_err(|_| TunnelError::Transport("control connection timeout"))?
-    .map_err(|_| TunnelError::Transport("control identity or connection failed"))
+    connect_target(endpoint, EndpointAddr::new(expected).with_ip_addr(address)).await
+}
+pub async fn connect_target(
+    endpoint: &Endpoint,
+    target: EndpointAddr,
+) -> Result<Connection, TunnelError> {
+    timeout(HANDSHAKE_TIMEOUT, endpoint.connect(target, host::ALPN))
+        .await
+        .map_err(|_| crate::tunnel::connection_failure(endpoint, "control connection timeout"))?
+        .map_err(|_| {
+            crate::tunnel::connection_failure(endpoint, "control identity or connection failed")
+        })
 }
 pub async fn catalog_on(
     connection: &Connection,

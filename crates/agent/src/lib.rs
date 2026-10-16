@@ -23,7 +23,7 @@ pub async fn run(
             authority,
         )
         .await?;
-        tracing::info!(component="agent",event="started",networking=true,mode="independent_host",endpoint_id=%host.endpoint().id(),bind_addr=%host.endpoint().bound_sockets()[0]);
+        tracing::info!(component="agent",event="started",networking=true,mode="independent_host",endpoint_id=%host.endpoint().id(),bind_addr=%host.endpoint().bound_sockets().first().map(ToString::to_string).unwrap_or_else(|| "relay-only".into()));
         shutdown.await;
         host.shutdown().await;
         tracing::info!(component = "agent", event = "stopped");
@@ -46,7 +46,7 @@ pub async fn run(
     };
     if let Some(host) = &host {
         tracing::info!(component = "agent", event = "started", networking = true,
-            endpoint_id = %host.endpoint().id(), bind_addr = %host.endpoint().bound_sockets()[0]);
+            endpoint_id = %host.endpoint().id(), bind_addr = %host.endpoint().bound_sockets().first().map(ToString::to_string).unwrap_or_else(|| "relay-only".into()));
     } else {
         tracing::info!(component = "agent", event = "started", networking = false);
     }

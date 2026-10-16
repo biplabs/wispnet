@@ -46,6 +46,9 @@ fn service(
 }
 fn config() -> TransportConfig {
     TransportConfig {
+        relay_url: None,
+        relay_only: false,
+        relay_ca_file: None,
         bind_addr: "127.0.0.1:0".parse().unwrap(),
         max_connections: 8,
         max_streams: 8,
@@ -242,4 +245,251 @@ async fn malformed_control_cannot_mutate_or_open_backends_and_shutdown_drains() 
     assert_eq!(counts.connections(), 0);
     assert_eq!(counts.streams(), 0);
     endpoint.close().await;
+}
+
+async fn tls_relay(
+    certificate: &rcgen::CertifiedKey<rcgen::KeyPair>,
+    address: std::net::SocketAddr,
+) -> iroh_relay::server::Server {
+    use iroh_relay::server::{CertConfig, RelayConfig, Server, ServerConfig, TlsConfig};
+    let tls = rustls::ServerConfig::builder_with_provider(std::sync::Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_no_client_auth()
+    .with_single_cert(
+        vec![certificate.cert.der().clone()],
+        rustls_pki_types::PrivatePkcs8KeyDer::from(certificate.signing_key.serialize_der()).into(),
+    )
+    .unwrap();
+    let mut relay = RelayConfig::new("127.0.0.1:0".parse::<std::net::SocketAddr>().unwrap());
+    relay.tls = Some(TlsConfig::new(
+        address,
+        CertConfig::Manual { server_config: tls },
+    ));
+    let mut cfg = ServerConfig::default();
+    cfg.relay = Some(relay);
+    Server::spawn(cfg).await.unwrap()
+}
+
+#[tokio::test]
+async fn explicit_tls_relay_without_udp_pins_identity_enforces_grants_and_recovers() {
+    use std::time::Duration;
+    use tokio::time::timeout;
+    let certificate = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+    let relay = tls_relay(&certificate, "127.0.0.1:0".parse().unwrap()).await;
+    let relay_addr = relay.https_addr().unwrap();
+    let trust = dir();
+    let ca = trust.path().join("relay.pem");
+    std::fs::write(&ca, certificate.cert.pem()).unwrap();
+    std::fs::set_permissions(&ca, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let mut cfg = config();
+    cfg.relay_url = Some(format!("https://{relay_addr}"));
+    cfg.relay_only = true;
+    cfg.relay_ca_file = Some(ca);
+    let key = Identity::generate();
+    let client = Identity::generate();
+    let state = dir();
+    host::initialize(state.path(), key.endpoint_id()).unwrap();
+    approve(state.path(), key.endpoint_id(), client.endpoint_id(), 0);
+    let backend = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    service(
+        state.path(),
+        key.endpoint_id(),
+        client.endpoint_id(),
+        backend.local_addr().unwrap(),
+        1,
+    );
+    let host = tunnel::TunnelHost::bind_host(
+        key.secret_key(),
+        &cfg,
+        Authority::open(state.path(), key.endpoint_id()).unwrap(),
+    )
+    .await
+    .unwrap();
+    let outgoing = tunnel::bind_configured_client(client.secret_key(), Some(&cfg))
+        .await
+        .unwrap();
+    assert!(host.endpoint().bound_sockets().is_empty());
+    assert!(outgoing.bound_sockets().is_empty());
+    timeout(Duration::from_secs(10), async {
+        tokio::join!(host.endpoint().online(), outgoing.online());
+    })
+    .await
+    .unwrap();
+    let target = tunnel::peer_target(key.endpoint_id(), Some(&cfg), None).unwrap();
+    let connection = control::connect_target(&outgoing, target.clone())
+        .await
+        .unwrap();
+    assert!(connection.paths().iter().any(|p| p.is_relay()));
+    assert_eq!(
+        control::catalog_on(&connection, key.endpoint_id())
+            .await
+            .unwrap()
+            .services
+            .len(),
+        1
+    );
+    assert!(
+        control::catalog_on(&connection, client.endpoint_id())
+            .await
+            .is_err()
+    );
+    let service_connection = tunnel::connect_target(&outgoing, target.clone())
+        .await
+        .unwrap();
+    let mut stream = tunnel::open_service(&service_connection, "llama")
+        .await
+        .unwrap();
+    let (mut tcp, _) = timeout(Duration::from_secs(2), backend.accept())
+        .await
+        .unwrap()
+        .unwrap();
+    stream.write_all(b"relay-only").await.unwrap();
+    let mut data = [0; 10];
+    timeout(Duration::from_secs(2), tcp.read_exact(&mut data))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(&data, b"relay-only");
+    tcp.write_all(b"reply").await.unwrap();
+    let mut reply = [0; 5];
+    timeout(Duration::from_secs(2), stream.read_exact(&mut reply))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(&reply, b"reply");
+    drop(stream);
+    drop(tcp);
+    // Admission at the relay is deliberately AllowAll, but host approval is separate.
+    let stranger = tunnel::bind_configured_client(Identity::generate().secret_key(), Some(&cfg))
+        .await
+        .unwrap();
+    timeout(Duration::from_secs(10), stranger.online())
+        .await
+        .unwrap();
+    if let Ok(denied) = control::connect_target(&stranger, target.clone()).await {
+        assert!(
+            control::catalog_on(&denied, key.endpoint_id())
+                .await
+                .is_err()
+        );
+    }
+    // One unavailable pinned peer never holds up an independent live-peer request.
+    let absent = tunnel::peer_target(Identity::generate().endpoint_id(), Some(&cfg), None).unwrap();
+    let (missing, live) = tokio::join!(
+        control::connect_target(&outgoing, absent),
+        timeout(
+            Duration::from_secs(2),
+            control::catalog_on(&connection, key.endpoint_id())
+        )
+    );
+    assert!(missing.is_err());
+    assert!(live.unwrap().is_ok());
+    // Rebuild a stateless relay at the same address; no endpoint/key/grant replacement.
+    connection.close(0u32.into(), b"test reconnect");
+    service_connection.close(0u32.into(), b"test reconnect");
+    relay.shutdown().await.unwrap();
+    assert!(
+        control::connect_target(&outgoing, target.clone())
+            .await
+            .is_err()
+    );
+    let relay = tls_relay(&certificate, relay_addr).await;
+    timeout(Duration::from_secs(30), async {
+        loop {
+            if let Ok(c) = control::connect_target(&outgoing, target.clone()).await
+                && control::catalog_on(&c, key.endpoint_id()).await.is_ok()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(outgoing.id(), client.endpoint_id());
+    assert_eq!(host.endpoint().id(), key.endpoint_id());
+    // No replay of the previous service operation during relay recovery.
+    assert!(
+        timeout(Duration::from_millis(100), backend.accept())
+            .await
+            .is_err()
+    );
+    // The explicit certificate is required; no insecure TLS fallback.
+    cfg.relay_ca_file = None;
+    let untrusted = tunnel::bind_configured_client(Identity::generate().secret_key(), Some(&cfg))
+        .await
+        .unwrap();
+    assert!(
+        timeout(Duration::from_secs(1), untrusted.online())
+            .await
+            .is_err()
+    );
+    untrusted.close().await;
+    stranger.close().await;
+    outgoing.close().await;
+    host.shutdown().await;
+    relay.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn existing_direct_path_survives_configured_relay_outage() {
+    use std::time::Duration;
+    use tokio::time::timeout;
+    let certificate = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+    let relay = tls_relay(&certificate, "127.0.0.1:0".parse().unwrap()).await;
+    let trust = dir();
+    let ca = trust.path().join("relay.pem");
+    std::fs::write(&ca, certificate.cert.pem()).unwrap();
+    let mut cfg = config();
+    cfg.relay_url = Some(format!("https://{}", relay.https_addr().unwrap()));
+    cfg.relay_ca_file = Some(ca);
+    let key = Identity::generate();
+    let client = Identity::generate();
+    let state = dir();
+    host::initialize(state.path(), key.endpoint_id()).unwrap();
+    approve(state.path(), key.endpoint_id(), client.endpoint_id(), 0);
+    let host = tunnel::TunnelHost::bind_host(
+        key.secret_key(),
+        &cfg,
+        Authority::open(state.path(), key.endpoint_id()).unwrap(),
+    )
+    .await
+    .unwrap();
+    let outgoing = tunnel::bind_configured_client(client.secret_key(), Some(&cfg))
+        .await
+        .unwrap();
+    let target = tunnel::peer_target(
+        key.endpoint_id(),
+        Some(&cfg),
+        Some(host.endpoint().bound_sockets()[0]),
+    )
+    .unwrap();
+    let connection = control::connect_target(&outgoing, target).await.unwrap();
+    timeout(Duration::from_secs(5), async {
+        loop {
+            if connection
+                .paths()
+                .iter()
+                .any(|p| p.is_ip() && p.is_selected())
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    relay.shutdown().await.unwrap();
+    assert_eq!(
+        control::catalog_on(&connection, key.endpoint_id())
+            .await
+            .unwrap()
+            .host,
+        key.endpoint_id()
+    );
+    outgoing.close().await;
+    host.shutdown().await;
 }
