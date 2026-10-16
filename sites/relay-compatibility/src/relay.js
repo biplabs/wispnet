@@ -9,10 +9,11 @@ export async function authenticate(frame, challenge) {
   if (!await crypto.subtle.verify('Ed25519', key, frame.slice(34), challengeMessage(challenge))) return null;
   return frame.slice(1,33);
 }
+export function createRelay() {
 let active = 0;
 const peers = new Map(); // Deliberately isolate-local: the experiment must expose routing limitations.
 const hex = bytes => Array.from(bytes, b => b.toString(16).padStart(2,'0')).join('');
-export default {
+return {
   async fetch(request) {
     const path = new URL(request.url).pathname;
     if (path === '/' || path === '/ping') return Response.json({experiment:'iroh-1.3-sites',routing:'isolate-local-unproven',durable_storage:false});
@@ -67,5 +68,35 @@ export default {
     socket.addEventListener('close',cleanup);socket.addEventListener('error',cleanup);
     socket.send(new Uint8Array([0,...challenge]));
     return new Response(null,{status:101,webSocket:client,headers:{'Sec-WebSocket-Protocol':'iroh-relay-v2'}});
+  }
+};
+
+}
+// Each object owns one ephemeral socket router. Never use object storage for
+// packets, identities, catalog, permissions or pairing capabilities.
+export class RelayRoom {
+  constructor(_state, _env) { this.relay = createRelay(); }
+  fetch(request) { return this.relay.fetch(request); }
+}
+const isolateRelay = createRelay();
+export function hasRelayCoordinator(env) {
+  return typeof env?.RELAY_ROOMS?.idFromName === 'function' &&
+         typeof env?.RELAY_ROOMS?.get === 'function';
+}
+export default {
+  async fetch(request, env) {
+    const path = new URL(request.url).pathname;
+    if (path === '/capabilities') return Response.json({
+      experiment:'iroh-1.3-sites', durable_object_binding:hasRelayCoordinator(env),
+      durable_storage:false
+    });
+    if (path === '/relay-durable') {
+      if (!hasRelayCoordinator(env)) return Response.json({error:'durable_object_binding_unavailable'}, {status:503});
+      // One fixed object, independent of peer identity and incoming request path.
+      const room = env.RELAY_ROOMS.get(env.RELAY_ROOMS.idFromName('wispnet-relay-v1'));
+      const target = new URL(request.url); target.pathname = '/relay';
+      return room.fetch(new Request(target, request));
+    }
+    return isolateRelay.fetch(request);
   }
 };

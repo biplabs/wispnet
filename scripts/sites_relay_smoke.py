@@ -22,12 +22,13 @@ def main():
     parser.add_argument('--ssh-host', required=True)
     parser.add_argument('--serial', required=True)
     parser.add_argument('--url', required=True)
+    parser.add_argument('--durable', action='store_true', help='require the Durable Object route; no isolate fallback')
     args = parser.parse_args()
     assert args.url.startswith('https://') and args.url.endswith('.chatgpt.site')
     assert all(c.isalnum() or c in '.-_@' for c in args.ssh_host) and not args.ssh_host.startswith('-')
     token = getpass.getpass('Existing Sites service token (hidden): ')
     assert token and '\n' not in token and '\r' not in token
-    url = 'wss://' + args.url.removeprefix('https://') + '/relay'
+    url = 'wss://' + args.url.removeprefix('https://') + ('/relay-durable' if args.durable else '/relay')
     suffix = uuid.uuid4().hex
     remote = '/tmp/wipsnet-sites-' + suffix
     device = '/data/local/tmp/wipsnet-sites-' + suffix
@@ -68,11 +69,11 @@ def main():
             return p,event
         for listener,sender in [('local','desktop'),('desktop','tablet'),('tablet','local')]:
             lp,first=launch(listener,'listen')
-            print(json.dumps({'listener':listener,'event':first['event']}),flush=True)
+            print(json.dumps({'listener':listener,'event':first['event'],'status':first.get('status')}),flush=True)
             if first['event']!='authenticated':
                 lp.communicate(timeout=40);results.append(False);continue
             sp,second=launch(sender,'send',first['peer'])
-            print(json.dumps({'sender':sender,'event':second['event']}),flush=True)
+            print(json.dumps({'sender':sender,'event':second['event'],'status':second.get('status')}),flush=True)
             sout,serr=sp.communicate(timeout=40)
             lout,lerr=lp.communicate(timeout=40)
             success=sp.returncode==0 and lp.returncode==0 and 'packet_roundtrip' in sout and 'packet_roundtrip' in lout

@@ -31,3 +31,14 @@ using the persisted project ID and owner-private deployment operation. Do not
 initialize another Git repository inside this Wispnet checkout. Credentials go
 through hidden stdin only, never files, source, arguments or logs. Retain the
 private audience and existing service token. No token is needed for local tests.
+
+The Durable Object follow-up adds `/capabilities` and `/relay-durable`. The latter
+requires `env.RELAY_ROOMS` and returns HTTP 503 when absent; every request selects
+the same named object. `RelayRoom` owns only in-memory live connection state.
+The existing `/relay` remains the isolate-local comparison experiment.
+
+`durable-objects.probe.json` records standard Cloudflare declaration fields that
+Sites **rejected** as extra manifest inputs. They are not active hosting fields.
+Do not treat the exported class or a successful Worker deployment as proof that
+Sites created a namespace. Local tests use a fake namespace and test routing and
+failure behavior; the physical-device check is required for hosted acceptance.

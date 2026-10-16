@@ -40,8 +40,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (mut socket, response) =
         match tokio::time::timeout(std::time::Duration::from_secs(15), builder.connect()).await? {
             Ok(value) => value,
-            Err(_) => {
-                println!("{}", serde_json::json!({"event":"upgrade_failed"}));
+            Err(error) => {
+                let status = match error {
+                    tokio_websockets::Error::Upgrade(
+                        tokio_websockets::upgrade::Error::DidNotSwitchProtocols(code),
+                    ) => Some(code),
+                    _ => None,
+                };
+                println!(
+                    "{}",
+                    serde_json::json!({"event":"upgrade_failed","status":status})
+                );
                 return Err("WebSocket upgrade failed (details redacted)".into());
             }
         };
