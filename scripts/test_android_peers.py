@@ -6,6 +6,7 @@ its identity, approvals and real service grants untouched. Test peers/fixtures
 are revoked/removed afterward; both original node services are restarted.
 """
 import json
+import socket
 from pathlib import Path
 import select
 import shlex
@@ -19,7 +20,9 @@ from physical_relay_smoke import SSH
 PKG='com.biplabs.wispnet.peercheck'
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--serial',required=True);parser.add_argument('--order',choices=['both','local-first','desktop-first'],default='both');args=parser.parse_args()
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--serial',required=True);parser.add_argument('--order',choices=['both','local-first','desktop-first'],default='both');parser.add_argument('--acceptance',action='store_true');parser.add_argument('--session-expiry',action='store_true');parser.add_argument('--external-check',action='store_true');args=parser.parse_args()
+    assert not args.session_expiry or args.acceptance,'--session-expiry requires --acceptance'
+    assert not args.external_check or args.acceptance,'--external-check requires --acceptance'
     hosts=json.loads(Path('/tmp/wispnet-app-hosts.json').read_text());tag=uuid.uuid4().hex[:12];fixture='peer-'+tag
     processes=[];test_peers=set();remote_files=[];registered=[];current_peer=[None];issued=[]
     def adb(*cmd,**kw):return run(['adb','-s',args.serial,*cmd],**kw)
@@ -38,10 +41,10 @@ def main():
         def instrument(mode,target,other,on_stage=None):
             print(mode+': '+target['name'],flush=True)
             adb('shell','am','force-stop',PKG)
-            cmd=['am','instrument','-w','-e','mode',mode,'-e','host_a',target['host'],'-e','host_b',other['host'],'-e','name',target['name'],'-e','fixture',fixture,PKG+'.test/com.biplabs.wispnet.AppTestRunner']
+            cmd=['am','instrument','-w','-e','mode',mode,'-e','host_a',target['host'],'-e','host_b',other['host'],'-e','name',target['name'],'-e','fixture',fixture,'-e','home_ip',(socket.gethostbyname('relay.wispnet.app') if args.external_check else ''),PKG+'.test/com.biplabs.wispnet.AppTestRunner']
             path=root/(mode+'-'+target['name'].replace(' ','')+'.log')
             with path.open('w') as output:
-                p=subprocess.Popen(['adb','-s',args.serial,'shell',shlex.join(cmd)],stdout=output,stderr=output,text=True);processes.append(p);seen=set();deadline=time.monotonic()+150
+                p=subprocess.Popen(['adb','-s',args.serial,'shell',shlex.join(cmd)],stdout=output,stderr=output,text=True);processes.append(p);seen=set();deadline=time.monotonic()+(740 if mode=='peers-expiry' else 150)
                 while p.poll() is None:
                     assert time.monotonic()<deadline,'Peer test timed out'
                     for line in path.read_text().splitlines():
@@ -96,7 +99,28 @@ def main():
                 elif stage=='restart-revoked-host':node(h,'restart');adb('shell','run-as',PKG,'touch','files/peers-continue')
             instrument('peers-revoke',hosts[0],hosts[1],revoke)
             instrument('peers-denied-cold',hosts[0],hosts[1])
-            print('PASS: '+args.order+' pairing order; cold independent browsers, pin/replay rejection, active revocation and host isolation',flush=True)
+            if args.acceptance:
+                h=hosts[0]
+                def invitation_to_app():
+                    path=str(root/'repair-invitation.json')
+                    invitation=json.loads(cli(h,'host-invite','--output',path).stdout)['invitation'];issued.append((h,invitation))
+                    adb('shell','-T',shlex.join(['run-as',PKG,'sh','-c','umask 077; cat > files/peer-invitation.json']),input=Path(path).read_text());Path(path).unlink()
+                    return invitation
+                repair=[invitation_to_app()]
+                def recover(stage):
+                    if stage=='reject-repair-invitation':mutate(h,{'op':'reject_invitation','invitation':repair[0]})
+                    elif stage=='fresh-repair-invitation':repair[0]=invitation_to_app()
+                    elif stage=='approve-repair-invitation':
+                        entry=next(e for e in json.loads(cli(h,'host-invitations').stdout) if e['invitation']==repair[0] and e['state']=='pending')
+                        assert entry['peer']==current_peer[0],'Repair changed enrolling identity'
+                        mutate(h,{'op':'approve_invitation','invitation':repair[0]});grant(h,entry['peer'])
+                    else:return
+                    adb('shell','run-as',PKG,'touch','files/peers-continue')
+                instrument('peers-repair',hosts[0],hosts[1],recover)
+                if args.external_check:instrument('peers-egress',hosts[0],hosts[1])
+                if args.session_expiry:instrument('peers-expiry',hosts[0],hosts[1])
+
+            print('PASS: '+args.order+' pairing order; cold independent browsers, pin/replay rejection, active revocation and host isolation'+('; invitation repair' if args.acceptance else '')+('; external egress' if args.external_check else '')+('; ten-minute session expiry' if args.session_expiry else ''),flush=True)
         finally:
             adb('shell','am','force-stop',PKG,ok=None)
             errors=[]

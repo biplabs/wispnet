@@ -43,7 +43,8 @@ public final class AppTestRunner extends Instrumentation {
  }
  void resume(){Intent intent=getTargetContext().getPackageManager().getLaunchIntentForPackage(getTargetContext().getPackageName());intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_CLEAR_TOP);activity=(MainActivity)startActivitySync(intent);waitForIdleSync();}
  public void onStart(){Bundle result=new Bundle();try{
-  if(args.getString("mode","").startsWith("peers-")){PeerChecks.run(this);result.putString("result","passed");finish(Activity.RESULT_OK,result);return;}
+  if("platform-timeout".equals(args.getString("mode"))){PlatformChecks.run(this);result.putString("result","passed");finish(Activity.RESULT_OK,result);return;}
+  if(args.getString("mode","").startsWith("peers-")){if(java.util.List.of("peers-repair","peers-expiry","peers-egress").contains(args.getString("mode")))AcceptanceChecks.run(this);else PeerChecks.run(this);result.putString("result","passed");finish(Activity.RESULT_OK,result);return;}
   if("lifecycle-cold".equals(args.getString("mode"))){LifecycleChecks.cold(this);result.putString("result","passed");finish(Activity.RESULT_OK,result);return;}
   if("lifecycle".equals(args.getString("mode"))){LifecycleChecks.run(this);result.putString("result","passed");finish(Activity.RESULT_OK,result);return;}
   resume();Native.ensure(getTargetContext());stage("ready");String[] hosts={args.getString("host_a"),args.getString("host_b")};String[] names={"Local computer","Desktop"};

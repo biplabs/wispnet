@@ -11,7 +11,7 @@ scripts/build_android.sh
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-The APK currently targets API 35, supports arm64 only, and uses the configured public relay `https://relay.wispnet.app`.
+The APK currently targets API 35, builds for arm64 by default (optional x86_64 for emulator acceptance), and uses the configured public relay `https://relay.wispnet.app`.
 
 ## Pair and browse
 
@@ -50,7 +50,7 @@ Foreground access uses Android's `dataSync` service type and notification. It is
 
 The HTTP loopback gateway is a development implementation: isolated random localhost origins, origin/authority checks, HttpOnly session cookies, bounded uploads, and cross-origin redirect rejection. Secure-cookie/prefix behavior, service workers, arbitrary login flows, full HTTP compatibility, and the stricter release security work remain under #10. Streaming responses and WebSocket upgrades are implemented; a physical controlled WebSocket upgrade/echo is covered by the lifecycle harness. Chunked request uploads and Expect requests are currently rejected.
 
-Camera/QR scanning is not implemented; file import and pasted target-bound invitation JSON work on the camera-less tablet. Physical app checks now cover hotspot/home Wi-Fi transitions, relay service restart, screen-off/Doze recovery, fresh pairing with the other node stopped, and active-stream revocation. Independently verified cellular egress for this app run, full relay replacement, broader battery restrictions/Android 15 timeout behavior, and longer-duration lifecycle acceptance remain under #12. Transport-only #13 checks do not establish these app-level results.
+Camera/QR scanning is not implemented; file import and pasted target-bound invitation JSON work on the camera-less tablet. Physical app checks now cover hotspot/home Wi-Fi transitions, relay service restart, screen-off/Doze recovery, fresh pairing with the other node stopped, and active-stream revocation. Independently verified cellular egress for this app run, full relay replacement, broader OEM battery restrictions and longer-duration lifecycle acceptance remain under #12. Transport-only #13 checks do not establish these app-level results.
 
 ## Lifecycle and network recovery checks
 
@@ -71,7 +71,7 @@ touch /tmp/wispnet-network-switch-ready
 
 Checks cover an actual WebSocket upgrade/echo, activity recreation, a 40-event SSE response with Chrome foreground and screen off for 30 seconds, forced Doze followed by explicit recovery, Wi-Fi off/on interrupting an accepted side-effecting POST (backend count must remain exactly one), temporary relay restart, notification cancellation, and process force-stop/cold reopening with unchanged identity and pairings. No ADB reverse or TCP forwarding carries application traffic. The temporary backend is a controlled protocol fixture; the separate normal app test checks GIKE, the desktop website, and Llama.
 
-Doze can defer network access; the app does not request a battery-optimization exemption or promise uninterrupted execution. The physical tablet runs Android 14: Android 15's six-hour `dataSync` timeout requires a separate Android 15 device/emulator test. See the official [Doze test procedure](https://developer.android.com/training/monitoring-device-state/doze-standby) and [foreground-service timeout behavior](https://developer.android.com/develop/background-work/services/fgs/timeout).
+Doze can defer network access; the app does not request a battery-optimization exemption or promise uninterrupted execution. The physical tablet runs Android 14: Android 15's framework timeout was separately checked on an API 35 emulator using the documented shortened timeout override; a full six-hour soak and OEM-specific behavior remain untested. See the official [Doze test procedure](https://developer.android.com/training/monitoring-device-state/doze-standby) and [foreground-service timeout behavior](https://developer.android.com/develop/background-work/services/fgs/timeout).
 
 Observed on the physical Android 14 tablet (2026-10-16): the lifecycle harness passed on the phone hotspot, including a user-assisted switch from `10.153.228.240` to home Wi-Fi `192.168.1.59`. A second pass on home Wi-Fi disabled direct IP transports on both hosts and passed the same lifecycle/relay-restart checks through the public relay. Both runs retained the tablet identity and both host pins; the accepted POST count remained one. In the forced-relay run Wi-Fi interruption/recovery completed in approximately 14 seconds and a five-second relay outage plus recovery in approximately 10 seconds. These are measured checks on this setup, not general latency guarantees. The phone's cellular upstream was not independently reverified during this app run. Both host configurations returned to normal direct-plus-relay transport, all three user services remained registered, and the temporary fixture was removed.
 
@@ -97,3 +97,49 @@ python3 scripts/test_android_peers.py --serial DEVICE_SERIAL
 ```
 
 Checks cover both fresh pairing orderings, browser/cold-start access with the other host offline, independently pending owner approval, wrong host pins, consumed invitation replay, cross-host catalog substitution and rollback rejection, duplicate fixture service IDs, already-active streams at service grant withdrawal and client revocation, stale browser/session denial, cached-entry UI denial, unaffected access to the other host, and denial surviving host restart and a cold app start. Temporary fixture services never receive the normal app's identity or owner credentials.
+
+## Invitation recovery and session boundary acceptance
+
+Rejected pairing requests now carry a distinct native error code and the app asks for a new invitation. An invalid/expired invitation does not reset an existing host pin, erase a known denial, or restore access. Re-pairing after revocation uses the same protected device identity, a fresh target-bound invitation, another explicit target-owner approval, and fresh service grants. It does not change approval at another host.
+
+Browser Open reports the native session lifetime to Android. Returning after that local session expires shows **Browser session expired. Open the service again; pairing is unchanged.** Catalog age labels update while the directory is visible rather than remaining frozen at their last render. These display changes do not confer authorization or impose an authority lease on another host.
+
+After building/installing the separate peercheck variant as above:
+
+```sh
+# Expired/rejected invitation handling and explicit recovery after revocation:
+python3 scripts/test_android_peers.py --serial DEVICE_SERIAL --order local-first --acceptance
+# Add a real, unshortened ten-minute stream/session-expiry check:
+python3 scripts/test_android_peers.py --serial DEVICE_SERIAL --order local-first --acceptance --session-expiry
+# Add a fixed HTTPS public-egress check when the tablet is on a phone hotspot
+# and the phone's Wi-Fi is off. This fails if egress equals the home relay IP:
+python3 scripts/test_android_peers.py --serial DEVICE_SERIAL --order local-first --acceptance --session-expiry --external-check
+```
+
+The long check keeps Chrome foreground with app foreground access enabled, reads a real continuous fixture stream until the native ten-minute listener/session deadline, verifies the old listener is closed, verifies the explicit expiry message, fetches both hosts' catalogs again, and opens the target service with a fresh local session. The production session limit is used unchanged. Invitation capability expiry is separate from durable host approval: reopening must not require a new invitation or owner approval. This is an instrumented physical-device check, not a promise of indefinite background execution.
+
+
+One-way response streams now share read-idle activity with the request direction. A silent upload no longer closes a continuously progressing SSE response after sixty seconds. Completely idle connections and stalled writes remain bounded, as does the overall session. A short regression checks continuous one-way progress followed by a genuine idle timeout.
+
+## Android 15 framework timeout
+
+The isolated API 35 x86_64 emulator check uses Android's documented `FGS_INTRODUCE_TIME_LIMITS` compatibility switch and a ten-second `data_sync_fgs_timeout_duration`. It starts the real foreground service, backgrounds the app, waits for the framework callback, verifies both Java service state and native gateway state are stopped, and checks explicit foreground restart and Stop without changing identity. It does not call the timeout callback directly. The script restores the original timeout/compatibility settings and refuses physical-device serials. See the official [timeout test procedure](https://developer.android.com/develop/background-work/services/fgs/timeout).
+
+```sh
+# On a disposable, already-running API 35 x86_64 emulator:
+WIPSNET_ANDROID_ABI=x86_64 scripts/build_android.sh
+cd android
+ANDROID_HOME="$HOME/Android/Sdk" JAVA_HOME=/opt/android-studio/jbr ./gradlew --no-daemon \
+  assemblePeercheck assemblePeercheckAndroidTest \
+  -PwispnetTestBuildType=peercheck -PwispnetAndroidAbi=x86_64
+cd ..
+adb -s emulator-5584 install -r android/app/build/outputs/apk/peercheck/app-peercheck.apk
+adb -s emulator-5584 install -r android/app/build/outputs/apk/androidTest/peercheck/app-peercheck-androidTest.apk
+python3 scripts/test_android15_timeout.py --serial emulator-5584
+# Rebuild with the default arm64 ABI before installing on the physical tablet.
+scripts/build_android.sh
+```
+
+Observed on 2026-10-16: the real Android 15 framework timeout stopped native access, and explicit restart and Stop passed. This shortened platform test is separate from physical Android 14 lifecycle checks and does not establish a six-hour background soak or a live-tunnel test on Android 15.
+
+Observed on the physical Android 14 tablet (2026-10-16), on home Wi-Fi: expired and owner-rejected invitations preserved denial; fresh explicit approval restored access with the same identity. The unshortened ten-minute continuous stream reached its session deadline, the old listener closed, the app displayed session expiry, both hosts refreshed, and a fresh browser Open succeeded without new pairing. The isolated test client and fixture services were cleaned afterward. Cellular egress was not independently verified in this run.

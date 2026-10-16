@@ -53,6 +53,6 @@ public final class AccessService extends Service {
   networkWork.shutdown();networkStatus="Access stopped. Start access and reopen a service.";
   stopForeground(STOP_FOREGROUND_REMOVE);super.onDestroy();
  }
- public void onTimeout(int startId,int fgsType){stopSelf();}
+ @Override public void onTimeout(int startId,int fgsType){stopSelf();}
  public IBinder onBind(Intent intent){return null;}
 }

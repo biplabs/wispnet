@@ -122,6 +122,7 @@ impl Client {
                 }
                 self.catalog(host).await
             }
+            "access_status" => Ok(json!({"enabled":self.gateway.is_enabled()})),
             "enable" => {
                 self.gateway.enable();
                 Ok(json!({"enabled":true}))
@@ -152,7 +153,7 @@ impl Client {
                     return Err("Service no longer permitted".into());
                 }
                 let url = self.gateway.open(self.clone(), host, id.to_owned()).await?;
-                Ok(json!({"url":url}))
+                Ok(json!({"url":url,"expires_in":gateway::SESSION_SECONDS}))
             }
             _ => Err("Unknown app operation".into()),
         }
@@ -194,6 +195,8 @@ pub fn call(text: &str) -> String {
             let code = match error.as_str() {
                 "access denied" => "host_denied",
                 "Service no longer permitted" => "service_denied",
+                "pairing request denied" => "invitation_denied",
+                "Expired invitation or wrong host pin" => "invitation_invalid",
                 _ => "operation_failed",
             };
             json!({"ok":false,"error":error,"code":code}).to_string()

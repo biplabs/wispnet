@@ -394,10 +394,11 @@ async fn serve_stream(
     let mut tunnel = ServiceStream::new(send, recv);
     let (mut reader, mut writer) = backend.into_split();
     let (mut tunnel_read, mut tunnel_write) = tokio::io::split(&mut tunnel);
+    let activity = AtomicUsize::new(0);
     let transfer = timeout(MAX_SESSION, async {
         tokio::try_join!(
-            pump(&mut tunnel_read, &mut writer),
-            pump(&mut reader, &mut tunnel_write)
+            pump(&mut tunnel_read, &mut writer, &activity, IDLE_TIMEOUT),
+            pump(&mut reader, &mut tunnel_write, &activity, IDLE_TIMEOUT)
         )
     });
     // Host-local durable policy also governs already-open streams. Revocation,
@@ -419,27 +420,34 @@ async fn serve_stream(
     tokio::select! { _ = transfer => {}, _ = policy => {} }
 }
 
-/// Fixed per-direction buffer; timeout includes both slow reads and slow writes.
+/// Fixed per-direction buffer. Read idleness is shared across the session so
+/// one-way streams survive while either direction makes progress. Slow writes
+/// still have their own timeout to bound backpressure.
 /// EOF half-closes the destination and permits the opposite direction to finish.
 async fn pump(
     reader: &mut (impl AsyncRead + Unpin),
     writer: &mut (impl AsyncWrite + Unpin),
+    activity: &AtomicUsize,
+    idle: Duration,
 ) -> io::Result<()> {
     let mut buffer = [0u8; BUFFER];
     loop {
-        let n = timeout(IDLE_TIMEOUT, reader.read(&mut buffer))
-            .await
-            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "tunnel idle"))??;
+        let observed = activity.load(Ordering::Relaxed);
+        let n = match timeout(idle, reader.read(&mut buffer)).await {
+            Ok(result) => result?,
+            Err(_) if activity.load(Ordering::Relaxed) != observed => continue,
+            Err(_) => return Err(io::Error::new(io::ErrorKind::TimedOut, "tunnel idle")),
+        };
         if n == 0 {
-            return timeout(IDLE_TIMEOUT, writer.shutdown())
-                .await
-                .map_err(|_| {
-                    io::Error::new(io::ErrorKind::TimedOut, "tunnel half-close timeout")
-                })?;
+            return timeout(idle, writer.shutdown()).await.map_err(|_| {
+                io::Error::new(io::ErrorKind::TimedOut, "tunnel half-close timeout")
+            })?;
         }
-        timeout(IDLE_TIMEOUT, writer.write_all(&buffer[..n]))
+        activity.fetch_add(1, Ordering::Relaxed);
+        timeout(idle, writer.write_all(&buffer[..n]))
             .await
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "tunnel slow writer"))??;
+        activity.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -706,3 +714,35 @@ pub async fn open_service(connection: &Connection, id: &str) -> Result<ServiceSt
 #[cfg(test)]
 #[path = "relay_tests.rs"]
 mod relay_tests;
+
+#[cfg(test)]
+mod idle_tests {
+    use super::*;
+    #[tokio::test]
+    async fn one_way_progress_keeps_silent_direction_alive_but_total_idle_still_ends() {
+        let (mut client, tunnel) = tokio::io::duplex(64);
+        let (backend, mut server) = tokio::io::duplex(64);
+        let transfer = tokio::spawn(async move {
+            let (mut up_read, mut down_write) = tokio::io::split(tunnel);
+            let (mut down_read, mut up_write) = tokio::io::split(backend);
+            let activity = AtomicUsize::new(0);
+            let idle = Duration::from_millis(50);
+            tokio::try_join!(
+                pump(&mut up_read, &mut up_write, &activity, idle),
+                pump(&mut down_read, &mut down_write, &activity, idle)
+            )
+        });
+        for _ in 0..25 {
+            server.write_all(b"x").await.unwrap();
+            let mut byte = [0];
+            client.read_exact(&mut byte).await.unwrap();
+            assert_eq!(&byte, b"x");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let result = timeout(Duration::from_millis(200), transfer)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);
+    }
+}

@@ -14,6 +14,7 @@ use tokio::{
     sync::{Mutex, Semaphore},
     task::{JoinHandle, JoinSet},
 };
+pub const SESSION_SECONDS: u64 = 600;
 const COOKIE: &str = "_wipsnet_session";
 const START: &str = r#"<!doctype html><meta name="referrer" content="no-referrer"><title>Wispnet</title><p id="status">Opening service…</p><script>const token=location.hash.slice(1);history.replaceState(null,'',location.pathname);fetch('/_wipsnet/session',{method:'POST',headers:{Authorization:'Bearer '+token}}).then(r=>{if(!r.ok)throw Error();location.replace('/')}).catch(()=>document.getElementById('status').textContent='Access expired. Open this service again in Wispnet.');</script>"#;
 pub struct Gateways {
@@ -31,6 +32,9 @@ impl Default for Gateways {
     }
 }
 impl Gateways {
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Acquire)
+    }
     pub fn enable(&self) {
         self.enabled.store(true, Ordering::Release);
     }
@@ -80,7 +84,7 @@ impl Gateways {
             bootstrap: Mutex::new(Some(bootstrap)),
             credential: token(),
             bootstrap_expires: Instant::now() + Duration::from_secs(60),
-            expires: Instant::now() + Duration::from_secs(600),
+            expires: Instant::now() + Duration::from_secs(SESSION_SECONDS),
         });
         let mut workers = self.workers.lock().await;
         workers.retain(|w| !w.is_finished());
@@ -252,7 +256,7 @@ impl Route {
                 "204 No Content",
                 "",
                 &format!(
-                    "Set-Cookie: {COOKIE}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age=600\r\n",
+                    "Set-Cookie: {COOKIE}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_SECONDS}\r\n",
                     self.credential
                 ),
             )
