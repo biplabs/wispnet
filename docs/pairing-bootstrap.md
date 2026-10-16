@@ -40,3 +40,42 @@ response identity/version/schema, pin rejection before stream creation, CLI use,
 and shutdown cleanup. Linux namespace network auditing includes the relay hello
 in the existing host-control/CLI fixtures. Android app invitation UI, signed
 proofs, durable per-host pins and spent-capability protection remain #17/#12 work.
+
+## Invitation contract and protected preflight
+
+`wipsnet_core::pairing::Invitation` is the shared Linux/Android contract for a
+version-1 target-host ID, HTTPS relay origin, 64-character lowercase hex invitation
+ID/capability, `request_access` scope, expiry, and at most one direct socket hint.
+Invitations may have at most 15 minutes remaining; challenge proofs at most one
+minute, bounded by invitation expiry. Unknown fields/scopes/versions fail closed.
+An invitation is never a global owner credential or an automatic service grant.
+
+```sh
+target/debug/wipsnet pairing-check --config /absolute/path/client.toml --peer PINNED_HOST_ID --invitation /private/invitation.json
+```
+
+Preflight validates the expected pin, expiry and configured relay before creating
+an endpoint or dialing. Relay origins are compared after URL normalization;
+invitations cannot replace the locally configured relay or CA. Direct hints do
+not replace the pin. The document must be a current-user-owned private regular
+file (normally mode 0600), at an absolute path, at most 8 KiB, with no final
+symlink or hardlinks. Group/other permissions, special files and `..` components
+are rejected. Errors never print input fields. Secret file buffers and invitation
+capabilities are zeroized when dropped.
+
+The command sends only the existing hello request, not the capability or proof.
+It returns `state: bootstrap_verified`, `capability_checked: false` and
+`approval_checked: false`. A syntactically valid invented capability can pass
+this transport check; it establishes neither issuance, enrollment nor approval.
+No pin is silently accepted or persisted. `Bootstrap` provides a separate
+serializable pin/relay/hint record without invitation IDs or secrets for future
+client persistence.
+
+The challenge transcript is domain-separated from legacy HTTPS enrollment and
+binds version, target host, enrolling key, name, invitation ID, scope, nonce,
+purpose and expiry. Before signing, clients must match it against their validated
+invitation, own key/name and expected purpose. Targets must verify against the
+actual authenticated connection identity and their stored challenge. Signature
+verification alone does not prevent replay: host-local issuance, nonce consumption,
+owner approval, spent-capability storage and revocation remain #17 implementation
+work. No network proof exchange or durable enrollment state is added here.

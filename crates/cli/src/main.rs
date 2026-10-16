@@ -14,6 +14,7 @@ Enroll: wipsnet enroll --config /absolute/path/device.toml --invitation /private
 Host: wipsnet <host-init|host-status> --config /absolute/path/host.toml
 Host change: wipsnet host-mutate --config /absolute/path/host.toml --request /absolute/path/request.json
 Catalog: wipsnet host-catalog --config /absolute/path/client.toml --peer PUBLIC_ID [--address IP:UDP_PORT]
+Invitation check: wipsnet pairing-check --config /absolute/path/client.toml --peer PINNED_HOST_ID --invitation /private/invitation.json
 Pairing bootstrap: wipsnet peer-hello --config /absolute/path/client.toml --peer PINNED_HOST_ID [--address IP:UDP_PORT]
 Probe: wipsnet <peer-probe|peer-watch> --config /absolute/path/client.toml --peer PUBLIC_ID [--address IP:UDP_PORT]
 Reset: wipsnet identity-reset --config /absolute/path/config.toml --expect-id PUBLIC_ID
@@ -57,6 +58,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             Some("host-catalog" | "peer-hello" | "peer-probe" | "peer-watch")
         )
     });
+    let pairing_check = args.first().is_some_and(|a| a == "pairing-check");
     let enroll = args.first().is_some_and(|a| a == "enroll");
     let backup = args.first().is_some_and(|a| a == "registry-backup");
     let reset = args.first().is_some_and(|a| a == "identity-reset");
@@ -74,6 +76,8 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             || args[3] != "--peer"
             || (args.len() == 9 && args[5] != "--address")
             || args[args.len() - 2] != "--service"
+    } else if pairing_check {
+        args.len() != 7 || args[1] != "--config" || args[3] != "--peer" || args[5] != "--invitation"
     } else if enroll {
         args.len() != 5 || args[1] != "--config" || args[3] != "--invitation"
     } else if backup {
@@ -103,6 +107,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             | "host-status"
             | "host-mutate"
             | "host-catalog"
+            | "pairing-check"
             | "peer-hello"
             | "peer-probe"
             | "peer-watch"
@@ -221,6 +226,35 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             let revision = store.host_mutate(identity.endpoint_id(), &secret, operation)?;
             println!("Host revision: {revision}");
         }
+        return Ok(());
+    }
+    if mode == "pairing-check" {
+        let expected: EndpointId = args[4]
+            .to_str()
+            .ok_or("invalid peer")?
+            .parse()
+            .map_err(|_| "invalid peer")?;
+        let invitation = wipsnet_agent::pairing::read_invitation(&PathBuf::from(&args[6]))?;
+        let now = wipsnet_registry::enrollment::now();
+        let transport = config
+            .transport
+            .as_ref()
+            .ok_or("invitation requires transport configuration")?;
+        let target =
+            wipsnet_agent::pairing::invitation_target(&invitation, expected, transport, now)?;
+        let store = FileIdentityStore::new(&config.state_dir)?;
+        let _lease = store.lease()?;
+        let identity = store.load()?;
+        let endpoint =
+            tunnel::bind_configured_client(identity.secret_key(), Some(transport)).await?;
+        let result = wipsnet_agent::pairing::hello(&endpoint, target).await;
+        endpoint.close().await;
+        let hello = result?;
+        println!(
+            "{}",
+            serde_json::json!({"host": hello.host, "version": hello.version,
+            "state": "bootstrap_verified", "approval_checked": false, "capability_checked": false})
+        );
         return Ok(());
     }
     if matches!(

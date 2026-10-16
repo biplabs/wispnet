@@ -65,3 +65,72 @@ async fn hello_checks_transport_pin_before_request_and_rejects_false_responses()
     client.close().await;
     server.close().await;
 }
+
+#[test]
+fn invitation_files_and_targets_fail_closed_without_exposing_capabilities() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    use wipsnet_core::{config::TransportConfig, pairing::Invitation};
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("invite.json");
+    let host = Identity::generate().endpoint_id();
+    let code = "c".repeat(64);
+    let value = serde_json::json!({"version": 1, "host": host, "relay_url": "https://relay.example",
+        "invitation": "a".repeat(64), "code": code, "scope": "request_access", "expires_at": 200});
+    std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let invitation = pairing::read_invitation(&path).unwrap();
+    let mut config = TransportConfig {
+        relay_url: Some("https://relay.example/".into()),
+        relay_only: true,
+        relay_ca_file: None,
+        bind_addr: "127.0.0.1:0".parse().unwrap(),
+        max_connections: 8,
+        max_streams: 8,
+        max_streams_per_connection: 4,
+    };
+    assert!(pairing::invitation_target(&invitation, host, &config, 100).is_ok());
+    assert!(
+        pairing::invitation_target(
+            &invitation,
+            Identity::generate().endpoint_id(),
+            &config,
+            100
+        )
+        .is_err()
+    );
+    assert!(pairing::invitation_target(&invitation, host, &config, 200).is_err());
+    config.relay_url = Some("https://different.example".into());
+    assert!(pairing::invitation_target(&invitation, host, &config, 100).is_err());
+    config.relay_url = None;
+    assert!(pairing::invitation_target(&invitation, host, &config, 100).is_err());
+    let link = temporary.path().join("symlink");
+    symlink(&path, &link).unwrap();
+    assert!(pairing::read_invitation(&link).is_err());
+    let link = temporary.path().join("hardlink");
+    std::fs::hard_link(&path, &link).unwrap();
+    assert!(pairing::read_invitation(&path).is_err());
+    std::fs::remove_file(link).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+    assert!(pairing::read_invitation(&path).is_err());
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::write(&path, [b'x'; 8193]).unwrap();
+    assert!(pairing::read_invitation(&path).is_err());
+    std::fs::write(&path, format!("{{\"code\":\"{code}\"}}")).unwrap();
+    let error = match pairing::read_invitation(&path) {
+        Ok(_) => panic!("malformed invitation accepted"),
+        Err(error) => error,
+    };
+    assert!(!error.to_string().contains(&code));
+    assert!(pairing::read_invitation(temporary.path()).is_err());
+    assert!(pairing::read_invitation(std::path::Path::new("relative.json")).is_err());
+    let fifo = temporary.path().join("fifo");
+    let name = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    assert!(pairing::read_invitation(&fifo).is_err());
+    // No permissive unknown scope/version or legacy controller import.
+    for field in ["version", "scope", "controller"] {
+        let mut changed = value.clone();
+        changed[field] = serde_json::json!("admin");
+        assert!(serde_json::from_value::<Invitation>(changed).is_err());
+    }
+}

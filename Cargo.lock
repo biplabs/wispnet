@@ -4372,6 +4372,7 @@ version = "0.1.0"
 dependencies = [
  "iroh-base",
  "serde",
+ "serde_json",
  "toml",
  "url",
  "zeroize",

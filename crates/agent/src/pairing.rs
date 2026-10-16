@@ -80,3 +80,71 @@ pub async fn hello_on(connection: &Connection, expected: EndpointId) -> Result<H
     .await
     .map_err(|_| TunnelError::Transport("pairing request timeout"))?
 }
+
+/// Validate untrusted invitation data against the independently expected host and
+/// locally configured relay before binding/dialing. Never substitutes relay trust.
+pub fn invitation_target(
+    invitation: &wipsnet_core::pairing::Invitation,
+    expected: EndpointId,
+    config: &wipsnet_core::config::TransportConfig,
+    now: u64,
+) -> Result<EndpointAddr, TunnelError> {
+    let bootstrap = invitation
+        .bootstrap(expected, now)
+        .ok_or(TunnelError::Transport("invalid or expired host invitation"))?;
+    let relay = config
+        .relay_url
+        .as_deref()
+        .and_then(|url| wipsnet_core::config::controller_origin(url).ok())
+        .ok_or(TunnelError::Transport(
+            "invitation requires a configured relay",
+        ))?;
+    if relay.as_str() != bootstrap.relay_url {
+        return Err(TunnelError::Transport(
+            "invitation relay does not match local configuration",
+        ));
+    }
+    crate::tunnel::peer_target(expected, Some(config), bootstrap.direct_hint)
+}
+
+/// Capabilities are read only from a bounded private regular file, never stdin,
+/// command arguments or diagnostics. Reject symlinks, hardlinks and special files.
+pub fn read_invitation(
+    path: &std::path::Path,
+) -> Result<wipsnet_core::pairing::Invitation, TunnelError> {
+    use std::{
+        io::Read,
+        os::unix::fs::{MetadataExt, OpenOptionsExt},
+    };
+    let denied = || TunnelError::Transport("cannot read protected host invitation");
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|p| matches!(p, std::path::Component::ParentDir))
+    {
+        return Err(denied());
+    }
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|_| denied())?;
+    let metadata = file.metadata().map_err(|_| denied())?;
+    if !metadata.is_file()
+        || metadata.nlink() != 1
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o077 != 0
+        || metadata.len() > 8192
+    {
+        return Err(denied());
+    }
+    let mut bytes = zeroize::Zeroizing::new(Vec::new());
+    file.take(8193)
+        .read_to_end(&mut bytes)
+        .map_err(|_| denied())?;
+    if bytes.len() > 8192 {
+        return Err(denied());
+    }
+    serde_json::from_slice(&bytes)
+        .map_err(|_| TunnelError::Transport("invalid host invitation document"))
+}

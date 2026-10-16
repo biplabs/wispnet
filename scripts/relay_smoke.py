@@ -253,9 +253,25 @@ def main():
                 for index, (path, pin) in enumerate(zip(host_configs, pins)):
                     running = start(path)  # The other host has no running process.
                     before_count = len(requests)
-                    for _, call, client_path, _ in clients:
+                    # Syntactic fixture only: preflight must not claim that a
+                    # host issued/accepted this capability or approved anyone.
+                    invitation_path = root / f"host-{index}-invitation.json"
+                    invitation_path.write_text(json.dumps({"version": 1, "host": pin,
+                        "relay_url": relay_url, "invitation": "a" * 64, "code": "b" * 64,
+                        "scope": "request_access", "expires_at": int(time.time()) + 300}))
+                    invitation_path.chmod(0o600)
+                    for name, call, client_path, _ in clients:
                         hello = json.loads(call("peer-hello", client_path, "--peer", pin).stdout)
                         assert hello == {"host": pin, "version": 1}, "bootstrap exposed unexpected metadata"
+                        client_invitation = invitation_path
+                        if name.startswith("Android"):
+                            client_invitation = android_root + "/invitation.json"
+                            adb("push", invitation_path, client_invitation)
+                            tablet("chmod", "600", client_invitation)
+                        checked = json.loads(call("pairing-check", client_path, "--peer", pin,
+                                                  "--invitation", client_invitation).stdout)
+                        assert checked == {"host": pin, "version": 1, "state": "bootstrap_verified",
+                                           "approval_checked": False, "capability_checked": False}
                         catalog(call, client_path, pin, ok=False)
                         use(call, client_path, pin, ok=False)
                     initial_status = status(path)

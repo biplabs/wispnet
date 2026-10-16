@@ -1,6 +1,8 @@
 //! Public pre-approval bootstrap. A hello is not an invitation or authorization.
 use crate::identity::EndpointId;
 use serde::{Deserialize, Serialize};
+mod invitation;
+pub use invitation::{Bootstrap, Challenge, Invitation, Purpose, Scope};
 
 pub const ALPN: &[u8] = b"wipsnet/pairing/1";
 pub const VERSION: u16 = 1;

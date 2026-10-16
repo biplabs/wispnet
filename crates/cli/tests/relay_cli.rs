@@ -125,6 +125,30 @@ async fn native_catalog_and_service_need_no_peer_address() {
     let hello = command(&client_config, &["peer-hello", "--peer", &pin], b"").await;
     let hello: serde_json::Value = serde_json::from_str(&hello).unwrap();
     assert_eq!(hello, serde_json::json!({"host": pin, "version": 1}));
+    let invitation_path = tmp.path().join("invitation.json");
+    let invitation = serde_json::json!({"version": 1, "host": pin, "relay_url": cfg.relay_url,
+        "invitation": "a".repeat(64), "code": "b".repeat(64), "scope": "request_access",
+        "expires_at": wipsnet_registry::enrollment::now() + 120});
+    std::fs::write(&invitation_path, serde_json::to_vec(&invitation).unwrap()).unwrap();
+    std::fs::set_permissions(&invitation_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let checked = command(
+        &client_config,
+        &[
+            "pairing-check",
+            "--peer",
+            &pin,
+            "--invitation",
+            invitation_path.to_str().unwrap(),
+        ],
+        b"",
+    )
+    .await;
+    let checked: serde_json::Value = serde_json::from_str(&checked).unwrap();
+    assert_eq!(
+        checked,
+        serde_json::json!({"host": pin, "version": 1,
+        "state": "bootstrap_verified", "approval_checked": false, "capability_checked": false})
+    );
     let catalog = command(&client_config, &["host-catalog", "--peer", &pin], b"").await;
     let catalog: serde_json::Value = serde_json::from_str(&catalog).unwrap();
     assert_eq!(catalog["host"], pin);
