@@ -88,7 +88,7 @@ flag with transport encryption or declare plaintext sessions production-safe.
 | Linux/Android Secure cookie, prefix, hostname and HTTPS decisions | #10, validated under #2 |
 | Per-service isolation against malicious cookie Domain settings, XSS, service workers and port/hostname reuse | #10 |
 | Protected administrative API and authenticated nonbrowser API access | #10 |
-| Real authenticated transport, host-side service authorization and half-close handling | #5 |
+| Native gateway integration with authenticated transport and host-side authorization | #5 foundation landed; integration #10/#14 |
 | Atomic policy changes, active-stream revocation and expiry | #9 |
 | Direct/relay, LAN/separate Wi-Fi/cellular and no-router-forwarding proof | #13/#14 |
 | Resource/session limits, long streams, slow peers, malformed headers and lifecycle stress | #10/#14 |

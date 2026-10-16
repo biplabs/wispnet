@@ -13,6 +13,80 @@ pub struct Config {
     pub device_name: String,
     pub state_dir: PathBuf,
     pub log_level: LogLevel,
+    #[serde(default)]
+    pub transport: Option<TransportConfig>,
+    #[serde(default)]
+    pub services: Vec<ServiceConfig>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TransportConfig {
+    pub bind_addr: std::net::SocketAddr,
+    #[serde(default = "default_connections")]
+    pub max_connections: usize,
+    #[serde(default = "default_streams")]
+    pub max_streams: usize,
+    #[serde(default = "default_per_connection")]
+    pub max_streams_per_connection: usize,
+}
+fn default_connections() -> usize {
+    16
+}
+fn default_streams() -> usize {
+    64
+}
+fn default_per_connection() -> usize {
+    8
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServiceConfig {
+    pub id: String,
+    pub backend: std::net::SocketAddr,
+    pub allow: Vec<crate::identity::EndpointId>,
+}
+impl TransportConfig {
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if !(1..=128).contains(&self.max_connections)
+            || !(1..=256).contains(&self.max_streams)
+            || !(1..=32).contains(&self.max_streams_per_connection)
+        {
+            return Err(ConfigError(
+                "transport limits must be connections 1-128, streams 1-256, streams per connection 1-32",
+            ));
+        }
+        Ok(())
+    }
+}
+pub fn validate_services(services: &[ServiceConfig]) -> Result<(), ConfigError> {
+    if services.len() > 128 {
+        return Err(ConfigError("at most 128 services may be configured"));
+    }
+    let mut ids = std::collections::HashSet::new();
+    for service in services {
+        if !crate::protocol::valid_service_id(&service.id) || !ids.insert(&service.id) {
+            return Err(ConfigError(
+                "service IDs must be unique lowercase identifiers of 1-64 bytes",
+            ));
+        }
+        if !service.backend.ip().is_loopback() || service.backend.port() == 0 {
+            return Err(ConfigError(
+                "service backend must be an explicit loopback IP with a nonzero port",
+            ));
+        }
+        if service.allow.len() > 128 {
+            return Err(ConfigError(
+                "at most 128 peer grants may be configured per service",
+            ));
+        }
+        let unique: std::collections::HashSet<_> = service.allow.iter().collect();
+        if unique.len() != service.allow.len() {
+            return Err(ConfigError("duplicate peer grant"));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -72,7 +146,7 @@ impl Config {
         if text.len() > 65536 {
             return Err(ConfigError("configuration exceeds 64 KiB"));
         }
-        let config: Self = toml::from_str(text).map_err(|_| ConfigError("invalid TOML or schema; expected schema_version, device_name, state_dir, log_level (see config/example.toml)"))?;
+        let config: Self = toml::from_str(text).map_err(|_| ConfigError("invalid TOML or schema; expected base fields and optional transport/services (see config/example.toml)"))?;
         if config.schema_version != 1 {
             return Err(ConfigError("schema_version must be 1"));
         }
@@ -95,6 +169,15 @@ impl Config {
                 "state_dir must be an absolute non-root path without .. components",
             ));
         }
+        if let Some(transport) = &config.transport {
+            transport.validate()?;
+        }
+        if config.transport.is_none() && !config.services.is_empty() {
+            return Err(ConfigError(
+                "services require an explicit transport section",
+            ));
+        }
+        validate_services(&config.services)?;
         Ok(config)
     }
 
@@ -154,6 +237,53 @@ unknown = 'value'",
             assert!(Config::parse(&text).is_err());
         }
     }
+    #[test]
+    fn invalid_network_configuration_fails_before_startup() {
+        let peer = crate::identity::SecretKey::generate().public().to_string();
+        let transport = "\n[transport]\nbind_addr='127.0.0.1:0'\n";
+        let service =
+            format!("\n[[services]]\nid='website'\nbackend='127.0.0.1:8080'\nallow=['{peer}']\n");
+        assert!(Config::parse(&format!("{}{transport}{service}", valid())).is_ok());
+        for text in [
+            format!("{}{service}", valid()),
+            format!("{}{transport}max_connections=0\n", valid()),
+            format!("{}{transport}max_streams=257\n", valid()),
+            format!("{}{transport}max_streams_per_connection=0\n", valid()),
+            format!("{}{transport}max_streams_per_connection=33\n", valid()),
+            format!(
+                "{}{transport}{}",
+                valid(),
+                service.replace("127.0.0.1:8080", "192.168.1.1:8080")
+            ),
+            format!(
+                "{}{transport}{}",
+                valid(),
+                service.replace("127.0.0.1:8080", "127.0.0.1:0")
+            ),
+            format!(
+                "{}{transport}{}",
+                valid(),
+                service.replace("'website'", "'http://upstream'")
+            ),
+            format!(
+                "{}{transport}{}",
+                valid(),
+                service.replace(&peer, "SECRET-SENTINEL")
+            ),
+            format!("{}{transport}{service}{service}", valid()),
+            format!(
+                "{}{transport}{}",
+                valid(),
+                service.replace(&format!("['{peer}']"), &format!("['{peer}','{peer}']"))
+            ),
+        ] {
+            let error = Config::parse(&text)
+                .err()
+                .expect("invalid network configuration accepted");
+            assert!(!error.to_string().contains("SECRET-SENTINEL"));
+        }
+    }
+
     #[test]
     fn errors_never_echo_sensitive_input() {
         for field in [

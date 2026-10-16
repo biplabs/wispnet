@@ -1,0 +1,18 @@
+# Development host: set an absolute private state path and add the client public ID.
+schema_version = 1
+device_name = "development-host"
+state_dir = "/tmp/wipsnet-dev-host"
+log_level = "info"
+
+[transport]
+# Explicit UDP bind. Change to a LAN address only when deliberately testing peers.
+bind_addr = "127.0.0.1:7779"
+max_connections = 16
+max_streams = 64
+max_streams_per_connection = 8
+
+[[services]]
+id = "website"
+backend = "127.0.0.1:8080"
+# Empty means deny everyone. Copy the independently initialized client's public ID.
+allow = []

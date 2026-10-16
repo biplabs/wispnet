@@ -42,8 +42,8 @@ identity backups as secrets. Never copy a key to enroll another device.
 
 An agent holds a separate identity-use lease until shutdown. Reset and a second
 agent using the same state fail while that lease is held; status remains usable.
-Identity authentication alone does not authorize services. Host-side grants and
-the tunnel protocol remain #5 work.
+Identity authentication alone does not authorize services. The [service tunnel](service-tunnel.md) enforces static host-side grants; registry
+policy and revocation remain #9 work.
 
 ## Recovery and reset
 

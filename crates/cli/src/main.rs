@@ -1,5 +1,6 @@
 use std::{env, path::PathBuf, process::ExitCode};
-use wipsnet_agent::identity::FileIdentityStore;
+use tracing_subscriber::prelude::*;
+use wipsnet_agent::{identity::FileIdentityStore, tunnel};
 use wipsnet_core::{
     config::Config,
     identity::{EndpointId, IdentityStore},
@@ -8,11 +9,25 @@ use wipsnet_core::{
 const USAGE: &str = "Wipsnet development CLI
 Usage: wipsnet <check|identity-init|status|agent|registry> --config /absolute/path/config.toml
 Reset: wipsnet identity-reset --config /absolute/path/config.toml --expect-id PUBLIC_ID
-No networking, enrollment, or service access is implemented yet.";
+Tunnel: wipsnet tunnel --config /absolute/path/config.toml --peer PUBLIC_ID --address IP:UDP_PORT --service SERVICE_ID
+Tunnel mode relays raw stdin/stdout. It is not a browser gateway. Enrollment is not implemented.";
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> ExitCode {
-    match execute().await {
+fn main() -> ExitCode {
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(_) => {
+            eprintln!("wipsnet: cannot start runtime");
+            return ExitCode::FAILURE;
+        }
+    };
+    let outcome = runtime.block_on(execute());
+    // Tokio stdio uses blocking workers; interrupted stdin must not keep this CLI
+    // alive indefinitely. Network tasks are explicitly closed before this point.
+    runtime.shutdown_timeout(std::time::Duration::from_millis(100));
+    match outcome {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("wipsnet: {error}");
@@ -28,7 +43,14 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     let reset = args.first().is_some_and(|a| a == "identity-reset");
-    let invalid_arguments = if reset {
+    let tunnel_mode = args.first().is_some_and(|a| a == "tunnel");
+    let invalid_arguments = if tunnel_mode {
+        args.len() != 9
+            || args[1] != "--config"
+            || args[3] != "--peer"
+            || args[5] != "--address"
+            || args[7] != "--service"
+    } else if reset {
         args.len() != 5 || args[1] != "--config" || args[3] != "--expect-id"
     } else {
         args.len() != 3 || args[1] != "--config"
@@ -39,10 +61,27 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
     let mode = args[0].to_str().ok_or(USAGE)?;
     if !matches!(
         mode,
-        "check" | "identity-init" | "identity-reset" | "status" | "agent" | "registry"
+        "check" | "identity-init" | "identity-reset" | "status" | "agent" | "registry" | "tunnel"
     ) {
         return Err(USAGE.into());
     }
+    let target = if tunnel_mode {
+        let peer: EndpointId = args[4]
+            .to_str()
+            .ok_or("invalid public endpoint ID")?
+            .parse()
+            .map_err(|_| "invalid public endpoint ID")?;
+        let address: std::net::SocketAddr = args[6]
+            .to_str()
+            .ok_or("invalid peer socket address")?
+            .parse()
+            .map_err(|_| "invalid peer socket address")?;
+        let service = args[8].to_str().ok_or("invalid service ID")?.to_owned();
+        wipsnet_core::protocol::request(&service).map_err(tunnel::TunnelError::Status)?;
+        Some((peer, address, service))
+    } else {
+        None
+    };
     let config = Config::load(&PathBuf::from(&args[2]))?;
     if mode == "check" {
         println!("Configuration valid");
@@ -78,15 +117,25 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     // Only explicit, fixed lifecycle fields are logged; never config, args or payloads.
-    tracing_subscriber::fmt()
-        .json()
-        .with_max_level(match config.log_level {
-            wipsnet_core::config::LogLevel::Error => tracing::Level::ERROR,
-            wipsnet_core::config::LogLevel::Warn => tracing::Level::WARN,
-            wipsnet_core::config::LogLevel::Info => tracing::Level::INFO,
-            wipsnet_core::config::LogLevel::Debug => tracing::Level::DEBUG,
-        })
-        .with_writer(std::io::stderr)
+    let level = match config.log_level {
+        wipsnet_core::config::LogLevel::Error => tracing::Level::ERROR,
+        wipsnet_core::config::LogLevel::Warn => tracing::Level::WARN,
+        wipsnet_core::config::LogLevel::Info => tracing::Level::INFO,
+        wipsnet_core::config::LogLevel::Debug => tracing::Level::DEBUG,
+    };
+    // Keep third-party protocol traces out of normal diagnostics.
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .json()
+                .with_writer(std::io::stderr)
+                .with_filter(
+                    tracing_subscriber::filter::Targets::new()
+                        .with_target("wipsnet_agent", level)
+                        .with_target("wipsnet_cli", level)
+                        .with_target("wipsnet_registry", level),
+                ),
+        )
         .init();
     config.prepare_state()?;
     // Register signal handlers before reporting started.
@@ -98,6 +147,38 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
     match mode {
         "agent" => wipsnet_agent::run(&config, shutdown).await?,
         "registry" => wipsnet_registry::run(&config, shutdown).await,
+        "tunnel" => {
+            let (peer, address, service) = target.ok_or("missing tunnel target")?;
+            let store = FileIdentityStore::new(&config.state_dir)?;
+            let _lease = store.lease()?;
+            let identity = store.load()?;
+            let endpoint = tunnel::bind_client(identity.secret_key()).await?;
+            let operation = async {
+                let connection = tunnel::connect(&endpoint, peer, address).await?;
+                let stream = tunnel::open_service(&connection, &service).await?;
+                let (mut reader, mut writer) = tokio::io::split(stream);
+                let mut input = tokio::io::stdin();
+                let mut output = tokio::io::stdout();
+                tokio::try_join!(
+                    async {
+                        tokio::io::copy(&mut input, &mut writer).await?;
+                        tokio::io::AsyncWriteExt::shutdown(&mut writer).await
+                    },
+                    async {
+                        tokio::io::copy(&mut reader, &mut output).await?;
+                        tokio::io::AsyncWriteExt::flush(&mut output).await
+                    }
+                )
+                .map_err(|_| tunnel::TunnelError::Transport("tunnel I/O interrupted"))?;
+                Ok::<(), tunnel::TunnelError>(())
+            };
+            let outcome = tokio::select! {
+                outcome = operation => outcome,
+                _ = shutdown => Err(tunnel::TunnelError::Transport("tunnel cancelled")),
+            };
+            endpoint.close().await;
+            outcome?;
+        }
         _ => unreachable!(),
     }
     Ok(())
