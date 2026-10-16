@@ -6,6 +6,7 @@ its identity, approvals and real service grants untouched. Test peers/fixtures
 are revoked/removed afterward; both original node services are restarted.
 """
 import json
+import base64
 import socket
 from pathlib import Path
 import select
@@ -72,6 +73,14 @@ def main():
                     if h['remote']:remote_files.append(path)
                     invitation=json.loads(cli(h,'host-invite','--output',path).stdout)['invitation'];issued.append((h,invitation))
                     content=command(h,['cat',path]).stdout
+                    if index == 0:
+                        qr_input=root/'qr-input.json';qr_output=root/'qr.png'
+                        qr_input.write_text(content);qr_input.chmod(0o600)
+                        qr_output.unlink(missing_ok=True)
+                        run(['uv','run',str(ROOT/'scripts/pairing_qr.py'),'--input',str(qr_input),'--output',str(qr_output)],timeout=120)
+                        adb('shell','-T',shlex.join(['run-as',PKG,'sh','-c','umask 077; base64 -d > files/peer-invitation.png']),input=base64.b64encode(qr_output.read_bytes()).decode())
+                        qr_input.unlink();qr_output.unlink()
+
                     adb('shell','-T',shlex.join(['run-as',PKG,'sh','-c','umask 077; cat > files/peer-invitation.json']),input=content)
                     def approve(stage):
                         if stage!='pending-owner-approval':return

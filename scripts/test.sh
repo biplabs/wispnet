@@ -21,6 +21,7 @@ python3 scripts/standalone_relay_smoke.py
 python3 scripts/smoke.py
 python3 scripts/registry_smoke.py
 python3 scripts/host_smoke.py
+uv run --with qrcode==8.2 python -m unittest discover -s scripts -p test_pairing_qr.py
 if [ "${WIPSNET_ANDROID_RELAY_TEST:-0}" = 1 ]; then
     set -- --android
     if [ -n "${WIPSNET_ANDROID_LAN_ADDRESS:-}" ]; then

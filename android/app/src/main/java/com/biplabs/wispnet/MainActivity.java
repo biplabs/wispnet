@@ -39,6 +39,8 @@ public final class MainActivity extends Activity {
   host=field("Host ID — verify on that machine",InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
   invitation=field("Paste pairing code or invitation JSON",InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD|InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
   text(root,"No camera needed: paste a pairing code, import a file, or share an invitation to Wispnet.",15);
+  button(root,"Scan pairing QR",this::scanPairingQr);
+  button(root,"Import QR image",()->{Intent pick=new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(pick,3);});
   button(root,"Review pasted invitation",()->reviewInvitation(invitation.getText().toString()));
   hostVerified=new CheckBox(this);hostVerified.setText("I compared this host ID with the target computer");root.addView(hostVerified);
   host.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){} public void onTextChanged(CharSequence s,int start,int before,int count){hostVerified.setChecked(false);} public void afterTextChanged(android.text.Editable s){}});
@@ -73,6 +75,14 @@ public final class MainActivity extends Activity {
   }catch(Exception e){show("Saved directory unavailable");}
  }
  void open(String peer,String service){if(!AccessService.enabled){show("Start browser access first");return;}status.setText("Opening "+service+"…");work.execute(()->{try{JSONObject response=Native.request(new JSONObject().put("op","open").put("host",peer).put("service",service));String url=response.getString("url");runOnUiThread(()->{browserExpiresAt=SystemClock.elapsedRealtime()+response.optLong("expires_in",600)*1000;status.setText("Browser access active. Reopen this service when its local session expires.");Intent browser=new Intent(Intent.ACTION_VIEW,Uri.parse(url));browser.addCategory(Intent.CATEGORY_BROWSABLE);startActivity(browser);});}catch(Exception e){try{store.failed(peer,e);}catch(Exception ignored){}show("Cannot open service: "+e.getMessage());runOnUiThread(this::render);}});}
+ void scanPairingQr(){
+  if(!getPackageManager().hasSystemFeature(android.content.pm.PackageManager.FEATURE_CAMERA_ANY)){show("No camera available. Import a QR image or invitation file, or paste a pairing code.");return;}
+  try{com.journeyapps.barcodescanner.ScanOptions options=new com.journeyapps.barcodescanner.ScanOptions().setCaptureActivity(PairingCaptureActivity.class).setDesiredBarcodeFormats(com.journeyapps.barcodescanner.ScanOptions.QR_CODE).setBeepEnabled(false).setBarcodeImageEnabled(false).setTimeout(60000).setPrompt("Scan a Wispnet invitation. You will review the host ID next.");startActivityForResult(options.createScanIntent(this),2);}catch(RuntimeException unavailable){show("Camera unavailable. Import a QR image or invitation file, or paste a pairing code.");}
+ }
+ void readQrImage(Uri uri){
+  invitation.setText("");hostVerified.setChecked(false);status.setText("Reading QR image…");
+  work.execute(()->{try{if(uri==null||!"content".equals(uri.getScheme()))throw new IOException();try(InputStream input=getContentResolver().openInputStream(uri)){String document=PairingQr.decode(input);runOnUiThread(()->reviewInvitation(document));}}catch(Exception invalid){show("Cannot read pairing QR image. Import an invitation file or paste its pairing code instead.");}});
+ }
  void reviewInvitation(String document){
   if(document.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>8192){invitation.setText("");show("Invitation is too large. Ask for a new invitation file.");return;}
   hostVerified.setChecked(false);invitation.setText("");status.setText("Reviewing invitation…");
@@ -91,7 +101,7 @@ public final class MainActivity extends Activity {
   intent.removeExtra(Intent.EXTRA_STREAM);intent.removeExtra(Intent.EXTRA_TEXT);
  }
  protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);receiveInvitation(intent);}
- protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(request==1&&result==RESULT_OK&&data!=null)readInvitation(data.getData());}
+ protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(request==1&&result==RESULT_OK&&data!=null)readInvitation(data.getData());else if(request==3&&result==RESULT_OK&&data!=null)readQrImage(data.getData());else if(request==2){if(result==RESULT_OK&&data!=null){String document=data.getStringExtra("SCAN_RESULT");if(document!=null)reviewInvitation(document);else show("No pairing QR found. Import a file or paste a pairing code.");}else show("Scan cancelled or camera unavailable. Import a QR image or invitation file, or paste a pairing code.");}}
  protected void onResume(){super.onResume();if(AccessService.enabled&&browserExpiresAt>0&&SystemClock.elapsedRealtime()>=browserExpiresAt)status.setText("Browser session expired. Open the service again; pairing is unchanged.");lifecycle.post(updateAccess);if(access!=null)access.setText(AccessService.enabled?"Stop browser access":"Start browser access");}
  protected void onPause(){lifecycle.removeCallbacks(updateAccess);super.onPause();}
  protected void onDestroy(){work.shutdown();super.onDestroy();}

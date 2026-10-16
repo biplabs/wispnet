@@ -22,6 +22,20 @@ final class PeerChecks {
    if(!hadOther&&store.all().has(other))throw new Exception("Wrong pin saved");
    String code="wispnet1:"+android.util.Base64.encodeToString(document.getBytes(java.nio.charset.StandardCharsets.UTF_8),android.util.Base64.URL_SAFE|android.util.Base64.NO_PADDING|android.util.Base64.NO_WRAP);
    if(name.equals("Local computer")){
+    try{PairingQr.decode(new ByteArrayInputStream(new byte[4*1024*1024+1]));throw new Exception("Oversized QR accepted");}catch(IOException expected){}
+    try{PairingQr.decode(new ByteArrayInputStream(new byte[]{1,2,3}));throw new Exception("Malformed QR accepted");}catch(IOException expected){}
+    t.runOnMainSync(()->t.activity.onActivityResult(2,android.app.Activity.RESULT_CANCELED,null));
+    if(!t.activity.status.getText().toString().contains("paste a pairing code")||t.find(t.activity.root,"Import QR image")==null||t.find(t.activity.root,"Import invitation file")==null)throw new Exception("Camera cancellation lost fallback");
+    String decoded;try(InputStream input=new FileInputStream(new File(t.getTargetContext().getFilesDir(),"peer-invitation.png"))){decoded=PairingQr.decode(input);}
+    t.runOnMainSync(()->t.activity.reviewInvitation(decoded));t.await(()->t.activity.status.getText().toString().contains("Invitation ready for review"),"QR image review failed");
+    if(!target.equals(t.activity.host.getText().toString())||t.activity.hostVerified.isChecked()||store.all().has(target))throw new Exception("QR image implied verified pin or trust");
+    t.runOnMainSync(()->t.activity.onActivityResult(2,android.app.Activity.RESULT_OK,new android.content.Intent().putExtra("SCAN_RESULT","https://untrusted.invalid/invitation")));
+    t.await(()->t.activity.status.getText().toString().contains("Cannot import invitation"),"QR URL was accepted");
+    if(store.all().has(target)||t.activity.invitation.getText().length()!=0)throw new Exception("Invalid QR retained capability or trusted host");
+    t.runOnMainSync(()->t.activity.onActivityResult(2,android.app.Activity.RESULT_OK,new android.content.Intent().putExtra("SCAN_RESULT",code)));
+    t.await(()->t.activity.status.getText().toString().contains("Invitation ready for review"),"Scanner result review failed");
+    new File(t.getTargetContext().getFilesDir(),"peer-invitation.png").delete();
+
     android.content.Intent share=new android.content.Intent(android.content.Intent.ACTION_SEND).setClass(t.getTargetContext(),MainActivity.class).setType("text/plain").putExtra(android.content.Intent.EXTRA_TEXT,code).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK|android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP);
     t.activity=(MainActivity)t.startActivitySync(share);
    }else t.runOnMainSync(()->{try{t.activity.importInvitation(new ByteArrayInputStream(document.getBytes(java.nio.charset.StandardCharsets.UTF_8)));}catch(IOException e){throw new RuntimeException(e);}});
