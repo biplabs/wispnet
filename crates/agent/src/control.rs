@@ -97,6 +97,11 @@ pub async fn catalog_on(
     connection: &Connection,
     expected: EndpointId,
 ) -> Result<Catalog, TunnelError> {
+    // A reused connection must still match this operation's saved host pin.
+    // Check before opening a stream or disclosing even the request type.
+    if connection.remote_id() != expected {
+        return Err(TunnelError::Transport("control target identity mismatch"));
+    }
     timeout(HANDSHAKE_TIMEOUT, async {
         let (mut send, mut recv) = connection
             .open_bi()

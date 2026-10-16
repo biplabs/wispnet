@@ -592,3 +592,54 @@ async fn udp_enabled_hosts_fall_back_to_relay_with_stale_hint() {
     }
     relay.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn catalog_rejects_mismatched_pin_before_sending_a_stream() {
+    use std::time::Duration;
+    use tokio::time::timeout;
+    let server_key = Identity::generate();
+    let client_key = Identity::generate();
+    let unrelated = Identity::generate();
+    let server = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
+        .secret_key(server_key.secret_key().clone())
+        .alpns(vec![wipsnet_core::host::ALPN.to_vec()])
+        .bind_addr("127.0.0.1:0".parse::<std::net::SocketAddr>().unwrap())
+        .unwrap()
+        .bind()
+        .await
+        .unwrap();
+    let client = tunnel::bind_client(client_key.secret_key()).await.unwrap();
+    let (outgoing, incoming) = tokio::join!(
+        control::connect(&client, server_key.endpoint_id(), server.bound_sockets()[0]),
+        async { server.accept().await.unwrap().await.unwrap() }
+    );
+    let outgoing = outgoing.unwrap();
+    let result = timeout(
+        Duration::from_secs(1),
+        control::catalog_on(&outgoing, unrelated.endpoint_id()),
+    )
+    .await
+    .expect("a wrong pin must fail without waiting for a remote response");
+    assert!(matches!(
+        result,
+        Err(tunnel::TunnelError::Transport(
+            "control target identity mismatch"
+        ))
+    ));
+    assert!(
+        timeout(Duration::from_millis(250), incoming.accept_bi())
+            .await
+            .is_err()
+    );
+    // Rejection is local: it neither closes nor poisons the shared connection.
+    let (mut send, _recv) = outgoing.open_bi().await.unwrap();
+    send.write_all(b"still usable").await.unwrap();
+    send.finish().unwrap();
+    let (_send, mut recv) = timeout(Duration::from_secs(1), incoming.accept_bi())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(recv.read_to_end(32).await.unwrap(), b"still usable");
+    client.close().await;
+    server.close().await;
+}
