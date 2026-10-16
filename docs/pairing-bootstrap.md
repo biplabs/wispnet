@@ -16,9 +16,9 @@ still the transport pin. A successful response contains only `version: 1` and
 ID or ALPN fails before sending a request. Response identity, version and schema
 are also checked. Raw transport/relay reasons are not exposed.
 
-This is the transport bootstrap for #13/#17, not completed pairing: no invitation
-capability is accepted, no approval is created, and no remote owner operation is
-available. The client receives no host generation, revision, service listing,
+Hello is transport bootstrap only: it accepts no invitation capability and
+creates no approval. The enrollment flow below uses the same pinned endpoint;
+there is no remote owner operation. The client receives no host generation, revision, service listing,
 backend address or owner credential. Trusting this server does not authorize the
 client, grant reciprocal trust, or grant administrative rights. Private control
 and service connections still independently require host-local approval/grants.
@@ -26,20 +26,18 @@ The caller must obtain the expected host pin through a trusted channel; hello
 never discovers or silently replaces a trusted identity.
 
 The contract uses a four-byte big-endian length and strict JSON followed by FIN.
-The only request is `{"op":"hello"}` (maximum 256 bytes); replies are limited to
-512 bytes. Unknown fields/operations, trailing bytes and oversized frames fail
+Hello requests are at most 256 bytes; hello replies are limited to 512 bytes.
+Enrollment frames below are bounded to 4 KiB in each direction. Unknown fields/operations, trailing bytes and oversized frames fail
 closed. Hosts allow one RPC per bootstrap connection, with five-second deadlines
 for transport handshake, first-stream arrival, and request/response processing.
 Bootstrap uses the existing global connection and stream budgets, and all tasks
-are drained on host shutdown. Invitation budgets and per-client rate limiting belong to #17's pending
-enrollment implementation.
+are drained on host shutdown. Enrollment also has the invitation/attempt budgets described below.
 
 Local tests exercise unapproved hello through a real TLS relay with UDP disabled,
 unchanged authority/private-access denial, malformed/stalled requests, false
 response identity/version/schema, pin rejection before stream creation, CLI use,
 and shutdown cleanup. Linux namespace network auditing includes the relay hello
-in the existing host-control/CLI fixtures. Android app invitation UI, signed
-proofs, durable per-host pins and spent-capability protection remain #17/#12 work.
+in the existing host-control/CLI fixtures. Android app invitation UI and durable client pin persistence remain #17/#12 work.
 
 ## Invitation contract and protected preflight
 
@@ -76,6 +74,69 @@ binds version, target host, enrolling key, name, invitation ID, scope, nonce,
 purpose and expiry. Before signing, clients must match it against their validated
 invitation, own key/name and expected purpose. Targets must verify against the
 actual authenticated connection identity and their stored challenge. Signature
-verification alone does not prevent replay: host-local issuance, nonce consumption,
-owner approval, spent-capability storage and revocation remain #17 implementation
-work. No network proof exchange or durable enrollment state is added here.
+verification alone does not prevent replay: the host-local state machine below
+consumes the stored nonce and requires an independent owner decision.
+
+
+## Host-local enrollment and approval
+
+Issue an invitation on its target host. The destination must be a new absolute
+file in a current-user-owned mode-0700 directory; the command writes mode 0600
+and never prints its capability. The lifetime is five minutes.
+
+```sh
+target/debug/wipsnet host-invite --config /absolute/path/host.toml --output /private/new-invitation.json
+target/debug/wipsnet pairing-request --config /absolute/path/client.toml --peer PINNED_HOST_ID --invitation /private/new-invitation.json
+target/debug/wipsnet host-invitations --config /absolute/path/host.toml
+```
+
+Deliver only the invitation to the intended client through a trusted channel.
+The client sends its capability/name only after transport pin authentication,
+checks the returned target-bound challenge, signs with its own key, and submits
+that proof over another pinned connection. Both use the configured relay without
+a catalog or third host lookup. There is no automatic request retry. A valid
+proof atomically consumes its stored nonce and becomes `pending_owner_approval`.
+It does not change policy revision or authorize catalog/service access.
+
+On the target host, inspect the pending peer ID/name and confirm the intended
+client. Use the current policy revision from `host-status` and a protected local
+`host-mutate` request, for example:
+
+```json
+{"op":"approve_invitation","expected_revision":0,"invitation":"INVITATION_ID"}
+```
+
+`reject_invitation` uses the same fields to reject an issued, challenged or pending
+invitation. These are owner-local operations using that host's protected owner
+token. Approval inserts only the proved peer/name, consumes the invitation, and
+increments policy revision atomically. Catalog access then works; service grants
+still require a separate owner service operation. Approval never restores a grant
+removed by revocation or grants reciprocal/admin rights. No complete-purpose proof
+or client bearer token is required: the client's transport identity is its key.
+
+States are `issued` → `challenged` → `pending` → `spent`, with `expired`, `rejected`
+and `revoked` terminal outcomes. A challenged invitation is pinned to the actual
+client identity/name; challenge refresh rotates the nonce. Changed keys/names,
+stale/forged proofs, consumed nonces, wrong-host use and spent capabilities fail
+closed. Revocation removes that host's grants and also cancels unfinished requests
+already bound to the revoked peer. Other hosts are not consulted or changed.
+
+The target stores only a capability hash. State and attempt budgets survive host
+restart. There are at most 128 unexpired invitation rows (including spent/rejected
+rows); new issuance prunes expired rows. Each valid capability/proof record permits
+12 challenge/proof attempts per 60-second window. Bad capability guesses do not
+consume the legitimate capability's budget. Failed signatures do consume it,
+committed separately from rejection. Pending listings never contain capabilities
+or owner credentials. All state transitions use local SQLite transactions.
+
+A lost reply can leave a proved request pending despite a client-side error. Inspect
+`host-invitations` on the target before making another decision; failure is not
+proof that no state changed. A failed private-file save can similarly leave an
+issued row: reject it and issue a new invitation. Never retry a service operation
+or treat a queued/offline multi-host intent as authorization.
+
+Linux and authorized Android native relay fixtures exercise issuance, proof,
+pending denial, local approval, separate service grants, restart and revocation
+against each host while the other is off. These are native CLI fixtures, not APK,
+QR/UI, cellular or physical two-computer acceptance. Durable client pin storage,
+multi-target status UX and final app/deployment checks remain open.

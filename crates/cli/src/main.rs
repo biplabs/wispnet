@@ -12,14 +12,16 @@ Usage: wipsnet <check|identity-init|status|agent|registry|registry-init|registry
 Backup: wipsnet registry-backup --config /absolute/path/config.toml --output /absolute/path/new-backup.sqlite3
 Enroll: wipsnet enroll --config /absolute/path/device.toml --invitation /private/invitation.json
 Host: wipsnet <host-init|host-status> --config /absolute/path/host.toml
+Host invite: wipsnet host-invite --config /absolute/path/host.toml --output /private/new-invitation.json
+Host invitations: wipsnet host-invitations --config /absolute/path/host.toml
 Host change: wipsnet host-mutate --config /absolute/path/host.toml --request /absolute/path/request.json
 Catalog: wipsnet host-catalog --config /absolute/path/client.toml --peer PUBLIC_ID [--address IP:UDP_PORT]
-Invitation check: wipsnet pairing-check --config /absolute/path/client.toml --peer PINNED_HOST_ID --invitation /private/invitation.json
+Invitation request/check: wipsnet <pairing-request|pairing-check> --config /absolute/path/client.toml --peer PINNED_HOST_ID --invitation /private/invitation.json
 Pairing bootstrap: wipsnet peer-hello --config /absolute/path/client.toml --peer PINNED_HOST_ID [--address IP:UDP_PORT]
 Probe: wipsnet <peer-probe|peer-watch> --config /absolute/path/client.toml --peer PUBLIC_ID [--address IP:UDP_PORT]
 Reset: wipsnet identity-reset --config /absolute/path/config.toml --expect-id PUBLIC_ID
 Tunnel: wipsnet tunnel --config /absolute/path/config.toml --peer PUBLIC_ID [--address IP:UDP_PORT] --service SERVICE_ID
-Tunnel mode relays raw stdin/stdout. It is not a browser gateway. Independent hosts use local approval; target-bound pairing is tracked in #17. See docs/per-host-control.md.";
+Tunnel mode relays raw stdin/stdout. It is not a browser gateway. Independent hosts use local invitation approval. See docs/pairing-bootstrap.md and docs/per-host-control.md.";
 
 fn main() -> ExitCode {
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -51,6 +53,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         println!("{USAGE}");
         return Ok(());
     }
+    let host_invite = args.first().is_some_and(|a| a == "host-invite");
     let host_mutate = args.first().is_some_and(|a| a == "host-mutate");
     let peer_read = args.first().is_some_and(|a| {
         matches!(
@@ -58,12 +61,16 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             Some("host-catalog" | "peer-hello" | "peer-probe" | "peer-watch")
         )
     });
-    let pairing_check = args.first().is_some_and(|a| a == "pairing-check");
+    let pairing_check = args
+        .first()
+        .is_some_and(|a| a == "pairing-check" || a == "pairing-request");
     let enroll = args.first().is_some_and(|a| a == "enroll");
     let backup = args.first().is_some_and(|a| a == "registry-backup");
     let reset = args.first().is_some_and(|a| a == "identity-reset");
     let tunnel_mode = args.first().is_some_and(|a| a == "tunnel");
-    let invalid_arguments = if host_mutate {
+    let invalid_arguments = if host_invite {
+        args.len() != 5 || args[1] != "--config" || args[3] != "--output"
+    } else if host_mutate {
         args.len() != 5 || args[1] != "--config" || args[3] != "--request"
     } else if peer_read {
         !matches!(args.len(), 5 | 7)
@@ -104,9 +111,12 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             | "registry-directory"
             | "enroll"
             | "host-init"
+            | "host-invite"
+            | "host-invitations"
             | "host-status"
             | "host-mutate"
             | "host-catalog"
+            | "pairing-request"
             | "pairing-check"
             | "peer-hello"
             | "peer-probe"
@@ -162,9 +172,12 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             "registry" | "registry-init" | "registry-directory" | "enroll"
         )
     {
-        return Err("legacy controller commands are not available in independent host mode; pairing migration is tracked in #17".into());
+        return Err("legacy controller commands are not available in independent host mode; use host-invite and pairing-request".into());
     }
-    if matches!(mode, "host-init" | "host-status" | "host-mutate") {
+    if matches!(
+        mode,
+        "host-init" | "host-status" | "host-mutate" | "host-invite" | "host-invitations"
+    ) {
         if config.schema_version != 2 {
             return Err("host commands require schema_version=2; use config/host.toml".into());
         }
@@ -202,6 +215,54 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         }
         let (mut store, secret) =
             wipsnet_registry::host::owner_store(&config.state_dir, identity.endpoint_id())?;
+        if mode == "host-invite" {
+            use std::io::Write;
+            let path = PathBuf::from(&args[4]);
+            if !path.is_absolute()
+                || path
+                    .components()
+                    .any(|p| matches!(p, std::path::Component::ParentDir))
+                || path
+                    .try_exists()
+                    .map_err(|_| "cannot inspect invitation output")?
+            {
+                return Err("invitation output must be a new absolute private file".into());
+            }
+            let mut file = wipsnet_registry::control::credential_temp(&path)?;
+            let relay = config
+                .transport
+                .as_ref()
+                .and_then(|t| t.relay_url.as_deref())
+                .ok_or("invitation requires configured relay")?;
+            let invitation = store.pairing_invite(
+                identity.endpoint_id(),
+                &secret,
+                relay,
+                wipsnet_registry::enrollment::now(),
+                300,
+            )?;
+            let bytes = zeroize::Zeroizing::new(serde_json::to_vec(&invitation)?);
+            file.write_all(&bytes)?;
+            file.as_file().sync_all()?;
+            file.persist_noclobber(&path)
+                .map_err(|_| "cannot save private invitation")?;
+            std::fs::File::open(path.parent().ok_or("invalid invitation output")?)?.sync_all()?;
+            println!(
+                "{}",
+                serde_json::json!({"host":invitation.host,"invitation":invitation.invitation,
+                "state":"issued","expires_at":invitation.expires_at})
+            );
+        }
+        if mode == "host-invitations" {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&store.pairing_list(
+                    identity.endpoint_id(),
+                    &secret,
+                    wipsnet_registry::enrollment::now()
+                )?)?
+            );
+        }
         if mode == "host-status" {
             println!(
                 "{}",
@@ -228,7 +289,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     }
-    if mode == "pairing-check" {
+    if matches!(mode, "pairing-check" | "pairing-request") {
         let expected: EndpointId = args[4]
             .to_str()
             .ok_or("invalid peer")?
@@ -247,6 +308,25 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         let identity = store.load()?;
         let endpoint =
             tunnel::bind_configured_client(identity.secret_key(), Some(transport)).await?;
+        if mode == "pairing-request" {
+            let result = wipsnet_agent::pairing::request_enrollment(
+                &endpoint,
+                expected,
+                &invitation,
+                transport,
+                identity.secret_key(),
+                &config.device_name,
+            )
+            .await;
+            endpoint.close().await;
+            let pending = result?;
+            println!(
+                "{}",
+                serde_json::json!({"host":pending.host,"peer":pending.peer,
+                "invitation":pending.invitation,"state":"pending_owner_approval"})
+            );
+            return Ok(());
+        }
         let result = wipsnet_agent::pairing::hello(&endpoint, target).await;
         endpoint.close().await;
         let hello = result?;

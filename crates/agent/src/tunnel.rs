@@ -259,7 +259,7 @@ async fn serve(
                         let Ok(_stream_permit) = streams.try_acquire_owned() else { return };
                         let _stream_guard = CountGuard::new(counts.streams.clone());
                         if let Services::Host(authority) = services {
-                            crate::pairing::serve_stream(send, recv, authority.host()).await;
+                            crate::pairing::serve_stream(send, recv, peer, authority).await;
                         }
                         return;
                     }

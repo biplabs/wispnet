@@ -4,6 +4,7 @@ pub mod client;
 pub mod control;
 pub mod enrollment;
 pub mod host;
+pub mod pairing;
 pub mod store;
 use std::future::Future;
 use wipsnet_core::config::Config;

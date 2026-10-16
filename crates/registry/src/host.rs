@@ -27,6 +27,14 @@ pub enum Mutation {
         expected_revision: u64,
         peer: EndpointId,
     },
+    ApproveInvitation {
+        expected_revision: u64,
+        invitation: String,
+    },
+    RejectInvitation {
+        expected_revision: u64,
+        invitation: String,
+    },
     Service {
         expected_revision: u64,
         id: String,
@@ -45,6 +53,12 @@ impl Mutation {
                 expected_revision, ..
             }
             | Self::Revoke {
+                expected_revision, ..
+            }
+            | Self::ApproveInvitation {
+                expected_revision, ..
+            }
+            | Self::RejectInvitation {
                 expected_revision, ..
             }
             | Self::Service {
@@ -199,6 +213,12 @@ impl Store {
             return Err(ControlError::Conflict);
         }
         match operation {
+            Mutation::ApproveInvitation { invitation, .. } => {
+                crate::pairing::approve(&tx, &invitation, crate::enrollment::now())?;
+            }
+            Mutation::RejectInvitation { invitation, .. } => {
+                crate::pairing::reject(&tx, &invitation)?;
+            }
             Mutation::Approve { peer, name, .. } => {
                 if !valid_name(&name) {
                     return Err(ControlError::Invalid);
@@ -217,6 +237,11 @@ impl Store {
                 if tx.execute("DELETE FROM host_clients WHERE id=?1", [peer.to_string()])? == 0 {
                     return Err(ControlError::Invalid);
                 }
+                tx.execute(
+                    "UPDATE host_invitations SET state='revoked',challenge=NULL
+                    WHERE peer=?1 AND state IN ('issued','challenged','pending')",
+                    [peer.to_string()],
+                )?;
             }
             Mutation::Service {
                 id, backend, allow, ..
@@ -269,8 +294,8 @@ impl Store {
 }
 #[derive(Clone)]
 pub struct Authority {
-    host: EndpointId,
-    store: Arc<Mutex<Store>>,
+    pub(crate) host: EndpointId,
+    pub(crate) store: Arc<Mutex<Store>>,
 }
 impl Authority {
     pub fn open(directory: &Path, host: EndpointId) -> Result<Self, ControlError> {

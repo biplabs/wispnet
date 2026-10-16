@@ -23,7 +23,7 @@ pub(crate) async fn read_frame(
     if length == 0 || length > limit {
         return Err(TunnelError::Transport("control frame too large"));
     }
-    let mut bytes = vec![0; length];
+    let mut bytes = zeroize::Zeroizing::new(vec![0; length]);
     recv.read_exact(&mut bytes)
         .await
         .map_err(|_| TunnelError::Transport("control frame truncated"))?;
@@ -36,7 +36,7 @@ pub(crate) async fn read_frame(
     {
         return Err(TunnelError::Transport("control trailing data"));
     }
-    Ok(bytes)
+    Ok(std::mem::take(&mut *bytes))
 }
 pub(crate) async fn write_frame(send: &mut SendStream, bytes: &[u8]) -> Result<(), TunnelError> {
     send.write_all(&(bytes.len() as u32).to_be_bytes())

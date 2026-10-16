@@ -278,8 +278,25 @@ def main():
                     assert initial_status["revision"] == 0 and initial_status["clients"] == [], "hello changed host authority"
                     assert len(requests) == before_count, "unapproved client reached a backend"
                     revision = 0
-                    for name, _, _, peer in clients:
-                        mutate(path, {"op": "approve", "expected_revision": revision, "peer": peer, "name": name})
+                    for client_index, (name, call, client_path, peer) in enumerate(clients):
+                        invitation_file = root / f"issued-{index}-{client_index}.json"
+                        issued = json.loads(local("host-invite", path, "--output", invitation_file).stdout)
+                        client_invitation = invitation_file
+                        if name.startswith("Android"):
+                            client_invitation = android_root + "/issued-invitation.json"
+                            adb("push", invitation_file, client_invitation)
+                            tablet("chmod", "600", client_invitation)
+                        pending = json.loads(call("pairing-request", client_path, "--peer", pin,
+                                                  "--invitation", client_invitation).stdout)
+                        assert pending == {"host": pin, "peer": peer, "invitation": issued["invitation"],
+                                           "state": "pending_owner_approval"}
+                        listing = json.loads(local("host-invitations", path).stdout)
+                        record = next(entry for entry in listing if entry["invitation"] == issued["invitation"])
+                        assert record["state"] == "pending" and record["peer"] == peer
+                        catalog(call, client_path, pin, ok=False)
+                        use(call, client_path, pin, ok=False)
+                        mutate(path, {"op": "approve_invitation", "expected_revision": revision,
+                                      "invitation": issued["invitation"]})
                         revision += 1
                     mutate(path, {"op": "service", "expected_revision": revision, "id": "website", "backend": binding,
                                   "allow": [client[3] for client in clients]})

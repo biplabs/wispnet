@@ -363,7 +363,8 @@ async fn explicit_tls_relay_without_udp_pins_identity_enforces_grants_and_recove
     drop(stream);
     drop(tcp);
     // Admission at the relay is deliberately AllowAll, but host approval is separate.
-    let stranger = tunnel::bind_configured_client(Identity::generate().secret_key(), Some(&cfg))
+    let stranger_key = Identity::generate();
+    let stranger = tunnel::bind_configured_client(stranger_key.secret_key(), Some(&cfg))
         .await
         .unwrap();
     timeout(Duration::from_secs(10), stranger.online())
@@ -381,6 +382,87 @@ async fn explicit_tls_relay_without_udp_pins_identity_enforces_grants_and_recove
                 .is_err()
         );
     }
+    let (mut store, owner) = host::owner_store(state.path(), key.endpoint_id()).unwrap();
+    let invitation = store
+        .pairing_invite(
+            key.endpoint_id(),
+            &owner,
+            cfg.relay_url.as_deref().unwrap(),
+            wipsnet_registry::enrollment::now(),
+            300,
+        )
+        .unwrap();
+    let pending = wipsnet_agent::pairing::request_enrollment(
+        &stranger,
+        key.endpoint_id(),
+        &invitation,
+        &cfg,
+        stranger_key.secret_key(),
+        "new-tablet",
+    )
+    .await
+    .unwrap();
+    assert_eq!(pending.peer, stranger_key.endpoint_id());
+    let denied = control::connect_target(&stranger, target.clone())
+        .await
+        .unwrap();
+    assert!(
+        control::catalog_on(&denied, key.endpoint_id())
+            .await
+            .is_err()
+    );
+    store
+        .host_mutate(
+            key.endpoint_id(),
+            &owner,
+            Mutation::ApproveInvitation {
+                expected_revision: 2,
+                invitation: invitation.invitation.clone(),
+            },
+        )
+        .unwrap();
+    let approved = control::connect_target(&stranger, target.clone())
+        .await
+        .unwrap();
+    assert!(
+        control::catalog_on(&approved, key.endpoint_id())
+            .await
+            .unwrap()
+            .services
+            .is_empty()
+    );
+    let denied_service = tunnel::connect_target(&stranger, target.clone())
+        .await
+        .unwrap();
+    assert!(
+        tunnel::open_service(&denied_service, "llama")
+            .await
+            .is_err()
+    );
+    store
+        .host_mutate(
+            key.endpoint_id(),
+            &owner,
+            Mutation::Revoke {
+                expected_revision: 3,
+                peer: stranger_key.endpoint_id(),
+            },
+        )
+        .unwrap();
+    assert!(
+        wipsnet_agent::pairing::request_enrollment(
+            &stranger,
+            key.endpoint_id(),
+            &invitation,
+            &cfg,
+            stranger_key.secret_key(),
+            "new-tablet"
+        )
+        .await
+        .is_err()
+    );
+    drop(store);
+    drop(owner);
     // One unavailable pinned peer never holds up an independent live-peer request.
     let absent = tunnel::peer_target(Identity::generate().endpoint_id(), Some(&cfg), None).unwrap();
     let (missing, live) = tokio::join!(
@@ -466,7 +548,7 @@ async fn public_pairing_hello_is_bounded_strict_and_never_approves_a_client() {
         br#"{"op":"hello","owner":"forged"}"#.as_slice(),
         br#"{"op":"approve"}"#,
         br#"{"op":"hello"}trailing"#,
-        &[b'x'; 257],
+        &[b'x'; wipsnet_core::pairing::MAX_REQUEST + 1],
     ] {
         let connection = client
             .connect(target.clone(), wipsnet_core::pairing::ALPN)
