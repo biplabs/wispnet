@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Native independent-host/owner/catalog/service regression checks."""
+import base64
 import http.server
 import json
 from pathlib import Path
@@ -32,6 +33,19 @@ with tempfile.TemporaryDirectory(prefix="wipsnet-hosts-") as temporary:
     fresh_id = run("identity-init", "--config", fresh).stdout.split("Endpoint ID: ")[1].strip()
     a_id = run("host-init", "--config", a).stdout.split("Endpoint ID: ")[1].strip()
     b_id = run("host-init", "--config", b).stdout.split("Endpoint ID: ")[1].strip()
+    code_config, _ = configuration("code-host")
+    with code_config.open("a") as document:
+        document.write('relay_url="https://relay.example"\n')
+    code_host = run("host-init", "--config", code_config).stdout.split("Endpoint ID: ")[1].strip()
+    code_path = root / "invitation.txt"
+    result = run("host-invite", "--config", code_config, "--output", code_path, "--format", "code")
+    encoded = code_path.read_text()
+    assert encoded.startswith("wispnet1:") and code_path.stat().st_mode & 0o077 == 0
+    payload = encoded.removeprefix("wispnet1:")
+    invitation = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    assert invitation["host"] == code_host and invitation["scope"] == "request_access"
+    assert invitation["code"] not in result.stdout and encoded not in result.stdout
+    run("host-invite", "--config", code_config, "--output", code_path, "--format", "code", ok=False)
     assert a_id != b_id
     assert (a_state / "host-owner.token").read_bytes() != (b_state / "host-owner.token").read_bytes()
     def status(config):

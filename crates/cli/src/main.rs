@@ -12,7 +12,7 @@ Usage: wipsnet <check|identity-init|status|agent|registry|registry-init|registry
 Backup: wipsnet registry-backup --config /absolute/path/config.toml --output /absolute/path/new-backup.sqlite3
 Enroll: wipsnet enroll --config /absolute/path/device.toml --invitation /private/invitation.json
 Host: wipsnet <host-init|host-status> --config /absolute/path/host.toml
-Host invite: wipsnet host-invite --config /absolute/path/host.toml --output /private/new-invitation.json
+Host invite: wipsnet host-invite --config /absolute/path/host.toml --output /private/new-invitation.json [--format code]
 Host invitations: wipsnet host-invitations --config /absolute/path/host.toml
 Host change: wipsnet host-mutate --config /absolute/path/host.toml --request /absolute/path/request.json
 Catalog: wipsnet host-catalog --config /absolute/path/client.toml --peer PUBLIC_ID [--address IP:UDP_PORT]
@@ -69,7 +69,10 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
     let reset = args.first().is_some_and(|a| a == "identity-reset");
     let tunnel_mode = args.first().is_some_and(|a| a == "tunnel");
     let invalid_arguments = if host_invite {
-        args.len() != 5 || args[1] != "--config" || args[3] != "--output"
+        !matches!(args.len(), 5 | 7)
+            || args[1] != "--config"
+            || args[3] != "--output"
+            || (args.len() == 7 && (args[5] != "--format" || args[6] != "code"))
     } else if host_mutate {
         args.len() != 5 || args[1] != "--config" || args[3] != "--request"
     } else if peer_read {
@@ -241,7 +244,13 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 wipsnet_registry::enrollment::now(),
                 300,
             )?;
-            let bytes = zeroize::Zeroizing::new(serde_json::to_vec(&invitation)?);
+            let bytes = zeroize::Zeroizing::new(if args.len() == 7 {
+                wipsnet_agent::pairing::encode_invitation(&invitation)?
+                    .as_bytes()
+                    .to_vec()
+            } else {
+                serde_json::to_vec(&invitation)?
+            });
             file.write_all(&bytes)?;
             file.as_file().sync_all()?;
             file.persist_noclobber(&path)

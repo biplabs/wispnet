@@ -20,7 +20,17 @@ final class PeerChecks {
    String document=new String(Files.readAllBytes(new File(t.getTargetContext().getFilesDir(),"peer-invitation.json").toPath()),java.nio.charset.StandardCharsets.UTF_8);
    try{Native.request(new JSONObject().put("op","pair").put("host",other).put("invitation",document));throw new Exception("Wrong host pin accepted");}catch(Native.Failure expected){}
    if(!hadOther&&store.all().has(other))throw new Exception("Wrong pin saved");
-   t.runOnMainSync(()->{t.activity.label.setText(name);t.activity.host.setText(target);t.activity.invitation.setText(document);});t.click("Request pairing");
+   String code="wispnet1:"+android.util.Base64.encodeToString(document.getBytes(java.nio.charset.StandardCharsets.UTF_8),android.util.Base64.URL_SAFE|android.util.Base64.NO_PADDING|android.util.Base64.NO_WRAP);
+   if(name.equals("Local computer")){
+    android.content.Intent share=new android.content.Intent(android.content.Intent.ACTION_SEND).setClass(t.getTargetContext(),MainActivity.class).setType("text/plain").putExtra(android.content.Intent.EXTRA_TEXT,code).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK|android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP);
+    t.activity=(MainActivity)t.startActivitySync(share);
+   }else t.runOnMainSync(()->{try{t.activity.importInvitation(new ByteArrayInputStream(document.getBytes(java.nio.charset.StandardCharsets.UTF_8)));}catch(IOException e){throw new RuntimeException(e);}});
+   t.await(()->t.activity.status.getText().toString().contains("Invitation ready for review"),"Camera-free import failed");
+   if(!target.equals(t.activity.host.getText().toString())||t.activity.hostVerified.isChecked()||store.all().has(target))throw new Exception("Import implied verified pin or pairing");
+   t.runOnMainSync(()->{t.activity.label.setText(name);android.widget.Button b=t.find(t.activity.root,"Request pairing");b.performClick();});
+   t.await(()->t.activity.status.getText().toString().contains("Compare the full host ID"),"Import skipped explicit host verification");
+   if(t.activity.invitation.getText().length()==0||store.all().has(target))throw new Exception("Unconfirmed request consumed invitation or paired");
+   t.click("Request pairing");
    t.await(()->store.all().has(target)&&"approval_pending".equals(store.all().getJSONObject(target).optString("state")),"Pairing did not remain pending");
    refresh(t);Thread.sleep(1500);if(!"approval_pending".equals(store.all().getJSONObject(target).optString("state")))throw new Exception("Pending pairing falsely marked approved");
    barrier(t,"pending-owner-approval");available(t,target);

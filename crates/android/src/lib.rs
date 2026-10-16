@@ -87,6 +87,18 @@ impl Client {
     async fn command(self: &Arc<Self>, value: &Value) -> Result<Value, String> {
         match argument(value, "op")? {
             "identity" => Ok(json!({"peer":self.endpoint.id().to_string()})),
+            "preview_invitation" => {
+                let invitation = wipsnet_agent::pairing::decode_invitation(
+                    argument(value, "invitation")?.as_bytes(),
+                )
+                .map_err(|_| "Invalid invitation")?;
+                if !invitation.valid(wipsnet_registry::enrollment::now()) {
+                    return Err("Expired or invalid invitation".into());
+                }
+                Ok(
+                    json!({"host":invitation.host.to_string(),"relay_url":invitation.relay_url,"expires_at":invitation.expires_at}),
+                )
+            }
             "pair" => {
                 let host = peer(value)?;
                 let text = argument(value, "invitation")?;
@@ -94,7 +106,8 @@ impl Client {
                     return Err("Invitation too large".into());
                 }
                 let invitation: wipsnet_core::pairing::Invitation =
-                    serde_json::from_str(text).map_err(|_| "Invalid invitation")?;
+                    wipsnet_agent::pairing::decode_invitation(text.as_bytes())
+                        .map_err(|_| "Invalid invitation")?;
                 let bootstrap = invitation
                     .bootstrap(host, wipsnet_registry::enrollment::now())
                     .ok_or("Expired invitation or wrong host pin")?;

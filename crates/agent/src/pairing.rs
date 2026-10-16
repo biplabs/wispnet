@@ -165,8 +165,7 @@ pub fn read_invitation(
     if bytes.len() > 8192 {
         return Err(denied());
     }
-    serde_json::from_slice(&bytes)
-        .map_err(|_| TunnelError::Transport("invalid host invitation document"))
+    decode_invitation(&bytes)
 }
 
 async fn rpc(
@@ -268,4 +267,59 @@ pub async fn request_enrollment(
         return Err(TunnelError::Transport("pairing pending identity mismatch"));
     }
     Ok(pending)
+}
+
+/// Camera-free transport of the same target-bound contract. No URL is fetched.
+pub fn decode_invitation(bytes: &[u8]) -> Result<wipsnet_core::pairing::Invitation, TunnelError> {
+    use base64::Engine;
+    let denied = || TunnelError::Transport("invalid host invitation document");
+    if bytes.len() > 8192 {
+        return Err(denied());
+    }
+    let text = std::str::from_utf8(bytes).map_err(|_| denied())?.trim();
+    let decoded = zeroize::Zeroizing::new(if let Some(code) = text.strip_prefix("wispnet1:") {
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(code)
+            .map_err(|_| denied())?
+    } else {
+        text.as_bytes().to_vec()
+    });
+    serde_json::from_slice(&decoded).map_err(|_| denied())
+}
+pub fn encode_invitation(
+    invitation: &wipsnet_core::pairing::Invitation,
+) -> Result<zeroize::Zeroizing<String>, serde_json::Error> {
+    use base64::Engine;
+    let bytes = zeroize::Zeroizing::new(serde_json::to_vec(invitation)?);
+    Ok(zeroize::Zeroizing::new(format!(
+        "wispnet1:{}",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&bytes)
+    )))
+}
+#[cfg(test)]
+mod code_tests {
+    use super::*;
+    #[test]
+    fn code_and_json_share_strict_target_contract_and_bounds() {
+        let text = serde_json::json!({"version":1,"host":wipsnet_core::identity::SecretKey::generate().public(),"relay_url":"https://relay.example","invitation":"1".repeat(64),"code":"2".repeat(64),"scope":"request_access","expires_at":200});
+        let json = serde_json::to_vec(&text).unwrap();
+        let invitation = decode_invitation(&json).unwrap();
+        let code = encode_invitation(&invitation).unwrap();
+        let decoded = decode_invitation(code.as_bytes()).unwrap();
+        assert_eq!(decoded.host, invitation.host);
+        assert_eq!(decoded.code, invitation.code);
+        assert!(decoded.bootstrap(decoded.host, 100).is_some());
+        assert!(decoded.bootstrap(decoded.host, 200).is_none());
+        assert!(
+            decoded
+                .bootstrap(wipsnet_core::identity::SecretKey::generate().public(), 100)
+                .is_none()
+        );
+        for invalid in ["wispnet2:abc", "wispnet1:!!", &"x".repeat(8193)] {
+            assert!(decode_invitation(invalid.as_bytes()).is_err());
+        }
+        let mut invalid = text;
+        invalid["admin"] = serde_json::json!(true);
+        assert!(decode_invitation(&serde_json::to_vec(&invalid).unwrap()).is_err());
+    }
 }

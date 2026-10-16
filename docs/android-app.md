@@ -50,7 +50,7 @@ Foreground access uses Android's `dataSync` service type and notification. It is
 
 The HTTP loopback gateway is a development implementation: isolated random localhost origins, origin/authority checks, HttpOnly session cookies, bounded uploads, and cross-origin redirect rejection. Secure-cookie/prefix behavior, service workers, arbitrary login flows, full HTTP compatibility, and the stricter release security work remain under #10. Streaming responses and WebSocket upgrades are implemented; a physical controlled WebSocket upgrade/echo is covered by the lifecycle harness. Chunked request uploads and Expect requests are currently rejected.
 
-Camera/QR scanning is not implemented; file import and pasted target-bound invitation JSON work on the camera-less tablet. Physical app checks now cover hotspot/home Wi-Fi transitions, relay service restart, screen-off/Doze recovery, fresh pairing with the other node stopped, and active-stream revocation. Independently verified cellular egress for this app run, full relay replacement, broader OEM battery restrictions and longer-duration lifecycle acceptance remain under #12. Transport-only #13 checks do not establish these app-level results.
+Camera/QR scanning is not implemented yet. The camera-free path supports a pasted pairing code or JSON, invitation file import, and Android Share to Wispnet. All paths require host-ID comparison and independent target approval. Physical app checks now cover hotspot/home Wi-Fi transitions, relay service restart, screen-off/Doze recovery, fresh pairing with the other node stopped, and active-stream revocation. Independently verified cellular egress for this app run, full relay replacement, broader OEM battery restrictions and longer-duration lifecycle acceptance remain under #12. Transport-only #13 checks do not establish these app-level results.
 
 ## Lifecycle and network recovery checks
 
@@ -143,3 +143,20 @@ scripts/build_android.sh
 Observed on 2026-10-16: the real Android 15 framework timeout stopped native access, and explicit restart and Stop passed. This shortened platform test is separate from physical Android 14 lifecycle checks and does not establish a six-hour background soak or a live-tunnel test on Android 15.
 
 Observed on the physical Android 14 tablet (2026-10-16), on home Wi-Fi: expired and owner-rejected invitations preserved denial; fresh explicit approval restored access with the same identity. The unshortened ten-minute continuous stream reached its session deadline, the old listener closed, the app displayed session expiry, both hosts refreshed, and a fresh browser Open succeeded without new pairing. The isolated test client and fixture services were cleaned afterward. Cellular egress was not independently verified in this run.
+
+
+## Pairing without a camera
+
+Camera-less devices use the same host-scoped protocol. On the target computer, create either the usual invitation JSON or a copyable code file:
+
+```sh
+wipsnet host-invite --config /absolute/path/host.toml --output /private/invitation.json
+# Alternative representation of the same contract; choose one command:
+wipsnet host-invite --config /absolute/path/host.toml --output /private/invitation.txt --format code
+```
+
+Send the file to the tablet and select **Import invitation file**, or use Android's **Share → Wispnet**. A text code can also be pasted into **Paste pairing code or invitation JSON**, then **Review pasted invitation**. Both representations fill in the complete host ID for review. Compare that ID with the target computer and select **I compared this host ID with the target computer**, enter a machine name, then **Request pairing**. Import and review do not send a pairing request or save a trusted pin. Editing the host ID clears confirmation. The target owner must still approve the pending request and grant services.
+
+The `wispnet1:` code is a copyable encoding of the full versioned invitation, not a short numeric lookup code or a new authority. It contains the expiring single-use capability, so share it only with the intended device; the host command writes a new private file and does not print the capability. Linux reads either representation from its protected invitation file. Native Android uses the same strict decoder and performs expiry, target-pin and proof checks. Imports are bounded to 8 KiB; Android accepts file-picker content URIs or explicitly shared text/content, without fetching invitation URLs. No camera permission or scanner app is needed. QR scanning remains a separate pending convenience.
+
+Observed on the camera-less physical tablet (2026-10-16): shared-text pairing codes reached the real Android `ACTION_SEND` receiver; invitation JSON exercised the same bounded file-reader/review path used by the picker. Review filled the expected host ID without saving trust, left confirmation unchecked, and an unconfirmed Request did not consume the invitation or request enrollment. After confirmation, both fresh pairing orderings passed with the other node stopped, followed by cold browser access, host-local grant withdrawal/revocation, and rejected/expired invitation recovery. File-picker selection itself was not automated in this run. The normal app retained its original identity/pairings.

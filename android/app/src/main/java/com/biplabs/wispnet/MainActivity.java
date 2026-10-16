@@ -18,6 +18,7 @@ public final class MainActivity extends Activity {
  final Handler lifecycle=new Handler(Looper.getMainLooper());
  final Runnable updateAccess=new Runnable(){public void run(){if(access!=null){access.setText(AccessService.enabled?"Stop browser access":"Start browser access");network.setText(AccessService.networkStatus);for(Runnable age:ageUpdates)age.run();}lifecycle.postDelayed(this,1000);}};EditText label,host,invitation;Button access;
  static volatile long browserExpiresAt=0;
+ CheckBox hostVerified;
  HostStore store;
  final java.util.Set<String> refreshing=ConcurrentHashMap.newKeySet();
  void text(LinearLayout parent,String value,int size){TextView t=new TextView(this);t.setText(value);t.setTextSize(size);t.setPadding(0,12,0,8);parent.addView(t);}
@@ -36,17 +37,24 @@ public final class MainActivity extends Activity {
   text(root,"Pair a machine",22);
   label=field("Machine name",InputType.TYPE_CLASS_TEXT);
   host=field("Host ID — verify on that machine",InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
-  invitation=field("Paste invitation JSON",InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD|InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+  invitation=field("Paste pairing code or invitation JSON",InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD|InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+  text(root,"No camera needed: paste a pairing code, import a file, or share an invitation to Wispnet.",15);
+  button(root,"Review pasted invitation",()->reviewInvitation(invitation.getText().toString()));
+  hostVerified=new CheckBox(this);hostVerified.setText("I compared this host ID with the target computer");root.addView(hostVerified);
+  host.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){} public void onTextChanged(CharSequence s,int start,int before,int count){hostVerified.setChecked(false);} public void afterTextChanged(android.text.Editable s){}});
   button(root,"Import invitation file",()->{Intent pick=new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(pick,1);});
   button(root,"Request pairing",this::pair);
   text(root,"Services",22);list=new LinearLayout(this);list.setOrientation(LinearLayout.VERTICAL);root.addView(list);
   if(checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},2);
   status.setText("Preparing protected device identity…");
+  receiveInvitation(getIntent());
   work.execute(()->{try{Native.ensure(this);String peer=Native.command("identity").getString("peer");runOnUiThread(()->{identity.setText("This tablet: "+peer);if(status.getText().toString().startsWith("Preparing protected"))status.setText("Ready. Pair with each machine independently.");refresh();});}catch(Exception e){show("Cannot initialize protected identity: "+e.getMessage());}});
  }
  void show(String value){runOnUiThread(()->status.setText(value));}
- void pair(){final String expected=host.getText().toString().trim(),document=invitation.getText().toString(),name=label.getText().toString().trim();invitation.setText("");
+ void pair(){final String expected=host.getText().toString().trim(),document=invitation.getText().toString(),name=label.getText().toString().trim();
+  if(!hostVerified.isChecked()){show("Compare the full host ID with the target computer, then confirm it before requesting pairing.");return;}
   if(expected.isEmpty()||document.isEmpty()||name.isEmpty()){show("Enter machine name, verified host ID and invitation");return;}
+  invitation.setText("");
   status.setText("Requesting pairing from "+name+"…");
   work.execute(()->{try{Native.ensure(this);Native.request(new JSONObject().put("op","pair").put("host",expected).put("invitation",document));store.paired(expected,name);show("Request sent. Approve this tablet on "+name+", grant services, then refresh.");runOnUiThread(this::render);}catch(Exception e){if(e instanceof Native.Failure&&"invitation_denied".equals(((Native.Failure)e).code))show("This host did not accept the invitation. Ask its owner for a new invitation.");else show(e.getMessage());}});
  }
@@ -65,7 +73,25 @@ public final class MainActivity extends Activity {
   }catch(Exception e){show("Saved directory unavailable");}
  }
  void open(String peer,String service){if(!AccessService.enabled){show("Start browser access first");return;}status.setText("Opening "+service+"…");work.execute(()->{try{JSONObject response=Native.request(new JSONObject().put("op","open").put("host",peer).put("service",service));String url=response.getString("url");runOnUiThread(()->{browserExpiresAt=SystemClock.elapsedRealtime()+response.optLong("expires_in",600)*1000;status.setText("Browser access active. Reopen this service when its local session expires.");Intent browser=new Intent(Intent.ACTION_VIEW,Uri.parse(url));browser.addCategory(Intent.CATEGORY_BROWSABLE);startActivity(browser);});}catch(Exception e){try{store.failed(peer,e);}catch(Exception ignored){}show("Cannot open service: "+e.getMessage());runOnUiThread(this::render);}});}
- protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(request==1&&result==RESULT_OK&&data!=null){try(InputStream in=getContentResolver().openInputStream(data.getData())){byte[] bytes=in.readNBytes(8193);if(bytes.length>8192)throw new IOException();invitation.setText(new String(bytes,java.nio.charset.StandardCharsets.UTF_8));status.setText("Invitation imported. Verify the host ID before pairing.");}catch(Exception e){show("Cannot read bounded invitation file");}}}
+ void reviewInvitation(String document){
+  if(document.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>8192){invitation.setText("");show("Invitation is too large. Ask for a new invitation file.");return;}
+  hostVerified.setChecked(false);invitation.setText("");status.setText("Reviewing invitation…");
+  work.execute(()->{try{Native.ensure(this);JSONObject preview=Native.request(new JSONObject().put("op","preview_invitation").put("invitation",document));runOnUiThread(()->{host.setText(preview.optString("host"));invitation.setText(document);status.setText("Invitation ready for review. Compare the full host ID on the target computer. Importing does not request pairing or grant access.");});}catch(Exception e){show("Cannot import invitation: "+e.getMessage());}});
+ }
+ void importInvitation(InputStream in)throws IOException{byte[] bytes=in.readNBytes(8193);if(bytes.length>8192)throw new IOException();String document=new String(bytes,java.nio.charset.StandardCharsets.UTF_8);runOnUiThread(()->reviewInvitation(document));}
+ void readInvitation(Uri uri){
+  invitation.setText("");hostVerified.setChecked(false);status.setText("Reading invitation file…");
+  work.execute(()->{try{if(uri==null||!"content".equals(uri.getScheme()))throw new IOException();try(InputStream in=getContentResolver().openInputStream(uri)){importInvitation(in);}}catch(Exception e){show("Cannot read bounded invitation file. Paste its pairing code instead.");}});
+ }
+ void receiveInvitation(Intent intent){
+  if(!Intent.ACTION_SEND.equals(intent.getAction()))return;
+  try{Uri uri=intent.getParcelableExtra(Intent.EXTRA_STREAM,Uri.class);if(uri!=null){readInvitation(uri);}
+   else{String document=intent.getStringExtra(Intent.EXTRA_TEXT);if(document==null)throw new IOException();reviewInvitation(document);}
+  }catch(Exception invalid){show("Cannot read invitation. Paste a pairing code or import its file instead.");}
+  intent.removeExtra(Intent.EXTRA_STREAM);intent.removeExtra(Intent.EXTRA_TEXT);
+ }
+ protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);receiveInvitation(intent);}
+ protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(request==1&&result==RESULT_OK&&data!=null)readInvitation(data.getData());}
  protected void onResume(){super.onResume();if(AccessService.enabled&&browserExpiresAt>0&&SystemClock.elapsedRealtime()>=browserExpiresAt)status.setText("Browser session expired. Open the service again; pairing is unchanged.");lifecycle.post(updateAccess);if(access!=null)access.setText(AccessService.enabled?"Stop browser access":"Start browser access");}
  protected void onPause(){lifecycle.removeCallbacks(updateAccess);super.onPause();}
  protected void onDestroy(){work.shutdown();super.onDestroy();}
