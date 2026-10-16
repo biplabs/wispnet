@@ -8,7 +8,7 @@ Wipsnet brings your self-hosted services into one directory and makes them acces
 
 > **Every host owns its services and permissions. There is no master node. The cloud is disposable.** Machine 1 is authoritative for Machine 1; Machine 2 is authoritative for Machine 2. Devices assemble trusted service information into a shared directory view. The cloud supplies only a transient connection relay, not a registry or authorization database.
 
-> **Status: initial implementation and architecture migration.** The behavior below is the accepted v1 target, not a claim that migration, the Android app, or relay recovery is already complete. Development foundations exist, but there is no complete v1 release, stable CLI, or production-readiness claim. [#16](https://github.com/biplabs/wispnet/issues/16) tracks per-host control and storage; [#18](https://github.com/biplabs/wispnet/issues/18) tracks disposable relay deployment. [ADR 0002](docs/decisions/0002-per-host-authority.md) records the decision.
+> **Status: development implementation.** An installable native Android app now provides independent host pairing, an aggregated service directory, Start/Stop browser access, and normal-browser handoff. See the [Android build and usage guide](docs/android-app.md). Full lifecycle, network-transition, and gateway release acceptance remain tracked in [#12](https://github.com/biplabs/wispnet/issues/12) and [#10](https://github.com/biplabs/wispnet/issues/10); this is not a production-ready v1 release. [ADR 0002](docs/decisions/0002-per-host-authority.md) records the architecture.
 
 ## Why Wipsnet?
 

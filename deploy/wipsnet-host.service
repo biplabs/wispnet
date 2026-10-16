@@ -1,0 +1,12 @@
+[Unit]
+Description=Wispnet host node (independent of relay role)
+After=network-online.target
+Wants=network-online.target
+[Service]
+ExecStart=%h/.local/libexec/wipsnet-node/wipsnet agent --config %h/.config/wipsnet-node/host.toml
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+UMask=0077
+[Install]
+WantedBy=default.target

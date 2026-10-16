@@ -4350,6 +4350,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "wipsnet-android"
+version = "0.1.0"
+dependencies = [
+ "httparse",
+ "iroh",
+ "jni 0.21.1",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "wipsnet-agent",
+ "wipsnet-core",
+ "wipsnet-registry",
+ "zeroize",
+]
+
+[[package]]
 name = "wipsnet-cli"
 version = "0.1.0"
 dependencies = [
