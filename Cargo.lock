@@ -3619,6 +3619,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-util",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -4351,13 +4352,18 @@ dependencies = [
 name = "wipsnet-cli"
 version = "0.1.0"
 dependencies = [
+ "blake3",
+ "http",
+ "iroh-base",
  "iroh-relay",
+ "n0-future",
  "rcgen",
  "rustls",
  "rustls-pki-types",
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-websockets",
  "tracing",
  "tracing-subscriber",
  "wipsnet-agent",

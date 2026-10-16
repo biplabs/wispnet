@@ -9,6 +9,7 @@ if [ -n "${WIPSNET_SSH_RELAY_HOST:-}" ] && [ "${WIPSNET_ANDROID_RELAY_TEST:-0}" 
     echo "Physical SSH/tablet checks require WIPSNET_ANDROID_RELAY_TEST=1 to rebuild the current Android CLI." >&2
     exit 1
 fi
+node --test sites/relay-compatibility/test/*.test.js
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked

@@ -31,7 +31,10 @@ git push
 ```
 
 The hook runs formatting, Clippy, unit tests, a debug build, CLI lifecycle/tunnel
-smoke tests, and the disposable browser-boundary suite. Install uv and Python 3.11+ for that suite.
+smoke tests, and the disposable browser-boundary suite. Install uv and Python 3.11+ for that suite. Node 22+ runs the bundled Sites relay
+spike authentication checks without installing npm dependencies. The optional
+[live Sites compatibility test](sites-relay-validation.md) reports hosting failures
+separately from the local suite.
 It blocks a push on failure, a dirty working tree, or a branch other than main,
 so checks cover the commit being pushed. Fresh clones must install the hook;
 Git does not enable versioned hooks automatically. GitHub Actions is not used.
