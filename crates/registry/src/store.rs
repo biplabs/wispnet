@@ -1,0 +1,315 @@
+//! Local persistence boundary. Callers must authenticate before invoking mutations.
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use std::path::Path;
+use wipsnet_core::{identity::EndpointId, protocol::valid_service_id};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Error {
+    Storage,
+    UnsupportedSchema,
+    InvalidInput,
+    Conflict,
+}
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Storage => "registry storage failed",
+            Self::UnsupportedSchema => "unsupported registry schema",
+            Self::InvalidInput => "invalid registry input",
+            Self::Conflict => "registry revision conflict",
+        })
+    }
+}
+impl std::error::Error for Error {}
+impl From<rusqlite::Error> for Error {
+    fn from(_: rusqlite::Error) -> Self {
+        Self::Storage
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct Service {
+    pub id: String,
+    pub host: EndpointId,
+    pub grants: Vec<EndpointId>,
+}
+#[derive(Debug, PartialEq, Eq)]
+pub struct Snapshot {
+    pub revision: u64,
+    pub devices: Vec<EndpointId>,
+    pub services: Vec<Service>,
+}
+/// SQLite handle for a database in a private, caller-managed state directory.
+/// This is not an authenticated network API.
+pub struct Store(Connection);
+impl Store {
+    pub fn open(path: &Path) -> Result<Self, Error> {
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+        let parent = path.parent().ok_or(Error::InvalidInput)?;
+        let parent_metadata = std::fs::symlink_metadata(parent).map_err(|_| Error::Storage)?;
+        if !parent_metadata.is_dir()
+            || parent_metadata.mode() & 0o777 != 0o700
+            || parent_metadata.uid() != unsafe { libc::geteuid() }
+        {
+            return Err(Error::Storage);
+        }
+        // Reserve with private permissions before SQLite opens the file. Refuse
+        // links/shared files; callers keep the parent directory private as well.
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(path)
+            .map_err(|_| Error::Storage)?;
+        let metadata = file.metadata().map_err(|_| Error::Storage)?;
+        if !metadata.is_file()
+            || metadata.nlink() != 1
+            || metadata.mode() & 0o777 != 0o600
+            || metadata.uid() != unsafe { libc::geteuid() }
+        {
+            return Err(Error::Storage);
+        }
+        let mut db = Connection::open(path)?;
+        db.busy_timeout(std::time::Duration::from_secs(3))?;
+        db.pragma_update(None, "foreign_keys", true)?;
+        let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let version: u32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        match version {
+            0 => tx.execute_batch("CREATE TABLE revision (id INTEGER PRIMARY KEY CHECK(id=1), value INTEGER NOT NULL CHECK(value>=0));
+                INSERT INTO revision VALUES(1,0);
+                CREATE TABLE devices (id TEXT PRIMARY KEY);
+                CREATE TABLE services (id TEXT PRIMARY KEY, host TEXT NOT NULL REFERENCES devices(id));
+                CREATE TABLE grants (service TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE, device TEXT NOT NULL REFERENCES devices(id), PRIMARY KEY(service,device));
+                PRAGMA user_version=1;")?,
+            1 => {},
+            _ => return Err(Error::UnsupportedSchema),
+        }
+        tx.commit()?;
+        Ok(Self(db))
+    }
+    /// Atomically replace the directory and policy against a known revision.
+    /// Enrollment and owner authentication belong to the API layer, not this method.
+    pub fn replace(
+        &mut self,
+        expected: u64,
+        devices: &[EndpointId],
+        services: &[Service],
+    ) -> Result<u64, Error> {
+        if services.iter().map(|s| s.grants.len()).sum::<usize>() > 16384
+            || devices.len() > 1024
+            || services.len() > 1024
+            || expected >= i64::MAX as u64
+            || services
+                .iter()
+                .any(|s| !valid_service_id(&s.id) || s.grants.len() > 1024)
+        {
+            return Err(Error::InvalidInput);
+        }
+        let tx = self
+            .0
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let revision: i64 =
+            tx.query_row("SELECT value FROM revision WHERE id=1", [], |r| r.get(0))?;
+        if revision != expected as i64 {
+            return Err(Error::Conflict);
+        }
+        tx.execute_batch("DELETE FROM grants; DELETE FROM services; DELETE FROM devices;")?;
+        for device in devices {
+            tx.execute("INSERT INTO devices VALUES(?1)", [device.to_string()])?;
+        }
+        for service in services {
+            tx.execute(
+                "INSERT INTO services VALUES(?1,?2)",
+                params![service.id, service.host.to_string()],
+            )?;
+            for grant in &service.grants {
+                tx.execute(
+                    "INSERT INTO grants VALUES(?1,?2)",
+                    params![service.id, grant.to_string()],
+                )?;
+            }
+        }
+        tx.execute(
+            "UPDATE revision SET value=?1 WHERE id=1",
+            [(expected + 1) as i64],
+        )?;
+        tx.commit()?;
+        Ok(expected + 1)
+    }
+    /// One read transaction guarantees policy and routing share a revision.
+    pub fn snapshot(&mut self) -> Result<Snapshot, Error> {
+        let tx = self.0.transaction()?;
+        let revision: i64 =
+            tx.query_row("SELECT value FROM revision WHERE id=1", [], |r| r.get(0))?;
+        let devices = ids(&tx, "SELECT id FROM devices ORDER BY id", [])?;
+        let mut services = Vec::new();
+        {
+            let mut stmt = tx.prepare("SELECT id,host FROM services ORDER BY id")?;
+            let rows =
+                stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+            for row in rows {
+                let (id, host) = row?;
+                let grants = ids(
+                    &tx,
+                    "SELECT device FROM grants WHERE service=?1 ORDER BY device",
+                    [&id],
+                )?;
+                services.push(Service {
+                    id,
+                    host: host.parse().map_err(|_| Error::Storage)?,
+                    grants,
+                });
+            }
+        }
+        tx.commit()?;
+        Ok(Snapshot {
+            revision: revision.try_into().map_err(|_| Error::Storage)?,
+            devices,
+            services,
+        })
+    }
+    /// SQLite's online backup yields a consistent standalone database.
+    /// Destination must be a newly reserved private file, never an existing backup.
+    pub fn backup(&self, destination: &Path) -> Result<(), Error> {
+        use std::os::unix::fs::OpenOptionsExt;
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(destination)
+            .map_err(|_| Error::Storage)?;
+        self.0.backup("main", destination, None)?;
+        file.sync_all().map_err(|_| Error::Storage)?;
+        Ok(())
+    }
+    pub fn ready(&self) -> Result<bool, Error> {
+        let result: Option<String> = self
+            .0
+            .query_row("PRAGMA quick_check", [], |r| r.get(0))
+            .optional()?;
+        Ok(result.as_deref() == Some("ok"))
+    }
+}
+fn ids<P: rusqlite::Params>(
+    db: &Connection,
+    sql: &str,
+    params: P,
+) -> Result<Vec<EndpointId>, Error> {
+    let mut stmt = db.prepare(sql)?;
+    stmt.query_map(params, |r| r.get::<_, String>(0))?
+        .map(|r| r?.parse().map_err(|_| Error::Storage))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wipsnet_core::identity::Identity;
+    fn private_dir() -> tempfile::TempDir {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        dir
+    }
+    #[test]
+    fn restart_backup_restore_and_atomic_conflicts() {
+        let dir = private_dir();
+        let path = dir.path().join("registry.db");
+        let backup = dir.path().join("backup.db");
+        let host = Identity::generate().endpoint_id();
+        let client = Identity::generate().endpoint_id();
+        let mut store = Store::open(&path).unwrap();
+        assert!(store.ready().unwrap());
+        assert_eq!(
+            store.replace(
+                0,
+                &[host, client],
+                &[Service {
+                    id: "website".into(),
+                    host,
+                    grants: vec![client]
+                }]
+            ),
+            Ok(1)
+        );
+        let original = store.snapshot().unwrap();
+        assert_eq!(store.replace(0, &[], &[]), Err(Error::Conflict));
+        // Invalid foreign key after deletion must roll back the entire update.
+        assert_eq!(
+            store.replace(
+                1,
+                &[host],
+                &[Service {
+                    id: "website".into(),
+                    host,
+                    grants: vec![client]
+                }]
+            ),
+            Err(Error::Storage)
+        );
+        assert_eq!(store.snapshot().unwrap(), original);
+        store.backup(&backup).unwrap();
+        assert_eq!(store.backup(&backup), Err(Error::Storage));
+        drop(store);
+        assert_eq!(Store::open(&path).unwrap().snapshot().unwrap(), original);
+        // Restore offline into a new location; no live database is overwritten.
+        let restored = dir.path().join("restored.db");
+        std::fs::copy(backup, &restored).unwrap();
+        assert_eq!(
+            Store::open(&restored).unwrap().snapshot().unwrap(),
+            original
+        );
+    }
+    #[test]
+    fn independent_writers_cannot_overwrite_newer_policy() {
+        let dir = private_dir();
+        let path = dir.path().join("db");
+        let mut first = Store::open(&path).unwrap();
+        let mut second = Store::open(&path).unwrap();
+        let stale = second.snapshot().unwrap().revision;
+        let host = Identity::generate().endpoint_id();
+        first.replace(0, &[host], &[]).unwrap();
+        assert_eq!(second.replace(stale, &[], &[]), Err(Error::Conflict));
+        assert_eq!(second.snapshot().unwrap().devices, vec![host]);
+    }
+    #[test]
+    fn shared_files_and_symlinks_are_rejected() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let dir = private_dir();
+        let path = dir.path().join("db");
+        drop(Store::open(&path).unwrap());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(matches!(Store::open(&path), Err(Error::Storage)));
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let link = dir.path().join("link");
+        symlink(&path, &link).unwrap();
+        assert!(matches!(Store::open(&link), Err(Error::Storage)));
+        let hardlink = dir.path().join("hardlink");
+        std::fs::hard_link(&path, &hardlink).unwrap();
+        assert!(matches!(Store::open(&path), Err(Error::Storage)));
+    }
+    #[test]
+    fn future_schema_and_input_limits_are_rejected() {
+        let dir = private_dir();
+        let path = dir.path().join("db");
+        let mut store = Store::open(&path).unwrap();
+        let host = Identity::generate().endpoint_id();
+        assert_eq!(
+            store.replace(
+                0,
+                &[host],
+                &[Service {
+                    id: "INVALID".into(),
+                    host,
+                    grants: vec![]
+                }]
+            ),
+            Err(Error::InvalidInput)
+        );
+        store.0.pragma_update(None, "user_version", 2).unwrap();
+        drop(store);
+        assert!(matches!(Store::open(&path), Err(Error::UnsupportedSchema)));
+    }
+}

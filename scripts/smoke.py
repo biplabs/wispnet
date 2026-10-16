@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import select
 import signal
+import sqlite3
 import subprocess
 import tempfile
 
@@ -65,6 +66,27 @@ with tempfile.TemporaryDirectory(prefix="wipsnet-smoke-") as temporary:
                 events = [json.loads(line)["fields"]["event"] for line in stderr.splitlines()]
                 assert events == ["stopped"], stderr
                 assert "SECRET-SENTINEL" not in first + stdout + stderr
+                if mode == "registry":
+                    database = state / "registry.sqlite3"
+                    assert database.stat().st_mode & 0o777 == 0o600
+                    with sqlite3.connect(database) as db:
+                        assert db.execute("PRAGMA user_version").fetchone() == (1,)
+                        db.execute("UPDATE revision SET value=7 WHERE id=1")
+                    restarted = subprocess.Popen(
+                        [binary, mode, "--config", config], stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE, text=True,
+                    )
+                    try:
+                        assert select.select([restarted.stderr], [], [], 10)[0]
+                        line = restarted.stderr.readline()
+                        assert json.loads(line)["fields"]["revision"] == 7, line
+                        restarted.send_signal(stop_signal)
+                        _, errors = restarted.communicate(timeout=5)
+                        assert restarted.returncode == 0, errors
+                    finally:
+                        if restarted.poll() is None:
+                            restarted.kill()
+                            restarted.communicate()
                 if mode == "agent":
                     assert key_bytes[8:40].hex() not in first + stdout + stderr
                     status = subprocess.run([binary, "status", "--config", config], capture_output=True, text=True, timeout=5)

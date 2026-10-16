@@ -146,7 +146,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
     };
     match mode {
         "agent" => wipsnet_agent::run(&config, shutdown).await?,
-        "registry" => wipsnet_registry::run(&config, shutdown).await,
+        "registry" => wipsnet_registry::run(&config, shutdown).await?,
         "tunnel" => {
             let (peer, address, service) = target.ok_or("missing tunnel target")?;
             let store = FileIdentityStore::new(&config.state_dir)?;
