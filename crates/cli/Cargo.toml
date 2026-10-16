@@ -1,0 +1,18 @@
+[package]
+name = "wipsnet-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+wipsnet-core.workspace = true
+wipsnet-agent.workspace = true
+wipsnet-registry.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[[bin]]
+name = "wipsnet"
+path = "src/main.rs"

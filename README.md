@@ -6,7 +6,7 @@ Project domain: **`wipsnet.app`** · [v1 roadmap](https://github.com/biplabs/wis
 
 Wipsnet is a project for a shared directory of your self-hosted services, with secure access from your computers and phone. Find a service by name and open it without tracking machine IP addresses, configuring individual router port forwards, or making the service public.
 
-> **Status: planning and initial implementation.** The repository currently contains the project documentation and issue backlog, not a working release. The workflows and capabilities below describe the v1 target. There is no published installer, stable CLI, or production-readiness claim yet.
+> **Status: planning and initial implementation.** The repository contains project documentation, the issue backlog, and an initial Rust development workspace, not a working release. The workflows and capabilities below describe the v1 target. There is no published installer, stable CLI, or production-readiness claim yet.
 
 ## Why Wipsnet?
 
@@ -137,6 +137,6 @@ VPN/TUN integration, arbitrary LAN routing, gossip discovery, multi-hop applicat
 
 Start with the [roadmap](https://github.com/biplabs/wispnet/issues/1) and the dependencies in the relevant issue. Inspect the repository state before introducing new scaffolding, and link implementation pull requests to their issues.
 
-The Rust workspace, Android integration, supported versions, build commands, configuration schema, and packaging are work items in this backlog. They are not yet a stable interface. Installation and usage examples will be added as runnable components land.
+The initial Rust workspace implements configuration checking and agent/registry lifecycle shells for [#3](https://github.com/biplabs/wispnet/issues/3). Networking, identity, and service access remain unimplemented. See the [contributor guide](docs/development.md) for build commands, crate boundaries, configuration, and validation. These development interfaces are not stable; Android integration and packaging remain backlog work.
 
 Keep the implementation focused on the original goal: **one service directory, access from every enrolled device, and secure connections across networks without per-service router configuration.**

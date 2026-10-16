@@ -1,0 +1,10 @@
+[package]
+name = "wipsnet-registry"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+wipsnet-core.workspace = true
+tracing.workspace = true
