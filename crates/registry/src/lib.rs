@@ -1,16 +1,42 @@
-//! Persistent registry lifecycle. Network API authentication is not implemented.
+//! Persistent single-owner registry with an authenticated loopback API.
+pub mod api;
+pub mod client;
+pub mod control;
 pub mod store;
 use std::future::Future;
 use wipsnet_core::config::Config;
 
 /// Open and check persistent storage before announcing readiness.
-/// No network listener is opened until the authenticated API is implemented.
-pub async fn run(config: &Config, shutdown: impl Future<Output = ()>) -> Result<(), store::Error> {
+/// A configured API listener requires explicit owner bootstrap first.
+pub async fn run(
+    config: &Config,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), store::Error> {
     let mut store = store::Store::open(&config.state_dir.join("registry.sqlite3"))?;
     if !store.ready()? {
         return Err(store::Error::Storage);
     }
     let revision = store.snapshot()?.revision;
+    if let Some(network) = &config.registry {
+        if !store.initialized()? {
+            return Err(store::Error::InvalidInput);
+        }
+        let listener = tokio::net::TcpListener::bind(network.bind_addr)
+            .await
+            .map_err(|_| store::Error::Storage)?;
+        tracing::info!(
+            component = "registry",
+            event = "started",
+            networking = true,
+            revision
+        );
+        axum::serve(listener, api::router(store))
+            .with_graceful_shutdown(shutdown)
+            .await
+            .map_err(|_| store::Error::Storage)?;
+        tracing::info!(component = "registry", event = "stopped");
+        return Ok(());
+    }
     tracing::info!(
         component = "registry",
         event = "started",

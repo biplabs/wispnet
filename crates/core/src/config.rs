@@ -16,7 +16,52 @@ pub struct Config {
     #[serde(default)]
     pub transport: Option<TransportConfig>,
     #[serde(default)]
+    pub registry: Option<RegistryConfig>,
+    #[serde(default)]
+    pub controller: Option<ControllerConfig>,
+    #[serde(default)]
     pub services: Vec<ServiceConfig>,
+}
+
+/// Only a trusted local HTTPS reverse proxy may reach this listener.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegistryConfig {
+    pub bind_addr: std::net::SocketAddr,
+    #[serde(default = "default_mesh")]
+    pub mesh: String,
+}
+
+fn default_mesh() -> String {
+    "default".into()
+}
+/// Out-of-band controller origin and device credential, never a service route.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ControllerConfig {
+    pub origin: String,
+    pub credential_file: PathBuf,
+}
+
+/// Parse an out-of-band controller origin without accepting embedded authority.
+pub fn controller_origin(origin: &str) -> Result<url::Url, ConfigError> {
+    let url =
+        url::Url::parse(origin).map_err(|_| ConfigError("invalid controller HTTPS origin"))?;
+    if origin.len() > 2048
+        || url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.port() == Some(0)
+    {
+        return Err(ConfigError(
+            "controller must be an HTTPS origin without credentials, path, query or fragment",
+        ));
+    }
+    Ok(url)
 }
 
 #[derive(Clone, Deserialize)]
@@ -177,6 +222,27 @@ impl Config {
                 "services require an explicit transport section",
             ));
         }
+        if let Some(registry) = &config.registry
+            && (!registry.bind_addr.ip().is_loopback()
+                || registry.bind_addr.port() == 0
+                || !crate::protocol::valid_service_id(&registry.mesh))
+        {
+            return Err(ConfigError(
+                "registry must bind an explicit loopback IP and nonzero port",
+            ));
+        }
+        if let Some(controller) = &config.controller
+            && (controller_origin(&controller.origin).is_err()
+                || !controller.credential_file.is_absolute()
+                || controller
+                    .credential_file
+                    .components()
+                    .any(|p| matches!(p, std::path::Component::ParentDir)))
+        {
+            return Err(ConfigError(
+                "controller requires an HTTPS origin and absolute credential_file",
+            ));
+        }
         validate_services(&config.services)?;
         Ok(config)
     }
@@ -284,6 +350,36 @@ unknown = 'value'",
         }
     }
 
+    #[test]
+    fn registry_binds_and_controller_origins_fail_closed() {
+        for address in ["0.0.0.0:7780", "[::]:7780", "192.0.2.1:7780", "127.0.0.1:0"] {
+            assert!(
+                Config::parse(&format!("{}\n[registry]\nbind_addr='{address}'", valid())).is_err()
+            );
+        }
+        assert!(
+            Config::parse(&format!(
+                "{}\n[registry]\nbind_addr='127.0.0.1:7780'",
+                valid()
+            ))
+            .is_ok()
+        );
+        for origin in [
+            "http://controller.example",
+            "https://user:SECRET-SENTINEL@controller.example",
+            "https://controller.example/path",
+            "https://controller.example/?token=SECRET-SENTINEL",
+            "https://controller.example/#x",
+            "https://controller.example:0",
+        ] {
+            let text = format!(
+                "{}\n[controller]\norigin='{origin}'\ncredential_file='/private/device.token'",
+                valid()
+            );
+            let error = Config::parse(&text).err().unwrap();
+            assert!(!error.to_string().contains("SECRET-SENTINEL"));
+        }
+    }
     #[test]
     fn errors_never_echo_sensitive_input() {
         for field in [

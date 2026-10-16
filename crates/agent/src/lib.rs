@@ -13,6 +13,16 @@ pub async fn run(
     let store = identity::FileIdentityStore::new(&config.state_dir)?;
     let _lease = store.lease()?;
     let identity = store.load()?;
+    if let Some(controller) = &config.controller {
+        let secret = wipsnet_registry::control::read_token(&controller.credential_file)?;
+        let client = wipsnet_registry::client::Client::new(&controller.origin, secret)?;
+        let directory = client.directory(Some(identity.endpoint_id())).await?;
+        tracing::info!(
+            component = "agent",
+            event = "registry_bootstrap",
+            revision = directory.revision
+        );
+    }
     let host = if let Some(transport) = &config.transport {
         Some(tunnel::TunnelHost::bind(identity.secret_key(), transport, &config.services).await?)
     } else {

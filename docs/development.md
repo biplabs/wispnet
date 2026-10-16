@@ -106,3 +106,7 @@ The separate tunnel suite checks actual Iroh listener/task cleanup, socket reuse
 stream cancellation and two-process streaming. Internet/relay, native Android and
 production browser gateway checks remain future release work. The pre-push hook
 runs the local Linux checks; Android and release builds remain explicit manual checks.
+
+The [registry API guide](registry-api.md) covers `registry-init`, HTTPS deployment,
+owner administration, `registry-directory` and `registry-backup`. The pre-push
+suite includes a native-process registry backup/restore and authorization smoke.

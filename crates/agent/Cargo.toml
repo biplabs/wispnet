@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 wipsnet-core.workspace = true
+wipsnet-registry.workspace = true
 tracing.workspace = true
 zeroize.workspace = true
 tempfile.workspace = true

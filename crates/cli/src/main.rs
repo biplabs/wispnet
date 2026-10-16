@@ -7,10 +7,11 @@ use wipsnet_core::{
 };
 
 const USAGE: &str = "Wipsnet development CLI
-Usage: wipsnet <check|identity-init|status|agent|registry> --config /absolute/path/config.toml
+Usage: wipsnet <check|identity-init|status|agent|registry|registry-init|registry-backup|registry-directory> --config /absolute/path/config.toml
+Backup: wipsnet registry-backup --config /absolute/path/config.toml --output /absolute/path/new-backup.sqlite3
 Reset: wipsnet identity-reset --config /absolute/path/config.toml --expect-id PUBLIC_ID
 Tunnel: wipsnet tunnel --config /absolute/path/config.toml --peer PUBLIC_ID --address IP:UDP_PORT --service SERVICE_ID
-Tunnel mode relays raw stdin/stdout. It is not a browser gateway. Enrollment is not implemented.";
+Tunnel mode relays raw stdin/stdout. It is not a browser gateway. Invitation enrollment is not implemented.";
 
 fn main() -> ExitCode {
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -42,6 +43,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         println!("{USAGE}");
         return Ok(());
     }
+    let backup = args.first().is_some_and(|a| a == "registry-backup");
     let reset = args.first().is_some_and(|a| a == "identity-reset");
     let tunnel_mode = args.first().is_some_and(|a| a == "tunnel");
     let invalid_arguments = if tunnel_mode {
@@ -50,6 +52,8 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             || args[3] != "--peer"
             || args[5] != "--address"
             || args[7] != "--service"
+    } else if backup {
+        args.len() != 5 || args[1] != "--config" || args[3] != "--output"
     } else if reset {
         args.len() != 5 || args[1] != "--config" || args[3] != "--expect-id"
     } else {
@@ -61,7 +65,16 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
     let mode = args[0].to_str().ok_or(USAGE)?;
     if !matches!(
         mode,
-        "check" | "identity-init" | "identity-reset" | "status" | "agent" | "registry" | "tunnel"
+        "check"
+            | "identity-init"
+            | "identity-reset"
+            | "status"
+            | "agent"
+            | "registry"
+            | "registry-init"
+            | "registry-backup"
+            | "registry-directory"
+            | "tunnel"
     ) {
         return Err(USAGE.into());
     }
@@ -82,9 +95,67 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         None
     };
+    let backup_path = if backup {
+        let path = PathBuf::from(&args[4]);
+        if !path.is_absolute()
+            || path.parent().is_none()
+            || path
+                .components()
+                .any(|p| matches!(p, std::path::Component::ParentDir))
+        {
+            return Err("backup path must be absolute without .. components".into());
+        }
+        Some(path)
+    } else {
+        None
+    };
     let config = Config::load(&PathBuf::from(&args[2]))?;
     if mode == "check" {
         println!("Configuration valid");
+        return Ok(());
+    }
+    if matches!(mode, "registry-init" | "registry-backup") {
+        if mode == "registry-init" && config.registry.is_none() {
+            return Err("registry-init requires a registry section".into());
+        }
+        config.prepare_state()?;
+        let mut store =
+            wipsnet_registry::store::Store::open(&config.state_dir.join("registry.sqlite3"))?;
+        if mode == "registry-init" {
+            let mesh = &config
+                .registry
+                .as_ref()
+                .ok_or("registry-init requires a registry section")?
+                .mesh;
+            wipsnet_registry::control::initialize(
+                &mut store,
+                &config.state_dir.join("owner.token"),
+                mesh,
+            )?;
+            println!(
+                "Registry initialized; owner credential is in state_dir/owner.token (keep private)"
+            );
+        } else {
+            store.backup(backup_path.as_ref().ok_or("backup path required")?)?;
+            println!("Registry backup complete");
+        }
+        return Ok(());
+    }
+    if mode == "registry-directory" {
+        let controller = config
+            .controller
+            .as_ref()
+            .ok_or("controller section required")?;
+        let identity = FileIdentityStore::new(&config.state_dir)?.load()?;
+        let secret = wipsnet_registry::control::read_token(&controller.credential_file)?;
+        let client = wipsnet_registry::client::Client::new(&controller.origin, secret)?;
+        let directory = client.directory(Some(identity.endpoint_id())).await?;
+        println!(
+            "Mesh: {}\nRevision: {}\nAuthorized services: {}",
+            directory.mesh,
+            directory.revision,
+            directory.services.len()
+        );
         return Ok(());
     }
     if matches!(mode, "identity-init" | "identity-reset" | "status") {

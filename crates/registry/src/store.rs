@@ -41,7 +41,7 @@ pub struct Snapshot {
 }
 /// SQLite handle for a database in a private, caller-managed state directory.
 /// This is not an authenticated network API.
-pub struct Store(Connection);
+pub struct Store(pub(crate) Connection);
 impl Store {
     pub fn open(path: &Path) -> Result<Self, Error> {
         use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
@@ -83,8 +83,14 @@ impl Store {
                 CREATE TABLE services (id TEXT PRIMARY KEY, host TEXT NOT NULL REFERENCES devices(id));
                 CREATE TABLE grants (service TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE, device TEXT NOT NULL REFERENCES devices(id), PRIMARY KEY(service,device));
                 PRAGMA user_version=1;")?,
-            1 => {},
+            1 | 2 => {},
             _ => return Err(Error::UnsupportedSchema),
+        }
+        if version < 2 {
+            tx.execute_batch("CREATE TABLE controller (id INTEGER PRIMARY KEY CHECK(id=1), mesh TEXT NOT NULL, owner_hash TEXT NOT NULL);
+                CREATE TABLE device_tokens (device TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE, hash TEXT NOT NULL UNIQUE);
+                CREATE TABLE routes (service TEXT PRIMARY KEY REFERENCES services(id) ON DELETE CASCADE, address TEXT NOT NULL);
+                PRAGMA user_version=2;")?;
         }
         tx.commit()?;
         Ok(Self(db))
@@ -182,6 +188,9 @@ impl Store {
             .map_err(|_| Error::Storage)?;
         self.0.backup("main", destination, None)?;
         file.sync_all().map_err(|_| Error::Storage)?;
+        std::fs::File::open(destination.parent().ok_or(Error::InvalidInput)?)
+            .and_then(|parent| parent.sync_all())
+            .map_err(|_| Error::Storage)?;
         Ok(())
     }
     pub fn ready(&self) -> Result<bool, Error> {
@@ -308,7 +317,7 @@ mod tests {
             ),
             Err(Error::InvalidInput)
         );
-        store.0.pragma_update(None, "user_version", 2).unwrap();
+        store.0.pragma_update(None, "user_version", 3).unwrap();
         drop(store);
         assert!(matches!(Store::open(&path), Err(Error::UnsupportedSchema)));
     }
