@@ -192,6 +192,8 @@ The first [independent-host control checkpoint](docs/per-host-control.md) now pr
 
 The [explicit relay checkpoint](docs/relay-connectivity.md) adds validated HTTPS relay configuration and pinned-ID catalog/service connections without a peer IP. Local TLS fixtures exercise relay-only traffic, native CLI use, grant denial, relay restart and direct-path survival during outage. Isolated Linux fixtures also test hostname-preserving DNS/IP replacement, block all peer UDP, and audit attempted network destinations with public access blocked. #13 remains open for pairing integration, physical network transitions and deployed-relay evidence.
 
+The [native relay lifecycle harness](docs/native-relay-validation.md) also exercises separate Linux processes and the authorized Android native CLI over USB, including independent host approvals, HTTP service bytes, offline startup, relay recovery and persistent local revocation. This remains native CLI evidence; the Android app and physical Wi-Fi/cellular/two-computer validation are still open.
+
 Older implementation guides describe earlier HTTPS-controller prototypes, not the accepted architecture. Development now uses fresh per-host state; production migration/import compatibility is not current work. #16/#17 focus on independent host control and target-bound pairing without a global owner credential. #9 supplies per-host catalog synchronization and live local authorization. The checkpoint above does not mark these complete.
 
 **One service directory. Independent hosts. No master node. A disposable cloud relay.**

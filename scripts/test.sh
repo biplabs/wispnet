@@ -5,10 +5,16 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 cargo build --workspace --locked
+cargo build -p wipsnet-cli --example relay_fixture --locked
 python3 -m unittest discover -s scripts -p test_relay_network_audit.py
 python3 scripts/smoke.py
 python3 scripts/registry_smoke.py
 python3 scripts/host_smoke.py
+if [ "${WIPSNET_ANDROID_RELAY_TEST:-0}" = 1 ]; then
+    python3 scripts/relay_smoke.py --android
+else
+    python3 scripts/relay_smoke.py
+fi
 python3 scripts/tunnel_smoke.py
 uv run --project spikes/browser --locked python -m unittest discover -s spikes/browser -p 'test_*.py'
 

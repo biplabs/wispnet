@@ -105,6 +105,12 @@ TLS and an explicitly trusted ephemeral certificate. Tests verify:
 - An untrusted relay certificate never brings the endpoint online (one-second
   observation); there is no insecure fallback.
 
+A separate [native lifecycle harness](native-relay-validation.md) runs the real
+Linux agent/CLI and authorized Android native CLI over a temporary USB relay
+mapping. It verifies per-host approval, host/relay restart, wrong pins, independent
+offline-peer failure and host-local persistent revocation. The ordinary hook runs
+its Linux mode; hardware checks are opt-in.
+
 These are local test deadlines, not internet recovery or availability guarantees.
 #13 remains open for pairing integration (#17), physical two-host/tablet cold
 starts, Wi-Fi/cellular/sleep transitions, and deployed relay replacement with
