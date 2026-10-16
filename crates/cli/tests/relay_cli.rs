@@ -205,6 +205,62 @@ async fn native_catalog_and_service_need_no_peer_address() {
     assert!(denied.get("generation").is_none());
     assert!(denied.get("services").is_none());
     assert_eq!(denied["client"], probe["client"]);
+    assert_eq!(denied["retry_after_ms"], 1000);
+    for expected in [2000, 4000] {
+        let started = std::time::Instant::now();
+        let next = timeout(Duration::from_secs(8), lines.next_line())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let next: serde_json::Value = serde_json::from_str(&next).unwrap();
+        assert_eq!(next["ok"], false);
+        assert_eq!(next["retry_after_ms"], expected);
+        assert!(started.elapsed() >= Duration::from_millis(expected / 2 - 100));
+    }
+    // A network notification interrupts the four-second backoff immediately.
+    let status = tokio::process::Command::new("kill")
+        .args(["-USR1", &watcher.id().unwrap().to_string()])
+        .status()
+        .await
+        .unwrap();
+    assert!(status.success());
+    let reset = timeout(Duration::from_secs(2), lines.next_line())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let reset: serde_json::Value = serde_json::from_str(&reset).unwrap();
+    assert_eq!(reset["ok"], false);
+    assert_eq!(reset["retry_after_ms"], 1000);
+    assert_eq!(reset["client"], probe["client"]);
+    // Recovery resets pacing without replacing the endpoint or identity.
+    let (mut store, owner) = host::owner_store(&host_state, identity.endpoint_id()).unwrap();
+    store
+        .host_mutate(
+            identity.endpoint_id(),
+            &owner,
+            Mutation::Approve {
+                expected_revision: 3,
+                peer,
+                name: "reapproved-client".into(),
+            },
+        )
+        .unwrap();
+    drop(store);
+    drop(owner);
+    let recovered = timeout(Duration::from_secs(8), lines.next_line())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let recovered: serde_json::Value = serde_json::from_str(&recovered).unwrap();
+    assert_eq!(recovered["ok"], true);
+    assert_eq!(recovered["retry_after_ms"], 1000);
+    assert_eq!(recovered["client"], probe["client"]);
+    assert_eq!(recovered["generation"], probe["generation"]);
+    // Approval does not restore the service grant removed by revocation.
+    assert_eq!(recovered["service_count"], 0);
     let status = tokio::process::Command::new("kill")
         .args(["-TERM", &watcher.id().unwrap().to_string()])
         .status()

@@ -28,8 +28,14 @@ path. A path snapshot reflects the time of observation, not an availability or
 future-route guarantee. Relay reachability and peer reachability are separate:
 a direct peer can work while the configured relay is unavailable.
 
-Watch emits one compact JSON line per completed probe, with a one-second pause
-between probes. Failures emit fixed redacted errors and omit private catalog
+Watch emits one compact JSON line per completed probe. Successful probes pause
+one second; consecutive failures pause 1, 2, 4, 8, 16, then at most 30 seconds
+after each completed attempt, in addition to the bounded probe deadlines above.
+Each watch owns its retry state independently. Success or a network-change
+notification resets the failure backoff; notifications interrupt the wait and
+start a fresh probe. Watch reports include `retry_after_ms` for this scheduled
+pause (one-shot `peer-probe` does not retry or include that field).
+Failures emit fixed redacted errors and omit private catalog
 metadata. Pending probes are canceled on shutdown, their connections are closed,
 and the endpoint/key lease is released. An unrelated host is not consulted.
 Catalog observations are diagnostic snapshots, not service authorization tickets

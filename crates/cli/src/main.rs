@@ -1,4 +1,5 @@
 use std::{env, path::PathBuf, process::ExitCode};
+mod retry;
 use tracing_subscriber::prelude::*;
 use wipsnet_agent::{diagnostics, identity::FileIdentityStore, tunnel};
 use wipsnet_core::{
@@ -257,14 +258,16 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
             let mut network =
                 tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1())?;
+            let mut retry = retry::Retry::default();
             loop {
-                let report = tokio::select! {
+                let mut report = tokio::select! {
                     _ = term.recv() => break,
                     _ = interrupt.recv() => break,
                     _ = network.recv() => {
                         // Android's native route monitor cannot deliver system
                         // callbacks. This bridge represents the app notification.
                         endpoint.network_change().await;
+                        retry.reset();
                         continue;
                     }
                     result = diagnostics::probe(&endpoint, peer, target.clone(), relay_configured) => {
@@ -276,12 +279,17 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 };
+                let delay = retry.completed(report["ok"] == true);
+                report["retry_after_ms"] = serde_json::json!(delay.as_millis());
                 println!("{report}");
                 tokio::select! {
                     _ = term.recv() => break,
                     _ = interrupt.recv() => break,
-                    _ = network.recv() => endpoint.network_change().await,
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+                    _ = network.recv() => {
+                        endpoint.network_change().await;
+                        retry.reset();
+                    }
+                    _ = tokio::time::sleep(delay) => {}
                 }
             }
             endpoint.close().await;
