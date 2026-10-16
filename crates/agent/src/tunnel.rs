@@ -367,8 +367,9 @@ async fn serve_stream(
             .await
             .map_err(|_| Status::BackendUnavailable)?
             .map_err(|_| Status::BackendUnavailable)
+            .map(|backend| (backend, id.to_owned(), service.backend))
     };
-    let backend = match timeout(HANDSHAKE_TIMEOUT, opened).await {
+    let (backend, service_id, binding) = match timeout(HANDSHAKE_TIMEOUT, opened).await {
         Ok(Ok(backend)) => backend,
         outcome => {
             let status = match outcome {
@@ -393,13 +394,29 @@ async fn serve_stream(
     let mut tunnel = ServiceStream::new(send, recv);
     let (mut reader, mut writer) = backend.into_split();
     let (mut tunnel_read, mut tunnel_write) = tokio::io::split(&mut tunnel);
-    let _ = timeout(MAX_SESSION, async {
+    let transfer = timeout(MAX_SESSION, async {
         tokio::try_join!(
             pump(&mut tunnel_read, &mut writer),
             pump(&mut reader, &mut tunnel_write)
         )
-    })
-    .await;
+    });
+    // Host-local durable policy also governs already-open streams. Revocation,
+    // deletion, backend replacement, and unreadable policy fail closed. Static
+    // configurations are immutable for the lifetime of their host endpoint.
+    let policy = async {
+        if matches!(services, Services::Static(_)) {
+            std::future::pending::<()>().await;
+        }
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            let allowed = timeout(std::time::Duration::from_secs(1), services.load()).await;
+            if !matches!(allowed, Ok(Ok(ref current)) if current.iter().any(|s| s.id == service_id && s.backend == binding && s.allow.contains(&peer)))
+            {
+                break;
+            }
+        }
+    };
+    tokio::select! { _ = transfer => {}, _ = policy => {} }
 }
 
 /// Fixed per-direction buffer; timeout includes both slow reads and slow writes.

@@ -41,8 +41,9 @@ public final class AppTestRunner extends Instrumentation {
   if(!streamed.contains("data:")||!streamed.contains("[DONE]"))throw new Exception("Actual Llama streaming reply failed");
   return url;
  }
- void resume(){Intent intent=getTargetContext().getPackageManager().getLaunchIntentForPackage("com.biplabs.wispnet");intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_CLEAR_TOP);activity=(MainActivity)startActivitySync(intent);waitForIdleSync();}
+ void resume(){Intent intent=getTargetContext().getPackageManager().getLaunchIntentForPackage(getTargetContext().getPackageName());intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_CLEAR_TOP);activity=(MainActivity)startActivitySync(intent);waitForIdleSync();}
  public void onStart(){Bundle result=new Bundle();try{
+  if(args.getString("mode","").startsWith("peers-")){PeerChecks.run(this);result.putString("result","passed");finish(Activity.RESULT_OK,result);return;}
   if("lifecycle-cold".equals(args.getString("mode"))){LifecycleChecks.cold(this);result.putString("result","passed");finish(Activity.RESULT_OK,result);return;}
   if("lifecycle".equals(args.getString("mode"))){LifecycleChecks.run(this);result.putString("result","passed");finish(Activity.RESULT_OK,result);return;}
   resume();Native.ensure(getTargetContext());stage("ready");String[] hosts={args.getString("host_a"),args.getString("host_b")};String[] names={"Local computer","Desktop"};

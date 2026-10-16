@@ -190,7 +190,14 @@ pub fn call(text: &str) -> String {
     })();
     match outcome {
         Ok(value) => json!({"ok":true,"result":value}).to_string(),
-        Err(error) => json!({"ok":false,"error":error}).to_string(),
+        Err(error) => {
+            let code = match error.as_str() {
+                "access denied" => "host_denied",
+                "Service no longer permitted" => "service_denied",
+                _ => "operation_failed",
+            };
+            json!({"ok":false,"error":error,"code":code}).to_string()
+        }
     }
 }
 #[cfg(target_os = "android")]

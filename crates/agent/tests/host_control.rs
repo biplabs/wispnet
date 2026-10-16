@@ -154,10 +154,12 @@ async fn symmetric_hosts_share_protocol_endpoint_and_isolate_local_authority() {
     let bs = tunnel::connect(&outgoing, b.endpoint_id(), ba)
         .await
         .unwrap();
-    let stream = tunnel::open_service(&bs, "llama").await.unwrap();
-    let (tcp, _) = backend.accept().await.unwrap();
-    drop(stream);
-    drop(tcp);
+    let mut stream = tunnel::open_service(&bs, "llama").await.unwrap();
+    let (mut tcp, _) = backend.accept().await.unwrap();
+    tcp.write_all(b"active").await.unwrap();
+    let mut initial = [0; 6];
+    stream.read_exact(&mut initial).await.unwrap();
+    assert_eq!(&initial, b"active");
     // Revocation is read again on an existing control/service connection.
     mutate(
         db.path(),
@@ -167,7 +169,22 @@ async fn symmetric_hosts_share_protocol_endpoint_and_isolate_local_authority() {
             peer: client.endpoint_id(),
         },
     );
-    assert!(control::catalog_on(&bc, b.endpoint_id()).await.is_err());
+    assert!(matches!(
+        control::catalog_on(&bc, b.endpoint_id()).await,
+        Err(tunnel::TunnelError::Status(
+            wipsnet_core::protocol::Status::Denied
+        ))
+    ));
+    let mut byte = [0];
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(3), stream.read(&mut byte))
+        .await
+        .expect("revocation must interrupt active stream");
+    assert!(matches!(ended, Ok(0) | Err(_)));
+    let backend_ended =
+        tokio::time::timeout(std::time::Duration::from_secs(3), tcp.read(&mut byte))
+            .await
+            .expect("revocation must close backend");
+    assert!(matches!(backend_ended, Ok(0) | Err(_)));
     assert!(tunnel::open_service(&bs, "llama").await.is_err());
     assert!(
         tokio::time::timeout(std::time::Duration::from_millis(50), backend.accept())

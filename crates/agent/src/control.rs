@@ -59,10 +59,15 @@ pub(crate) async fn serve_stream(
         let request = read_frame(&mut recv, host::MAX_REQUEST).await?;
         let Request::Catalog {} = serde_json::from_slice(&request)
             .map_err(|_| TunnelError::Transport("invalid control request"))?;
-        let catalog = authority
-            .catalog(peer)
-            .await
-            .map_err(|_| TunnelError::Transport("control denied"))?;
+        let catalog = match authority.catalog(peer).await {
+            Ok(catalog) => catalog,
+            Err(wipsnet_registry::control::ControlError::Forbidden) => {
+                write_frame(&mut send, br#"{"error":"access_denied"}"#).await?;
+                let _ = send.stopped().await;
+                return Ok(());
+            }
+            Err(_) => return Err(TunnelError::Transport("control unavailable")),
+        };
         let bytes =
             serde_json::to_vec(&catalog).map_err(|_| TunnelError::Transport("invalid catalog"))?;
         if bytes.len() > host::MAX_RESPONSE {
@@ -105,7 +110,7 @@ pub async fn catalog_on(
     if connection.remote_id() != expected {
         return Err(TunnelError::Transport("control target identity mismatch"));
     }
-    timeout(HANDSHAKE_TIMEOUT, async {
+    let result = timeout(HANDSHAKE_TIMEOUT, async {
         let (mut send, mut recv) = connection
             .open_bi()
             .await
@@ -114,6 +119,9 @@ pub async fn catalog_on(
             .map_err(|_| TunnelError::Transport("invalid control request"))?;
         write_frame(&mut send, &request).await?;
         let bytes = read_frame(&mut recv, host::MAX_RESPONSE).await?;
+        if bytes == br#"{"error":"access_denied"}"# {
+            return Err(TunnelError::Status(wipsnet_core::protocol::Status::Denied));
+        }
         let catalog: Catalog = serde_json::from_slice(&bytes)
             .map_err(|_| TunnelError::Transport("invalid catalog"))?;
         if catalog.host != expected
@@ -138,5 +146,11 @@ pub async fn catalog_on(
         Ok(catalog)
     })
     .await
-    .map_err(|_| TunnelError::Transport("control request timeout"))?
+    .map_err(|_| TunnelError::Transport("control request timeout"))?;
+    if result.is_err()
+        && matches!(connection.close_reason(), Some(iroh::endpoint::ConnectionError::ApplicationClosed(ref close)) if close.error_code == (wipsnet_core::protocol::Status::Denied as u32).into())
+    {
+        return Err(TunnelError::Status(wipsnet_core::protocol::Status::Denied));
+    }
+    result
 }

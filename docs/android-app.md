@@ -50,7 +50,7 @@ Foreground access uses Android's `dataSync` service type and notification. It is
 
 The HTTP loopback gateway is a development implementation: isolated random localhost origins, origin/authority checks, HttpOnly session cookies, bounded uploads, and cross-origin redirect rejection. Secure-cookie/prefix behavior, service workers, arbitrary login flows, full HTTP compatibility, and the stricter release security work remain under #10. Streaming responses and WebSocket upgrades are implemented; a physical controlled WebSocket upgrade/echo is covered by the lifecycle harness. Chunked request uploads and Expect requests are currently rejected.
 
-Camera/QR scanning is not implemented; file import and pasted target-bound invitation JSON work on the camera-less tablet. App-level unrelated Wi-Fi/cellular transitions, relay rebuild recovery, screen-off/battery restrictions, active-stream revocation, and fresh pairing while the other computer is down remain #12 acceptance work. Transport-only #13 checks do not establish these app-level results.
+Camera/QR scanning is not implemented; file import and pasted target-bound invitation JSON work on the camera-less tablet. Physical app checks now cover hotspot/home Wi-Fi transitions, relay service restart, screen-off/Doze recovery, fresh pairing with the other node stopped, and active-stream revocation. Independently verified cellular egress for this app run, full relay replacement, broader battery restrictions/Android 15 timeout behavior, and longer-duration lifecycle acceptance remain under #12. Transport-only #13 checks do not establish these app-level results.
 
 ## Lifecycle and network recovery checks
 
@@ -76,3 +76,24 @@ Doze can defer network access; the app does not request a battery-optimization e
 Observed on the physical Android 14 tablet (2026-10-16): the lifecycle harness passed on the phone hotspot, including a user-assisted switch from `10.153.228.240` to home Wi-Fi `192.168.1.59`. A second pass on home Wi-Fi disabled direct IP transports on both hosts and passed the same lifecycle/relay-restart checks through the public relay. Both runs retained the tablet identity and both host pins; the accepted POST count remained one. In the forced-relay run Wi-Fi interruption/recovery completed in approximately 14 seconds and a five-second relay outage plus recovery in approximately 10 seconds. These are measured checks on this setup, not general latency guarantees. The phone's cellular upstream was not independently reverified during this app run. Both host configurations returned to normal direct-plus-relay transport, all three user services remained registered, and the temporary fixture was removed.
 
 A separate check launched the production debug APK normally with no app instrumentation, opened the desktop website in Chrome, and verified Android's foreground-service process state. The same process and foreground service survived 60 seconds with the screen off, including 15 seconds forced deep Doze. After waking, a fresh Open from Wispnet rendered the desktop site again in Chrome, and the normal app Stop control ended access. This strengthens the instrumented lifecycle evidence but does not establish indefinite execution or behavior on other Android versions/devices.
+
+## Independent pairing and revocation
+
+The host now rechecks durable policy for active service streams approximately once per second, with a bounded policy read. Client revocation, grant removal, service deletion, a changed backend binding, or unreadable policy closes the active stream and its backend. New requests remain subject to the host's current policy. Static fixture configurations are immutable and do not need this monitor.
+
+Authenticated catalog denial has a distinct native error code. The app retains cached catalog provenance while marking a host's denial and disabling its cached Open controls. Pending approval, unavailable/unverified responses, service withdrawal, and a host's explicit denial are distinct states. An outage does not erase an already-known denial or silently promote a pending request. Other hosts continue refreshing independently. Re-pairing is an explicit target-host request and still needs that host's approval and fresh service grants.
+
+The physical permission harness uses a separately installed `com.biplabs.wispnet.peercheck` app sandbox. Clearing that sandbox produces fresh test identities without touching the normal app's Keystore key, pins, or host grants. It temporarily stops only one **node** service at a time; the independent desktop relay keeps running. It creates unique loopback fixture services, removes them, revokes test peers, restores both node services, and uninstalls the test variant afterward.
+
+```sh
+scripts/build_android.sh
+cd android
+ANDROID_HOME="$HOME/Android/Sdk" JAVA_HOME=/opt/android-studio/jbr ./gradlew --no-daemon \
+  assemblePeercheck assemblePeercheckAndroidTest -PwispnetTestBuildType=peercheck
+cd ..
+adb install -r android/app/build/outputs/apk/peercheck/app-peercheck.apk
+adb install -r android/app/build/outputs/apk/androidTest/peercheck/app-peercheck-androidTest.apk
+python3 scripts/test_android_peers.py --serial DEVICE_SERIAL
+```
+
+Checks cover both fresh pairing orderings, browser/cold-start access with the other host offline, independently pending owner approval, wrong host pins, consumed invitation replay, cross-host catalog substitution and rollback rejection, duplicate fixture service IDs, already-active streams at service grant withdrawal and client revocation, stale browser/session denial, cached-entry UI denial, unaffected access to the other host, and denial surviving host restart and a cold app start. Temporary fixture services never receive the normal app's identity or owner credentials.
