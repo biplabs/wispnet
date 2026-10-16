@@ -64,7 +64,10 @@ from transport errors. Raw relay error strings/reasons, payloads and credentials
 are not surfaced. The minimal endpoint preset plus a custom relay map enables
 no default public relays or DNS/Pkarr/DHT/gossip node address lookup/publication.
 Ordinary DNS for a configured hostname and relay certificate validation remain
-necessary. Packet-level destination auditing remains an acceptance task.
+necessary. DNS uses the operating system's configured resolvers; library-selected
+public fallback DNS servers are explicitly disabled. A system DNS outage can
+therefore prevent hostname-based relay reconnection. No implicit public DNS
+service is used to hide that failure.
 
 During a single-relay outage, an established usable direct connection can continue.
 Relay-dependent new connections fail within their connection deadline. Existing
@@ -88,11 +91,60 @@ TLS and an explicitly trusted ephemeral certificate. Tests verify:
   at the same address/certificate recovers within a 30-second test deadline,
   preserving endpoint IDs and host grants, with no backend operation replay.
 - A selected direct loopback path continues after relay shutdown.
+- A real UDP DNS fixture changes `relay.test` from `127.0.0.1` to `127.0.0.2`
+  with a one-second TTL and the same HTTPS port/hostname/certificate. Persistent
+  host/client endpoints reconnect within a 30-second test deadline without
+  resolver-cache resets, endpoint replacement, new pins or authority changes.
+  DNS queries are checked to contain only the configured relay hostname.
+- UDP-enabled endpoints cold-start against each host independently with the other
+  host absent and a stale direct hint. The isolated audit repeats catalog and
+  service byte checks with kernel UDP dropping, verifies nonzero drop counters
+  and a selected relay path, and keeps identities/host approvals separate.
+- A relay admission-denial fixture produces the distinct fixed diagnostic and
+  never echoes its server-supplied sentinel reason.
 - An untrusted relay certificate never brings the endpoint online (one-second
   observation); there is no insecure fallback.
 
 These are local test deadlines, not internet recovery or availability guarantees.
 #13 remains open for pairing integration (#17), physical two-host/tablet cold
-starts, Wi-Fi/cellular/sleep transitions, changed DNS IP under the same hostname,
-packet-level public-destination blocking/audit, and deployed relay replacement
-with retained hostname/trust (#18). No production migration is implemented.
+starts, Wi-Fi/cellular/sleep transitions, and deployed relay replacement with
+retained hostname/trust (#18). DNS replacement and destination blocking/auditing
+now have isolated Linux fixture evidence, not deployed internet/mobile evidence.
+No production migration is implemented.
+
+## Isolated destination and UDP-block audit
+
+On Linux with unprivileged user/network namespaces, `ip`, `nft` and `strace`:
+
+```sh
+python3 scripts/relay_network_audit.py
+# Or include the audit in the normal tests and pre-push hook:
+WIPSNET_NETWORK_AUDIT=1 ./scripts/test.sh
+WIPSNET_NETWORK_AUDIT=1 git push origin main
+```
+
+For a locally unpacked strace binary, pass `--strace /absolute/path/strace`, or
+set `WIPSNET_STRACE` alongside `WIPSNET_NETWORK_AUDIT=1` for the hook. Missing
+dependencies or unsupported namespaces fail an explicitly requested audit.
+The ordinary hook always runs the DNS/recovery and stale-hint Rust tests plus
+eight audit-parser regression tests; isolated firewall checks are opt-in because
+those Linux kernel/tool permissions are not available on every development host.
+
+The runner builds fixtures first, then runs the DNS replacement, host control,
+native CLI and forced-UDP cases in private network namespaces with only loopback
+and default-drop nftables output policy. It changes no host routes, firewall,
+interfaces or resolver files. Non-loopback Internet destinations cannot be reached;
+a separate `strace -f -yy` audit rejects attempted TCP connections or addressed
+packet sends outside loopback, including failed attempts. It reassembles
+interleaved unfinished/resumed syscalls and fails incomplete/empty traces.
+The UDP-block case drops all UDP before the loopback allow rule and requires
+nonzero firewall packet counters while catalog/service bytes still succeed.
+
+Pinned netdev performs no-packet UDP `connect` route probes to
+`10.254.254.254:1` and `[fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:1`. The audit
+accounts only for those exact datagram calls returning `ENETUNREACH`; it rejects
+packet sends, TCP, other addresses/ports and successful calls under that exception.
+These probes do not publish node state. Trace payload strings are suppressed and
+temporary fixture traces are deleted after auditing. This validates the exercised
+pinned native transport paths, not unimplemented Android/UI flows or every future
+library feature.

@@ -153,11 +153,18 @@ impl TunnelHost {
         config: &TransportConfig,
         services: Services,
     ) -> Result<Self, TunnelError> {
+        Self::bind_builder(config, services, configured_builder(secret, Some(config))?).await
+    }
+    async fn bind_builder(
+        config: &TransportConfig,
+        services: Services,
+        builder: iroh::endpoint::Builder,
+    ) -> Result<Self, TunnelError> {
         let mut alpns = vec![protocol::ALPN.to_vec()];
         if matches!(services, Services::Host(_)) {
             alpns.push(wipsnet_core::host::ALPN.to_vec());
         }
-        let mut builder = configured_builder(secret, Some(config))?.clear_ip_transports();
+        let mut builder = builder.clear_ip_transports();
         if !config.relay_only {
             builder = builder
                 .bind_addr(config.bind_addr)
@@ -504,7 +511,16 @@ fn configured_builder(
     secret: &SecretKey,
     config: Option<&TransportConfig>,
 ) -> Result<iroh::endpoint::Builder, TunnelError> {
-    let mut builder = Endpoint::builder(presets::Minimal).secret_key(secret.clone());
+    let mut builder = Endpoint::builder(presets::Minimal)
+        .secret_key(secret.clone())
+        // Never silently add a library-selected public DNS service when the
+        // operating system resolver is unavailable. Peer discovery stays off.
+        .dns_resolver(
+            iroh::dns::DnsResolver::builder()
+                .with_system_defaults()
+                .disable_fallback()
+                .build(),
+        );
     if let Some(config) = config {
         config
             .validate()
@@ -653,3 +669,7 @@ pub async fn open_service(connection: &Connection, id: &str) -> Result<ServiceSt
     .await
     .map_err(|_| TunnelError::Status(Status::Timeout))?
 }
+
+#[cfg(test)]
+#[path = "relay_tests.rs"]
+mod relay_tests;

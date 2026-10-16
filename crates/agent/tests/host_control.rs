@@ -493,3 +493,102 @@ async fn existing_direct_path_survives_configured_relay_outage() {
     outgoing.close().await;
     host.shutdown().await;
 }
+
+#[tokio::test]
+async fn udp_enabled_hosts_fall_back_to_relay_with_stale_hint() {
+    use std::time::Duration;
+    use tokio::time::timeout;
+    let certificate = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+    let relay = tls_relay(&certificate, "127.0.0.1:0".parse().unwrap()).await;
+    let trust = dir();
+    let ca = trust.path().join("relay.pem");
+    std::fs::write(&ca, certificate.cert.pem()).unwrap();
+    let mut cfg = config();
+    cfg.relay_url = Some(format!("https://{}", relay.https_addr().unwrap()));
+    cfg.relay_ca_file = Some(ca);
+    let client_key = Identity::generate();
+    let hosts = [Identity::generate(), Identity::generate()];
+    // Fresh local authorities; only one host exists on the network at a time.
+    for key in &hosts {
+        let state = dir();
+        host::initialize(state.path(), key.endpoint_id()).unwrap();
+        approve(state.path(), key.endpoint_id(), client_key.endpoint_id(), 0);
+        let backend = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        service(
+            state.path(),
+            key.endpoint_id(),
+            client_key.endpoint_id(),
+            backend.local_addr().unwrap(),
+            1,
+        );
+        let host = tunnel::TunnelHost::bind_host(
+            key.secret_key(),
+            &cfg,
+            Authority::open(state.path(), key.endpoint_id()).unwrap(),
+        )
+        .await
+        .unwrap();
+        let client = tunnel::bind_configured_client(client_key.secret_key(), Some(&cfg))
+            .await
+            .unwrap();
+        assert!(!host.endpoint().bound_sockets().is_empty());
+        assert!(!client.bound_sockets().is_empty());
+        timeout(Duration::from_secs(10), async {
+            tokio::join!(host.endpoint().online(), client.online());
+        })
+        .await
+        .unwrap();
+        // The isolated audit repeats this test with kernel UDP blocking. The
+        // normal suite also covers the stale hint without firewall privileges.
+        let target = tunnel::peer_target(
+            key.endpoint_id(),
+            Some(&cfg),
+            Some("127.0.0.9:9".parse().unwrap()),
+        )
+        .unwrap();
+        let control = control::connect_target(&client, target.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            control::catalog_on(&control, key.endpoint_id())
+                .await
+                .unwrap()
+                .services
+                .len(),
+            1
+        );
+        let connection = tunnel::connect_target(&client, target).await.unwrap();
+        if std::env::var("WIPSNET_AUDIT_DROP_UDP").as_deref() == Ok("1") {
+            assert!(
+                connection
+                    .paths()
+                    .iter()
+                    .any(|p| p.is_relay() && p.is_selected())
+            );
+        }
+        let mut stream = tunnel::open_service(&connection, "llama").await.unwrap();
+        let (mut tcp, _) = timeout(Duration::from_secs(2), backend.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        stream.write_all(b"request").await.unwrap();
+        let mut data = [0; 7];
+        timeout(Duration::from_secs(2), tcp.read_exact(&mut data))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&data, b"request");
+        tcp.write_all(b"reply").await.unwrap();
+        let mut reply = [0; 5];
+        timeout(Duration::from_secs(2), stream.read_exact(&mut reply))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&reply, b"reply");
+        drop(stream);
+        drop(tcp);
+        client.close().await;
+        host.shutdown().await;
+    }
+    relay.shutdown().await.unwrap();
+}
