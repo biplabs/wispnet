@@ -5,6 +5,10 @@ if { [ -n "${WIPSNET_ANDROID_LAN_ADDRESS:-}" ] || [ "${WIPSNET_ANDROID_WIFI_CYCL
     echo "Android LAN/Wi-Fi checks require WIPSNET_ANDROID_RELAY_TEST=1." >&2
     exit 1
 fi
+if [ -n "${WIPSNET_SSH_RELAY_HOST:-}" ] && [ "${WIPSNET_ANDROID_RELAY_TEST:-0}" != 1 ]; then
+    echo "Physical SSH/tablet checks require WIPSNET_ANDROID_RELAY_TEST=1 to rebuild the current Android CLI." >&2
+    exit 1
+fi
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
@@ -25,6 +29,9 @@ if [ "${WIPSNET_ANDROID_RELAY_TEST:-0}" = 1 ]; then
     python3 scripts/relay_smoke.py "$@"
 else
     python3 scripts/relay_smoke.py
+fi
+if [ -n "${WIPSNET_SSH_RELAY_HOST:-}" ]; then
+    python3 scripts/physical_relay_smoke.py --ssh-host "$WIPSNET_SSH_RELAY_HOST"
 fi
 python3 scripts/tunnel_smoke.py
 uv run --project spikes/browser --locked python -m unittest discover -s spikes/browser -p 'test_*.py'

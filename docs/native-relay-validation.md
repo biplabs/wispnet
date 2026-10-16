@@ -133,3 +133,10 @@ ran on one Linux computer and were alternately absent. The fallback relay was a
 local TLS server reached over USB, not a cloud deployment or a relay-hostname/DNS
 test on Android. Those remain #12, #17, #18 and #13/#14 acceptance work; #13 is
 not closed by this harness.
+
+The optional [physical two-host harness](physical-relay-validation.md) extends the
+native checks to a second SSH-accessible Linux computer. Both physical hosts have
+their own keys, authority state and local backend, and the tablet connects with
+the opposite host's agent stopped. Enable it with `WIPSNET_SSH_RELAY_HOST` alongside
+`WIPSNET_ANDROID_RELAY_TEST=1`. Its documented SSH/USB relay forwarding keeps the
+orchestration computer powered on; it is not a cloud deployment or APK test.
