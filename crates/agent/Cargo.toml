@@ -15,3 +15,4 @@ libc.workspace = true
 
 iroh.workspace = true
 tokio = { workspace = true, features = ["time", "sync", "net", "io-util"] }
+serde_json = "=1.0.150"

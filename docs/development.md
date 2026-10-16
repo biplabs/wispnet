@@ -1,5 +1,9 @@
 # Development foundation (#3)
 
+The current [independent-host checkpoint](per-host-control.md) uses
+`config/host.toml` (`schema_version = 2`). Schema-1 HTTPS/registry examples below
+are preserved legacy foundations. #13/#17 still own relay/pairing integration.
+
 The Rust workspace provides configuration checking and Linux agent/registry
 lifecycle shells with persistent Linux device identity and an opt-in authenticated
 Iroh service host/raw client. Enrollment, registry persistence, the directory and

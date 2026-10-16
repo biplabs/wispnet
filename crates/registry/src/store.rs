@@ -83,7 +83,7 @@ impl Store {
                 CREATE TABLE services (id TEXT PRIMARY KEY, host TEXT NOT NULL REFERENCES devices(id));
                 CREATE TABLE grants (service TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE, device TEXT NOT NULL REFERENCES devices(id), PRIMARY KEY(service,device));
                 PRAGMA user_version=1;")?,
-            1..=3 => {},
+            1..=4 => {},
             _ => return Err(Error::UnsupportedSchema),
         }
         if version < 2 {
@@ -97,6 +97,13 @@ impl Store {
                 INSERT INTO device_records SELECT id,'legacy','enrolled',0,NULL FROM devices;
                 CREATE TABLE invitations(id TEXT PRIMARY KEY, hash TEXT NOT NULL UNIQUE, origin TEXT NOT NULL, expires INTEGER NOT NULL, state TEXT NOT NULL, device TEXT, name TEXT, nonce TEXT, challenge_expires INTEGER, purpose TEXT, window INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0);
                 PRAGMA user_version=3;")?;
+        }
+        if version < 4 {
+            tx.execute_batch("CREATE TABLE host_authority(id INTEGER PRIMARY KEY CHECK(id=1), endpoint TEXT NOT NULL, generation TEXT NOT NULL, owner_hash TEXT NOT NULL);
+                CREATE TABLE host_clients(id TEXT PRIMARY KEY,name TEXT NOT NULL);
+                CREATE TABLE host_services(id TEXT PRIMARY KEY,backend TEXT NOT NULL);
+                CREATE TABLE host_grants(service TEXT NOT NULL REFERENCES host_services(id) ON DELETE CASCADE,client TEXT NOT NULL REFERENCES host_clients(id) ON DELETE CASCADE,PRIMARY KEY(service,client));
+                PRAGMA user_version=4;")?;
         }
         tx.commit()?;
         Ok(Self(db))
@@ -323,7 +330,7 @@ mod tests {
             ),
             Err(Error::InvalidInput)
         );
-        store.0.pragma_update(None, "user_version", 4).unwrap();
+        store.0.pragma_update(None, "user_version", 5).unwrap();
         drop(store);
         assert!(matches!(Store::open(&path), Err(Error::UnsupportedSchema)));
     }

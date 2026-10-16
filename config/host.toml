@@ -1,0 +1,12 @@
+# Independent per-host authority (ADR 0002). No HTTPS controller preflight.
+schema_version = 2
+device_name = "my-host"
+state_dir = "/home/CHANGE_ME/.local/state/wipsnet-host"
+log_level = "info"
+
+[transport]
+# Direct development path. Explicit relay support remains #13.
+bind_addr = "127.0.0.1:7779"
+max_connections = 16
+max_streams = 64
+max_streams_per_connection = 8

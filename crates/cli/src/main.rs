@@ -10,6 +10,9 @@ const USAGE: &str = "Wipsnet development CLI
 Usage: wipsnet <check|identity-init|status|agent|registry|registry-init|registry-backup|registry-directory> --config /absolute/path/config.toml
 Backup: wipsnet registry-backup --config /absolute/path/config.toml --output /absolute/path/new-backup.sqlite3
 Enroll: wipsnet enroll --config /absolute/path/device.toml --invitation /private/invitation.json
+Host: wipsnet <host-init|host-status> --config /absolute/path/host.toml
+Host change: wipsnet host-mutate --config /absolute/path/host.toml --request /absolute/path/request.json
+Catalog: wipsnet host-catalog --config /absolute/path/client.toml --peer PUBLIC_ID --address IP:UDP_PORT
 Reset: wipsnet identity-reset --config /absolute/path/config.toml --expect-id PUBLIC_ID
 Tunnel: wipsnet tunnel --config /absolute/path/config.toml --peer PUBLIC_ID --address IP:UDP_PORT --service SERVICE_ID
 Tunnel mode relays raw stdin/stdout. It is not a browser gateway. Use enroll for invitation pairing; see docs/enrollment.md.";
@@ -44,11 +47,17 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         println!("{USAGE}");
         return Ok(());
     }
+    let host_mutate = args.first().is_some_and(|a| a == "host-mutate");
+    let host_catalog = args.first().is_some_and(|a| a == "host-catalog");
     let enroll = args.first().is_some_and(|a| a == "enroll");
     let backup = args.first().is_some_and(|a| a == "registry-backup");
     let reset = args.first().is_some_and(|a| a == "identity-reset");
     let tunnel_mode = args.first().is_some_and(|a| a == "tunnel");
-    let invalid_arguments = if tunnel_mode {
+    let invalid_arguments = if host_mutate {
+        args.len() != 5 || args[1] != "--config" || args[3] != "--request"
+    } else if host_catalog {
+        args.len() != 7 || args[1] != "--config" || args[3] != "--peer" || args[5] != "--address"
+    } else if tunnel_mode {
         args.len() != 9
             || args[1] != "--config"
             || args[3] != "--peer"
@@ -79,6 +88,10 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             | "registry-backup"
             | "registry-directory"
             | "enroll"
+            | "host-init"
+            | "host-status"
+            | "host-mutate"
+            | "host-catalog"
             | "tunnel"
     ) {
         return Err(USAGE.into());
@@ -115,6 +128,102 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
     let config = Config::load(&PathBuf::from(&args[2]))?;
+    if config.schema_version == 2
+        && matches!(
+            mode,
+            "registry" | "registry-init" | "registry-directory" | "enroll"
+        )
+    {
+        return Err("legacy controller commands are not available in independent host mode; pairing migration is tracked in #17".into());
+    }
+    if matches!(mode, "host-init" | "host-status" | "host-mutate") {
+        if config.schema_version != 2 {
+            return Err("host commands require schema_version=2; use config/host.toml".into());
+        }
+        if mode == "host-init" {
+            config.prepare_state()?;
+        }
+        let identity_store = FileIdentityStore::new(&config.state_dir)?;
+        let _lease = if mode == "host-init" {
+            Some(identity_store.lease()?)
+        } else {
+            None
+        };
+        let initialized = config
+            .state_dir
+            .join("host-owner.token")
+            .try_exists()
+            .map_err(|_| "cannot inspect host credential")?
+            || config
+                .state_dir
+                .join("host.sqlite3")
+                .try_exists()
+                .map_err(|_| "cannot inspect host authority")?;
+        let identity = if mode == "host-init" && !initialized {
+            identity_store.initialize()?
+        } else {
+            identity_store.load()?
+        };
+        if mode == "host-init" {
+            wipsnet_registry::host::initialize(&config.state_dir, identity.endpoint_id())?;
+            println!(
+                "Independent host initialized\nEndpoint ID: {}",
+                identity.endpoint_id()
+            );
+            return Ok(());
+        }
+        let (mut store, secret) =
+            wipsnet_registry::host::owner_store(&config.state_dir, identity.endpoint_id())?;
+        if mode == "host-status" {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&store.host_snapshot(identity.endpoint_id())?)?
+            );
+        }
+        if mode == "host-mutate" {
+            use std::io::Read;
+            let file = std::fs::File::open(PathBuf::from(&args[4]))
+                .map_err(|_| "cannot read owner request")?;
+            if !file.metadata()?.is_file() {
+                return Err("owner request must be a regular file".into());
+            }
+            let mut bytes = Vec::new();
+            file.take(32769)
+                .read_to_end(&mut bytes)
+                .map_err(|_| "cannot read owner request")?;
+            if bytes.len() > 32768 {
+                return Err("owner request exceeds 32 KiB".into());
+            }
+            let operation = serde_json::from_slice(&bytes).map_err(|_| "invalid owner request")?;
+            let revision = store.host_mutate(identity.endpoint_id(), &secret, operation)?;
+            println!("Host revision: {revision}");
+        }
+        return Ok(());
+    }
+    if mode == "host-catalog" {
+        let peer: EndpointId = args[4]
+            .to_str()
+            .ok_or("invalid peer")?
+            .parse()
+            .map_err(|_| "invalid peer")?;
+        let address: std::net::SocketAddr = args[6]
+            .to_str()
+            .ok_or("invalid address")?
+            .parse()
+            .map_err(|_| "invalid address")?;
+        let store = FileIdentityStore::new(&config.state_dir)?;
+        let _lease = store.lease()?;
+        let identity = store.load()?;
+        let endpoint = tunnel::bind_client(identity.secret_key()).await?;
+        let result = async {
+            let connection = wipsnet_agent::control::connect(&endpoint, peer, address).await?;
+            wipsnet_agent::control::catalog_on(&connection, peer).await
+        }
+        .await;
+        endpoint.close().await;
+        println!("{}", serde_json::to_string_pretty(&result?)?);
+        return Ok(());
+    }
     if mode == "check" {
         println!("Configuration valid");
         return Ok(());

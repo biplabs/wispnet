@@ -6,6 +6,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+serde_json = "=1.0.150"
 wipsnet-core.workspace = true
 wipsnet-agent.workspace = true
 wipsnet-registry.workspace = true

@@ -91,6 +91,26 @@ fn quic_config(streams: usize) -> QuicTransportConfig {
         .build()
 }
 
+#[derive(Clone)]
+enum Services {
+    Static(Arc<Vec<ServiceConfig>>),
+    Host(wipsnet_registry::host::Authority),
+}
+impl Services {
+    async fn load(&self) -> Result<Vec<ServiceConfig>, Status> {
+        match self {
+            Self::Static(services) => Ok(services.as_ref().clone()),
+            Self::Host(host) => host.services().await.map_err(|_| Status::Denied),
+        }
+    }
+    async fn approved(&self, peer: EndpointId) -> bool {
+        match self {
+            Self::Static(services) => services.iter().any(|s| s.allow.contains(&peer)),
+            Self::Host(host) => host.approved(peer).await,
+        }
+    }
+}
+
 pub struct TunnelHost {
     endpoint: Endpoint,
     stop: watch::Sender<bool>,
@@ -108,12 +128,41 @@ impl TunnelHost {
             .map_err(|_| TunnelError::Transport("invalid transport limits"))?;
         validate_services(services)
             .map_err(|_| TunnelError::Transport("invalid host service configuration"))?;
+        Self::bind_services(
+            secret,
+            config,
+            Services::Static(Arc::new(services.to_vec())),
+        )
+        .await
+    }
+    pub async fn bind_host(
+        secret: &SecretKey,
+        config: &TransportConfig,
+        authority: wipsnet_registry::host::Authority,
+    ) -> Result<Self, TunnelError> {
+        config
+            .validate()
+            .map_err(|_| TunnelError::Transport("invalid transport limits"))?;
+        if authority.host() != secret.public() {
+            return Err(TunnelError::Transport("host authority identity mismatch"));
+        }
+        Self::bind_services(secret, config, Services::Host(authority)).await
+    }
+    async fn bind_services(
+        secret: &SecretKey,
+        config: &TransportConfig,
+        services: Services,
+    ) -> Result<Self, TunnelError> {
+        let mut alpns = vec![protocol::ALPN.to_vec()];
+        if matches!(services, Services::Host(_)) {
+            alpns.push(wipsnet_core::host::ALPN.to_vec());
+        }
         let endpoint = Endpoint::builder(presets::Minimal)
             .secret_key(secret.clone())
             .clear_ip_transports()
             .bind_addr(config.bind_addr)
             .map_err(|_| TunnelError::Transport("invalid transport bind address"))?
-            .alpns(vec![protocol::ALPN.to_vec()])
+            .alpns(alpns)
             .transport_config(quic_config(config.max_streams_per_connection))
             .bind()
             .await
@@ -125,7 +174,7 @@ impl TunnelHost {
         let worker = tokio::spawn(serve(
             endpoint.clone(),
             config.clone(),
-            Arc::new(services.to_vec()),
+            services,
             counts.clone(),
             receiver,
         ));
@@ -162,7 +211,7 @@ impl Drop for TunnelHost {
 async fn serve(
     endpoint: Endpoint,
     config: TransportConfig,
-    services: Arc<Vec<ServiceConfig>>,
+    services: Services,
     counts: ActiveCounts,
     mut stop: watch::Receiver<bool>,
 ) {
@@ -189,7 +238,7 @@ async fn serve(
                     let Ok(Ok(connection)) = timeout(HANDSHAKE_TIMEOUT, incoming).await else { return };
                     // Only the completed transport handshake establishes peer authority.
                     let peer = connection.remote_id();
-                    if !services.iter().any(|service| service.allow.contains(&peer)) {
+                    if !timeout(HANDSHAKE_TIMEOUT,services.approved(peer)).await.unwrap_or(false) {
                         connection.close((Status::Denied as u32).into(), b"access denied");
                         return;
                     }
@@ -205,11 +254,12 @@ async fn serve(
 async fn serve_connection(
     connection: Connection,
     peer: EndpointId,
-    services: Arc<Vec<ServiceConfig>>,
+    services: Services,
     streams: Arc<Semaphore>,
     max: usize,
     counts: ActiveCounts,
 ) {
+    let connection_control = connection.alpn() == wipsnet_core::host::ALPN;
     let _close = CloseConnection(connection.clone());
     let mut tasks = JoinSet::new();
     loop {
@@ -231,7 +281,11 @@ async fn serve_connection(
                 tasks.spawn(async move {
                     let _permit = permit;
                     let _guard = guard;
-                    serve_stream(send, recv, peer, &services).await;
+                    if connection_control {
+                        if let Services::Host(host)=services {crate::control::serve_stream(send,recv,peer,host).await;}
+                    } else {
+                        serve_stream(send, recv, peer, &services).await;
+                    }
                 });
             }
         }
@@ -270,11 +324,12 @@ async fn serve_stream(
     mut send: SendStream,
     mut recv: RecvStream,
     peer: EndpointId,
-    services: &[ServiceConfig],
+    services: &Services,
 ) {
     let opened = async {
         let frame = read_frame(&mut recv).await?;
         let id = protocol::decode_request(&frame)?;
+        let services = services.load().await?;
         let service = services
             .iter()
             .find(|service| service.id == id)

@@ -1,5 +1,10 @@
 # Registry storage foundation (#6)
 
+> Pre-migration schema-1 foundation. For the accepted ADR 0002 architecture and
+> the new independent-host checkpoint, use [per-host control](per-host-control.md).
+> This guide preserves the earlier HTTPS-controller implementation/evidence; it
+> does not make that controller a master or a requirement of schema-2 host mode.
+
 `wipsnet_registry::store::Store` provides a local SQLite persistence boundary.
 The `registry` CLI opens `registry.sqlite3` in the configured state directory,
 checks integrity, and logs the current revision before waiting for shutdown.

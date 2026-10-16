@@ -1,5 +1,10 @@
 # Single-owner registry API (v1)
 
+> Pre-migration schema-1 foundation. For the accepted ADR 0002 architecture and
+> the new independent-host checkpoint, use [per-host control](per-host-control.md).
+> This guide preserves the earlier HTTPS-controller implementation/evidence; it
+> does not make that controller a master or a requirement of schema-2 host mode.
+
 The registry stores one mesh and one owner credential, device records, service
 ownership, published Iroh socket addresses, and whole-service grants. It does
 not forward application payloads. The owner assigns service IDs and hosting

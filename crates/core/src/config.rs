@@ -195,8 +195,10 @@ impl Config {
             return Err(ConfigError("configuration exceeds 64 KiB"));
         }
         let config: Self = toml::from_str(text).map_err(|_| ConfigError("invalid TOML or schema; expected base fields and optional transport/services (see config/example.toml)"))?;
-        if config.schema_version != 1 {
-            return Err(ConfigError("schema_version must be 1"));
+        if !matches!(config.schema_version, 1 | 2) {
+            return Err(ConfigError(
+                "schema_version must be 1 (legacy) or 2 (independent host)",
+            ));
         }
         if config.device_name.trim().is_empty()
             || config.device_name.len() > 128
@@ -215,6 +217,16 @@ impl Config {
         {
             return Err(ConfigError(
                 "state_dir must be an absolute non-root path without .. components",
+            ));
+        }
+        if config.schema_version == 2
+            && (config.transport.is_none()
+                || config.controller.is_some()
+                || config.registry.is_some()
+                || !config.services.is_empty())
+        {
+            return Err(ConfigError(
+                "independent hosts require transport and durable local authority; controller/registry/static services are not allowed; use config/host.toml with fresh host state",
             ));
         }
         if let Some(transport) = &config.transport {
@@ -386,6 +398,20 @@ unknown = 'value'",
             );
             let error = Config::parse(&text).err().unwrap();
             assert!(!error.to_string().contains("SECRET-SENTINEL"));
+        }
+    }
+    #[test]
+    fn independent_host_configuration_requires_explicit_local_authority() {
+        let base = valid().replace("schema_version = 1", "schema_version = 2");
+        let transport = "\n[transport]\nbind_addr='127.0.0.1:0'\n";
+        assert!(Config::parse(&format!("{base}{transport}")).is_ok());
+        assert!(Config::parse(&base).is_err());
+        for legacy in [
+            "\n[controller]\norigin='https://controller.example'\ncredential_file='/private/token'",
+            "\n[registry]\nbind_addr='127.0.0.1:7780'",
+            "\n[[services]]\nid='legacy'\nbackend='127.0.0.1:8080'\nallow=[]",
+        ] {
+            assert!(Config::parse(&format!("{base}{transport}{legacy}")).is_err());
         }
     }
     #[test]

@@ -1,5 +1,10 @@
 # Invitation enrollment (v1)
 
+> Pre-migration schema-1 foundation. For the accepted ADR 0002 architecture and
+> the new independent-host checkpoint, use [per-host control](per-host-control.md).
+> This guide preserves the earlier HTTPS-controller implementation/evidence; it
+> does not make that controller a master or a requirement of schema-2 host mode.
+
 Enrollment adds an installation without copying another installation's private
 key. Linux and the native Android harness use the same portable JSON payload,
 Ed25519 proof protocol, HTTPS client, and persisted identity. The Android

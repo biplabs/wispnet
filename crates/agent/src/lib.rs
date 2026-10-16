@@ -1,6 +1,7 @@
 //! Agent identity and authenticated service-host lifecycle.
 use std::future::Future;
 use wipsnet_core::config::Config;
+pub mod control;
 pub mod identity;
 pub mod tunnel;
 
@@ -13,6 +14,21 @@ pub async fn run(
     let store = identity::FileIdentityStore::new(&config.state_dir)?;
     let _lease = store.lease()?;
     let identity = store.load()?;
+    if config.schema_version == 2 {
+        let authority =
+            wipsnet_registry::host::Authority::open(&config.state_dir, identity.endpoint_id())?;
+        let host = tunnel::TunnelHost::bind_host(
+            identity.secret_key(),
+            config.transport.as_ref().ok_or("host transport required")?,
+            authority,
+        )
+        .await?;
+        tracing::info!(component="agent",event="started",networking=true,mode="independent_host",endpoint_id=%host.endpoint().id(),bind_addr=%host.endpoint().bound_sockets()[0]);
+        shutdown.await;
+        host.shutdown().await;
+        tracing::info!(component = "agent", event = "stopped");
+        return Ok(());
+    }
     if let Some(controller) = &config.controller {
         let secret = wipsnet_registry::control::read_token(&controller.credential_file)?;
         let client = wipsnet_registry::client::Client::configured(controller, secret)?;

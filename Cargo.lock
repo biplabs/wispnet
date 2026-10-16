@@ -4025,6 +4025,7 @@ version = "0.1.0"
 dependencies = [
  "iroh",
  "libc",
+ "serde_json",
  "tempfile",
  "tokio",
  "tracing",
@@ -4037,6 +4038,7 @@ dependencies = [
 name = "wipsnet-cli"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",

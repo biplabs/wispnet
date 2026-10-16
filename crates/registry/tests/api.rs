@@ -349,7 +349,7 @@ fn version_one_migrates_without_losing_existing_directory() {
         store.replace(0, &[host], &[]).unwrap();
     }
     let db = rusqlite::Connection::open(&path).unwrap();
-    db.execute_batch("DROP TABLE invitations; DROP TABLE device_records; DROP TABLE routes; DROP TABLE device_tokens; DROP TABLE controller; PRAGMA user_version=1;").unwrap();
+    db.execute_batch("DROP TABLE host_grants; DROP TABLE host_services; DROP TABLE host_clients; DROP TABLE host_authority; DROP TABLE invitations; DROP TABLE device_records; DROP TABLE routes; DROP TABLE device_tokens; DROP TABLE controller; PRAGMA user_version=1;").unwrap();
     drop(db);
     let mut migrated = Store::open(&path).unwrap();
     assert_eq!(migrated.snapshot().unwrap().devices, vec![host]);
