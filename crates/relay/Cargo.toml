@@ -1,0 +1,20 @@
+[package]
+name = "wipsnet-relay"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+iroh-relay = { version = "=1.3.0", default-features = false, features = ["server", "tls-ring"] }
+iroh-base.workspace = true
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std"] }
+rustls-pki-types = "=1.15.1"
+tokio.workspace = true
+serde.workspace = true
+toml.workspace = true
+libc.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

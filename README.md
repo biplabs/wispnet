@@ -112,11 +112,11 @@ The owner may use one UI to add or revoke a phone across several hosts, but each
 
 ## How known peers find each other
 
-Each device saves its trusted peers' identities and relay bootstrap information. v1 explicitly configures one relay, proposed **`relay.wipsnet.app`**. This hostname is a deployment proposal, not confirmation that DNS or a server is provisioned.
+Each device saves its trusted peers' identities and relay bootstrap information. v1 explicitly configures one relay: **`relay.wispnet.app`**. Its temporary deployment runs on `desktop.home` as a separate service from the node role; see [desktop relay setup](docs/desktop-relay.md).
 
 ```text
 Expected peer:  <target host's public EndpointId>
-Initial route: https://relay.wipsnet.app
+Initial route: https://relay.wispnet.app
 Direct hints:  optional; current peer IP is not required for relay reachability
 ```
 

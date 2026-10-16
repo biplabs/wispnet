@@ -3,6 +3,7 @@
 
 Only creates owned private temporary state. The local TLS relay is reached over
 an SSH reverse forward and USB reverse; no production relay or Android APK.
+With --relay-url, the existing relay is used directly without any forwarding.
 Opposite Wipsnet host processes stop; the underlying computers stay powered on.
 """
 import argparse
@@ -16,6 +17,7 @@ import subprocess
 import tempfile
 import time
 import uuid
+from urllib.parse import urlsplit
 from relay_smoke import BINARY, FIXTURE, ROOT, event, run, stop
 
 SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=yes"]
@@ -59,10 +61,21 @@ def drain(process):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ssh-host", required=True)
+    parser.add_argument("--relay-url", help="existing HTTPS relay; skips all local relay and TCP forwarding fixtures")
+    parser.add_argument("--relay-ca-file", type=Path, help="public certificate for an existing private-CA relay")
+    parser.add_argument("--restart-desktop-relay", action="store_true", help="restart only wipsnet-relay.service on the selected SSH host")
     parser.add_argument("--serial", help="authorized ADB serial; omit only when exactly one device is connected")
     ndk_default = os.environ.get("WIPSNET_ANDROID_NDK", str(Path.home() / "Android/Sdk/ndk/27.2.12479018"))
     parser.add_argument("--ndk", type=Path, default=Path(ndk_default))
     args = parser.parse_args()
+    assert not args.relay_ca_file or args.relay_url, "--relay-ca-file requires --relay-url"
+    assert not args.restart_desktop_relay or args.relay_url, "service restart requires an existing relay"
+    if args.relay_url:
+        parsed=urlsplit(args.relay_url)
+        assert parsed.scheme=="https" and parsed.hostname and not parsed.username and not parsed.password
+        assert parsed.path in ("", "/") and not parsed.query and not parsed.fragment
+    if args.relay_ca_file: assert args.relay_ca_file.is_file()
+
     if args.serial is None:
         devices = [line.split()[0] for line in run(["adb", "devices"]).stdout.splitlines()[1:]
                    if len(line.split()) == 2 and line.split()[1] == "device"]
@@ -130,40 +143,46 @@ def main():
     with tempfile.TemporaryDirectory(prefix="wipsnet-physical-") as temporary:
         root=Path(temporary)
         try:
-            fixture=subprocess.Popen([FIXTURE,"--ca-file",root/"relay.pem"],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
-            relay_url=event(fixture,fixture.stdout,"started")["relay_url"]
-            port=int(relay_url.rsplit(":",1)[1].rstrip("/"))
+            if args.relay_url:
+                relay_url=args.relay_url
+                if args.relay_ca_file: shutil.copyfile(args.relay_ca_file,root/"relay.pem")
+            else:
+                fixture=subprocess.Popen([FIXTURE,"--ca-file",root/"relay.pem"],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+                relay_url=event(fixture,fixture.stdout,"started")["relay_url"]
+            port=int(urlsplit(relay_url).port or 443)
             python("import os,sys;os.mkdir(sys.argv[1],0o700)",remote_root)
             remote_created=True
             native=root/"wipsnet"
             shutil.copyfile(BINARY,native)
             run(["strip","--strip-debug",native])
-            run(["scp","-q","-o","BatchMode=yes","-o","StrictHostKeyChecking=yes",native,root/"relay.pem",args.ssh_host+":"+remote_root+"/"])
+            run(["scp","-q","-o","BatchMode=yes","-o","StrictHostKeyChecking=yes",native,*([root/"relay.pem"] if (root/"relay.pem").exists() else []),args.ssh_host+":"+remote_root+"/"])
             python("import os,sys;os.chmod(sys.argv[1]+'/wipsnet',0o700)",remote_root)
             remote([remote_root+"/wipsnet","--help"])
-            forward=subprocess.Popen([*SSH,"-o","ExitOnForwardFailure=yes","-N","-R",f"127.0.0.1:{port}:127.0.0.1:{port}",args.ssh_host],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
-            deadline=time.monotonic()+10
-            while True:
-                probe=python("import socket,sys;socket.create_connection(('127.0.0.1',int(sys.argv[1])),1).close()",str(port),ok=None)
-                if probe.returncode==0: break
-                assert forward.poll() is None and time.monotonic()<deadline,"SSH relay forwarding unavailable"
-                time.sleep(.1)
+            if not args.relay_url:
+                forward=subprocess.Popen([*SSH,"-o","ExitOnForwardFailure=yes","-N","-R",f"127.0.0.1:{port}:127.0.0.1:{port}",args.ssh_host],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+                deadline=time.monotonic()+10
+                while True:
+                    probe=python("import socket,sys;socket.create_connection(('127.0.0.1',int(sys.argv[1])),1).close()",str(port),ok=None)
+                    if probe.returncode==0: break
+                    assert forward.poll() is None and time.monotonic()<deadline,"SSH relay forwarding unavailable"
+                    time.sleep(.1)
             tablet("mkdir","-m","700",device_root)
             device_created=True
             stripped=root/"android-wipsnet"
             shutil.copyfile(android_binary,stripped)
             run([args.ndk/"toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip",stripped])
             adb("push",stripped,device_root+"/wipsnet")
-            adb("push",root/"relay.pem",device_root+"/relay.pem")
+            if (root/"relay.pem").exists(): adb("push",root/"relay.pem",device_root+"/relay.pem")
             tablet("chmod","700",device_root+"/wipsnet")
-            tablet("chmod","600",device_root+"/relay.pem")
+            if (root/"relay.pem").exists(): tablet("chmod","600",device_root+"/relay.pem")
             def config(state,ca,schema):
-                return f"schema_version={schema}\ndevice_name='physical-fixture'\nstate_dir='{state}'\nlog_level='info'\n[transport]\nbind_addr='127.0.0.1:0'\nrelay_url='{relay_url}'\nrelay_only=true\nrelay_ca_file='{ca}'\n"
+                return f"schema_version={schema}\ndevice_name='physical-fixture'\nstate_dir='{state}'\nlog_level='info'\n[transport]\nbind_addr='127.0.0.1:0'\nrelay_url='{relay_url}'\nrelay_only=true\n" + (f"relay_ca_file='{ca}'\n" if (root/"relay.pem").exists() else "")
             device_config=root/"client.toml"
             device_config.write_text(config(device_root+"/state",device_root+"/relay.pem",1))
             adb("push",device_config,device_root+"/client.toml")
-            adb("reverse","--no-rebind",f"tcp:{port}",f"tcp:{port}")
-            reverse=f"tcp:{port}"
+            if not args.relay_url:
+                adb("reverse","--no-rebind",f"tcp:{port}",f"tcp:{port}")
+                reverse=f"tcp:{port}"
             peer=client("identity-init",None).stdout.split("Endpoint ID: ")[1].strip()
             backend=subprocess.Popen([*SSH,args.ssh_host,shlex.join(["python3","-u","-c",BACKEND])],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
             remote_binding=event(backend,backend.stdout,"backend")["address"]
@@ -211,15 +230,44 @@ def main():
                 agent=start(call,path)
                 assert available(pin)==before
                 use(pin)
-                fixture.send_signal(signal.SIGUSR1)
-                assert event(fixture,fixture.stdout,"restarted")["relay_url"]==relay_url
+                if fixture:
+                    fixture.send_signal(signal.SIGUSR1)
+                    assert event(fixture,fixture.stdout,"restarted")["relay_url"]==relay_url
+                elif args.restart_desktop_relay:
+                    # The live node process/identity lease must survive a relay restart.
+                    pid_path=remote_root+"/agent.pid" if call is remote_cli else root/"local-agent.pid"
+                    before_pid=python("import pathlib,sys;print(pathlib.Path(sys.argv[1]).read_text())",pid_path).stdout if call is remote_cli else Path(pid_path).read_text()
+                    remote(["systemctl","--user","restart","wipsnet-relay.service"])
+                    remote(["systemctl","--user","is-active","wipsnet-relay.service"])
+                    after_pid=python("import pathlib,sys;print(pathlib.Path(sys.argv[1]).read_text())",pid_path).stdout if call is remote_cli else Path(pid_path).read_text()
+                    assert before_pid==after_pid and agent.poll() is None,"relay restart affected the node process"
                 assert available(pin)==before
                 use(pin)
                 assert client("identity-init",None).stdout.split("Endpoint ID: ")[1].strip()==peer
-                print(f"{label} physical host: tablet cold start, proof/approval, HTTP, host restart and relay rebuild passed with other host stopped",flush=True)
+                print(f"{label} physical host: tablet cold start, proof/approval, HTTP, host restart and relay recovery passed with other host stopped",flush=True)
                 drain(agent);agent=None
+            # Fresh Linux clients exercise both cross-computer directions too.
+            # No private node/tablet key is copied or reused for these clients.
+            local_client_config=root/"linux-client.toml"
+            local_client_config.write_text(config(root/"linux-client-state",root/"relay.pem",1))
+            linux_local=local_cli("identity-init",local_client_config).stdout.split("Endpoint ID: ")[1].strip()
+            remote_client_config=remote_root+"/linux-client.toml"
+            remote_write(remote_client_config,config(remote_root+"/linux-client-state",remote_root+"/relay.pem",1))
+            linux_remote=remote_cli("identity-init",remote_client_config).stdout.split("Endpoint ID: ")[1].strip()
+            for index,client_call,client_path,client_peer in [(0,local_cli,local_client_config,linux_local),(1,remote_cli,remote_client_config,linux_remote)]:
+                call,path,binding,request_path,label=hosts[index]
+                mutate(call,path,{"op":"approve","expected_revision":2,"peer":client_peer,"name":"physical-linux-client"},request_path)
+                mutate(call,path,{"op":"service","expected_revision":3,"id":"website","backend":binding,"allow":[peer,client_peer]},request_path)
+                agent=start(call,path)
+                result=json.loads(client_call("host-catalog",client_path,"--peer",pins[index]).stdout)
+                assert result["host"]==pins[index] and result["services"]==[{"id":"website"}]
+                response=client_call("tunnel",client_path,"--peer",pins[index],"--service","website",input="GET / HTTP/1.0\r\nHost: fixture\r\n\r\n")
+                assert "200 OK" in response.stdout and "physical-host-service" in response.stdout
+                drain(agent);agent=None
+                if args.restart_desktop_relay: remote(["systemctl","--user","is-active","wipsnet-relay.service"])
+                print(f"{label} host: opposite physical Linux client catalog/HTTP passed; stopping node left relay active",flush=True)
             remote_cli("host-invitations",remote_config)
-            mutate(remote_cli,remote_config,{"op":"revoke","expected_revision":2,"peer":peer},remote_root+"/request.json")
+            mutate(remote_cli,remote_config,{"op":"revoke","expected_revision":4,"peer":peer},remote_root+"/request.json")
             agent=start(remote_cli,remote_config)
             catalog(pins[0],False);use(pins[0],False)
             drain(agent);agent=None
@@ -259,7 +307,7 @@ shutil.rmtree(root)
             try: stop(fixture)
             except BaseException as error: errors.append(error)
             if errors: raise RuntimeError("physical fixture cleanup failed") from errors[0]
-    print("Two physical Linux hosts/Android native relay fixture passed; temporary resources removed",flush=True)
+    print("Two physical Linux hosts/Android native relay checks passed; temporary node resources removed",flush=True)
 
 if __name__=="__main__":
     main()

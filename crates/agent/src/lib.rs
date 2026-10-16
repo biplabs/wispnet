@@ -60,3 +60,6 @@ pub async fn run(
     tracing::info!(component = "agent", event = "stopped");
     Ok(())
 }
+
+#[cfg(any(target_os = "android", test))]
+mod os_dns;

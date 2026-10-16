@@ -7,7 +7,7 @@ log_level = "info"
 [transport]
 # Direct development path. For an operated relay, configure the same HTTPS
 # origin on host and clients; see docs/relay-connectivity.md.
-# relay_url = "https://relay.wipsnet.app"
+# relay_url = "https://relay.wispnet.app"
 # relay_only = false
 # relay_ca_file = "/absolute/path/private-relay-ca.pem"
 bind_addr = "127.0.0.1:7779"

@@ -18,6 +18,7 @@ production browser gateway remain unimplemented. See the
 | wipsnet-agent | Agent lifecycle, identity and Iroh tunnel; future browser gateway |
 | wipsnet-registry | Registry lifecycle and future authenticated API/persistence |
 | wipsnet-cli | Linux CLI, structured logging, and OS signals |
+| wipsnet-relay | Standalone packet relay, separate TLS configuration and lifecycle; no node authority |
 
 ## Build and verify
 
@@ -31,7 +32,7 @@ git push
 ```
 
 The hook runs formatting, Clippy, unit tests, a debug build, CLI lifecycle/tunnel
-smoke tests, and the disposable browser-boundary suite. Install uv and Python 3.11+ for that suite. Node 22+ runs the bundled Sites relay
+smoke tests, and the disposable browser-boundary suite. Install OpenSSL for the standalone relay TLS smoke test, and uv and Python 3.11+ for that suite. Node 22+ runs the bundled Sites relay
 spike authentication checks without installing npm dependencies. The optional
 [live Sites compatibility test](sites-relay-validation.md) reports hosting failures
 separately from the local suite.

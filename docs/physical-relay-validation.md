@@ -58,3 +58,9 @@ This scenario was verified using two physical x86-64 Linux computers and the
 authorized arm64 Android tablet, with current native binaries. The fixture still
 uses a local TLS relay and native CLI, so it is not production deployment or an
 Android application acceptance claim.
+
+An [existing desktop relay](desktop-relay.md) can now be selected with `--relay-url`
+and optional `--relay-ca-file`. That mode skips all local relay and SSH/USB
+forwarding fixtures. `--restart-desktop-relay` restarts only `wipsnet-relay.service`
+on the selected SSH host and verifies the active node process remains unchanged.
+Both modes also test fresh Linux clients in both cross-computer directions.

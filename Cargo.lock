@@ -4336,6 +4336,7 @@ dependencies = [
  "iroh",
  "iroh-relay",
  "libc",
+ "n0-error",
  "rcgen",
  "rustls",
  "rustls-pki-types",
@@ -4402,6 +4403,22 @@ dependencies = [
  "tower",
  "tracing",
  "wipsnet-core",
+ "zeroize",
+]
+
+[[package]]
+name = "wipsnet-relay"
+version = "0.1.0"
+dependencies = [
+ "iroh-base",
+ "iroh-relay",
+ "libc",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "tempfile",
+ "tokio",
+ "toml",
  "zeroize",
 ]
 

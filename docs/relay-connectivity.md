@@ -10,15 +10,15 @@ Add this section to both host and client configuration:
 ```toml
 [transport]
 bind_addr = "0.0.0.0:7779"
-relay_url = "https://relay.wipsnet.app"
+relay_url = "https://relay.wispnet.app"
 relay_only = false
 max_connections = 16
 max_streams = 64
 max_streams_per_connection = 8
 ```
 
-The hostname is the proposed deployment, not a provisioned service supplied by
-this change. Use your operated relay. Normal mode permits direct UDP/NAT paths
+The current temporary relay runs on desktop as a separate service; see the
+[deployment and explicit TLS trust instructions](desktop-relay.md). Use your operated relay. Normal mode permits direct UDP/NAT paths
 and relay fallback. Choose a reachable bind address for direct connectivity.
 `relay_only = true` removes all peer UDP transports, useful for restrictive
 networks and testing. Relay TCP/TLS still needs network access. The config bind
@@ -64,7 +64,8 @@ from transport errors. Raw relay error strings/reasons, payloads and credentials
 are not surfaced. The minimal endpoint preset plus a custom relay map enables
 no default public relays or DNS/Pkarr/DHT/gossip node address lookup/publication.
 Ordinary DNS for a configured hostname and relay certificate validation remain
-necessary. DNS uses the operating system's configured resolvers; library-selected
+necessary. Android uses its OS address resolver without a Java VM; TXT peer
+discovery is disabled, and no library-selected public DNS fallback is added. DNS uses the operating system's configured resolvers; library-selected
 public fallback DNS servers are explicitly disabled. A system DNS outage can
 therefore prevent hostname-based relay reconnection. No implicit public DNS
 service is used to hide that failure.

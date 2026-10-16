@@ -524,16 +524,19 @@ fn configured_builder(
     secret: &SecretKey,
     config: Option<&TransportConfig>,
 ) -> Result<iroh::endpoint::Builder, TunnelError> {
+    // Android native CLI has no JVM. getaddrinfo delegates to Android's OS
+    // resolver without JNI or library-selected public DNS fallback. It also
+    // works in the future app without installing a second DNS policy.
+    #[cfg(target_os = "android")]
+    let resolver = crate::os_dns::resolver();
+    #[cfg(not(target_os = "android"))]
+    let resolver = iroh::dns::DnsResolver::builder()
+        .with_system_defaults()
+        .disable_fallback()
+        .build();
     let mut builder = Endpoint::builder(presets::Minimal)
         .secret_key(secret.clone())
-        // Never silently add a library-selected public DNS service when the
-        // operating system resolver is unavailable. Peer discovery stays off.
-        .dns_resolver(
-            iroh::dns::DnsResolver::builder()
-                .with_system_defaults()
-                .disable_fallback()
-                .build(),
-        );
+        .dns_resolver(resolver);
     if let Some(config) = config {
         config
             .validate()

@@ -1,0 +1,200 @@
+//! Standalone packet relay: no application/node identity or persistent registry.
+use iroh_relay::server::{
+    Access, AccessControl, CertConfig, ClientRateLimit, ClientRequest, ConnectionId, RelayConfig,
+    Server, ServerConfig, TlsConfig,
+};
+use rustls_pki_types::pem::PemObject;
+use serde::Deserialize;
+use std::{
+    fs::OpenOptions,
+    io::Read,
+    net::SocketAddr,
+    num::NonZeroU32,
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
+use zeroize::Zeroizing;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Config {
+    listen: SocketAddr,
+    certificate: PathBuf,
+    private_key: PathBuf,
+    max_connections: usize,
+}
+
+fn read_protected(path: &Path, secret: bool) -> Result<Vec<u8>, &'static str> {
+    if !path.is_absolute() {
+        return Err("relay file paths must be absolute");
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|_| "relay file unavailable")?;
+    let m = file
+        .metadata()
+        .map_err(|_| "relay file metadata unavailable")?;
+    // SAFETY: geteuid takes no pointers and has no preconditions.
+    let uid = unsafe { libc::geteuid() };
+    if !m.is_file()
+        || m.nlink() != 1
+        || (m.uid() != uid && m.uid() != 0)
+        || m.mode() & if secret { 0o077 } else { 0o022 } != 0
+        || m.len() > 65536
+    {
+        return Err("relay file must be protected, regular, singly linked and bounded");
+    }
+    let mut bytes = Vec::new();
+    file.take(65537)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "relay file read failed")?;
+    if bytes.len() > 65536 {
+        return Err("relay file too large");
+    }
+    Ok(bytes)
+}
+
+#[derive(Debug)]
+struct Admission {
+    current: AtomicUsize,
+    maximum: usize,
+}
+impl Admission {
+    fn admit(&self) -> bool {
+        self.current
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                (n < self.maximum).then_some(n + 1)
+            })
+            .is_ok()
+    }
+}
+impl AccessControl for Admission {
+    async fn on_connect(&self, _request: &ClientRequest) -> Access {
+        if self.admit() {
+            Access::Allow
+        } else {
+            Access::Deny {
+                reason: Some("relay capacity".into()),
+            }
+        }
+    }
+    fn on_disconnect(&self, _endpoint: iroh_base::EndpointId, _connection: ConnectionId) {
+        self.current.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+async fn serve(path: &Path) -> Result<(), &'static str> {
+    let bytes = Zeroizing::new(read_protected(path, true)?);
+    let text = std::str::from_utf8(&bytes).map_err(|_| "invalid relay configuration")?;
+    let config: Config = toml::from_str(text).map_err(|_| "invalid relay configuration")?;
+    if config.listen.port() == 0 || !(1..=1024).contains(&config.max_connections) {
+        return Err("invalid relay listener or connection limit");
+    }
+    let certificates = read_protected(&config.certificate, false)?;
+    let certificates = rustls_pki_types::CertificateDer::pem_slice_iter(&certificates)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| "invalid relay certificate")?;
+    let key = Zeroizing::new(read_protected(&config.private_key, true)?);
+    let key = rustls_pki_types::PrivateKeyDer::from_pem_slice(&key)
+        .map_err(|_| "invalid relay private key")?;
+    let tls = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .map_err(|_| "relay TLS configuration failed")?
+    .with_no_client_auth()
+    .with_single_cert(certificates, key)
+    .map_err(|_| "relay certificate/key mismatch")?;
+    // Auxiliary HTTP stays loopback-only on an ephemeral port. QUIC and metrics
+    // listeners remain disabled; only the configured TLS port is exposed.
+    let mut relay = RelayConfig::new(
+        "127.0.0.1:0"
+            .parse::<SocketAddr>()
+            .expect("constant address"),
+    );
+    relay.tls = Some(TlsConfig::new(
+        config.listen,
+        CertConfig::Manual { server_config: tls },
+    ));
+    relay.access = Arc::new(Admission {
+        current: AtomicUsize::new(0),
+        maximum: config.max_connections,
+    });
+    let mut rate = ClientRateLimit::new(NonZeroU32::new(1024 * 1024).expect("nonzero"));
+    rate.max_burst_bytes = NonZeroU32::new(2 * 1024 * 1024);
+    relay.limits.client_rx = Some(rate);
+    let mut server_config = ServerConfig::default();
+    server_config.relay = Some(relay);
+    let server = Server::spawn(server_config)
+        .await
+        .map_err(|_| "relay listener startup failed")?;
+    println!(
+        "{{\"event\":\"started\",\"role\":\"packet_relay\",\"listen\":\"{}\"}}",
+        config.listen
+    );
+    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .map_err(|_| "relay signal setup failed")?;
+    tokio::select! { _=term.recv()=>{}, _=tokio::signal::ctrl_c()=>{} }
+    server
+        .shutdown()
+        .await
+        .map_err(|_| "relay shutdown failed")?;
+    println!("{{\"event\":\"stopped\",\"role\":\"packet_relay\"}}");
+    Ok(())
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let result = if args.len() == 2 && args[0] == "--config" {
+        serve(Path::new(&args[1])).await
+    } else {
+        Err("usage: wipsnet-relay --config /absolute/relay.toml")
+    };
+    if let Err(message) = result {
+        eprintln!("{message}");
+        std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn admission_is_bounded_and_capacity_can_be_reused() {
+        let gate = Admission {
+            current: AtomicUsize::new(0),
+            maximum: 2,
+        };
+        assert!(gate.admit());
+        assert!(gate.admit());
+        assert!(!gate.admit());
+        gate.current.fetch_sub(1, Ordering::AcqRel);
+        assert!(gate.admit());
+        assert!(!gate.admit());
+    }
+    #[test]
+    fn private_key_file_rejects_shared_permissions_links_and_symlinks() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let root = tempfile::tempdir().unwrap();
+        let key = root.path().join("key.pem");
+        std::fs::write(&key, b"not logged key material").unwrap();
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(read_protected(&key, true).is_ok());
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(read_protected(&key, true).is_err());
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let alias = root.path().join("alias");
+        symlink(&key, &alias).unwrap();
+        assert!(read_protected(&alias, true).is_err());
+        let hard = root.path().join("hard");
+        std::fs::hard_link(&key, &hard).unwrap();
+        assert!(read_protected(&key, true).is_err());
+    }
+}
