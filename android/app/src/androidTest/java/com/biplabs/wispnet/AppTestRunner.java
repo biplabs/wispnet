@@ -43,6 +43,8 @@ public final class AppTestRunner extends Instrumentation {
  }
  void resume(){Intent intent=getTargetContext().getPackageManager().getLaunchIntentForPackage("com.biplabs.wispnet");intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_CLEAR_TOP);activity=(MainActivity)startActivitySync(intent);waitForIdleSync();}
  public void onStart(){Bundle result=new Bundle();try{
+  if("lifecycle-cold".equals(args.getString("mode"))){LifecycleChecks.cold(this);result.putString("result","passed");finish(Activity.RESULT_OK,result);return;}
+  if("lifecycle".equals(args.getString("mode"))){LifecycleChecks.run(this);result.putString("result","passed");finish(Activity.RESULT_OK,result);return;}
   resume();Native.ensure(getTargetContext());stage("ready");String[] hosts={args.getString("host_a"),args.getString("host_b")};String[] names={"Local computer","Desktop"};
   if(!"resume".equals(args.getString("mode"))){
    for(int i=0;i<2;i++){final String host=hosts[i],name=names[i];String document=new String(Files.readAllBytes(new File(getTargetContext().getFilesDir(),"invitation-"+i+".json").toPath()),java.nio.charset.StandardCharsets.UTF_8);

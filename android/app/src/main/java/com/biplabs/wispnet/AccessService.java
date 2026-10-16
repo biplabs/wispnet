@@ -3,14 +3,17 @@ import android.app.*;
 import android.content.*;
 import android.net.*;
 import android.os.IBinder;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.*;
 
+/** Owns browser access independently of the activity. Never restarts after process death. */
 public final class AccessService extends Service {
  public static volatile boolean enabled=false;
+ public static volatile String networkStatus="Access stopped";
  private final ExecutorService networkWork=Executors.newSingleThreadExecutor();
- private final AtomicBoolean networkPending=new AtomicBoolean(false);
+ private final Object networkLock=new Object();
+ private boolean destroyed=false,worker=false;
+ private long generation=0;
+ private Network current;
  private ConnectivityManager manager;
  private ConnectivityManager.NetworkCallback callback;
  public void onCreate(){
@@ -21,16 +24,35 @@ public final class AccessService extends Service {
   PendingIntent open=PendingIntent.getActivity(this,1,new Intent(this,MainActivity.class),PendingIntent.FLAG_IMMUTABLE);
   Notification notification=new Notification.Builder(this,"access").setSmallIcon(android.R.drawable.ic_menu_share).setContentTitle("Wispnet access enabled").setContentText("Private browser connections to your paired hosts").setContentIntent(open).addAction(new Notification.Action.Builder(null,"Stop access",pending).build()).setOngoing(true).build();
   startForeground(1,notification);
-  manager=getSystemService(ConnectivityManager.class);callback=new ConnectivityManager.NetworkCallback(){public void onAvailable(Network network){networkChanged();}public void onLost(Network network){networkChanged();}};manager.registerDefaultNetworkCallback(callback);
+  manager=getSystemService(ConnectivityManager.class);current=manager.getActiveNetwork();
+  networkStatus=current==null?"No network. Reconnect, then reopen the service.":"Network available";
+  callback=new ConnectivityManager.NetworkCallback(){
+   public void onAvailable(Network network){synchronized(networkLock){if(destroyed||network.equals(current))return;current=network;changed();}}
+   public void onLost(Network network){synchronized(networkLock){if(destroyed||!network.equals(current))return;current=null;changed();}}
+  };manager.registerDefaultNetworkCallback(callback);
  }
- private void networkChanged(){if(!networkPending.compareAndSet(false,true))return;networkWork.execute(()->{try{Native.command("network");}catch(Exception ignored){}finally{networkPending.set(false);}});}
+ // Call while holding networkLock. Drain every generation, including a callback
+ // arriving during native recovery; coalescing must never lose the final network.
+ private void changed(){
+  generation++;networkStatus=current==null?"Network lost. Requests interrupted; reconnect and reopen the service.":"Network changed. Reopen the service; requests are not retried.";
+  if(worker)return;worker=true;
+  networkWork.execute(()->{while(true){long observed;synchronized(networkLock){if(destroyed){worker=false;return;}observed=generation;}
+   try{Native.command("network");}catch(Exception ignored){networkStatus="Network recovery failed. Stop and start access, then reopen the service.";}
+   synchronized(networkLock){if(destroyed||observed==generation){worker=false;return;}}
+  }});
+ }
  public int onStartCommand(Intent intent,int flags,int startId){
   if(intent!=null&&"stop".equals(intent.getAction())){stopSelf();return START_NOT_STICKY;}
-  try{Native.ensure(this);Native.command("enable");enabled=true;}catch(Exception failure){stopSelf();}
+  try{Native.ensure(this);Native.command("enable");enabled=true;}catch(Exception failure){networkStatus="Cannot start browser access";stopSelf();}
   return START_NOT_STICKY;
  }
- public void onDestroy(){enabled=false;try{if(callback!=null)manager.unregisterNetworkCallback(callback);}catch(Exception ignored){}
-  try{Native.command("stop");}catch(Exception ignored){}networkWork.shutdownNow();stopForeground(STOP_FOREGROUND_REMOVE);super.onDestroy();}
+ public void onDestroy(){
+  enabled=false;synchronized(networkLock){destroyed=true;}
+  try{if(callback!=null)manager.unregisterNetworkCallback(callback);}catch(Exception ignored){}
+  try{Native.command("stop");}catch(Exception ignored){}
+  networkWork.shutdown();networkStatus="Access stopped. Start access and reopen a service.";
+  stopForeground(STOP_FOREGROUND_REMOVE);super.onDestroy();
+ }
  public void onTimeout(int startId,int fgsType){stopSelf();}
  public IBinder onBind(Intent intent){return null;}
 }

@@ -131,6 +131,7 @@ impl Client {
                 Ok(json!({"enabled":false}))
             }
             "network" => {
+                self.gateway.interrupt().await;
                 self.endpoint.network_change().await;
                 Ok(json!({"network_changed":true}))
             }

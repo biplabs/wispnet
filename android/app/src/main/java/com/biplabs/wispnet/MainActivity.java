@@ -13,7 +13,9 @@ import java.util.concurrent.*;
 
 public final class MainActivity extends Activity {
  final ExecutorService work=Executors.newFixedThreadPool(4);
- LinearLayout root,list;TextView status,identity;EditText label,host,invitation;Button access;
+ LinearLayout root,list;TextView status,identity,network;
+ final Handler lifecycle=new Handler(Looper.getMainLooper());
+ final Runnable updateAccess=new Runnable(){public void run(){if(access!=null){access.setText(AccessService.enabled?"Stop browser access":"Start browser access");network.setText(AccessService.networkStatus);}lifecycle.postDelayed(this,1000);}};EditText label,host,invitation;Button access;
  HostStore store;
  final java.util.Set<String> refreshing=ConcurrentHashMap.newKeySet();
  void text(LinearLayout parent,String value,int size){TextView t=new TextView(this);t.setText(value);t.setTextSize(size);t.setPadding(0,12,0,8);parent.addView(t);}
@@ -23,10 +25,10 @@ public final class MainActivity extends Activity {
   super.onCreate(state);getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);store=new HostStore(this);
   ScrollView scroll=new ScrollView(this);root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setPadding(24,24,24,32);scroll.addView(root);setContentView(scroll);
   text(root,"Wispnet",30);text(root,"Your machines. Their services.",18);
-  status=new TextView(this);root.addView(status);identity=new TextView(this);identity.setTextIsSelectable(true);root.addView(identity);
+  status=new TextView(this);root.addView(status);network=new TextView(this);root.addView(network);identity=new TextView(this);identity.setTextIsSelectable(true);root.addView(identity);
   access=button(root,"Start browser access",()->{
    if(AccessService.enabled){stopService(new Intent(this,AccessService.class));access.setText("Start browser access");status.setText("Browser access stopped");}
-   else {startForegroundService(new Intent(this,AccessService.class));access.setText("Stop browser access");status.setText("Browser access enabled; tap a service below");}
+   else {try{startForegroundService(new Intent(this,AccessService.class));status.setText("Starting browser access…");}catch(RuntimeException unavailable){status.setText("Android could not start access. Return to Wispnet and try again after the platform restriction ends.");}}
   });
   button(root,"Refresh all hosts",this::refresh);
   text(root,"Pair a machine",22);
@@ -62,6 +64,7 @@ public final class MainActivity extends Activity {
  }
  void open(String peer,String service){if(!AccessService.enabled){show("Start browser access first");return;}status.setText("Opening "+service+"…");work.execute(()->{try{JSONObject response=Native.request(new JSONObject().put("op","open").put("host",peer).put("service",service));String url=response.getString("url");runOnUiThread(()->{status.setText("Browser access active");Intent browser=new Intent(Intent.ACTION_VIEW,Uri.parse(url));browser.addCategory(Intent.CATEGORY_BROWSABLE);startActivity(browser);});}catch(Exception e){show(e.getMessage());}});}
  protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(request==1&&result==RESULT_OK&&data!=null){try(InputStream in=getContentResolver().openInputStream(data.getData())){byte[] bytes=in.readNBytes(8193);if(bytes.length>8192)throw new IOException();invitation.setText(new String(bytes,java.nio.charset.StandardCharsets.UTF_8));status.setText("Invitation imported. Verify the host ID before pairing.");}catch(Exception e){show("Cannot read bounded invitation file");}}}
- protected void onResume(){super.onResume();if(access!=null)access.setText(AccessService.enabled?"Stop browser access":"Start browser access");}
+ protected void onResume(){super.onResume();lifecycle.post(updateAccess);if(access!=null)access.setText(AccessService.enabled?"Stop browser access":"Start browser access");}
+ protected void onPause(){lifecycle.removeCallbacks(updateAccess);super.onPause();}
  protected void onDestroy(){work.shutdown();super.onDestroy();}
 }

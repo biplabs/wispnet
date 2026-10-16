@@ -36,7 +36,13 @@ impl Gateways {
     }
     pub async fn stop(&self) {
         self.enabled.store(false, Ordering::Release);
-        let workers = std::mem::take(&mut *self.workers.lock().await);
+        self.interrupt().await;
+    }
+    /// Close existing browser sessions without changing the user's access setting.
+    /// Network changes never replay an in-flight HTTP request.
+    pub async fn interrupt(&self) {
+        let mut guard = self.workers.lock().await;
+        let workers = std::mem::take(&mut *guard);
         for worker in &workers {
             worker.abort();
         }
@@ -544,9 +550,38 @@ mod tests {
                 .await
                 .starts_with("HTTP/1.1 403")
         );
-        client.gateway.stop().await;
+        client.gateway.interrupt().await;
         assert!(
             TcpStream::connect(format!("127.0.0.1:{port}"))
+                .await
+                .is_err()
+        );
+        // A network interruption invalidates sessions but preserves explicit access.
+        let reopened = client
+            .gateway
+            .open(client.clone(), peer, "website".into())
+            .await
+            .unwrap();
+        let new_port = reopened
+            .split('#')
+            .next()
+            .unwrap()
+            .split('/')
+            .nth(2)
+            .unwrap()
+            .rsplit(':')
+            .next()
+            .unwrap();
+        client.gateway.stop().await;
+        assert!(
+            TcpStream::connect(format!("127.0.0.1:{new_port}"))
+                .await
+                .is_err()
+        );
+        assert!(
+            client
+                .gateway
+                .open(client.clone(), peer, "website".into())
                 .await
                 .is_err()
         );

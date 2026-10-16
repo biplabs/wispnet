@@ -48,6 +48,31 @@ Physical validation covers two actual computers, independent approval, duplicate
 
 Foreground access uses Android's `dataSync` service type and notification. It is intentionally stopped at the platform timeout (including Android 15's time limit); process death needs an explicit restart. Service sessions expire after ten minutes, with at most 16 open service listeners and 32 active connections. Bootstrap tokens are single-use and expire after one minute.
 
-The HTTP loopback gateway is a development implementation: isolated random localhost origins, origin/authority checks, HttpOnly session cookies, bounded uploads, and cross-origin redirect rejection. Secure-cookie/prefix behavior, service workers, arbitrary login flows, full HTTP compatibility, and the stricter release security work remain under #10. Streaming responses and WebSocket upgrades are implemented; physical WebSocket acceptance remains to be demonstrated. Chunked request uploads and Expect requests are currently rejected.
+The HTTP loopback gateway is a development implementation: isolated random localhost origins, origin/authority checks, HttpOnly session cookies, bounded uploads, and cross-origin redirect rejection. Secure-cookie/prefix behavior, service workers, arbitrary login flows, full HTTP compatibility, and the stricter release security work remain under #10. Streaming responses and WebSocket upgrades are implemented; a physical controlled WebSocket upgrade/echo is covered by the lifecycle harness. Chunked request uploads and Expect requests are currently rejected.
 
 Camera/QR scanning is not implemented; file import and pasted target-bound invitation JSON work on the camera-less tablet. App-level unrelated Wi-Fi/cellular transitions, relay rebuild recovery, screen-off/battery restrictions, active-stream revocation, and fresh pairing while the other computer is down remain #12 acceptance work. Transport-only #13 checks do not establish these app-level results.
+
+## Lifecycle and network recovery checks
+
+The app now invalidates existing loopback sessions when the default Android network changes. An interrupted HTTP request is never replayed by the app. The access setting stays enabled; return to Wispnet and open the service again to create a fresh session. The UI shows network loss/change and actual service state, including a notification Stop action. Network callback processing drains the latest change even when another callback arrives during recovery. Activity recreation does not own or stop the service; process death closes its sockets and requires an explicit Start after reopening.
+
+The repeatable physical test uses a unique temporary host-local HTTP/SSE/WebSocket fixture granted only to the existing approved tablet. It restores Wi-Fi enabled state, screen timeout, USB stay-awake setting, battery simulation, and device idle state; it restarts the relay and removes the fixture grant on exit. With `--force-relay`, both host agents temporarily use relay-only transport; original configuration and normal transport are restored afterward. It does not change host identities, real service grants, or app identity/pairings. Run only when these temporary network/relay interruptions are acceptable:
+
+```sh
+# Install rebuilt app and instrumentation APKs first.
+python3 scripts/test_android_lifecycle.py --serial DEVICE_SERIAL
+# Disable both host agents' direct IP transports for this test, then restore:
+python3 scripts/test_android_lifecycle.py --serial DEVICE_SERIAL --force-relay
+# Include a human-assisted hotspot -> home Wi-Fi switch:
+python3 scripts/test_android_lifecycle.py --serial DEVICE_SERIAL --wait-for-network-switch
+# At the printed network-switch barrier, reconnect the tablet, then acknowledge:
+touch /tmp/wispnet-network-switch-ready
+```
+
+Checks cover an actual WebSocket upgrade/echo, activity recreation, a 40-event SSE response with Chrome foreground and screen off for 30 seconds, forced Doze followed by explicit recovery, Wi-Fi off/on interrupting an accepted side-effecting POST (backend count must remain exactly one), temporary relay restart, notification cancellation, and process force-stop/cold reopening with unchanged identity and pairings. No ADB reverse or TCP forwarding carries application traffic. The temporary backend is a controlled protocol fixture; the separate normal app test checks GIKE, the desktop website, and Llama.
+
+Doze can defer network access; the app does not request a battery-optimization exemption or promise uninterrupted execution. The physical tablet runs Android 14: Android 15's six-hour `dataSync` timeout requires a separate Android 15 device/emulator test. See the official [Doze test procedure](https://developer.android.com/training/monitoring-device-state/doze-standby) and [foreground-service timeout behavior](https://developer.android.com/develop/background-work/services/fgs/timeout).
+
+Observed on the physical Android 14 tablet (2026-10-16): the lifecycle harness passed on the phone hotspot, including a user-assisted switch from `10.153.228.240` to home Wi-Fi `192.168.1.59`. A second pass on home Wi-Fi disabled direct IP transports on both hosts and passed the same lifecycle/relay-restart checks through the public relay. Both runs retained the tablet identity and both host pins; the accepted POST count remained one. In the forced-relay run Wi-Fi interruption/recovery completed in approximately 14 seconds and a five-second relay outage plus recovery in approximately 10 seconds. These are measured checks on this setup, not general latency guarantees. The phone's cellular upstream was not independently reverified during this app run. Both host configurations returned to normal direct-plus-relay transport, all three user services remained registered, and the temporary fixture was removed.
+
+A separate check launched the production debug APK normally with no app instrumentation, opened the desktop website in Chrome, and verified Android's foreground-service process state. The same process and foreground service survived 60 seconds with the screen off, including 15 seconds forced deep Doze. After waking, a fresh Open from Wispnet rendered the desktop site again in Chrome, and the normal app Stop control ended access. This strengthens the instrumented lifecycle evidence but does not establish indefinite execution or behavior on other Android versions/devices.
