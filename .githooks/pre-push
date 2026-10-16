@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+cd "$(git rev-parse --show-toplevel)"
+head=$(git rev-parse HEAD)
+while read -r local_ref local_sha remote_ref remote_sha; do
+    if [ "$local_ref" != refs/heads/main ] || [ "$remote_ref" != refs/heads/main ] || [ "$local_sha" != "$head" ]; then
+        echo "Push main to remote main from the checked-out main branch." >&2
+        exit 1
+    fi
+done
+if [ "$(git symbolic-ref --short HEAD)" != main ]; then
+    echo "Check out main before pushing." >&2
+    exit 1
+fi
+if [ -n "$(git status --porcelain)" ]; then
+    echo "Commit or stash changes before pushing so tests match the pushed commit." >&2
+    exit 1
+fi
+exec ./scripts/test.sh

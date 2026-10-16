@@ -15,6 +15,21 @@ access remain unimplemented.
 
 ## Build and verify
 
+Develop directly on main and push to origin/main. Install the local pre-push
+hook once per checkout:
+
+```sh
+./scripts/install-hooks.sh
+./scripts/test.sh
+git push
+```
+
+The hook runs formatting, Clippy, unit tests, a debug build, and CLI smoke tests.
+It blocks a push on failure, a dirty working tree, or a branch other than main,
+so checks cover the commit being pushed. Fresh clones must install the hook;
+Git does not enable versioned hooks automatically. GitHub Actions is not used.
+Release builds and Android checks below remain available as manual checks.
+
 Install rustup and a Linux C toolchain. Rust 1.95.0, rustfmt and Clippy are pinned
 in rust-toolchain.toml. Direct dependencies use exact versions; Cargo.lock pins
 the resolved graph. The supported development host is x86_64 Linux.
@@ -74,5 +89,5 @@ errors describe the expected schema without echoing input. RUST_LOG is ignored.
 The smoke test starts/stops both shells with SIGINT and SIGTERM, checks private
 state permissions and sensitive-input errors, and verifies no sockets are owned.
 Future networking must extend it to verify actual listener/task cleanup. Current
-tests cannot prove shutdown of future tunnels. CI repeats Linux checks and checks
-the Android core; local verification does not mean hosted CI has run.
+tests cannot prove shutdown of future tunnels. The pre-push hook runs the local
+Linux checks; Android and release builds remain explicit manual checks.
