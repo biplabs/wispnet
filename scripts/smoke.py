@@ -22,6 +22,11 @@ with tempfile.TemporaryDirectory(prefix="wipsnet-smoke-") as temporary:
         for stop_signal in (signal.SIGINT, signal.SIGTERM):
             state = root / f"{mode}-{stop_signal}"
             write_config(state)
+            if mode == "agent":
+                init = subprocess.run([binary, "identity-init", "--config", config], capture_output=True, text=True, timeout=5)
+                assert init.returncode == 0, init.stderr
+                public_status = init.stdout
+                key_bytes = (state / "identity.key").read_bytes()
             process = subprocess.Popen(
                 [binary, mode, "--config", config],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -48,12 +53,35 @@ with tempfile.TemporaryDirectory(prefix="wipsnet-smoke-") as temporary:
                     if table.exists():
                         internet_inodes.update(line.split()[9] for line in table.read_text().splitlines()[1:])
                 assert not any(s[8:-1] in internet_inodes for s in sockets), sockets
+                if mode == "agent":
+                    status = subprocess.run([binary, "status", "--config", config], capture_output=True, text=True, timeout=5)
+                    assert status.returncode == 0 and status.stdout == public_status
+                    endpoint_id = status.stdout.split("Endpoint ID: ")[1].strip()
+                    reset = subprocess.run([binary, "identity-reset", "--config", config, "--expect-id", endpoint_id], capture_output=True, text=True, timeout=5)
+                    assert reset.returncode != 0 and "in use" in reset.stderr
                 process.send_signal(stop_signal)
                 stdout, stderr = process.communicate(timeout=5)
                 assert process.returncode == 0, stderr
                 events = [json.loads(line)["fields"]["event"] for line in stderr.splitlines()]
                 assert events == ["stopped"], stderr
                 assert "SECRET-SENTINEL" not in first + stdout + stderr
+                if mode == "agent":
+                    assert key_bytes[8:40].hex() not in first + stdout + stderr
+                    status = subprocess.run([binary, "status", "--config", config], capture_output=True, text=True, timeout=5)
+                    assert status.stdout == public_status
+                    reset = subprocess.run([binary, "identity-reset", "--config", config, "--expect-id", endpoint_id], capture_output=True, text=True, timeout=5)
+                    assert reset.returncode == 0, reset.stderr
+                    missing = subprocess.run([binary, "agent", "--config", config], capture_output=True, text=True, timeout=5)
+                    assert missing.returncode != 0 and "identity missing" in missing.stderr
+                    assert not (state / "identity.key").exists()
+                    init = subprocess.run([binary, "identity-init", "--config", config], capture_output=True, text=True, timeout=5)
+                    assert init.returncode == 0 and init.stdout != public_status
+                    (state / "identity.key").write_bytes(b"PRIVATE-SENTINEL")
+                    for operation in ("agent", "identity-init", "status"):
+                        damaged = subprocess.run([binary, operation, "--config", config], capture_output=True, text=True, timeout=5)
+                        assert damaged.returncode != 0
+                        assert "PRIVATE-SENTINEL" not in damaged.stdout + damaged.stderr
+                        assert (state / "identity.key").read_bytes() == b"PRIVATE-SENTINEL"
             finally:
                 if process.poll() is None:
                     process.kill()
@@ -70,6 +98,9 @@ with tempfile.TemporaryDirectory(prefix="wipsnet-smoke-") as temporary:
         assert not state.exists(), "invalid config created state"
 
     write_config(state)
+    for args in ([], ["identity-reset"], ["identity-reset", "--config", str(config)]):
+        result = subprocess.run([binary, *args], capture_output=True, text=True, timeout=5)
+        assert result.returncode != 0 and "panicked" not in result.stderr
     result = subprocess.run([binary, "check", "--config", config], capture_output=True, text=True, timeout=5)
     assert result.returncode == 0
     assert not state.exists(), "check must be read-only"

@@ -137,6 +137,6 @@ VPN/TUN integration, arbitrary LAN routing, gossip discovery, multi-hop applicat
 
 Start with the [roadmap](https://github.com/biplabs/wispnet/issues/1) and the dependencies in the relevant issue. Inspect the repository state before introducing new scaffolding, and link implementation pull requests to their issues.
 
-The initial Rust workspace implements configuration checking and agent/registry lifecycle shells for [#3](https://github.com/biplabs/wispnet/issues/3). Networking, identity, and service access remain unimplemented. See the [contributor guide](docs/development.md) for build commands, crate boundaries, configuration, and validation. These development interfaces are not stable; Android integration and packaging remain backlog work.
+The Rust workspace implements configuration checking, agent/registry lifecycle shells, and persistent Linux device identity. See the [contributor guide](docs/development.md) for build commands and the [identity guide](docs/identity.md) for initialization, status, storage, and reset. Networking, enrollment, and service access remain unimplemented. These development interfaces are not stable; Android integration and packaging remain backlog work.
 
 Keep the implementation focused on the original goal: **one service directory, access from every enrolled device, and secure connections across networks without per-service router configuration.**

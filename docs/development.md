@@ -1,8 +1,9 @@
 # Development foundation (#3)
 
 The Rust workspace provides configuration checking and Linux agent/registry
-lifecycle shells. Networking, device identity, enrollment, persistence, and service
-access remain unimplemented.
+lifecycle shells with persistent Linux device identity. Networking, enrollment,
+registry persistence, and service access remain unimplemented. See the
+[identity guide](identity.md) for storage, recovery, and Android strategy.
 
 ## Crate boundaries
 
@@ -61,6 +62,8 @@ mkdir -p "$HOME/.config/wipsnet"
 cp config/example.toml "$HOME/.config/wipsnet/agent.toml"
 # Edit state_dir before running.
 cargo run -p wipsnet-cli -- check --config "$HOME/.config/wipsnet/agent.toml"
+cargo run -p wipsnet-cli -- identity-init --config "$HOME/.config/wipsnet/agent.toml"
+cargo run -p wipsnet-cli -- status --config "$HOME/.config/wipsnet/agent.toml"
 cargo run -p wipsnet-cli -- agent --config "$HOME/.config/wipsnet/agent.toml"
 ```
 
@@ -79,7 +82,8 @@ Invalid configuration fails before state preparation or component startup.
 
 Linux state directories are created as 0700. Existing shared directories and
 final symlinks are rejected; parent directories must be under your control.
-No key store exists yet, and same-UID malicious processes are not isolated.
+The Linux identity store also checks ownership; same-UID malicious processes are
+not isolated. Agent startup requires an explicitly initialized identity.
 
 JSON logs go to stderr and contain only fixed lifecycle component/event fields
 and networking status. Configuration, arguments, device names, raw parser errors,
