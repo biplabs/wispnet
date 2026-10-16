@@ -5,6 +5,7 @@ pub mod control;
 pub mod diagnostics;
 pub mod identity;
 pub mod pairing;
+pub mod peers;
 pub mod tunnel;
 
 /// Own and drain component tasks here as features are added. No detached tasks.

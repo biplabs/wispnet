@@ -88,12 +88,19 @@ def main():
         cwd=root, check=True, text=True, stdout=subprocess.PIPE,
     )
     wanted = {"wipsnet_agent": "tunnel::relay_tests", "host_control": "", "relay_cli": "", "pairing": ""}
+    sources = {
+        "wipsnet_agent": root / "crates/agent/src/lib.rs",
+        "host_control": root / "crates/agent/tests/host_control.rs",
+        "relay_cli": root / "crates/cli/tests/relay_cli.rs",
+        "pairing": root / "crates/agent/tests/pairing.rs",
+    }
     binaries = {}
     for line in build.stdout.splitlines():
         entry = json.loads(line)
         if entry.get("reason") == "compiler-artifact" and entry["profile"].get("test"):
             name = entry["target"]["name"]
-            if name in wanted and entry.get("executable"):
+            if (name in wanted and entry.get("executable")
+                    and Path(entry["target"]["src_path"]) == sources[name]):
                 binaries[name] = entry["executable"]
     if binaries.keys() != wanted.keys():
         raise RuntimeError("missing expected relay test executables")

@@ -290,6 +290,19 @@ def main():
                                                   "--invitation", client_invitation).stdout)
                         assert pending == {"host": pin, "peer": peer, "invitation": issued["invitation"],
                                            "state": "pending_owner_approval"}
+                        capability = json.loads(invitation_file.read_text())["code"]
+                        if name.startswith("Android"):
+                            saved_path = android_root + f"/state/peer-pins/{pin}.json"
+                            saved = tablet("cat", saved_path).stdout
+                            assert tablet("stat", "-c", "%a", saved_path).stdout.strip() == "600"
+                            tablet("rm", client_invitation)
+                        else:
+                            saved_path = root / "linux-client" / "peer-pins" / f"{pin}.json"
+                            saved = saved_path.read_text()
+                            assert saved_path.stat().st_mode & 0o777 == 0o600
+                        assert capability not in saved and issued["invitation"] not in saved
+                        assert json.loads(saved)["host"] == pin
+                        invitation_file.unlink()
                         listing = json.loads(local("host-invitations", path).stdout)
                         record = next(entry for entry in listing if entry["invitation"] == issued["invitation"])
                         assert record["state"] == "pending" and record["peer"] == peer

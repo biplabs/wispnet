@@ -105,7 +105,7 @@ async fn native_catalog_and_service_need_no_peer_address() {
     let cfg = TransportConfig {
         bind_addr: "127.0.0.1:0".parse().unwrap(),
         relay_url: Some(relay_url),
-        relay_only: true,
+        relay_only: false,
         relay_ca_file: Some(ca),
         max_connections: 8,
         max_streams: 8,
@@ -149,6 +149,57 @@ async fn native_catalog_and_service_need_no_peer_address() {
         serde_json::json!({"host": pin, "version": 1,
         "state": "bootstrap_verified", "approval_checked": false, "capability_checked": false})
     );
+    let (mut store, owner) = host::owner_store(&host_state, identity.endpoint_id()).unwrap();
+    let mut issued = store
+        .pairing_invite(
+            identity.endpoint_id(),
+            &owner,
+            cfg.relay_url.as_deref().unwrap(),
+            wipsnet_registry::enrollment::now(),
+            300,
+        )
+        .unwrap();
+    issued.direct_hint = Some(host.endpoint().bound_sockets()[0]);
+    std::fs::write(&invitation_path, serde_json::to_vec(&issued).unwrap()).unwrap();
+    let pending = command(
+        &client_config,
+        &[
+            "pairing-request",
+            "--peer",
+            &pin,
+            "--invitation",
+            invitation_path.to_str().unwrap(),
+        ],
+        b"",
+    )
+    .await;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&pending).unwrap()["state"],
+        "pending_owner_approval"
+    );
+    let pin_path = tmp
+        .path()
+        .join("client/peer-pins")
+        .join(format!("{pin}.json"));
+    let persisted = std::fs::read_to_string(&pin_path).unwrap();
+    assert!(!persisted.contains(&issued.code));
+    assert!(!persisted.contains(&issued.invitation));
+    assert_eq!(
+        std::fs::metadata(&pin_path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    std::fs::remove_file(&invitation_path).unwrap();
+    drop(store);
+    drop(owner);
+    // A fresh CLI process reuses the saved direct hint without an invitation or
+    // explicit address. This local config explicitly disables the saved relay.
+    let direct_config = tmp.path().join("direct.toml");
+    std::fs::write(&direct_config, format!("schema_version=1\ndevice_name='client'\nstate_dir='{}'\nlog_level='info'\n[transport]\nbind_addr='127.0.0.1:0'\n",
+        tmp.path().join("client").display())).unwrap();
+    let direct = command(&direct_config, &["peer-probe", "--peer", &pin], b"").await;
+    let direct: serde_json::Value = serde_json::from_str(&direct).unwrap();
+    assert_eq!(direct["selected_path"], "direct");
+    assert_eq!(direct["relay_status"], "disabled");
     let catalog = command(&client_config, &["host-catalog", "--peer", &pin], b"").await;
     let catalog: serde_json::Value = serde_json::from_str(&catalog).unwrap();
     assert_eq!(catalog["host"], pin);
@@ -168,6 +219,24 @@ async fn native_catalog_and_service_need_no_peer_address() {
     .await
     .unwrap();
     assert_eq!(output, "response");
+    let direct_echo = async {
+        let (mut socket, _) = backend.accept().await.unwrap();
+        let mut request = Vec::new();
+        socket.read_to_end(&mut request).await.unwrap();
+        assert_eq!(request, b"direct-request");
+        socket.write_all(b"direct-response").await.unwrap();
+        socket.shutdown().await.unwrap();
+    };
+    let (direct_output, ()) = timeout(Duration::from_secs(10), async {
+        tokio::join!(
+            command(&direct_config, &tunnel_args, b"direct-request"),
+            direct_echo
+        )
+    })
+    .await
+    .unwrap();
+    assert_eq!(direct_output, "direct-response");
+
     let probe = command(&client_config, &["peer-probe", "--peer", &pin], b"").await;
     let probe: serde_json::Value = serde_json::from_str(&probe).unwrap();
     assert_eq!(probe["selected_path"], "relay");

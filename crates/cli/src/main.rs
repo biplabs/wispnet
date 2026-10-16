@@ -306,6 +306,10 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         let store = FileIdentityStore::new(&config.state_dir)?;
         let _lease = store.lease()?;
         let identity = store.load()?;
+        let _saved = wipsnet_agent::peers::load(&config.state_dir, expected)?;
+        let bootstrap = invitation
+            .bootstrap(expected, now)
+            .ok_or("invalid host bootstrap")?;
         let endpoint =
             tunnel::bind_configured_client(identity.secret_key(), Some(transport)).await?;
         if mode == "pairing-request" {
@@ -320,6 +324,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             .await;
             endpoint.close().await;
             let pending = result?;
+            wipsnet_agent::peers::save(&config.state_dir, &bootstrap)?;
             println!(
                 "{}",
                 serde_json::json!({"host":pending.host,"peer":pending.peer,
@@ -357,17 +362,16 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             None
         };
-        let target = tunnel::peer_target(peer, config.transport.as_ref(), address)?;
         let store = FileIdentityStore::new(&config.state_dir)?;
         let _lease = store.lease()?;
         let identity = store.load()?;
+        let saved = wipsnet_agent::peers::load(&config.state_dir, peer)?;
+        let transport = wipsnet_agent::peers::transport(config.transport.as_ref(), saved.as_ref());
+        let address = address.or_else(|| saved.as_ref().and_then(|p| p.direct_hint));
+        let target = tunnel::peer_target(peer, transport.as_ref(), address)?;
         let endpoint =
-            tunnel::bind_configured_client(identity.secret_key(), config.transport.as_ref())
-                .await?;
-        let relay_configured = config
-            .transport
-            .as_ref()
-            .is_some_and(|c| c.relay_url.is_some());
+            tunnel::bind_configured_client(identity.secret_key(), transport.as_ref()).await?;
+        let relay_configured = transport.as_ref().is_some_and(|c| c.relay_url.is_some());
         if mode == "peer-watch" {
             // One identity lease and endpoint for the whole watch. Only fresh,
             // bounded read-only catalog probes are repeated; never service ops.
@@ -623,13 +627,16 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             let store = FileIdentityStore::new(&config.state_dir)?;
             let _lease = store.lease()?;
             let identity = store.load()?;
+            let saved = wipsnet_agent::peers::load(&config.state_dir, peer)?;
+            let transport =
+                wipsnet_agent::peers::transport(config.transport.as_ref(), saved.as_ref());
+            let address = address.or_else(|| saved.as_ref().and_then(|p| p.direct_hint));
             let endpoint =
-                tunnel::bind_configured_client(identity.secret_key(), config.transport.as_ref())
-                    .await?;
+                tunnel::bind_configured_client(identity.secret_key(), transport.as_ref()).await?;
             let operation = async {
                 let connection = tunnel::connect_target(
                     &endpoint,
-                    tunnel::peer_target(peer, config.transport.as_ref(), address)?,
+                    tunnel::peer_target(peer, transport.as_ref(), address)?,
                 )
                 .await?;
                 let stream = tunnel::open_service(&connection, &service).await?;

@@ -48,13 +48,7 @@ impl Invitation {
             && self.expires_at > now
             && self.expires_at <= now.saturating_add(900)
             && self.expires_at <= i64::MAX as u64
-            && self.direct_hint.is_none_or(|hint| {
-                hint.port() != 0
-                    && !hint.ip().is_unspecified()
-                    && !hint.ip().is_multicast()
-                    && hint.ip() != std::net::Ipv4Addr::BROADCAST
-                    && !matches!(hint, SocketAddr::V6(a) if a.scope_id() != 0 || a.flowinfo() != 0)
-            })
+            && valid_hint(self.direct_hint)
     }
     /// Bootstrap/pin persistence must not retain the invitation ID or capability.
     pub fn bootstrap(&self, expected: EndpointId, now: u64) -> Option<Bootstrap> {
@@ -79,6 +73,24 @@ pub struct Bootstrap {
     pub direct_hint: Option<SocketAddr>,
 }
 
+impl Bootstrap {
+    pub fn valid(&self, expected: EndpointId) -> bool {
+        self.version == super::VERSION
+            && self.host == expected
+            && controller_origin(&self.relay_url).is_ok()
+            && valid_hint(self.direct_hint)
+    }
+}
+fn valid_hint(hint: Option<SocketAddr>) -> bool {
+    hint.is_none_or(|hint| {
+        hint.port() != 0
+            && !hint.ip().is_unspecified()
+            && !hint.ip().is_multicast()
+            && hint.ip() != std::net::Ipv4Addr::BROADCAST
+            && !matches!(hint, SocketAddr::V6(a) if a.scope_id() != 0 || a.flowinfo() != 0)
+    })
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Challenge {
@@ -94,12 +106,15 @@ pub struct Challenge {
 }
 impl Challenge {
     pub fn valid(&self, now: u64) -> bool {
+        self.valid_lifetime(now, 60)
+    }
+    fn valid_lifetime(&self, now: u64, maximum_remaining: u64) -> bool {
         self.version == super::VERSION
             && valid_code(&self.invitation)
             && valid_code(&self.nonce)
             && valid_name(&self.name)
             && self.expires_at > now
-            && self.expires_at <= now.saturating_add(60)
+            && self.expires_at <= now.saturating_add(maximum_remaining)
             && self.expires_at <= i64::MAX as u64
     }
     pub fn matches(
@@ -111,7 +126,10 @@ impl Challenge {
         now: u64,
     ) -> bool {
         invitation.valid(now)
-            && self.valid(now)
+            // A host may be up to five seconds ahead. This only tolerates the
+            // future-bound check; expired challenges and host-side verification
+            // retain their strict expiry and 60-second lifetime checks.
+            && self.valid_lifetime(now, 65)
             && self.host == invitation.host
             && self.invitation == invitation.invitation
             && self.scope == invitation.scope
@@ -249,6 +267,19 @@ mod tests {
             "태블릿",
             Purpose::Complete,
             100
+        ));
+        let mut fresh = challenge.clone();
+        fresh.expires_at = 160;
+        assert!(fresh.matches(&invitation, device.public(), "태블릿", Purpose::Request, 99));
+        assert!(fresh.matches(&invitation, device.public(), "태블릿", Purpose::Request, 95));
+        assert!(!fresh.matches(&invitation, device.public(), "태블릿", Purpose::Request, 94));
+        assert!(!fresh.valid(99)); // Server validation has no client clock allowance.
+        assert!(!fresh.matches(
+            &invitation,
+            device.public(),
+            "태블릿",
+            Purpose::Request,
+            160
         ));
         let signature = device.sign(&challenge.signing_bytes());
         assert!(challenge.verify(&signature, device.public(), 100));
