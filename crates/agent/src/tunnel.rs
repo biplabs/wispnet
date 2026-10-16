@@ -163,6 +163,7 @@ impl TunnelHost {
         let mut alpns = vec![protocol::ALPN.to_vec()];
         if matches!(services, Services::Host(_)) {
             alpns.push(wipsnet_core::host::ALPN.to_vec());
+            alpns.push(wipsnet_core::pairing::ALPN.to_vec());
         }
         let mut builder = builder.clear_ip_transports();
         if !config.relay_only {
@@ -250,6 +251,18 @@ async fn serve(
                     let Ok(Ok(connection)) = timeout(HANDSHAKE_TIMEOUT, incoming).await else { return };
                     // Only the completed transport handshake establishes peer authority.
                     let peer = connection.remote_id();
+                    if connection.alpn() == wipsnet_core::pairing::ALPN {
+                        // Public bootstrap has no access to authority. One RPC,
+                        // bounded idle/read time, and the same global budgets.
+                        let _close = CloseConnection(connection.clone());
+                        let Ok(Ok((send, recv))) = timeout(HANDSHAKE_TIMEOUT, connection.accept_bi()).await else { return };
+                        let Ok(_stream_permit) = streams.try_acquire_owned() else { return };
+                        let _stream_guard = CountGuard::new(counts.streams.clone());
+                        if let Services::Host(authority) = services {
+                            crate::pairing::serve_stream(send, recv, authority.host()).await;
+                        }
+                        return;
+                    }
                     if !timeout(HANDSHAKE_TIMEOUT,services.approved(peer)).await.unwrap_or(false) {
                         connection.close((Status::Denied as u32).into(), b"access denied");
                         return;

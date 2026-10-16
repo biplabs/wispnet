@@ -369,6 +369,11 @@ async fn explicit_tls_relay_without_udp_pins_identity_enforces_grants_and_recove
     timeout(Duration::from_secs(10), stranger.online())
         .await
         .unwrap();
+    let hello = wipsnet_agent::pairing::hello(&stranger, target.clone())
+        .await
+        .unwrap();
+    assert_eq!(hello.host, key.endpoint_id());
+    assert_eq!(hello.version, wipsnet_core::pairing::VERSION);
     if let Ok(denied) = control::connect_target(&stranger, target.clone()).await {
         assert!(
             control::catalog_on(&denied, key.endpoint_id())
@@ -432,6 +437,83 @@ async fn explicit_tls_relay_without_udp_pins_identity_enforces_grants_and_recove
     outgoing.close().await;
     host.shutdown().await;
     relay.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn public_pairing_hello_is_bounded_strict_and_never_approves_a_client() {
+    use std::time::Duration;
+    use tokio::time::timeout;
+    let key = Identity::generate();
+    let client_key = Identity::generate();
+    let state = dir();
+    host::initialize(state.path(), key.endpoint_id()).unwrap();
+    let host = tunnel::TunnelHost::bind_host(
+        key.secret_key(),
+        &config(),
+        Authority::open(state.path(), key.endpoint_id()).unwrap(),
+    )
+    .await
+    .unwrap();
+    let client = tunnel::bind_client(client_key.secret_key()).await.unwrap();
+    let target =
+        iroh::EndpointAddr::new(key.endpoint_id()).with_ip_addr(host.endpoint().bound_sockets()[0]);
+    let hello = wipsnet_agent::pairing::hello(&client, target.clone())
+        .await
+        .unwrap();
+    assert_eq!(hello.host, key.endpoint_id());
+    assert_eq!(hello.version, 1);
+    for bytes in [
+        br#"{"op":"hello","owner":"forged"}"#.as_slice(),
+        br#"{"op":"approve"}"#,
+        br#"{"op":"hello"}trailing"#,
+        &[b'x'; 257],
+    ] {
+        let connection = client
+            .connect(target.clone(), wipsnet_core::pairing::ALPN)
+            .await
+            .unwrap();
+        let (mut send, mut recv) = connection.open_bi().await.unwrap();
+        send.write_all(&(bytes.len() as u32).to_be_bytes())
+            .await
+            .unwrap();
+        send.write_all(bytes).await.unwrap();
+        send.finish().unwrap();
+        assert!(
+            timeout(Duration::from_secs(2), recv.read_to_end(512))
+                .await
+                .unwrap()
+                .is_err()
+        );
+        connection.close(0u32.into(), b"test complete");
+    }
+    // A stalled pre-approval RPC cannot occupy a connection indefinitely.
+    let stalled = client
+        .connect(target.clone(), wipsnet_core::pairing::ALPN)
+        .await
+        .unwrap();
+    timeout(Duration::from_secs(7), stalled.closed())
+        .await
+        .unwrap();
+    let control = control::connect_target(&client, target.clone())
+        .await
+        .unwrap();
+    assert!(
+        control::catalog_on(&control, key.endpoint_id())
+            .await
+            .is_err()
+    );
+    let service = tunnel::connect_target(&client, target).await.unwrap();
+    assert!(tunnel::open_service(&service, "llama").await.is_err());
+    let (mut store, _) = host::owner_store(state.path(), key.endpoint_id()).unwrap();
+    let snapshot = store.host_snapshot(key.endpoint_id()).unwrap();
+    assert_eq!(snapshot.revision, 0);
+    assert!(snapshot.clients.is_empty());
+    assert!(snapshot.services.is_empty());
+    client.close().await;
+    let counts = host.counts();
+    host.shutdown().await;
+    assert_eq!(counts.connections(), 0);
+    assert_eq!(counts.streams(), 0);
 }
 
 #[tokio::test]
@@ -546,6 +628,10 @@ async fn udp_enabled_hosts_fall_back_to_relay_with_stale_hint() {
             Some("127.0.0.9:9".parse().unwrap()),
         )
         .unwrap();
+        let hello = wipsnet_agent::pairing::hello(&client, target.clone())
+            .await
+            .unwrap();
+        assert_eq!(hello.host, key.endpoint_id());
         let control = control::connect_target(&client, target.clone())
             .await
             .unwrap();

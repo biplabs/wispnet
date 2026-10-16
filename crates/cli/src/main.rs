@@ -14,6 +14,7 @@ Enroll: wipsnet enroll --config /absolute/path/device.toml --invitation /private
 Host: wipsnet <host-init|host-status> --config /absolute/path/host.toml
 Host change: wipsnet host-mutate --config /absolute/path/host.toml --request /absolute/path/request.json
 Catalog: wipsnet host-catalog --config /absolute/path/client.toml --peer PUBLIC_ID [--address IP:UDP_PORT]
+Pairing bootstrap: wipsnet peer-hello --config /absolute/path/client.toml --peer PINNED_HOST_ID [--address IP:UDP_PORT]
 Probe: wipsnet <peer-probe|peer-watch> --config /absolute/path/client.toml --peer PUBLIC_ID [--address IP:UDP_PORT]
 Reset: wipsnet identity-reset --config /absolute/path/config.toml --expect-id PUBLIC_ID
 Tunnel: wipsnet tunnel --config /absolute/path/config.toml --peer PUBLIC_ID [--address IP:UDP_PORT] --service SERVICE_ID
@@ -53,7 +54,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
     let peer_read = args.first().is_some_and(|a| {
         matches!(
             a.to_str(),
-            Some("host-catalog" | "peer-probe" | "peer-watch")
+            Some("host-catalog" | "peer-hello" | "peer-probe" | "peer-watch")
         )
     });
     let enroll = args.first().is_some_and(|a| a == "enroll");
@@ -102,6 +103,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             | "host-status"
             | "host-mutate"
             | "host-catalog"
+            | "peer-hello"
             | "peer-probe"
             | "peer-watch"
             | "tunnel"
@@ -221,7 +223,10 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     }
-    if matches!(mode, "host-catalog" | "peer-probe" | "peer-watch") {
+    if matches!(
+        mode,
+        "host-catalog" | "peer-hello" | "peer-probe" | "peer-watch"
+    ) {
         let peer: EndpointId = args[4]
             .to_str()
             .ok_or("invalid peer")?
@@ -296,6 +301,11 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
         let result = async {
+            if mode == "peer-hello" {
+                let hello = wipsnet_agent::pairing::hello(&endpoint, target).await?;
+                return serde_json::to_value(hello)
+                    .map_err(|_| tunnel::TunnelError::Transport("invalid pairing response"));
+            }
             if mode == "peer-probe" {
                 return diagnostics::probe(&endpoint, peer, target, relay_configured).await;
             }

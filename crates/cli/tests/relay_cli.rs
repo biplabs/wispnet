@@ -122,6 +122,9 @@ async fn native_catalog_and_service_need_no_peer_address() {
         .await
         .unwrap();
     let pin = identity.endpoint_id().to_string();
+    let hello = command(&client_config, &["peer-hello", "--peer", &pin], b"").await;
+    let hello: serde_json::Value = serde_json::from_str(&hello).unwrap();
+    assert_eq!(hello, serde_json::json!({"host": pin, "version": 1}));
     let catalog = command(&client_config, &["host-catalog", "--peer", &pin], b"").await;
     let catalog: serde_json::Value = serde_json::from_str(&catalog).unwrap();
     assert_eq!(catalog["host"], pin);

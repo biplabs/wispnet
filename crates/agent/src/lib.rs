@@ -4,6 +4,7 @@ use wipsnet_core::config::Config;
 pub mod control;
 pub mod diagnostics;
 pub mod identity;
+pub mod pairing;
 pub mod tunnel;
 
 /// Own and drain component tasks here as features are added. No detached tasks.

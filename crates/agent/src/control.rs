@@ -11,7 +11,10 @@ use wipsnet_core::{
     identity::EndpointId,
 };
 
-async fn read_frame(recv: &mut RecvStream, limit: usize) -> Result<Vec<u8>, TunnelError> {
+pub(crate) async fn read_frame(
+    recv: &mut RecvStream,
+    limit: usize,
+) -> Result<Vec<u8>, TunnelError> {
     let mut length = [0; 4];
     recv.read_exact(&mut length)
         .await
@@ -35,7 +38,7 @@ async fn read_frame(recv: &mut RecvStream, limit: usize) -> Result<Vec<u8>, Tunn
     }
     Ok(bytes)
 }
-async fn write_frame(send: &mut SendStream, bytes: &[u8]) -> Result<(), TunnelError> {
+pub(crate) async fn write_frame(send: &mut SendStream, bytes: &[u8]) -> Result<(), TunnelError> {
     send.write_all(&(bytes.len() as u32).to_be_bytes())
         .await
         .map_err(|_| TunnelError::Transport("control stream failed"))?;

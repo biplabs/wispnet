@@ -254,8 +254,12 @@ def main():
                     running = start(path)  # The other host has no running process.
                     before_count = len(requests)
                     for _, call, client_path, _ in clients:
+                        hello = json.loads(call("peer-hello", client_path, "--peer", pin).stdout)
+                        assert hello == {"host": pin, "version": 1}, "bootstrap exposed unexpected metadata"
                         catalog(call, client_path, pin, ok=False)
                         use(call, client_path, pin, ok=False)
+                    initial_status = status(path)
+                    assert initial_status["revision"] == 0 and initial_status["clients"] == [], "hello changed host authority"
                     assert len(requests) == before_count, "unapproved client reached a backend"
                     revision = 0
                     for name, _, _, peer in clients:

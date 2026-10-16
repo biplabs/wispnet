@@ -87,7 +87,7 @@ def main():
         ["cargo", "test", "--workspace", "--locked", "--no-run", "--message-format=json"],
         cwd=root, check=True, text=True, stdout=subprocess.PIPE,
     )
-    wanted = {"wipsnet_agent": "tunnel::relay_tests", "host_control": "", "relay_cli": ""}
+    wanted = {"wipsnet_agent": "tunnel::relay_tests", "host_control": "", "relay_cli": "", "pairing": ""}
     binaries = {}
     for line in build.stdout.splitlines():
         entry = json.loads(line)
