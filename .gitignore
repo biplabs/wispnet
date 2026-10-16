@@ -1,1 +1,3 @@
 /target/
+/spikes/browser/.venv/
+__pycache__/

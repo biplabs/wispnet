@@ -25,7 +25,7 @@ hook once per checkout:
 git push
 ```
 
-The hook runs formatting, Clippy, unit tests, a debug build, and CLI smoke tests.
+The hook runs formatting, Clippy, unit tests, a debug build, CLI smoke tests, and\nthe disposable browser-boundary suite. Install uv and Python 3.11+ for that suite.
 It blocks a push on failure, a dirty working tree, or a branch other than main,
 so checks cover the commit being pushed. Fresh clones must install the hook;
 Git does not enable versioned hooks automatically. GitHub Actions is not used.
