@@ -425,9 +425,21 @@ async fn backend_half_close_keeps_upload_open_and_shutdown_drains_active_tasks()
     assert_eq!(counts.connections(), 0);
     assert_eq!(counts.streams(), 0);
     until(|| backend.live.load(Ordering::SeqCst) == 0).await;
-    let _rebound = tokio::net::UdpSocket::bind(address)
-        .await
-        .expect("host UDP port leaked");
+    // Iroh drains connections before its final async transport teardown. Verify
+    // a finite release bound instead of racing the final socket-drop poll.
+    let _rebound = tokio::time::timeout(Duration::from_millis(250), async {
+        loop {
+            match tokio::net::UdpSocket::bind(address).await {
+                Ok(socket) => break socket,
+                Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                    tokio::time::sleep(Duration::from_millis(1)).await
+                }
+                Err(error) => panic!("cannot rebind host UDP socket: {error}"),
+            }
+        }
+    })
+    .await
+    .expect("host UDP port not released within 250 ms");
     second_endpoint.close().await;
 }
 

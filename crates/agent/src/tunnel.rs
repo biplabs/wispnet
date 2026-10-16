@@ -197,6 +197,11 @@ impl TunnelHost {
             let _ = worker.await;
         }
         self.endpoint.close().await;
+        // Iroh keeps the UDP socket until the final Endpoint owner is dropped.
+        // Drop our owner before yielding to finish canceled transport cleanup,
+        // rather than returning while a queued task still holds the socket.
+        drop(self);
+        tokio::task::yield_now().await;
     }
 }
 impl Drop for TunnelHost {

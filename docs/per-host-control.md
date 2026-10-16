@@ -130,7 +130,9 @@ one request per bidirectional stream: a 32-bit big-endian length, bounded JSON
 `{"op":"catalog"}`, then FIN. Trailing bytes and unknown fields/operations fail
 closed. Requests are limited to 4 KiB; responses to 128 KiB; the entire operation
 times out after 5 seconds. Connection/global-stream/per-connection credits are
-shared with service transport and owned tasks drain on shutdown. A busy/corrupt
+shared with service transport and owned tasks drain on shutdown. The owner
+endpoint is dropped explicitly; a regression verifies UDP port release within
+250 ms after transport shutdown rather than assuming same-tick socket teardown. A busy/corrupt
 local store denies rather than falling back to static permissions.
 
 Unknown peers are denied before private RPC/service access. Approved peers get
