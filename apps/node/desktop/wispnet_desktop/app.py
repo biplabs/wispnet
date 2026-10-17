@@ -86,7 +86,7 @@ def _base_icon_pixmap():
     for candidate in [
         here / "icon.png",
         here.parent / "icon.png",
-        here.parents[2] / "assets/icon.jpeg",
+        here.parents[2] / "assets/icon2.jpeg",
     ]:
         if candidate.is_file():
             pix = QPixmap(str(candidate))
