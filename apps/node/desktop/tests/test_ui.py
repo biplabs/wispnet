@@ -115,6 +115,81 @@ class DesktopChecks(unittest.TestCase):
             QApplication.processEvents()
             window.deleteLater()
 
+    def test_persisted_catalog_is_stale_and_retains_high_water_after_restart(self):
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(Window, "refresh", lambda self: None),
+        ):
+            api = API()
+            api.state = Path(directory)
+            peer = "a" * 64
+            catalog = {
+                "host": peer,
+                "generation": "g",
+                "revision": 5,
+                "services": [{"id": "website"}],
+            }
+            first = Window(api, tray=False)
+            first.timer.stop()
+            first.peer_updated(peer, catalog, None)
+            second = Window(api, tray=False)
+            second.timer.stop()
+            snapshot = {
+                "access_enabled": True,
+                "host_name": "Local",
+                "connected_peers": {},
+                "transport_streams": 0,
+                "relay": "unavailable",
+                "invitations": [],
+                "peer_pins": [peer],
+                "host": {"host": "f" * 64, "clients": [], "services": []},
+            }
+            calls = []
+            second.submit = lambda fn, callback, peer=False: calls.append(fn)
+            second.updated(snapshot, None)
+            self.assertEqual(second.catalogs[peer]["catalog"], catalog)
+            self.assertIn("Cached", second.peers.item(0, 1).text())
+            calls.clear()
+            second.open_peer(0, 0)
+            self.assertEqual(calls, [])
+            second.peer_updated(peer, {**catalog, "revision": 4}, None)
+            self.assertIn("rejected", second.catalogs[peer]["state"])
+            second.peer_updated(peer, {**catalog, "generation": "other"}, None)
+            self.assertIn("rejected", second.catalogs[peer]["state"])
+            second.peer_updated(peer, {**catalog, "services": []}, None)
+            self.assertIn("rejected", second.catalogs[peer]["state"])
+            second.peer_updated(peer, None, "access denied")
+            self.assertEqual(second.catalogs[peer]["state"], "Denied")
+            self.assertEqual(second.catalog_cache.load(peer)["catalog"], catalog)
+            second.peer_updated(peer, catalog, None)
+            self.assertEqual(second.catalogs[peer]["state"], "Available")
+            second.updated({**snapshot, "peer_pins": []}, None)
+            self.assertNotIn(peer, second.catalogs)
+            first.deleteLater()
+            second.deleteLater()
+
+    def test_local_open_uses_owner_host_and_requires_access(self):
+        with patch.object(Window, "refresh", lambda self: None):
+            window = Window(API(), tray=False)
+            window.timer.stop()
+            window.online = True
+            window.snapshot = {"host": {"host": "f" * 64}}
+            window.fill(window.services, [["website", "127.0.0.1:1234", "Nobody"]])
+            window.services.selectRow(0)
+            calls = []
+            window.submit = lambda fn, callback, peer=False: calls.append(fn)
+            window.open_local()
+            self.assertEqual(calls, [])
+            window.access.setChecked(True)
+            window.open_local()
+            request = calls[-1]
+            with patch.object(window.api, "request", return_value={}) as call:
+                request()
+                call.assert_called_once_with(
+                    op="open", host="f" * 64, service="website"
+                )
+            window.deleteLater()
+
     def test_peer_catalog_origin_and_versions_remain_isolated(self):
         window = Window(API(), tray=False)
         window.timer.stop()

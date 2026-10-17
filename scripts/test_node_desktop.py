@@ -13,6 +13,7 @@ import unittest
 import urllib.request
 import threading
 import http.server
+import http.client
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location(
@@ -70,7 +71,10 @@ class NodeIntegration(unittest.TestCase):
                     self.end_headers()
                     if self.path == "/hold":
                         release.wait(8)
-                    self.wfile.write(b"node-gateway-ok")
+                    try:
+                        self.wfile.write(b"node-gateway-ok")
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
 
                 def log_message(self, *args):
                     pass
@@ -203,6 +207,91 @@ class NodeIntegration(unittest.TestCase):
                 self.assertFalse(api.request(op="access_status")["enabled"])
                 with self.assertRaises(OSError):
                     socket.create_connection(("127.0.0.1", parsed.port), timeout=1)
+                # Owner-local browsing needs no self-pin/self-grant or transport.
+                # Duplicate local IDs on different hosts do not change the route.
+                api.request(
+                    op="mutate",
+                    operation={
+                        "op": "service",
+                        "expected_revision": 0,
+                        "id": "website",
+                        "backend": f"127.0.0.1:{backend.server_port}",
+                        "allow": [],
+                    },
+                )
+                with self.assertRaises(ValueError):
+                    api.request(op="open", host=pa, service="website")
+                api.request(op="enable")
+                with self.assertRaises(ValueError):
+                    api.request(op="open", host=pa, service="missing")
+                parsed = urlsplit(
+                    api.request(op="open", host=pa, service="website")["url"]
+                )
+                self.assertEqual(exchange("/")[0], 401)
+                self.assertEqual(exchange("/", {"Host": "other.localhost"})[0], 421)
+                status, headers, _ = exchange(
+                    "/_wipsnet/session",
+                    {
+                        "Origin": "http://" + parsed.netloc,
+                        "Authorization": "Bearer " + parsed.fragment,
+                    },
+                    b"",
+                )
+                self.assertEqual(status, 204)
+                cookie = headers["Set-Cookie"].split(";")[0]
+                self.assertEqual(
+                    exchange("/", {"Cookie": cookie})[2], b"node-gateway-ok"
+                )
+                self.assertEqual(
+                    exchange("/", {"Cookie": cookie, "Origin": "http://evil.example"})[
+                        0
+                    ],
+                    403,
+                )
+                self.assertEqual(api.request(op="status")["connected_peers"], {})
+                self.assertEqual(api.request(op="status")["host"]["clients"], [])
+                self.assertNotIn(pa, api.request(op="status")["peer_pins"])
+                # Removing the binding interrupts an active local response and
+                # rejects subsequent requests using the old browser session.
+                release.clear()
+                held_connection = http.client.HTTPConnection(
+                    "127.0.0.1", parsed.port, timeout=4
+                )
+                held_connection.request(
+                    "GET", "/hold", headers={"Host": parsed.netloc, "Cookie": cookie}
+                )
+                held_response = held_connection.getresponse()
+                started = time.monotonic()
+                api.request(
+                    op="mutate",
+                    operation={"op": "remove", "expected_revision": 1, "id": "website"},
+                )
+                self.assertEqual(held_response.read(), b"")
+                self.assertLess(time.monotonic() - started, 3)
+                held_connection.close()
+                release.set()
+                self.assertEqual(exchange("/", {"Cookie": cookie})[0], 403)
+                with self.assertRaises(ValueError):
+                    api.request(op="open", host=pa, service="website")
+                # Recreating the ID at another binding must not rebind the old URL.
+                with socket.socket() as replacement_backend:
+                    replacement_backend.bind(("127.0.0.1", 0))
+                    replacement_backend.listen()
+                    api.request(
+                        op="mutate",
+                        operation={
+                            "op": "service",
+                            "expected_revision": 2,
+                            "id": "website",
+                            "backend": f"127.0.0.1:{replacement_backend.getsockname()[1]}",
+                            "allow": [],
+                        },
+                    )
+                    self.assertEqual(exchange("/", {"Cookie": cookie})[0], 403)
+                    api.request(op="open", host=pa, service="website")
+                api.request(op="stop")
+                with self.assertRaises(OSError):
+                    socket.create_connection(("127.0.0.1", parsed.port), timeout=1)
                 # Successful requests retain recent activity after short connections
                 # close, without emitting background network traffic.
                 status = bapi.request(op="status")
@@ -216,9 +305,10 @@ class NodeIntegration(unittest.TestCase):
                 self.assertEqual(len(bapi.request(op="status")["host"]["clients"]), 1)
                 api.request(op="catalog", host=pb)
                 self.assertIn(pa, bapi.request(op="status")["recent_peers"])
-                bapi.request(op="mutate", operation={
-                    "op": "revoke", "expected_revision": 2, "peer": pa
-                })
+                bapi.request(
+                    op="mutate",
+                    operation={"op": "revoke", "expected_revision": 2, "peer": pa},
+                )
                 self.assertNotIn(pa, bapi.request(op="status")["recent_peers"])
                 with self.assertRaises(ValueError):
                     api.request(op="catalog", host=pb)

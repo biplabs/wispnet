@@ -8,6 +8,7 @@ import sys
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
+from wispnet_desktop.catalog_cache import CatalogCache, valid_catalog
 from PySide6.QtCore import (
     QObject,
     QRunnable,
@@ -144,6 +145,8 @@ class Window(QMainWindow):
         self.api = api
         self.snapshot = None
         self.catalogs = {}
+        self.catalog_cache = CatalogCache(getattr(api, "state", None))
+        self.cache_loaded = set()
         self.peer_busy = set()
         self.busy = False
         self.online = False
@@ -229,6 +232,7 @@ class Window(QMainWindow):
         actions = QHBoxLayout()
         actions.setSpacing(10)
         for title, fn, variant in [
+            ("Open local service", self.open_local, "primary"),
             ("Share service", self.share, "primary"),
             ("Edit service", self.edit, "secondary"),
             ("Remove service", self.remove, "danger"),
@@ -247,6 +251,7 @@ class Window(QMainWindow):
         self.message.setTextFormat(Qt.TextFormat.PlainText)
         self.message.setWordWrap(True)
         layout.addWidget(self.message)
+        self.services.cellDoubleClicked.connect(self.open_local)
         self.peers.cellDoubleClicked.connect(self.open_peer)
         self.tray = QSystemTrayIcon(icon(), self) if tray else None
         if self.tray:
@@ -392,6 +397,14 @@ class Window(QMainWindow):
             if peer not in result["peer_pins"]:
                 self.catalogs.pop(peer)
         for peer in result["peer_pins"]:
+            if peer not in self.cache_loaded:
+                self.cache_loaded.add(peer)
+                try:
+                    cached = self.catalog_cache.load(peer)
+                    if cached and peer not in self.catalogs:
+                        self.catalogs[peer] = cached
+                except (OSError, ValueError):
+                    self.message.setText("Invalid catalog cache ignored; refreshing its pinned host")
             if peer not in self.peer_busy:
                 self.peer_busy.add(peer)
                 self.submit(
@@ -433,8 +446,8 @@ class Window(QMainWindow):
         if error:
             previous["state"] = "Denied" if "denied" in error.lower() else "Unavailable"
             self.catalogs[peer] = previous
-        elif value.get("host") != peer:
-            previous["state"] = "Catalog rejected; wrong host"
+        elif not valid_catalog(peer, value):
+            previous["state"] = "Catalog rejected; invalid or wrong host"
             self.catalogs[peer] = previous
         elif previous.get("catalog") and (
             previous["catalog"]["generation"] != value["generation"]
@@ -452,6 +465,10 @@ class Window(QMainWindow):
                 "fetched": time.time(),
                 "state": "Available",
             }
+            try:
+                self.catalog_cache.save(peer, self.catalogs[peer])
+            except (OSError, ValueError):
+                self.message.setText("Catalog refreshed, but its cache could not be saved")
         self.draw_peers()
 
     def draw_peers(self):
@@ -463,7 +480,7 @@ class Window(QMainWindow):
             services = data.get("catalog", {}).get("services", [])
             state = data.get("state", "Refreshing")
             age = (
-                f"{int(time.time() - data['fetched'])}s ago"
+                f"{max(0, int(time.time() - data['fetched']))}s ago"
                 if "fetched" in data
                 else "Never"
             )
@@ -699,6 +716,13 @@ class Window(QMainWindow):
             return
         peer = preview["host"]
         self.catalogs.pop(peer, None)
+        # Explicit target re-pairing permits a new catalog generation baseline.
+        try:
+            self.catalog_cache.remove(peer)
+        except (OSError, ValueError):
+            self.message.setText("Cannot reset the catalog cache; retry pairing")
+            return
+        self.cache_loaded.add(peer)
         self.peer_names[peer] = preview.get("host_name") or "Host " + peer[:8]
         path = None
         try:
@@ -717,6 +741,20 @@ class Window(QMainWindow):
             if path:
                 Path(path).unlink(missing_ok=True)
         self.refresh()
+
+    def open_local(self, *args):
+        row = self.services.currentRow()
+        if not self.online or not self.snapshot or row < 0:
+            return
+        if not self.access.isChecked():
+            self.message.setText("Enable Browser access first")
+            return
+        host = self.snapshot["host"]["host"]
+        service = self.services.item(row, 0).text()
+        self.submit(
+            lambda: self.api.request(op="open", host=host, service=service),
+            self.open_result,
+        )
 
     def open_peer(self, row, column):
         if row >= len(self.peer_routes):

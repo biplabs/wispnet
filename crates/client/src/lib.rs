@@ -29,6 +29,7 @@ pub struct Client {
     config: TransportConfig,
     state: PathBuf,
     pub gateway: gateway::Gateways,
+    pub(crate) local_authority: Option<wipsnet_registry::host::Authority>,
 }
 fn token() -> String {
     SecretKey::generate()
@@ -54,6 +55,7 @@ impl Client {
         key: SecretKey,
         state: PathBuf,
         config: TransportConfig,
+        authority: wipsnet_registry::host::Authority,
     ) -> Arc<Self> {
         Arc::new(Self {
             endpoint,
@@ -61,6 +63,7 @@ impl Client {
             state,
             config,
             gateway: gateway::Gateways::default(),
+            local_authority: Some(authority),
         })
     }
     pub async fn new(
@@ -80,6 +83,7 @@ impl Client {
             config,
             state,
             gateway: gateway::Gateways::default(),
+            local_authority: None,
         }))
     }
     pub async fn catalog(&self, host: EndpointId) -> Result<Value, String> {
@@ -173,19 +177,30 @@ impl Client {
             }
             "open" => {
                 let host = peer(value)?;
-                if wipsnet_agent::peers::load(&self.state, host)
-                    .map_err(|_| "Invalid saved host")?
-                    .is_none()
-                {
-                    return Err("Pair with this host first".into());
-                }
                 let id = argument(value, "service")?;
-                let catalog = self.catalog(host).await?;
-                if !catalog["services"]
-                    .as_array()
-                    .is_some_and(|s| s.iter().any(|s| s["id"] == id))
+                if host == self.endpoint.id()
+                    && let Some(authority) = &self.local_authority
                 {
-                    return Err("Service no longer permitted".into());
+                    // Only the owner-only node API constructs a local authority client.
+                    // Local owner access needs neither a self-pin nor a self-grant.
+                    let services = authority.services().await.map_err(|e| e.to_string())?;
+                    if !services.iter().any(|s| s.id == id) {
+                        return Err("Service no longer permitted".into());
+                    }
+                } else {
+                    if wipsnet_agent::peers::load(&self.state, host)
+                        .map_err(|_| "Invalid saved host")?
+                        .is_none()
+                    {
+                        return Err("Pair with this host first".into());
+                    }
+                    let catalog = self.catalog(host).await?;
+                    if !catalog["services"]
+                        .as_array()
+                        .is_some_and(|s| s.iter().any(|s| s["id"] == id))
+                    {
+                        return Err("Service no longer permitted".into());
+                    }
                 }
                 let url = self.gateway.open(self.clone(), host, id.to_owned()).await?;
                 Ok(json!({"url":url,"expires_in":gateway::SESSION_SECONDS}))

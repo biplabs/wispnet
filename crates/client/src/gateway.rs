@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     sync::{Mutex, Semaphore},
     task::{JoinHandle, JoinSet},
@@ -63,6 +63,24 @@ impl Gateways {
         if !self.enabled.load(Ordering::Acquire) {
             return Err("Start browser access first".into());
         }
+        let local_binding = if peer == client.endpoint.id() {
+            if let Some(authority) = &client.local_authority {
+                Some(
+                    authority
+                        .services()
+                        .await
+                        .map_err(|e| e.to_string())?
+                        .into_iter()
+                        .find(|s| s.id == service)
+                        .ok_or("Service no longer permitted")?
+                        .backend,
+                )
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .map_err(|_| "Cannot start loopback gateway")?;
@@ -80,6 +98,7 @@ impl Gateways {
             client,
             peer,
             service,
+            local_binding,
             authority,
             bootstrap: Mutex::new(Some(bootstrap)),
             credential: token(),
@@ -107,10 +126,14 @@ impl Gateways {
         Ok(url)
     }
 }
+trait ServiceIo: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> ServiceIo for T {}
+
 struct Route {
     client: Arc<Client>,
     peer: EndpointId,
     service: String,
+    local_binding: Option<std::net::SocketAddr>,
     authority: String,
     bootstrap: Mutex<Option<String>>,
     credential: String,
@@ -316,17 +339,53 @@ impl Route {
         if length > 16 * 1024 * 1024 {
             return response(&mut socket, "413 Content Too Large", "", "").await;
         }
-        let target = self.client.target(self.peer).map_err(|_| ())?;
-        let connection =
-            match wipsnet_agent::tunnel::connect_target(&self.client.endpoint, target).await {
+        let local = if self.peer == self.client.endpoint.id() {
+            self.client.local_authority.as_ref()
+        } else {
+            None
+        };
+        // Resolve the binding from current durable owner state, never from UI/cache input.
+        let binding = if let Some(authority) = local {
+            match authority.services().await {
+                Ok(services) => services
+                    .into_iter()
+                    .find(|s| s.id == self.service && Some(s.backend) == self.local_binding)
+                    .map(|s| s.backend),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+        let _connection;
+        let mut service: Box<dyn ServiceIo> = if local.is_some() {
+            let Some(binding) = binding else {
+                return response(
+                    &mut socket,
+                    "403 Forbidden",
+                    "Local service unavailable",
+                    "",
+                )
+                .await;
+            };
+            match TcpStream::connect(binding).await {
+                Ok(stream) => Box::new(stream),
+                Err(_) => {
+                    return response(&mut socket, "502 Bad Gateway", "Backend unavailable", "")
+                        .await;
+                }
+            }
+        } else {
+            let target = self.client.target(self.peer).map_err(|_| ())?;
+            _connection = match wipsnet_agent::tunnel::connect_target(&self.client.endpoint, target)
+                .await
+            {
                 Ok(c) => Close(c),
                 Err(_) => {
                     return response(&mut socket, "502 Bad Gateway", "Host unavailable", "").await;
                 }
             };
-        let mut service =
-            match wipsnet_agent::tunnel::open_service(&connection.0, &self.service).await {
-                Ok(s) => s,
+            match wipsnet_agent::tunnel::open_service(&_connection.0, &self.service).await {
+                Ok(stream) => Box::new(stream),
                 Err(_) => {
                     return response(
                         &mut socket,
@@ -336,104 +395,123 @@ impl Route {
                     )
                     .await;
                 }
-            };
-        let mut outgoing = format!("{} {} HTTP/1.1\r\n", request.method, request.path);
-        for (name, value) in &request.headers {
-            let lower = name.to_ascii_lowercase();
-            if lower == "cookie" {
-                let clean = value
-                    .split(';')
-                    .map(str::trim)
-                    .filter(|c| c.split('=').next() != Some(COOKIE))
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                if !clean.is_empty() {
-                    outgoing.push_str(&format!("Cookie: {clean}\r\n"));
-                }
-                continue;
             }
-            if [
-                "connection",
-                "proxy-authorization",
-                "proxy-connection",
-                "forwarded",
-                "sec-fetch-site",
-            ]
-            .contains(&lower.as_str())
-                || lower.starts_with("x-forwarded-")
-            {
-                continue;
-            }
-            outgoing.push_str(&format!("{name}: {value}\r\n"));
-        }
-        outgoing.push_str(if websocket {
-            "Connection: Upgrade\r\n\r\n"
-        } else {
-            "Connection: close\r\n\r\n"
-        });
-        service
-            .write_all(outgoing.as_bytes())
-            .await
-            .map_err(|_| ())?;
-        let copied = tokio::time::timeout(
-            Duration::from_secs(30),
-            tokio::io::copy(&mut (&mut socket).take(length), &mut service),
-        )
-        .await
-        .map_err(|_| ())?
-        .map_err(|_| ())?;
-        if copied != length {
-            return Err(());
-        }
-        let incoming = headers(&mut service).await?;
-        let incoming = std::str::from_utf8(&incoming).map_err(|_| ())?;
-        let mut lines = incoming.split("\r\n");
-        let status = lines.next().ok_or(())?;
-        if !status.starts_with("HTTP/1.") {
-            return Err(());
-        }
-        let mut filtered = format!("{status}\r\n");
-        for line in lines.filter(|s| !s.is_empty()) {
-            let (name, value) = line.split_once(':').ok_or(())?;
-            if name.eq_ignore_ascii_case("set-cookie") {
-                if let Some(cookie) = clean_cookie(value.trim()) {
-                    filtered.push_str(&format!("Set-Cookie: {cookie}\r\n"));
+        };
+        let forwarding = async {
+            let mut outgoing = format!("{} {} HTTP/1.1\r\n", request.method, request.path);
+            for (name, value) in &request.headers {
+                let lower = name.to_ascii_lowercase();
+                if lower == "cookie" {
+                    let clean = value
+                        .split(';')
+                        .map(str::trim)
+                        .filter(|c| c.split('=').next() != Some(COOKIE))
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    if !clean.is_empty() {
+                        outgoing.push_str(&format!("Cookie: {clean}\r\n"));
+                    }
+                    continue;
                 }
-            } else if name.eq_ignore_ascii_case("location") {
-                let value = value.trim();
-                if value.starts_with("//")
-                    || (value
-                        .split(['/', '?', '#'])
-                        .next()
-                        .unwrap_or("")
-                        .contains(':')
-                        && !value.starts_with(&format!("{origin}/")))
+                if [
+                    "connection",
+                    "proxy-authorization",
+                    "proxy-connection",
+                    "forwarded",
+                    "sec-fetch-site",
+                ]
+                .contains(&lower.as_str())
+                    || lower.starts_with("x-forwarded-")
                 {
-                    return response(
-                        &mut socket,
-                        "502 Bad Gateway",
-                        "Cross-origin redirect blocked",
-                        "",
-                    )
-                    .await;
+                    continue;
                 }
-                filtered.push_str(&format!("Location: {value}\r\n"));
-            } else {
-                filtered.push_str(line);
-                filtered.push_str("\r\n");
+                outgoing.push_str(&format!("{name}: {value}\r\n"));
             }
-        }
-        filtered.push_str("Referrer-Policy: no-referrer\r\n\r\n");
-        socket
-            .write_all(filtered.as_bytes())
+            outgoing.push_str(if websocket {
+                "Connection: Upgrade\r\n\r\n"
+            } else {
+                "Connection: close\r\n\r\n"
+            });
+            service
+                .write_all(outgoing.as_bytes())
+                .await
+                .map_err(|_| ())?;
+            let copied = tokio::time::timeout(
+                Duration::from_secs(30),
+                tokio::io::copy(&mut (&mut socket).take(length), &mut service),
+            )
             .await
+            .map_err(|_| ())?
             .map_err(|_| ())?;
-        if websocket && status.contains(" 101 ") {
-            let _ = tokio::io::copy_bidirectional(&mut socket, &mut service).await;
-        } else {
-            let _ = tokio::io::copy(&mut service, &mut socket).await;
-        }
-        Ok(())
+            if copied != length {
+                return Err(());
+            }
+            let incoming = headers(&mut service).await?;
+            let incoming = std::str::from_utf8(&incoming).map_err(|_| ())?;
+            let mut lines = incoming.split("\r\n");
+            let status = lines.next().ok_or(())?;
+            if !status.starts_with("HTTP/1.") {
+                return Err(());
+            }
+            let mut filtered = format!("{status}\r\n");
+            for line in lines.filter(|s| !s.is_empty()) {
+                let (name, value) = line.split_once(':').ok_or(())?;
+                if name.eq_ignore_ascii_case("set-cookie") {
+                    if let Some(cookie) = clean_cookie(value.trim()) {
+                        filtered.push_str(&format!("Set-Cookie: {cookie}\r\n"));
+                    }
+                } else if name.eq_ignore_ascii_case("location") {
+                    let value = value.trim();
+                    if value.starts_with("//")
+                        || (value
+                            .split(['/', '?', '#'])
+                            .next()
+                            .unwrap_or("")
+                            .contains(':')
+                            && !value.starts_with(&format!("{origin}/")))
+                    {
+                        return response(
+                            &mut socket,
+                            "502 Bad Gateway",
+                            "Cross-origin redirect blocked",
+                            "",
+                        )
+                        .await;
+                    }
+                    filtered.push_str(&format!("Location: {value}\r\n"));
+                } else {
+                    filtered.push_str(line);
+                    filtered.push_str("\r\n");
+                }
+            }
+            filtered.push_str("Referrer-Policy: no-referrer\r\n\r\n");
+            socket
+                .write_all(filtered.as_bytes())
+                .await
+                .map_err(|_| ())?;
+            if websocket && status.contains(" 101 ") {
+                let _ = tokio::io::copy_bidirectional(&mut socket, &mut service).await;
+            } else {
+                let _ = tokio::io::copy(&mut service, &mut socket).await;
+            }
+            Ok(())
+        };
+        let policy = async {
+            let Some(authority) = local else {
+                std::future::pending::<()>().await;
+                return;
+            };
+            loop {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                let current =
+                    tokio::time::timeout(Duration::from_secs(1), authority.services()).await;
+                if !matches!(current, Ok(Ok(ref services)) if services.iter().any(|s| s.id == self.service && Some(s.backend) == binding))
+                {
+                    return;
+                }
+            }
+        };
+        tokio::select! { result = forwarding => result, _ = policy => Err(()) }
     }
 }
 fn clean_cookie(value: &str) -> Option<String> {

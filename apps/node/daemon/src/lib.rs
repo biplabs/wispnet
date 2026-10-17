@@ -165,6 +165,7 @@ pub async fn run(
         identity.secret_key().clone(),
         config.state_dir.clone(),
         transport.clone(),
+        authority.clone(),
     );
     let path = config.state_dir.join("node.sock");
     if let Ok(metadata) = std::fs::symlink_metadata(&path) {
