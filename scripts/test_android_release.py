@@ -3,6 +3,7 @@ from pathlib import Path
 import struct
 import subprocess
 import unittest
+import xml.etree.ElementTree as ET
 from check_android_release import check_elf,check_manifest
 
 class ReleaseChecks(unittest.TestCase):
@@ -20,6 +21,20 @@ class ReleaseChecks(unittest.TestCase):
         self.assertEqual(check_manifest(manifest),'2')
         for invalid in [manifest.replace('targetSdkVersion="36"','targetSdkVersion="35"'),manifest.replace('debuggable="false"','debuggable="true"'),manifest.replace('allowBackup="false"','allowBackup="true"'),manifest.replace('required="false"','required="true"')]:
             with self.assertRaises(ValueError):check_manifest(invalid)
+    def test_private_state_excluded_from_cloud_and_device_transfer(self):
+        root=Path(__file__).resolve().parents[1]/'android/app/src/main'
+        android='{http://schemas.android.com/apk/res/android}'
+        app=ET.parse(root/'AndroidManifest.xml').getroot().find('application')
+        self.assertEqual(app.get(android+'allowBackup'),'false')
+        self.assertEqual(app.get(android+'dataExtractionRules'),'@xml/data_extraction_rules')
+        rules=ET.parse(root/'res/xml/data_extraction_rules.xml').getroot()
+        for mode in ['cloud-backup','device-transfer']:
+            section=rules.find(mode)
+            self.assertIsNotNone(section)
+            self.assertEqual(section.findall('include'),[])
+            exclusions={(item.get('domain'),item.get('path')) for item in section.findall('exclude')}
+            for domain in ['root','file','database','sharedpref','external','device_root','device_file','device_database','device_sharedpref']:
+                self.assertIn((domain,'.'),exclusions)
     def test_signed_build_fails_before_building_when_credentials_missing(self):
         env=os.environ.copy()
         for name in ['WIPSNET_UPLOAD_KEYSTORE','WIPSNET_UPLOAD_STORE_PASSWORD','WIPSNET_UPLOAD_KEY_ALIAS','WIPSNET_UPLOAD_KEY_PASSWORD']:env.pop(name,None)
