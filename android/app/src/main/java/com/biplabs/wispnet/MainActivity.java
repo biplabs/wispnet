@@ -27,6 +27,7 @@ public final class MainActivity extends Activity {
  public void onCreate(Bundle state){
   super.onCreate(state);getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);store=new HostStore(this);
   ScrollView scroll=new ScrollView(this);root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setPadding(24,24,24,32);scroll.addView(root);setContentView(scroll);
+  getWindow().setDecorFitsSystemWindows(false);scroll.setOnApplyWindowInsetsListener((view,insets)->{android.graphics.Insets bars=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout()|WindowInsets.Type.ime());view.setPadding(bars.left,bars.top,bars.right,bars.bottom);return insets;});
   text(root,"Wispnet",30);text(root,"Your machines. Their services.",18);
   status=new TextView(this);root.addView(status);network=new TextView(this);root.addView(network);identity=new TextView(this);identity.setTextIsSelectable(true);root.addView(identity);
   access=button(root,"Start browser access",()->{

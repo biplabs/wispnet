@@ -4,14 +4,14 @@ The native Android app pairs independently with each hosting computer, displays 
 
 ## Build and install
 
-Requirements: Rust with `aarch64-linux-android`, Android SDK platform 35, NDK 27.2.12479018, Java 17+, and an authorized arm64 Android 14+ device. `scripts/build_android.sh` defaults to `$HOME/Android/Sdk` and Android Studio's JBR; override `ANDROID_HOME`, `JAVA_HOME`, or `WIPSNET_ANDROID_NDK` as needed. The checked-in Gradle wrapper pins its distribution checksum.
+Requirements: Rust with `aarch64-linux-android`, Android SDK platform 36, NDK 27.2.12479018, Java 17+, and an authorized arm64 Android 14+ device. `scripts/build_android.sh` defaults to `$HOME/Android/Sdk` and Android Studio's JBR; override `ANDROID_HOME`, `JAVA_HOME`, or `WIPSNET_ANDROID_NDK` as needed. The checked-in Gradle wrapper pins its distribution checksum.
 
 ```sh
 scripts/build_android.sh
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-The APK currently targets API 35, builds for arm64 by default (optional x86_64 for emulator acceptance), and uses the configured public relay `https://relay.wispnet.app`.
+The APK currently targets API 36, builds for arm64 by default (optional x86_64 for emulator acceptance), and uses the configured public relay `https://relay.wispnet.app`.
 
 ## Pair and browse
 
@@ -179,3 +179,5 @@ The scanner uses pinned [ZXing Android Embedded 4.3.0](https://github.com/journe
 The physical peer harness now generates a real PNG from each local target invitation with the host renderer, transfers it into the isolated test sandbox, decodes it with the production Android QR reader, and checks unconfirmed review before exercising the existing shared-code/pairing path. It also checks malformed/oversized image rejection, cancelled-scan fallback controls, invalid URL payload rejection, and scanner-result routing. These image and result-handling checks do not establish live optical scanning; a separate camera-device test remains required. File-picker chooser interaction is likewise distinct from the decoder check. Export security regressions run inside the normal local/pre-push suite.
 
 Observed on the physical Android 14 tablet (2026-10-16): local-first independent pairing passed with the real host-exported QR PNG decoder, unconfirmed review, malformed/oversized image rejection, cancelled-scan fallback, URL rejection and simulated scanner-result handling. Cold browsers, grant withdrawal, active revocation, restart denial and explicit re-pairing passed afterward. No camera was used or granted for this run. Live optical scanning and the Android image-picker chooser interaction remain unverified.
+
+For optimized AAB generation, upload signing, API 36/16 KB validation and the deferred Play internal camera check, see [Android internal-testing build](android-release.md).

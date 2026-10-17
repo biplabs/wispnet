@@ -1,13 +1,28 @@
 plugins { id("com.android.application") }
 android {
     namespace = "com.biplabs.wispnet"
-    compileSdk = 35
-    defaultConfig { applicationId = "com.biplabs.wispnet"; minSdk = 34; targetSdk = 35; versionCode = 1; versionName = "0.1.0"; testInstrumentationRunner = "com.biplabs.wispnet.AppTestRunner"; ndk { abiFilters += providers.gradleProperty("wispnetAndroidAbi").orElse("arm64-v8a").get() } }
+    compileSdk = 36
+    defaultConfig { applicationId = "com.biplabs.wispnet"; minSdk = 34; targetSdk = 36; versionCode = providers.gradleProperty("wispnetVersionCode").orElse("1").get().toInt(); versionName = providers.gradleProperty("wispnetVersionName").orElse("0.1.0").get(); testInstrumentationRunner = "com.biplabs.wispnet.AppTestRunner"; ndk { abiFilters += providers.gradleProperty("wispnetAndroidAbi").orElse("arm64-v8a").get() } }
+    val uploadEnvironment = listOf("WIPSNET_UPLOAD_KEYSTORE", "WIPSNET_UPLOAD_STORE_PASSWORD", "WIPSNET_UPLOAD_KEY_ALIAS", "WIPSNET_UPLOAD_KEY_PASSWORD")
+    val supplied = uploadEnvironment.map { providers.environmentVariable(it).orNull }
+    require(supplied.all { it == null } || supplied.all { !it.isNullOrBlank() }) { "Supply all upload signing environment variables, or none for an unsigned build" }
+    if (supplied.all { it != null }) {
+        signingConfigs.create("upload") {
+            storeFile = file(supplied[0]!!)
+            storePassword = supplied[1]
+            keyAlias = supplied[2]
+            keyPassword = supplied[3]
+        }
+    }
     buildTypes {
+        getByName("release") {
+            isDebuggable = false
+            signingConfig = signingConfigs.findByName("upload")
+        }
         create("peercheck") { initWith(getByName("debug")); applicationIdSuffix = ".peercheck"; signingConfig = signingConfigs.getByName("debug") }
     }
     testBuildType = providers.gradleProperty("wispnetTestBuildType").orElse("debug").get()
-    packaging { jniLibs { useLegacyPackaging = true } }
+    packaging { jniLibs { useLegacyPackaging = false } }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
 }
 

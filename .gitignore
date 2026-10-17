@@ -1,3 +1,8 @@
 /target/
 /spikes/browser/.venv/
 __pycache__/
+
+# Never commit Android upload signing credentials.
+*.jks
+*.keystore
+keystore.properties

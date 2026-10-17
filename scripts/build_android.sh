@@ -20,9 +20,19 @@ case "$android_abi" in
     ;;
   *) echo 'Supported Android ABIs: arm64-v8a, x86_64' >&2; exit 1 ;;
 esac
-cargo build -p wipsnet-android --target "$native_target" --locked
+# NDK r27 needs both flags: segment alignment and RELRO boundaries.
+export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-Wl,-z,max-page-size=16384 -C link-arg=-Wl,-z,common-page-size=16384"
+android_profile="${WIPSNET_ANDROID_PROFILE:-debug}"
+android_artifact="${WIPSNET_ANDROID_ARTIFACT:-apk}"
+case "$android_profile:$android_artifact" in
+  debug:apk) cargo_flags=(); gradle_task=assembleDebug ;;
+  release:apk) cargo_flags=(--release); gradle_task=assembleRelease ;;
+  release:bundle) cargo_flags=(--release); gradle_task=bundleRelease ;;
+  *) echo 'Supported builds: debug/apk, release/apk, release/bundle' >&2; exit 1 ;;
+esac
+cargo build -p wipsnet-android --target "$native_target" --locked "${cargo_flags[@]}"
 mkdir -p "android/app/src/main/jniLibs/$android_abi"
-cp "target/$native_target/debug/libwipsnet_android.so" "android/app/src/main/jniLibs/$android_abi/"
+cp "target/$native_target/$android_profile/libwipsnet_android.so" "android/app/src/main/jniLibs/$android_abi/"
 "$ndk_bin/llvm-strip" --strip-debug "android/app/src/main/jniLibs/$android_abi/libwipsnet_android.so"
 cd android
-./gradlew --no-daemon assembleDebug "-PwispnetAndroidAbi=$android_abi"
+./gradlew --no-daemon "$gradle_task" "-PwispnetAndroidAbi=$android_abi" "-PwispnetVersionCode=${WIPSNET_ANDROID_VERSION_CODE:-1}" "-PwispnetVersionName=${WIPSNET_ANDROID_VERSION_NAME:-0.1.0}"
