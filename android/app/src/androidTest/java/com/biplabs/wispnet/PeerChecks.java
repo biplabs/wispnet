@@ -32,8 +32,6 @@ final class PeerChecks {
     t.runOnMainSync(()->t.activity.onActivityResult(2,android.app.Activity.RESULT_OK,new android.content.Intent().putExtra("SCAN_RESULT","https://untrusted.invalid/invitation")));
     t.await(()->t.activity.status.getText().toString().contains("Cannot import invitation"),"QR URL was accepted");
     if(store.all().has(target)||t.activity.invitation.getText().length()!=0)throw new Exception("Invalid QR retained capability or trusted host");
-    t.runOnMainSync(()->t.activity.onActivityResult(2,android.app.Activity.RESULT_OK,new android.content.Intent().putExtra("SCAN_RESULT",code)));
-    t.await(()->t.activity.status.getText().toString().contains("Invitation ready for review"),"Scanner result review failed");
     new File(t.getTargetContext().getFilesDir(),"peer-invitation.png").delete();
 
     android.content.Intent share=new android.content.Intent(android.content.Intent.ACTION_SEND).setClass(t.getTargetContext(),MainActivity.class).setType("text/plain").putExtra(android.content.Intent.EXTRA_TEXT,code).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK|android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP);
@@ -44,7 +42,8 @@ final class PeerChecks {
    t.runOnMainSync(()->{t.activity.label.setText(name);android.widget.Button b=t.find(t.activity.root,"Request pairing");b.performClick();});
    t.await(()->t.activity.status.getText().toString().contains("Compare the full host ID"),"Import skipped explicit host verification");
    if(t.activity.invitation.getText().length()==0||store.all().has(target))throw new Exception("Unconfirmed request consumed invitation or paired");
-   t.click("Request pairing");
+   if(name.equals("Local computer"))t.runOnMainSync(()->t.activity.onActivityResult(2,android.app.Activity.RESULT_OK,new android.content.Intent().putExtra("SCAN_RESULT",code)));
+   else t.click("Request pairing");
    t.await(()->store.all().has(target)&&"approval_pending".equals(store.all().getJSONObject(target).optString("state")),"Pairing did not remain pending");
    refresh(t);Thread.sleep(1500);if(!"approval_pending".equals(store.all().getJSONObject(target).optString("state")))throw new Exception("Pending pairing falsely marked approved");
    barrier(t,"pending-owner-approval");available(t,target);

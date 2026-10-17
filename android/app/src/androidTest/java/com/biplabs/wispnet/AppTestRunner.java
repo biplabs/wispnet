@@ -43,6 +43,7 @@ public final class AppTestRunner extends Instrumentation {
  }
  void resume(){Intent intent=getTargetContext().getPackageManager().getLaunchIntentForPackage(getTargetContext().getPackageName());intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_CLEAR_TOP);activity=(MainActivity)startActivitySync(intent);waitForIdleSync();}
  public void onStart(){Bundle result=new Bundle();try{
+  if("qr-auto-pair".equals(args.getString("mode"))){AutoPairChecks.run(this);result.putString("result","passed");finish(Activity.RESULT_OK,result);return;}
   if("scanner-launch".equals(args.getString("mode"))){ScannerChecks.run(this);result.putString("result","passed");finish(Activity.RESULT_OK,result);return;}
   if("platform-timeout".equals(args.getString("mode"))){PlatformChecks.run(this);result.putString("result","passed");finish(Activity.RESULT_OK,result);return;}
   if(args.getString("mode","").startsWith("peers-")){if(java.util.List.of("peers-repair","peers-expiry","peers-egress").contains(args.getString("mode")))AcceptanceChecks.run(this);else PeerChecks.run(this);result.putString("result","passed");finish(Activity.RESULT_OK,result);return;}

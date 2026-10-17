@@ -20,6 +20,7 @@ public final class MainActivity extends Activity {
  static volatile long browserExpiresAt=0;
  CheckBox hostVerified;
  HostStore store;
+ boolean pairingBusy=false;
  final java.util.Set<String> refreshing=ConcurrentHashMap.newKeySet();
  void text(LinearLayout parent,String value,int size){TextView t=new TextView(this);t.setText(value);t.setTextSize(size);t.setPadding(0,12,0,8);parent.addView(t);}
  Button button(LinearLayout parent,String title,Runnable action){Button b=new Button(this);b.setText(title);parent.addView(b);b.setOnClickListener(v->action.run());return b;}
@@ -53,14 +54,24 @@ public final class MainActivity extends Activity {
   receiveInvitation(getIntent());
   work.execute(()->{try{Native.ensure(this);String peer=Native.command("identity").getString("peer");runOnUiThread(()->{identity.setText("This tablet: "+peer);if(status.getText().toString().startsWith("Preparing protected"))status.setText("Ready. Pair with each machine independently.");refresh();});}catch(Exception e){show("Cannot initialize protected identity: "+e.getMessage());}});
  }
- void show(String value){runOnUiThread(()->status.setText(value));}
+ void show(String value){runOnUiThread(()->{status.setText(value);status.announceForAccessibility(value);if(root.getParent() instanceof ScrollView){ScrollView scroll=(ScrollView)root.getParent();scroll.post(()->scroll.smoothScrollTo(0,0));}});}
  void pair(){final String expected=host.getText().toString().trim(),document=invitation.getText().toString(),name=label.getText().toString().trim();
   if(!hostVerified.isChecked()){show("Compare the full host ID with the target computer, then confirm it before requesting pairing.");return;}
   if(expected.isEmpty()||document.isEmpty()||name.isEmpty()){show("Enter machine name, verified host ID and invitation");return;}
-  invitation.setText("");
-  status.setText("Requesting pairing from "+name+"…");
-  work.execute(()->{try{Native.ensure(this);Native.request(new JSONObject().put("op","pair").put("host",expected).put("invitation",document));store.paired(expected,name);show("Request sent. Approve this tablet on "+name+", grant services, then refresh.");runOnUiThread(this::render);}catch(Exception e){if(e instanceof Native.Failure&&"invitation_denied".equals(((Native.Failure)e).code))show("This host did not accept the invitation. Ask its owner for a new invitation.");else show(e.getMessage());}});
+  requestPairing(expected,document,name);
  }
+ void requestPairing(String expected,String document,String name){
+  if(pairingBusy){show("A pairing request is already in progress. Please wait.");return;}
+  pairingBusy=true;invitation.setText("");show("Requesting pairing from "+name+"… This may take up to a minute.");
+  work.execute(()->{try{Native.ensure(this);Native.request(new JSONObject().put("op","pair").put("host",expected).put("invitation",document));store.paired(expected,name);show("Request sent. Pending owner approval on "+name+". Grant services on that computer, then refresh.");runOnUiThread(this::render);}catch(Exception e){if(e instanceof Native.Failure&&"invitation_denied".equals(((Native.Failure)e).code))show("This host did not accept the invitation. Ask its owner for a new invitation.");else show("Pairing failed: "+e.getMessage()+". Scan a fresh invitation to try again.");}finally{runOnUiThread(()->pairingBusy=false);}});
+ }
+ void pairScannedQr(String document){
+  if(pairingBusy){show("A pairing request is already in progress. Please wait.");return;}
+  if(document.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>8192){show("Invitation is too large. Ask for a new QR code.");return;}
+  invitation.setText("");hostVerified.setChecked(false);show("Checking scanned invitation…");
+  work.execute(()->{try{Native.ensure(this);JSONObject preview=Native.request(new JSONObject().put("op","preview_invitation").put("invitation",document));String target=preview.getString("host");runOnUiThread(()->{host.setText(target);String name=label.getText().toString().trim();if(name.isEmpty()){name="Host "+target.substring(0,8);label.setText(name);}requestPairing(target,document,name);});}catch(Exception e){show("Cannot import invitation: "+e.getMessage());}});
+ }
+
  void refresh(){
   try{JSONObject hosts=store.all();for(java.util.Iterator<String> keys=hosts.keys();keys.hasNext();){String peer=keys.next();if(!refreshing.add(peer))continue;work.execute(()->{try{Native.ensure(this);JSONObject snapshot=Native.request(new JSONObject().put("op","catalog").put("host",peer));store.catalog(peer,snapshot);}catch(Exception e){try{store.failed(peer,e);}catch(Exception ignored){}}refreshing.remove(peer);runOnUiThread(this::render);});}render();}catch(Exception e){show("Cannot read saved hosts");}
  }
@@ -86,8 +97,8 @@ public final class MainActivity extends Activity {
  }
  void reviewInvitation(String document){
   if(document.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>8192){invitation.setText("");show("Invitation is too large. Ask for a new invitation file.");return;}
-  hostVerified.setChecked(false);invitation.setText("");status.setText("Reviewing invitation…");
-  work.execute(()->{try{Native.ensure(this);JSONObject preview=Native.request(new JSONObject().put("op","preview_invitation").put("invitation",document));runOnUiThread(()->{host.setText(preview.optString("host"));invitation.setText(document);status.setText("Invitation ready for review. Compare the full host ID on the target computer. Importing does not request pairing or grant access.");});}catch(Exception e){show("Cannot import invitation: "+e.getMessage());}});
+  hostVerified.setChecked(false);invitation.setText("");show("Reviewing invitation…");
+  work.execute(()->{try{Native.ensure(this);JSONObject preview=Native.request(new JSONObject().put("op","preview_invitation").put("invitation",document));runOnUiThread(()->{host.setText(preview.optString("host"));invitation.setText(document);show("Invitation ready for review. Compare the full host ID on the target computer. Importing does not request pairing or grant access.");});}catch(Exception e){show("Cannot import invitation: "+e.getMessage());}});
  }
  void importInvitation(InputStream in)throws IOException{byte[] bytes=in.readNBytes(8193);if(bytes.length>8192)throw new IOException();String document=new String(bytes,java.nio.charset.StandardCharsets.UTF_8);runOnUiThread(()->reviewInvitation(document));}
  void readInvitation(Uri uri){
@@ -102,7 +113,7 @@ public final class MainActivity extends Activity {
   intent.removeExtra(Intent.EXTRA_STREAM);intent.removeExtra(Intent.EXTRA_TEXT);
  }
  protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);receiveInvitation(intent);}
- protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(request==1&&result==RESULT_OK&&data!=null)readInvitation(data.getData());else if(request==3&&result==RESULT_OK&&data!=null)readQrImage(data.getData());else if(request==2){if(result==RESULT_OK&&data!=null){String document=data.getStringExtra("SCAN_RESULT");if(document!=null)reviewInvitation(document);else show("No pairing QR found. Import a file or paste a pairing code.");}else show("Scan cancelled or camera unavailable. Import a QR image or invitation file, or paste a pairing code.");}}
+ protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(request==1&&result==RESULT_OK&&data!=null)readInvitation(data.getData());else if(request==3&&result==RESULT_OK&&data!=null)readQrImage(data.getData());else if(request==2){if(result==RESULT_OK&&data!=null){String document=data.getStringExtra("SCAN_RESULT");if(document!=null)pairScannedQr(document);else show("No pairing QR found. Import a file or paste a pairing code.");}else show("Scan cancelled or camera unavailable. Import a QR image or invitation file, or paste a pairing code.");}}
  protected void onResume(){super.onResume();if(AccessService.enabled&&browserExpiresAt>0&&SystemClock.elapsedRealtime()>=browserExpiresAt)status.setText("Browser session expired. Open the service again; pairing is unchanged.");lifecycle.post(updateAccess);if(access!=null)access.setText(AccessService.enabled?"Stop browser access":"Start browser access");}
  protected void onPause(){lifecycle.removeCallbacks(updateAccess);super.onPause();}
  protected void onDestroy(){work.shutdown();super.onDestroy();}

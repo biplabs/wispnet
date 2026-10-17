@@ -193,3 +193,11 @@ adb -s emulator-5584 shell am instrument -w -e mode scanner-launch app.wispnet.a
 ```
 
 `ScannerChecks` opens the real scanner via the production button, waits for the capture activity, verifies the camera preview starts, and cancels back to the camera-free fallback. This test reproduced the pre-fix process crash and passed after the dependency fix. It requires a camera feature; the camera-less tablet cannot substitute. It does not establish optical QR recognition or a Play-signed phone install.
+
+## Automatic camera-QR pairing
+
+A successful **Scan pairing QR** result now validates the bounded, expiring Wispnet invitation and immediately submits its target-pinned pairing request. No machine-name entry, comparison checkbox or separate Request tap is required for this explicit scan action. If the name field is empty, the app uses `Host ` plus the first eight host-ID characters. The full host ID remains visible. Scanning an arbitrary URL or malformed/expired invitation fails without fetching it or saving a host.
+
+This supersedes the manual-review instruction for live camera scans above. Pasted codes, shared invitation files and QR-image imports still use manual review. A scan submits a request, not an approval or service grant: the target owner must approve that phone and grant services independently. A scanned code from an unintended source requests that source's host, so scan only the intended computer's QR.
+
+Pairing progress/errors scroll into view and are announced for accessibility. Network work runs off the main thread, duplicate in-flight requests are blocked, and failures ask for an explicit fresh scan rather than automatically replaying the request. `qr-auto-pair` instrumentation exercises invalid scanner results, automatic request with an empty name and unchecked comparison, main-thread responsiveness and pending-owner state using an actual host invitation placed in the isolated test app's private `files/peer-invitation.json`.
