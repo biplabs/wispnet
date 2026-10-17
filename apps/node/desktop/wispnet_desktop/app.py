@@ -79,19 +79,61 @@ def item(text):
     return value
 
 
+def _base_icon_pixmap():
+    here = Path(__file__).resolve().parent
+    for candidate in [
+        here / "icon.png",
+        here.parent / "icon.png",
+        here.parents[2] / "assets/icon.jpeg",
+    ]:
+        if candidate.is_file():
+            pix = QPixmap(str(candidate))
+            if not pix.isNull():
+                return pix
+    return None
+
+
 def icon(count=0, online=False):
     pixmap = QPixmap(64, 64)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setBrush(QColor("#617bf5" if online else "#677085"))
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.drawRoundedRect(4, 4, 56, 56, 18, 18)
-    painter.setPen(QColor("white"))
-    painter.setFont(QFont("sans-serif", 29, QFont.Weight.Bold))
-    painter.drawText(
-        pixmap.rect(), Qt.AlignmentFlag.AlignCenter, str(count) if online else "w"
-    )
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+    base = _base_icon_pixmap()
+    if base is not None:
+        scaled = base.scaled(
+            60,
+            60,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        painter.drawPixmap(2, 2, scaled)
+        if online:
+            badge_w = 28 if count < 10 else 34
+            badge_x = 62 - badge_w
+            badge_y = 38
+            painter.setBrush(QColor("#3b66e6"))
+            painter.setPen(QColor("#79b4ff"))
+            painter.drawRoundedRect(badge_x, badge_y, badge_w, 24, 11, 11)
+            painter.setPen(QColor("#f4f8ff"))
+            painter.setFont(QFont("sans-serif", 11, QFont.Weight.Bold))
+            painter.drawText(
+                badge_x,
+                badge_y,
+                badge_w,
+                24,
+                Qt.AlignmentFlag.AlignCenter,
+                str(count),
+            )
+    else:
+        painter.setBrush(QColor("#3b66e6" if online else "#142038"))
+        painter.setPen(QColor("#79b4ff" if online else "#30456e"))
+        painter.drawRoundedRect(4, 4, 56, 56, 18, 18)
+        painter.setPen(QColor("#f4f8ff"))
+        painter.setFont(QFont("sans-serif", 28, QFont.Weight.Bold))
+        painter.drawText(
+            pixmap.rect(), Qt.AlignmentFlag.AlignCenter, str(count) if online else "W"
+        )
     painter.end()
     return QIcon(pixmap)
 
@@ -135,30 +177,43 @@ class Window(QMainWindow):
         self.jobs = set()
         self.setWindowTitle("Wispnet")
         self.setWindowIcon(icon())
-        self.resize(1080, 700)
+        self.resize(1100, 720)
         main = QWidget()
         layout = QVBoxLayout(main)
-        layout.setContentsMargins(28, 24, 28, 24)
-        layout.setSpacing(18)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(16)
         self.setCentralWidget(main)
-        top = QHBoxLayout()
+        header_card = QWidget()
+        header_card.setObjectName("headerCard")
+        header_layout = QHBoxLayout(header_card)
+        header_layout.setContentsMargins(18, 14, 18, 14)
+        header_layout.setSpacing(14)
+        logo = QLabel()
+        logo.setPixmap(icon().pixmap(44, 44))
+        logo.setFixedSize(44, 44)
+        header_layout.addWidget(logo)
+        title_box = QVBoxLayout()
+        title_box.setSpacing(4)
         name = QLabel("Your node")
         name.setObjectName("heading")
-        top.addWidget(name)
-        top.addStretch()
-        self.access = QCheckBox("Browser access")
-        self.access.clicked.connect(self.toggle_access)
-        top.addWidget(self.access)
-        refresh = QPushButton("Refresh")
-        refresh.clicked.connect(self.refresh)
-        top.addWidget(refresh)
-        layout.addLayout(top)
+        title_box.addWidget(name)
         self.status = QLabel("Connecting to local node…")
+        self.status.setObjectName("statusText")
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         self.status.setWordWrap(True)
-        layout.addWidget(self.status)
+        title_box.addWidget(self.status)
+        header_layout.addLayout(title_box, 1)
+        self.access = QCheckBox("Browser access")
+        self.access.setObjectName("accessToggle")
+        self.access.clicked.connect(self.toggle_access)
+        header_layout.addWidget(self.access)
+        refresh = QPushButton("Refresh")
+        refresh.setProperty("variant", "secondary")
+        refresh.clicked.connect(self.refresh)
+        header_layout.addWidget(refresh)
+        layout.addWidget(header_card)
         self.tabs = QTabWidget()
-        layout.addWidget(self.tabs)
+        layout.addWidget(self.tabs, 1)
         self.services = self.table(
             ["Service", "Backend", "Permitted clients"], "My services"
         )
@@ -172,20 +227,23 @@ class Window(QMainWindow):
             ["Invitation", "Client", "Peer ID", "State"], "Pairing requests"
         )
         actions = QHBoxLayout()
-        for title, fn in [
-            ("Share service", self.share),
-            ("Edit service", self.edit),
-            ("Remove service", self.remove),
-            ("Revoke client", self.revoke),
-            ("Pair with a host", self.pair),
-            ("Approve request", lambda: self.decide(True)),
-            ("Reject request", lambda: self.decide(False)),
+        actions.setSpacing(10)
+        for title, fn, variant in [
+            ("Share service", self.share, "primary"),
+            ("Edit service", self.edit, "secondary"),
+            ("Remove service", self.remove, "danger"),
+            ("Revoke client", self.revoke, "danger"),
+            ("Pair with a host", self.pair, "primary"),
+            ("Approve request", lambda: self.decide(True), "primary"),
+            ("Reject request", lambda: self.decide(False), "danger"),
         ]:
             button = QPushButton(title)
+            button.setProperty("variant", variant)
             button.clicked.connect(fn)
             actions.addWidget(button)
         layout.addLayout(actions)
         self.message = QLabel("")
+        self.message.setObjectName("messageBar")
         self.message.setTextFormat(Qt.TextFormat.PlainText)
         self.message.setWordWrap(True)
         layout.addWidget(self.message)
@@ -221,6 +279,8 @@ class Window(QMainWindow):
         table = QTableWidget(0, len(columns))
         table.setHorizontalHeaderLabels(columns)
         table.horizontalHeader().setStretchLastSection(True)
+        table.setAlternatingRowColors(True)
+        table.setShowGrid(False)
         table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         table.verticalHeader().hide()
@@ -712,7 +772,170 @@ class Window(QMainWindow):
 def appearance(app):
     app.setStyle("Fusion")
     app.setStyleSheet(
-        "QWidget {background:#0b1020;color:#e5eaf5;font-size:14px;} QMainWindow {background:#0b1020;} QLabel#heading {font-size:28px;font-weight:600;} QPushButton {background:#202c48;padding:9px;border-radius:7px;} QPushButton:hover {background:#30446a;} QTableWidget {background:#10182b;gridline-color:#26324a;border:0;} QHeaderView::section {background:#18243b;padding:10px;border:0;} QCheckBox::indicator {width:16px;height:16px;border:1px solid #7384aa;border-radius:3px;background:#17223a;} QCheckBox::indicator:checked {background:#617bf5;} QLineEdit {background:#19243a;padding:8px;border:1px solid #354462;} QTabBar::tab {padding:12px;} QTabBar::tab:selected {background:#26395e;}"
+        """
+        QWidget {
+            background: #070b14;
+            color: #edf2ff;
+            font-size: 14px;
+        }
+        QMainWindow, QDialog, QMessageBox {
+            background: #070b14;
+        }
+        QWidget#headerCard {
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #111d38, stop:0.55 #0d162b, stop:1 #091020);
+            border: 1px solid #283c66;
+            border-radius: 16px;
+        }
+        QWidget#headerCard QLabel {
+            background: transparent;
+        }
+        QLabel#heading {
+            font-size: 22px;
+            font-weight: 700;
+            color: #f4f8ff;
+        }
+        QLabel#statusText {
+            font-size: 13px;
+            color: #94a6c4;
+        }
+        QLabel#messageBar {
+            background: #101c34;
+            color: #b8d4ff;
+            border: 1px solid #283e6b;
+            border-radius: 12px;
+            padding: 8px 14px;
+        }
+        QPushButton {
+            background: #142038;
+            color: #edf2ff;
+            padding: 9px 15px;
+            border: 1px solid #283b60;
+            border-radius: 12px;
+            font-weight: 600;
+        }
+        QPushButton:hover {
+            background: #1c2e50;
+            border-color: #3d5b94;
+        }
+        QPushButton:pressed {
+            background: #101a30;
+        }
+        QPushButton[variant="primary"] {
+            background: #1f3666;
+            border: 1px solid #4b73c2;
+            color: #f4f8ff;
+        }
+        QPushButton[variant="primary"]:hover {
+            background: #284582;
+            border-color: #65ceff;
+        }
+        QPushButton[variant="danger"] {
+            background: #221526;
+            border: 1px solid #4e2942;
+            color: #ffb3c4;
+        }
+        QPushButton[variant="danger"]:hover {
+            background: #311c36;
+            border-color: #783a62;
+        }
+        QCheckBox#accessToggle {
+            background: #142038;
+            border: 1px solid #2b4270;
+            border-radius: 12px;
+            padding: 8px 14px;
+            font-weight: 600;
+            color: #edf2ff;
+            spacing: 10px;
+        }
+        QCheckBox#accessToggle:hover {
+            border-color: #4b73c2;
+        }
+        QCheckBox::indicator {
+            width: 28px;
+            height: 16px;
+            border: 1px solid #30456e;
+            border-radius: 8px;
+            background: #0d1526;
+        }
+        QCheckBox::indicator:checked {
+            background: #3b66e6;
+            border: 1px solid #79b4ff;
+        }
+        QCheckBox::indicator:disabled {
+            background: #121a2b;
+            border-color: #222e47;
+        }
+        QTabWidget::pane {
+            border: 1px solid #243659;
+            border-radius: 14px;
+            background: #0d1526;
+            top: -1px;
+        }
+        QTabBar::tab {
+            background: #10192e;
+            color: #94a6c4;
+            border: 1px solid #203050;
+            border-radius: 10px;
+            padding: 10px 18px;
+            margin-right: 8px;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+        QTabBar::tab:hover {
+            background: #162340;
+            color: #edf2ff;
+        }
+        QTabBar::tab:selected {
+            background: #1f3666;
+            color: #f4f8ff;
+            border: 1px solid #4b73c2;
+        }
+        QTableWidget {
+            background: #0d1526;
+            alternate-background-color: #101a30;
+            gridline-color: #1c2a46;
+            border: 0;
+            border-radius: 14px;
+            selection-background-color: #1f3666;
+            selection-color: #f4f8ff;
+        }
+        QTableWidget::item {
+            padding: 8px 10px;
+            border-bottom: 1px solid #16223a;
+        }
+        QHeaderView::section {
+            background: #131f38;
+            color: #94a6c4;
+            padding: 11px 12px;
+            border: 0;
+            border-bottom: 1px solid #243659;
+            font-weight: 600;
+        }
+        QLineEdit, QListWidget {
+            background: #0d1526;
+            color: #edf2ff;
+            padding: 10px 12px;
+            border: 1px solid #25385c;
+            border-radius: 10px;
+        }
+        QLineEdit:focus, QListWidget:focus {
+            border: 1px solid #65ceff;
+        }
+        QMenu {
+            background: #0e172a;
+            color: #edf2ff;
+            border: 1px solid #283c66;
+            border-radius: 10px;
+            padding: 6px;
+        }
+        QMenu::item {
+            padding: 8px 16px;
+            border-radius: 6px;
+        }
+        QMenu::item:selected {
+            background: #1f3666;
+        }
+        """
     )
 
 

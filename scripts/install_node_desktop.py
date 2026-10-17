@@ -13,7 +13,7 @@ home = Path.home()
 destination = home / ".local/libexec/wispnet-desktop"
 destination.mkdir(parents=True, exist_ok=True)
 source = ROOT / "apps/node/desktop"
-for name in ["pyproject.toml", "uv.lock", "icon.svg"]:
+for name in ["pyproject.toml", "uv.lock", "icon.svg", "icon.png"]:
     shutil.copy2(source / name, destination / name)
 shutil.copytree(
     source / "wispnet_desktop",
@@ -37,7 +37,7 @@ applications.mkdir(parents=True, exist_ok=True)
     '[Desktop Entry]\nType=Application\nName=Wispnet\nComment=Your services and connected devices\nExec="'
     + str(binpath)
     + '"\nIcon='
-    + str(destination / "icon.svg")
+    + str(destination / "icon.png")
     + "\nCategories=Network;\nTerminal=false\n"
 )
 units = home / ".config/systemd/user"
