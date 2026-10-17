@@ -69,7 +69,7 @@ public final class MainActivity extends Activity {
   if(pairingBusy){show("A pairing request is already in progress. Please wait.");return;}
   if(document.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>8192){show("Invitation is too large. Ask for a new QR code.");return;}
   invitation.setText("");hostVerified.setChecked(false);show("Checking scanned invitation…");
-  work.execute(()->{try{Native.ensure(this);JSONObject preview=Native.request(new JSONObject().put("op","preview_invitation").put("invitation",document));String target=preview.getString("host");runOnUiThread(()->{host.setText(target);String name=label.getText().toString().trim();if(name.isEmpty()){name="Host "+target.substring(0,8);label.setText(name);}requestPairing(target,document,name);});}catch(Exception e){show("Cannot import invitation: "+e.getMessage());}});
+  work.execute(()->{try{Native.ensure(this);JSONObject preview=Native.request(new JSONObject().put("op","preview_invitation").put("invitation",document));String target=preview.getString("host");runOnUiThread(()->{host.setText(target);String name=preview.optString("host_name","").trim();if(name.isEmpty())name="Host "+target.substring(0,8);label.setText(name);requestPairing(target,document,name);});}catch(Exception e){show("Cannot import invitation: "+e.getMessage());}});
  }
 
  void refresh(){
@@ -98,7 +98,7 @@ public final class MainActivity extends Activity {
  void reviewInvitation(String document){
   if(document.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>8192){invitation.setText("");show("Invitation is too large. Ask for a new invitation file.");return;}
   hostVerified.setChecked(false);invitation.setText("");show("Reviewing invitation…");
-  work.execute(()->{try{Native.ensure(this);JSONObject preview=Native.request(new JSONObject().put("op","preview_invitation").put("invitation",document));runOnUiThread(()->{host.setText(preview.optString("host"));invitation.setText(document);show("Invitation ready for review. Compare the full host ID on the target computer. Importing does not request pairing or grant access.");});}catch(Exception e){show("Cannot import invitation: "+e.getMessage());}});
+  work.execute(()->{try{Native.ensure(this);JSONObject preview=Native.request(new JSONObject().put("op","preview_invitation").put("invitation",document));runOnUiThread(()->{host.setText(preview.optString("host"));String machine=preview.optString("host_name","").trim();if(!machine.isEmpty())label.setText(machine);invitation.setText(document);show("Invitation ready for review. Compare the full host ID on the target computer. Importing does not request pairing or grant access.");});}catch(Exception e){show("Cannot import invitation: "+e.getMessage());}});
  }
  void importInvitation(InputStream in)throws IOException{byte[] bytes=in.readNBytes(8193);if(bytes.length>8192)throw new IOException();String document=new String(bytes,java.nio.charset.StandardCharsets.UTF_8);runOnUiThread(()->reviewInvitation(document));}
  void readInvitation(Uri uri){

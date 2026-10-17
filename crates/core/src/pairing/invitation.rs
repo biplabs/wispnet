@@ -25,6 +25,9 @@ pub enum Purpose {
 pub struct Invitation {
     pub version: u16,
     pub host: EndpointId,
+    /// Display metadata only; never an authenticated host identifier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_name: Option<String>,
     pub relay_url: String,
     pub invitation: String,
     pub code: String,
@@ -43,6 +46,7 @@ impl Invitation {
     pub fn valid(&self, now: u64) -> bool {
         self.version == super::VERSION
             && controller_origin(&self.relay_url).is_ok()
+            && self.host_name.as_deref().is_none_or(valid_name)
             && valid_code(&self.invitation)
             && valid_code(&self.code)
             && self.expires_at > now
@@ -181,6 +185,7 @@ mod tests {
         Invitation {
             version: 1,
             host,
+            host_name: None,
             relay_url: "https://relay.example".into(),
             invitation: "1".repeat(64),
             code: "2".repeat(64),
@@ -188,6 +193,25 @@ mod tests {
             expires_at: 200,
             direct_hint: None,
         }
+    }
+    #[test]
+    fn host_name_is_optional_bounded_display_metadata() {
+        let host = SecretKey::generate().public();
+        let mut invitation = invite(host);
+        let legacy = serde_json::to_vec(&invitation).unwrap();
+        assert!(
+            serde_json::from_slice::<Invitation>(&legacy)
+                .unwrap()
+                .host_name
+                .is_none()
+        );
+        invitation.host_name = Some("Desktop".into());
+        assert!(invitation.valid(100));
+        assert_eq!(invitation.bootstrap(host, 100).unwrap().host, host);
+        invitation.host_name = Some("\n".into());
+        assert!(!invitation.valid(100));
+        invitation.host_name = Some("x".repeat(129));
+        assert!(!invitation.valid(100));
     }
     #[test]
     fn invitations_bound_target_expiry_origin_hints_and_separate_secrets() {

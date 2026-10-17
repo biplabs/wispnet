@@ -53,6 +53,7 @@ impl Store {
         let invitation = Invitation {
             version: VERSION,
             host,
+            host_name: None,
             relay_url: relay,
             invitation: control::token().to_string(),
             code: control::token().to_string(),

@@ -96,7 +96,7 @@ impl Client {
                     return Err("Expired or invalid invitation".into());
                 }
                 Ok(
-                    json!({"host":invitation.host.to_string(),"relay_url":invitation.relay_url,"expires_at":invitation.expires_at}),
+                    json!({"host":invitation.host.to_string(),"host_name":invitation.host_name.as_deref().unwrap_or(""),"relay_url":invitation.relay_url,"expires_at":invitation.expires_at}),
                 )
             }
             "pair" => {

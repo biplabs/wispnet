@@ -237,13 +237,23 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 .as_ref()
                 .and_then(|t| t.relay_url.as_deref())
                 .ok_or("invitation requires configured relay")?;
-            let invitation = store.pairing_invite(
+            let mut invitation = store.pairing_invite(
                 identity.endpoint_id(),
                 &secret,
                 relay,
                 wipsnet_registry::enrollment::now(),
                 300,
             )?;
+            let machine = std::process::Command::new("hostname")
+                .output()
+                .map_err(|_| "cannot read machine name")?;
+            let name = std::str::from_utf8(&machine.stdout)
+                .map_err(|_| "machine name is not UTF-8")?
+                .trim();
+            if !machine.status.success() || !wipsnet_core::enrollment::valid_name(name) {
+                return Err("machine name must be a valid display name".into());
+            }
+            invitation.host_name = Some(name.to_owned());
             let bytes = zeroize::Zeroizing::new(if args.len() == 7 {
                 wipsnet_agent::pairing::encode_invitation(&invitation)?
                     .as_bytes()
