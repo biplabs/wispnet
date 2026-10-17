@@ -7,12 +7,12 @@ listeners publicly. The production Rust agent is unchanged.
 Install uv and Python 3.11 or newer. Dependencies are pinned in pyproject.toml and
 uv.lock. From the repository root:
 
-    uv run --project spikes/browser --locked python -m unittest discover -s spikes/browser -p 'test_*.py' -v
-    uv run --project spikes/browser --locked python spikes/browser/run.py
+    uv run --project experiments/browser --locked python -m unittest discover -s experiments/browser -p 'test_*.py' -v
+    uv run --project experiments/browser --locked python experiments/browser/run.py
 
 Optional existing applications:
 
-    uv run --project spikes/browser --locked python spikes/browser/run.py --llama-port 8201 --website-port 8310
+    uv run --project experiments/browser --locked python experiments/browser/run.py --llama-port 8201 --website-port 8310
 
 The script prints disposable browser links. Open one within 60 seconds. Each
 session lasts at most 10 minutes; requests/streams are capped at 30 seconds in this
@@ -27,7 +27,7 @@ collision demonstration and must never contain private data.
 
 Authorize one device with adb. Add --phone to configure temporary reverse mappings:
 
-    uv run --project spikes/browser --locked python spikes/browser/run.py --llama-port 8201 --website-port 8310 --phone
+    uv run --project experiments/browser --locked python experiments/browser/run.py --llama-port 8201 --website-port 8310 --phone
 
 Open the printed phone_handoff URL in Android's ordinary browser, manually or with
 an explicit adb browser-launch request. Open website and second and run their

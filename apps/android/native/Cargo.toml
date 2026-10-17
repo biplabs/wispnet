@@ -4,23 +4,11 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
-
 [lib]
 name = "wipsnet_android"
 crate-type = ["cdylib", "rlib"]
-
 [dependencies]
-wipsnet-core.workspace = true
-wipsnet-agent.workspace = true
-wipsnet-registry.workspace = true
-iroh.workspace = true
-serde_json = "=1.0.150"
-tokio = { workspace = true, features = ["rt-multi-thread", "net", "sync", "io-util", "time"] }
-httparse = "=1.10.1"
+wipsnet-client = { path = "../../../crates/client" }
 zeroize.workspace = true
-
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "=0.21.1"
-
-[dev-dependencies]
-tempfile.workspace = true

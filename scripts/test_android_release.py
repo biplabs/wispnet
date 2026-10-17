@@ -22,7 +22,7 @@ class ReleaseChecks(unittest.TestCase):
         for invalid in [manifest.replace('targetSdkVersion="36"','targetSdkVersion="35"'),manifest.replace('debuggable="false"','debuggable="true"'),manifest.replace('allowBackup="false"','allowBackup="true"'),manifest.replace('required="false"','required="true"')]:
             with self.assertRaises(ValueError):check_manifest(invalid)
     def test_private_state_excluded_from_cloud_and_device_transfer(self):
-        root=Path(__file__).resolve().parents[1]/'android/app/src/main'
+        root=Path(__file__).resolve().parents[1]/'apps/android/app/src/main'
         android='{http://schemas.android.com/apk/res/android}'
         app=ET.parse(root/'AndroidManifest.xml').getroot().find('application')
         self.assertEqual(app.get(android+'allowBackup'),'false')

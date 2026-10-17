@@ -1,4 +1,4 @@
-//! Native Android client. One identity/endpoint shared by pairing, catalogs and gateway.
+//! Shared peer browser client. One identity/endpoint shared by pairing, catalogs and gateway.
 pub mod gateway;
 use iroh::Endpoint;
 use serde_json::{Value, json};
@@ -49,6 +49,20 @@ fn peer(value: &Value) -> Result<EndpointId, String> {
         .map_err(|_| "Invalid host pin".into())
 }
 impl Client {
+    pub fn from_endpoint(
+        endpoint: Endpoint,
+        key: SecretKey,
+        state: PathBuf,
+        config: TransportConfig,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            endpoint,
+            key,
+            state,
+            config,
+            gateway: gateway::Gateways::default(),
+        })
+    }
     pub async fn new(
         key: SecretKey,
         state: PathBuf,
@@ -69,8 +83,7 @@ impl Client {
         }))
     }
     pub async fn catalog(&self, host: EndpointId) -> Result<Value, String> {
-        let target = wipsnet_agent::tunnel::peer_target(host, Some(&self.config), None)
-            .map_err(|e| e.to_string())?;
+        let target = self.target(host)?;
         let connection = wipsnet_agent::control::connect_target(&self.endpoint, target)
             .await
             .map_err(|e| e.to_string())?;
@@ -81,10 +94,16 @@ impl Client {
         serde_json::to_value(result?).map_err(|_| "Invalid catalog".into())
     }
     pub fn target(&self, host: EndpointId) -> Result<iroh::EndpointAddr, String> {
-        wipsnet_agent::tunnel::peer_target(host, Some(&self.config), None)
-            .map_err(|e| e.to_string())
+        wipsnet_agent::tunnel::peer_target(
+            host,
+            Some(&self.config),
+            wipsnet_agent::peers::load(&self.state, host)
+                .map_err(|_| "Invalid saved host")?
+                .and_then(|p| p.direct_hint),
+        )
+        .map_err(|e| e.to_string())
     }
-    async fn command(self: &Arc<Self>, value: &Value) -> Result<Value, String> {
+    pub async fn command(self: &Arc<Self>, value: &Value) -> Result<Value, String> {
         match argument(value, "op")? {
             "identity" => Ok(json!({"peer":self.endpoint.id().to_string()})),
             "preview_invitation" => {
@@ -117,7 +136,10 @@ impl Client {
                     &invitation,
                     &self.config,
                     &self.key,
-                    "Wispnet Android",
+                    value
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("Wispnet Android"),
                 )
                 .await
                 .map_err(|e| e.to_string())?;
@@ -215,21 +237,4 @@ pub fn call(text: &str) -> String {
             json!({"ok":false,"error":error,"code":code}).to_string()
         }
     }
-}
-#[cfg(target_os = "android")]
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_com_biplabs_wispnet_Native_call(
-    mut env: jni::JNIEnv,
-    _class: jni::objects::JClass,
-    input: jni::objects::JString,
-) -> jni::sys::jstring {
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let input: zeroize::Zeroizing<String> =
-            zeroize::Zeroizing::new(env.get_string(&input).map(|s| s.into()).unwrap_or_default());
-        call(&input)
-    }))
-    .unwrap_or_else(|_| "{\"ok\":false,\"error\":\"Native operation failed\"}".into());
-    env.new_string(result)
-        .map(|s| s.into_raw())
-        .unwrap_or(std::ptr::null_mut())
 }

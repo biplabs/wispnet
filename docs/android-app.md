@@ -8,7 +8,7 @@ Requirements: Rust with `aarch64-linux-android`, Android SDK platform 36, NDK 27
 
 ```sh
 scripts/build_android.sh
-adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+adb install -r apps/android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
 The APK currently targets API 36, builds for arm64 by default (optional x86_64 for emulator acceptance), and uses the configured public relay `https://relay.wispnet.app`.
@@ -31,10 +31,10 @@ Catalog refreshes run independently. Cached listings show their age/status and c
 ```sh
 scripts/test.sh
 # Build the instrumentation APK after building the app:
-cd android
+cd apps/android
 ./gradlew --no-daemon assembleDebugAndroidTest
 cd ..
-adb install -r android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+adb install -r apps/android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 python3 scripts/test_android_app.py --serial DEVICE_SERIAL
 # Recheck persisted pairings without issuing new invitations:
 python3 scripts/test_android_app.py --serial DEVICE_SERIAL --resume
@@ -87,12 +87,12 @@ The physical permission harness uses a separately installed `app.wispnet.android
 
 ```sh
 scripts/build_android.sh
-cd android
+cd apps/android
 ANDROID_HOME="$HOME/Android/Sdk" JAVA_HOME=/opt/android-studio/jbr ./gradlew --no-daemon \
   assemblePeercheck assemblePeercheckAndroidTest -PwispnetTestBuildType=peercheck
 cd ..
-adb install -r android/app/build/outputs/apk/peercheck/app-peercheck.apk
-adb install -r android/app/build/outputs/apk/androidTest/peercheck/app-peercheck-androidTest.apk
+adb install -r apps/android/app/build/outputs/apk/peercheck/app-peercheck.apk
+adb install -r apps/android/app/build/outputs/apk/androidTest/peercheck/app-peercheck-androidTest.apk
 python3 scripts/test_android_peers.py --serial DEVICE_SERIAL
 ```
 
@@ -128,13 +128,13 @@ The isolated API 35 x86_64 emulator check uses Android's documented `FGS_INTRODU
 ```sh
 # On a disposable, already-running API 35 x86_64 emulator:
 WIPSNET_ANDROID_ABI=x86_64 scripts/build_android.sh
-cd android
+cd apps/android
 ANDROID_HOME="$HOME/Android/Sdk" JAVA_HOME=/opt/android-studio/jbr ./gradlew --no-daemon \
   assemblePeercheck assemblePeercheckAndroidTest \
   -PwispnetTestBuildType=peercheck -PwispnetAndroidAbi=x86_64
 cd ..
-adb -s emulator-5584 install -r android/app/build/outputs/apk/peercheck/app-peercheck.apk
-adb -s emulator-5584 install -r android/app/build/outputs/apk/androidTest/peercheck/app-peercheck-androidTest.apk
+adb -s emulator-5584 install -r apps/android/app/build/outputs/apk/peercheck/app-peercheck.apk
+adb -s emulator-5584 install -r apps/android/app/build/outputs/apk/androidTest/peercheck/app-peercheck-androidTest.apk
 python3 scripts/test_android15_timeout.py --serial emulator-5584
 # Rebuild with the default arm64 ABI before installing on the physical tablet.
 scripts/build_android.sh

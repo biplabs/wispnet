@@ -12,7 +12,7 @@ devices; devices can only publish addresses for their assigned services.
 
 ## Bootstrap and deployment
 
-1. Copy `config/registry.toml`, replace the state path and choose the mesh name.
+1. Copy `config/node/registry.toml`, replace the state path and choose the mesh name.
    Use a dedicated OS account and a trusted local filesystem. Run:
 
    ```sh
@@ -61,7 +61,7 @@ devices; devices can only publish addresses for their assigned services.
    This deployment recipe has not been exercised against a public domain in
    this repository's tests. No domain or cloud resources are provisioned by the CLI.
 
-3. Copy `config/controller.toml` onto each device. The controller HTTPS origin
+3. Copy `config/node/controller.toml` onto each device. The controller HTTPS origin
    and device credential are provisioned out of band. They do not depend on the
    private service directory, avoiding a bootstrap cycle. The Rust client uses
    its certificate trust roots, verifies the hostname, requires HTTPS, ignores

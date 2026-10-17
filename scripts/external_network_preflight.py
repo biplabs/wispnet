@@ -26,7 +26,7 @@ def main():
     try:
         tablet('mkdir','-m','700',remote);created=True
         with tempfile.TemporaryDirectory(prefix='wipsnet-external-probe-') as temporary:
-            binary=Path(temporary)/'probe';shutil.copyfile(ROOT/'target/aarch64-linux-android/debug/examples/external_network_probe',binary)
+            binary=Path(temporary)/'probe';shutil.copyfile(ROOT/'target/aarch64-linux-apps/android/debug/examples/external_network_probe',binary)
             run([Path.home()/'Android/Sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip',binary])
             adb('push',binary,remote+'/probe')
         tablet('chmod','700',remote+'/probe')

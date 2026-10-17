@@ -91,7 +91,7 @@ def main():
     sources = {
         "wipsnet_agent": root / "crates/agent/src/lib.rs",
         "host_control": root / "crates/agent/tests/host_control.rs",
-        "relay_cli": root / "crates/cli/tests/relay_cli.rs",
+        "relay_cli": root / "apps/node/cli/tests/relay_cli.rs",
         "pairing": root / "crates/agent/tests/pairing.rs",
     }
     binaries = {}

@@ -1,8 +1,10 @@
 /target/
-/spikes/browser/.venv/
+/experiments/browser/.venv/
 __pycache__/
 
 # Never commit Android upload signing credentials.
 *.jks
 *.keystore
 keystore.properties
+
+/apps/node/desktop/.venv/

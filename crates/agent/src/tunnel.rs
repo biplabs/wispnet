@@ -53,8 +53,12 @@ impl std::error::Error for TunnelError {}
 pub struct ActiveCounts {
     connections: Arc<AtomicUsize>,
     streams: Arc<AtomicUsize>,
+    peers: Arc<std::sync::Mutex<std::collections::BTreeMap<String, usize>>>,
 }
 impl ActiveCounts {
+    pub fn peers(&self) -> std::collections::BTreeMap<String, usize> {
+        self.peers.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
     pub fn connections(&self) -> usize {
         self.connections.load(Ordering::Relaxed)
     }
@@ -72,6 +76,33 @@ impl CountGuard {
 impl Drop for CountGuard {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+struct PeerGuard {
+    counts: ActiveCounts,
+    peer: String,
+}
+impl PeerGuard {
+    fn new(counts: ActiveCounts, peer: EndpointId) -> Self {
+        let peer = peer.to_string();
+        *counts
+            .peers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(peer.clone())
+            .or_default() += 1;
+        Self { counts, peer }
+    }
+}
+impl Drop for PeerGuard {
+    fn drop(&mut self) {
+        let mut peers = self.counts.peers.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = peers.get_mut(&self.peer) {
+            *count -= 1;
+            if *count == 0 {
+                peers.remove(&self.peer);
+            }
+        }
     }
 }
 struct CloseConnection(Connection);
@@ -267,6 +298,7 @@ async fn serve(
                         connection.close((Status::Denied as u32).into(), b"access denied");
                         return;
                     }
+                    let _peer = PeerGuard::new(counts.clone(), peer);
                     serve_connection(connection, peer, services, streams, max, counts).await;
                 });
             }

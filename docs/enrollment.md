@@ -37,7 +37,7 @@ on the controller/owner workstation. A normal device never receives it.
    services. A QR transport can encode exactly this JSON; no QR generator or
    camera dependency is required by this implementation.
 
-2. On the device, copy `config/controller.toml`, set its local state path, a
+2. On the device, copy `config/node/controller.toml`, set its local state path, a
    human-readable name, and the exact controller HTTPS origin. The invitation
    must match that configured origin. Save the received JSON in a 0600 file:
 

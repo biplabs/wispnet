@@ -1,0 +1,223 @@
+"""Real two-node IPC, permission, browser-gateway and live-connection integration."""
+
+import importlib.util
+import json
+import os
+from pathlib import Path
+import signal
+import socket
+import subprocess
+import tempfile
+import time
+import unittest
+import urllib.request
+import threading
+import http.server
+
+ROOT = Path(__file__).resolve().parents[1]
+spec = importlib.util.spec_from_file_location(
+    "node_api", ROOT / "apps/node/desktop/wispnet_desktop/api.py"
+)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+BINARY = ROOT / "target/debug/wipsnet"
+
+
+class NodeIntegration(unittest.TestCase):
+    def test_private_api_pair_catalog_gateway_counts_and_revision(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            processes = []
+
+            def cli(config, *args):
+                return subprocess.run(
+                    [BINARY, args[0], "--config", config, *args[1:]],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    timeout=15,
+                ).stdout
+
+            def host(name):
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+                    udp.bind(("127.0.0.1", 0))
+                    port = udp.getsockname()[1]
+                config = root / (name + ".toml")
+                state = root / name
+                config.write_text(
+                    f'schema_version=2\ndevice_name="{name}"\nstate_dir="{state}"\nlog_level="info"\n[transport]\nbind_addr="127.0.0.1:{port}"\nrelay_url="https://relay.example"\n'
+                )
+                peer = cli(config, "host-init").split("Endpoint ID: ")[1].strip()
+                process = subprocess.Popen(
+                    [BINARY, "agent", "--config", config],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                processes.append(process)
+                deadline = time.monotonic() + 10
+                while not (state / "node.sock").exists():
+                    self.assertIsNone(process.poll())
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(0.05)
+                self.assertEqual((state / "node.sock").stat().st_mode & 0o777, 0o600)
+                return config, state, peer, port, module.NodeAPI(config)
+
+            release = threading.Event()
+
+            class Backend(http.server.BaseHTTPRequestHandler):
+                def do_GET(self):
+                    self.send_response(200)
+                    self.end_headers()
+                    if self.path == "/hold":
+                        release.wait(8)
+                    self.wfile.write(b"node-gateway-ok")
+
+                def log_message(self, *args):
+                    pass
+
+            backend = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Backend)
+            thread = threading.Thread(target=backend.serve_forever, daemon=True)
+            thread.start()
+            try:
+                a, sa, pa, porta, api = host("a")
+                b, sb, pb, portb, bapi = host("b")
+                self.assertEqual(api.request(op="status")["connected_peers"], {})
+                self.assertEqual(bapi.request(op="status")["host"]["clients"], [])
+                with self.assertRaises(ValueError):
+                    api.request(op="shell", command="echo bad")
+                with self.assertRaises(ValueError):
+                    api.request(op="catalog", host=pb)
+                invitation_file = root / "invitation.json"
+                cli(b, "host-invite", "--output", invitation_file)
+                invitation = json.loads(invitation_file.read_text())
+                invitation["direct_hint"] = f"127.0.0.1:{portb}"
+                self.assertEqual(
+                    api.request(op="pair", host=pb, invitation=json.dumps(invitation))[
+                        "state"
+                    ],
+                    "pending_owner_approval",
+                )
+                pending = bapi.request(op="status")
+                self.assertEqual(pending["host"]["clients"], [])
+                self.assertEqual(pending["invitations"][0]["peer"], pa)
+                bapi.request(
+                    op="mutate",
+                    operation={
+                        "op": "approve_invitation",
+                        "expected_revision": 0,
+                        "invitation": invitation["invitation"],
+                    },
+                )
+                bapi.request(
+                    op="mutate",
+                    operation={
+                        "op": "service",
+                        "expected_revision": 1,
+                        "id": "website",
+                        "backend": f"127.0.0.1:{backend.server_port}",
+                        "allow": [pa],
+                    },
+                )
+                with self.assertRaises(ValueError):
+                    bapi.request(
+                        op="mutate",
+                        operation={
+                            "op": "remove",
+                            "expected_revision": 0,
+                            "id": "website",
+                        },
+                    )
+                # Pairing persisted only the protected target pin, not invitation capabilities.
+                pin = sa / "peer-pins" / (pb + ".json")
+                self.assertEqual(pin.stat().st_mode & 0o777, 0o600)
+                self.assertNotIn(invitation["code"], pin.read_text())
+                catalog = api.request(op="catalog", host=pb)
+                self.assertEqual(catalog["host"], pb)
+                self.assertEqual(catalog["services"], [{"id": "website"}])
+                api.request(op="enable")
+                url = api.request(op="open", host=pb, service="website")["url"]
+                from urllib.parse import urlsplit
+
+                parsed = urlsplit(url)
+
+                def exchange(path, headers=None, body=None):
+                    import http.client
+
+                    conn = http.client.HTTPConnection(
+                        "127.0.0.1", parsed.port, timeout=10
+                    )
+                    conn.request(
+                        "POST" if body is not None else "GET",
+                        path,
+                        body=body,
+                        headers={"Host": parsed.netloc, **(headers or {})},
+                    )
+                    response = conn.getresponse()
+                    data = response.read()
+                    result = (response.status, dict(response.getheaders()), data)
+                    conn.close()
+                    return result
+
+                self.assertEqual(exchange("/")[0], 401)
+                status, headers, _ = exchange(
+                    "/_wipsnet/session",
+                    {
+                        "Origin": "http://" + parsed.netloc,
+                        "Authorization": "Bearer " + parsed.fragment,
+                    },
+                    b"",
+                )
+                self.assertEqual(status, 204)
+                cookie = headers["Set-Cookie"].split(";")[0]
+                self.assertEqual(
+                    exchange("/", {"Cookie": cookie})[2], b"node-gateway-ok"
+                )
+                # Hold a real service stream open and distinguish approved from connected.
+                responses = []
+                held = threading.Thread(
+                    target=lambda: responses.append(
+                        exchange("/hold", {"Cookie": cookie})
+                    ),
+                    daemon=True,
+                )
+                held.start()
+                try:
+                    deadline = time.monotonic() + 8
+                    while pa not in bapi.request(op="status")["connected_peers"]:
+                        self.assertLess(time.monotonic(), deadline)
+                        time.sleep(0.05)
+                    self.assertGreaterEqual(
+                        bapi.request(op="status")["connected_peers"][pa], 1
+                    )
+                finally:
+                    release.set()
+                    held.join(timeout=10)
+                self.assertEqual(responses[0][2], b"node-gateway-ok")
+                deadline = time.monotonic() + 8
+                while bapi.request(op="status")["connected_peers"]:
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(0.05)
+                self.assertEqual(len(bapi.request(op="status")["host"]["clients"]), 1)
+                api.request(op="stop")
+                self.assertFalse(api.request(op="access_status")["enabled"])
+                with self.assertRaises(OSError):
+                    socket.create_connection(("127.0.0.1", parsed.port), timeout=1)
+                badpath = sa / "node.sock"
+                badpath.chmod(0o666)
+                with self.assertRaises(ValueError):
+                    api.request(op="status")
+                badpath.chmod(0o600)
+            finally:
+                for p in processes:
+                    p.send_signal(signal.SIGINT)
+                for p in processes:
+                    p.wait(timeout=10)
+                backend.shutdown()
+                backend.server_close()
+                thread.join(timeout=5)
+            self.assertFalse((sa / "node.sock").exists())
+            self.assertFalse((sb / "node.sock").exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

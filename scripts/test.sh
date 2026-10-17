@@ -9,7 +9,7 @@ if [ -n "${WIPSNET_SSH_RELAY_HOST:-}" ] && [ "${WIPSNET_ANDROID_RELAY_TEST:-0}" 
     echo "Physical SSH/tablet checks require WIPSNET_ANDROID_RELAY_TEST=1 to rebuild the current Android CLI." >&2
     exit 1
 fi
-node --test sites/relay-compatibility/test/*.test.js
+node --test experiments/relay-compatibility/test/*.test.js
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
@@ -21,6 +21,8 @@ python3 scripts/standalone_relay_smoke.py
 python3 scripts/smoke.py
 python3 scripts/registry_smoke.py
 python3 scripts/host_smoke.py
+python3 scripts/test_node_desktop.py
+QT_QPA_PLATFORM=offscreen uv run --project apps/node/desktop --locked python -m unittest discover -s apps/node/desktop/tests
 python3 -m unittest discover -s scripts -p test_android_release.py
 python3 -m unittest discover -s scripts -p test_android_publish.py
 uv run --with qrcode==8.2 python -m unittest discover -s scripts -p test_pairing_qr.py
@@ -40,7 +42,7 @@ if [ -n "${WIPSNET_SSH_RELAY_HOST:-}" ]; then
     python3 scripts/physical_relay_smoke.py --ssh-host "$WIPSNET_SSH_RELAY_HOST"
 fi
 python3 scripts/tunnel_smoke.py
-uv run --project spikes/browser --locked python -m unittest discover -s spikes/browser -p 'test_*.py'
+uv run --project experiments/browser --locked python -m unittest discover -s experiments/browser -p 'test_*.py'
 
 # Opt in on Linux hosts with namespaces, nftables and strace. An explicitly
 # requested network audit fails if unavailable; it is never silently skipped.

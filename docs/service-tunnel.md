@@ -8,7 +8,7 @@ HTTP-aware security boundary.
 ## Try two Linux processes
 
 Build with cargo build --workspace --locked. Prepare a host config from
-config/tunnel-host.toml and a client config from config/example.toml. Set different
+config/node/tunnel-host.toml and a client config from config/node/example.toml. Set different
 absolute state directories and config paths; initialize each independently:
 
     target/debug/wipsnet identity-init --config /absolute/host.toml

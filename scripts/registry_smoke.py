@@ -24,7 +24,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--android", action="store_true")
 args = parser.parse_args()
 binary = Path("target/debug/wipsnet").resolve()
-android_binary = Path("target/aarch64-linux-android/debug/wipsnet").resolve()
+android_binary = Path("target/aarch64-linux-apps/android/debug/wipsnet").resolve()
 
 def run(command, **kwargs):
     result = subprocess.run(command, capture_output=True, text=True, timeout=30, **kwargs)
@@ -133,7 +133,7 @@ with tempfile.TemporaryDirectory(prefix="wipsnet-registry-") as temporary:
         return data
 
     def enroll_device(android=False):
-        platform = "android" if android else "linux"
+        platform = "apps/android" if android else "linux"
         invitation_file = root / (platform + "-invitation.json")
         invite_request = root / (platform + "-invite-request.json")
         invite_request.write_text('{"op":"invite","ttl_seconds":600}')

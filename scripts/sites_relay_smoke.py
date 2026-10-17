@@ -33,7 +33,7 @@ def main():
     remote = '/tmp/wipsnet-sites-' + suffix
     device = '/data/local/tmp/wipsnet-sites-' + suffix
     binary = ROOT / 'target/debug/examples/sites_relay_probe'
-    android = ROOT / 'target/aarch64-linux-android/debug/examples/sites_relay_probe'
+    android = ROOT / 'target/aarch64-linux-apps/android/debug/examples/sites_relay_probe'
     assert binary.is_file() and android.is_file()
     def ssh(*command):
         return [*SSH, args.ssh_host, shlex.join(command)]
@@ -51,7 +51,7 @@ def main():
             import shutil
             native = Path(tmp)/'probe';shutil.copyfile(binary,native)
             run(['strip','--strip-debug',native])
-            arm = Path(tmp)/'android';shutil.copyfile(android,arm)
+            arm = Path(tmp)/'apps/android';shutil.copyfile(android,arm)
             run([Path.home()/'Android/Sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip',arm])
             run(['scp','-q','-o','BatchMode=yes','-o','StrictHostKeyChecking=yes',native,args.ssh_host+':'+remote+'/probe'])
             run(adb('push',arm,device+'/probe'))

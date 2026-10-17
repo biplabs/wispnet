@@ -10,7 +10,7 @@ remain open. Direct UDP and explicit TLS relay paths are tested locally; see
 
 ## Initialize each host independently
 
-Copy `config/host.toml` and choose that installation's own state path and UDP bind.
+Copy `config/node/host.toml` and choose that installation's own state path and UDP bind.
 Do not copy another installation's identity, owner token or authority database.
 For a direct LAN fixture choose an explicit reachable bind address; loopback is
 appropriate for local development. No public home HTTP listener, Caddy, ACME or

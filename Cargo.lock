@@ -4354,15 +4354,8 @@ dependencies = [
 name = "wipsnet-android"
 version = "0.1.0"
 dependencies = [
- "httparse",
- "iroh",
  "jni 0.21.1",
- "serde_json",
- "tempfile",
- "tokio",
- "wipsnet-agent",
- "wipsnet-core",
- "wipsnet-registry",
+ "wipsnet-client",
  "zeroize",
 ]
 
@@ -4388,6 +4381,22 @@ dependencies = [
  "webpki-roots",
  "wipsnet-agent",
  "wipsnet-core",
+ "wipsnet-node",
+ "wipsnet-registry",
+ "zeroize",
+]
+
+[[package]]
+name = "wipsnet-client"
+version = "0.1.0"
+dependencies = [
+ "httparse",
+ "iroh",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "wipsnet-agent",
+ "wipsnet-core",
  "wipsnet-registry",
  "zeroize",
 ]
@@ -4402,6 +4411,21 @@ dependencies = [
  "toml",
  "url",
  "zeroize",
+]
+
+[[package]]
+name = "wipsnet-node"
+version = "0.1.0"
+dependencies = [
+ "iroh",
+ "libc",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "wipsnet-agent",
+ "wipsnet-client",
+ "wipsnet-core",
+ "wipsnet-registry",
 ]
 
 [[package]]

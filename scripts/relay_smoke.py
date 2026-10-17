@@ -214,7 +214,7 @@ def main():
             linux_id = identity(local("identity-init", linux_config))
             clients.append(("Linux", local_client, linux_config, linux_id))
             if args.android:
-                android_binary = ROOT / "target/aarch64-linux-android/debug/wipsnet"
+                android_binary = ROOT / "target/aarch64-linux-apps/android/debug/wipsnet"
                 assert android_binary.is_file(), "build the Android CLI before requesting --android"
                 strip = args.ndk / "toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
                 assert strip.is_file(), "set --ndk to the Android NDK directory"

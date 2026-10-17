@@ -2,7 +2,7 @@
 
 On 2026-10-16 a private Worker ESM Site was deployed at
 https://wispnet-relay-compatibility.chirpy-tiger-6433.chatgpt.site.
-Its source is `sites/relay-compatibility`; its opaque project identity is tracked
+Its source is `experiments/relay-compatibility`; its opaque project identity is tracked
 in that directory's `.openai/hosting.json`. The platform service token is not
 tracked or written to a file. The production Wispnet relay configuration is
 unchanged.
@@ -90,7 +90,7 @@ Cloudflare Workers features are automatically available in Sites:
 2. A standard Cloudflare `durable_objects.bindings` declaration naming
    `RELAY_ROOMS` / `RelayRoom`, with the required new-class registration, was
    submitted in the deployment manifest. The exact extra fields are retained in
-   `sites/relay-compatibility/durable-objects.probe.json` as a **rejected probe**,
+   `experiments/relay-compatibility/durable-objects.probe.json` as a **rejected probe**,
    not active Sites configuration. Sites rejected the archive before deployment:
    `Invalid dist/.openai/hosting.json: Extra inputs are not permitted`
    (`INVALID_ARGUMENT`, `invalid_archive`, HTTP 400). No deployment or saved

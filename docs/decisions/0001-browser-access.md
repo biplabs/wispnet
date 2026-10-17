@@ -97,7 +97,7 @@ flag with transport encryption or declare plaintext sessions production-safe.
 ## Reproduce and references
 
 See [browser compatibility matrix](../browser-compatibility.md) and the disposable
-[spike](../../spikes/browser/README.md). Normative browser behavior is informed by
+[spike](../../experiments/browser/README.md). Normative browser behavior is informed by
 [HTTP cookies](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Cookies),
 [Origin](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Origin)
 and [Fetch Metadata](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Sec-Fetch-Site).

@@ -39,7 +39,7 @@ for item in sys.argv[1:]:
             status=call([binary,'host-status','--config',config])
         host=json.loads(status.stdout)['host']
         unit=home+'/.config/systemd/user/wipsnet-host.service'
-        call(['python3','-c',"import os,sys; p=sys.argv[1]; f=os.open(p,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600);os.write(f,sys.stdin.buffer.read());os.close(f)",unit],input=(ROOT/'deploy/wipsnet-host.service').read_text())
+        call(['python3','-c',"import os,sys; p=sys.argv[1]; f=os.open(p,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600);os.write(f,sys.stdin.buffer.read());os.close(f)",unit],input=(ROOT/'deploy/node/wipsnet-host.service').read_text())
         call(['systemctl','--user','daemon-reload']);call(['systemctl','--user','enable','wipsnet-host.service']);call(['systemctl','--user','restart','wipsnet-host.service']);call(['systemctl','--user','is-active','wipsnet-host.service'])
         records.append({'host':host,'name':'Desktop' if remote else 'Local computer','remote':remote,'config':config,'binary':binary,'state':state})
     Path('/tmp/wispnet-app-hosts.json').write_text(json.dumps(records))

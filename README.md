@@ -10,6 +10,19 @@ Wipsnet brings your self-hosted services into one directory and makes them acces
 
 > **Status: development implementation.** An installable native Android app now provides independent host pairing, an aggregated service directory, Start/Stop browser access, and normal-browser handoff. See the [Android build and usage guide](docs/android-app.md). Full lifecycle, network-transition, and gateway release acceptance remain tracked in [#12](https://github.com/biplabs/wispnet/issues/12) and [#10](https://github.com/biplabs/wispnet/issues/10); this is not a production-ready v1 release. [ADR 0002](docs/decisions/0002-per-host-authority.md) records the architecture.
 
+## Repository layout
+
+- `apps/node/daemon`: running Linux node and private desktop API.
+- `apps/node/cli`: owner commands and the node executable.
+- `apps/node/desktop`: Qt desktop window and KDE system tray.
+- `apps/relay`: separate disposable packet relay server.
+- `apps/android`: Android app, Gradle wrapper and thin Rust JNI adapter in `native/`.
+- `crates/core`, `crates/agent`, `crates/registry`, `crates/client`: shared protocol, peer transport, host-local authority and protected browser client/gateway.
+- `deploy/node`, `deploy/relay`, `config/node`: deployment and example configuration.
+- `experiments/`: browser and Sites compatibility investigations.
+
+[Linux desktop/tray setup](docs/linux-desktop.md). Installed service names, state paths and Android package ID stay unchanged by the source reorganization.
+
 ## Why Wipsnet?
 
 You run a website on one computer and a `llama.cpp` server on another. Both should appear in one place and work from either computer or your phone, whether you are at home, at a coffee shop, or using cellular data.
@@ -146,7 +159,7 @@ Restoring Machine 1 must not reset Machine 2, require its approval, or block it 
 
 ## Browser and application security
 
-The [browser spike](spikes/browser/README.md), [ADR 0001](docs/decisions/0001-browser-access.md), and [evidence matrix](docs/browser-compatibility.md) establish the tested browser direction: service-specific hostnames and an HTTP-aware session/origin boundary. Per-host authority does not make an unrestricted local byte proxy safe.
+The [browser spike](experiments/browser/README.md), [ADR 0001](docs/decisions/0001-browser-access.md), and [evidence matrix](docs/browser-compatibility.md) establish the tested browser direction: service-specific hostnames and an HTTP-aware session/origin boundary. Per-host authority does not make an unrestricted local byte proxy safe.
 
 Bind gateways only to loopback, authenticate browser/API sessions, validate exact Host and appropriate Origin/Fetch Metadata, protect WebSocket upgrades, and strip gateway credentials before forwarding. Different ports are not cookie isolation. Local service origins and sessions must be bound to the full host/service identity, so two peers publishing `llama` cannot collide or reuse each other's browser authority.
 

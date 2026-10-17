@@ -1,7 +1,7 @@
 # Development foundation (#3)
 
 The current [independent-host checkpoint](per-host-control.md) uses
-`config/host.toml` (`schema_version = 2`). Schema-1 HTTPS/registry examples below
+`config/node/host.toml` (`schema_version = 2`). Schema-1 HTTPS/registry examples below
 are preserved legacy foundations. #13/#17 still own relay/pairing integration.
 
 The Rust workspace provides configuration checking and Linux agent/registry
@@ -65,13 +65,13 @@ or background execution. Android integration and physical-device validation rema
 
 ## Run
 
-Copy config/example.toml to an absolute path and edit state_dir to a private
+Copy config/node/example.toml to an absolute path and edit state_dir to a private
 absolute directory, for example /home/YOUR_USER/.local/state/wipsnet/agent.
 Use distinct config/state paths for agent and registry.
 
 ```sh
 mkdir -p "$HOME/.config/wipsnet"
-cp config/example.toml "$HOME/.config/wipsnet/agent.toml"
+cp config/node/example.toml "$HOME/.config/wipsnet/agent.toml"
 # Edit state_dir before running.
 cargo run -p wipsnet-cli -- check --config "$HOME/.config/wipsnet/agent.toml"
 cargo run -p wipsnet-cli -- identity-init --config "$HOME/.config/wipsnet/agent.toml"
@@ -82,7 +82,7 @@ cargo run -p wipsnet-cli -- agent --config "$HOME/.config/wipsnet/agent.toml"
 Ctrl-C or SIGTERM stops the process. Use registry instead of agent with its own
 configuration to run the registry shell. Agent networking is opt-in through a
 validated transport section; the default example stays offline. See the
-[service tunnel guide](service-tunnel.md) and config/tunnel-host.toml.
+[service tunnel guide](service-tunnel.md) and config/node/tunnel-host.toml.
 There is no installed systemd service yet.
 
 ## Configuration and logging

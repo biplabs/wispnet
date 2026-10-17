@@ -221,7 +221,7 @@ impl Config {
         if text.len() > 65536 {
             return Err(ConfigError("configuration exceeds 64 KiB"));
         }
-        let config: Self = toml::from_str(text).map_err(|_| ConfigError("invalid TOML or schema; expected base fields and optional transport/services (see config/example.toml)"))?;
+        let config: Self = toml::from_str(text).map_err(|_| ConfigError("invalid TOML or schema; expected base fields and optional transport/services (see config/node/example.toml)"))?;
         if !matches!(config.schema_version, 1 | 2) {
             return Err(ConfigError(
                 "schema_version must be 1 (legacy) or 2 (independent host)",
@@ -253,7 +253,7 @@ impl Config {
                 || !config.services.is_empty())
         {
             return Err(ConfigError(
-                "independent hosts require transport and durable local authority; controller/registry/static services are not allowed; use config/host.toml with fresh host state",
+                "independent hosts require transport and durable local authority; controller/registry/static services are not allowed; use config/node/host.toml with fresh host state",
             ));
         }
         if let Some(transport) = &config.transport {

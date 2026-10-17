@@ -88,7 +88,7 @@ def main():
     if args.require_external_tablet: external_preflight()
     assert args.ssh_host and not args.ssh_host.startswith("-") and all(c.isalnum() or c in ".-_@" for c in args.ssh_host)
     assert BINARY.is_file() and FIXTURE.is_file()
-    android_binary = ROOT / "target/aarch64-linux-android/debug/wipsnet"
+    android_binary = ROOT / "target/aarch64-linux-apps/android/debug/wipsnet"
     assert android_binary.is_file(), "build and validate the current Android CLI first"
     suffix = uuid.uuid4().hex
     remote_root = "/tmp/wipsnet-physical-" + suffix

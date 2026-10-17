@@ -182,7 +182,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         "host-init" | "host-status" | "host-mutate" | "host-invite" | "host-invitations"
     ) {
         if config.schema_version != 2 {
-            return Err("host commands require schema_version=2; use config/host.toml".into());
+            return Err("host commands require schema_version=2; use config/node/host.toml".into());
         }
         if mode == "host-init" {
             config.prepare_state()?;
@@ -626,6 +626,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 .with_filter(
                     tracing_subscriber::filter::Targets::new()
                         .with_target("wipsnet_agent", level)
+                        .with_target("wipsnet_node", level)
                         .with_target("wipsnet_cli", level)
                         .with_target("wipsnet_registry", level),
                 ),
@@ -639,7 +640,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         tokio::select! { _ = term.recv() => {}, _ = interrupt.recv() => {} }
     };
     match mode {
-        "agent" => wipsnet_agent::run(&config, shutdown).await?,
+        "agent" => wipsnet_node::run(&config, shutdown).await?,
         "registry" => wipsnet_registry::run(&config, shutdown).await?,
         "tunnel" => {
             let (peer, address, service) = target.ok_or("missing tunnel target")?;

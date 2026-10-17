@@ -31,8 +31,8 @@ case "$android_profile:$android_artifact" in
   *) echo 'Supported builds: debug/apk, release/apk, release/bundle' >&2; exit 1 ;;
 esac
 cargo build -p wipsnet-android --target "$native_target" --locked "${cargo_flags[@]}"
-mkdir -p "android/app/src/main/jniLibs/$android_abi"
-cp "target/$native_target/$android_profile/libwipsnet_android.so" "android/app/src/main/jniLibs/$android_abi/"
-"$ndk_bin/llvm-strip" --strip-debug "android/app/src/main/jniLibs/$android_abi/libwipsnet_android.so"
-cd android
+mkdir -p "apps/android/app/src/main/jniLibs/$android_abi"
+cp "target/$native_target/$android_profile/libwipsnet_android.so" "apps/android/app/src/main/jniLibs/$android_abi/"
+"$ndk_bin/llvm-strip" --strip-debug "apps/android/app/src/main/jniLibs/$android_abi/libwipsnet_android.so"
+cd apps/android
 ./gradlew --no-daemon "$gradle_task" "-PwispnetAndroidAbi=$android_abi" "-PwispnetVersionCode=${WIPSNET_ANDROID_VERSION_CODE:-1}" "-PwispnetVersionName=${WIPSNET_ANDROID_VERSION_NAME:-0.1.0}"

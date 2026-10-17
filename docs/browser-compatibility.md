@@ -79,5 +79,5 @@ remain explicit #10 compatibility gates. Before release, run the real Iroh/direc
 #5/#10/#12/#13/#14. USB loopback forwarding is not the product's network access path.
 
 Reproduction commands and fixture controls are in the
-[spike guide](../spikes/browser/README.md). The nine automated boundary tests are
+[spike guide](../experiments/browser/README.md). The nine automated boundary tests are
 part of the local pre-push hook and do not depend on live GIKE, llama or a device.
