@@ -33,6 +33,20 @@ if node_changed:
     shutil.copy2(ROOT / "target/debug/wipsnet", node_temporary)
     node_temporary.chmod(0o755)
     os.replace(node_temporary, node_binary)
+# The headless command shares the existing node API and needs only Python stdlib.
+api_package = node_binary.parent / "wispnet_desktop"
+api_package.mkdir(exist_ok=True)
+for name in ["__init__.py", "api.py"]:
+    shutil.copy2(ROOT / "apps/node/desktop/wispnet_desktop" / name, api_package / name)
+shutil.copy2(ROOT / "scripts/node_request.py", node_binary.parent / "node_request.py")
+node_launcher = home / ".local/bin/wispnet-node"
+node_launcher.parent.mkdir(parents=True, exist_ok=True)
+node_launcher.write_text(
+    "#!/usr/bin/env python3\nimport os,sys\nos.execv(sys.executable, [sys.executable, "
+    + repr(str(node_binary.parent / "node_request.py"))
+    + ",*sys.argv[1:]])\n"
+)
+node_launcher.chmod(0o755)
 subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
 subprocess.run(["systemctl", "--user", "enable", "wipsnet-host.service"], check=True)
 if (

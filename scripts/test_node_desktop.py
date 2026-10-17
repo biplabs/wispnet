@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import sys
 import socket
 import subprocess
 import tempfile
@@ -138,6 +139,49 @@ class NodeIntegration(unittest.TestCase):
                 catalog = api.request(op="catalog", host=pb)
                 self.assertEqual(catalog["host"], pb)
                 self.assertEqual(catalog["services"], [{"id": "website"}])
+                # The headless command reuses the daemon, without a key lease or Qt.
+                command = [
+                    sys.executable,
+                    ROOT / "scripts/node_request.py",
+                    "--config",
+                    a,
+                ]
+                environment = {
+                    **os.environ,
+                    "PYTHONPATH": str(ROOT / "apps/node/desktop"),
+                }
+                result = subprocess.run(
+                    command,
+                    input=json.dumps({"op": "catalog", "host": pb}),
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    env=environment,
+                    timeout=30,
+                )
+                self.assertEqual(json.loads(result.stdout), catalog)
+                result = subprocess.run(
+                    command,
+                    input="",
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    env=environment,
+                    timeout=30,
+                )
+                self.assertEqual(json.loads(result.stdout)["host"]["host"], pa)
+                for invalid in ["[]", "x" * 16385]:
+                    result = subprocess.run(
+                        command,
+                        input=invalid,
+                        capture_output=True,
+                        text=True,
+                        env=environment,
+                        timeout=5,
+                    )
+                    self.assertEqual(result.returncode, 1)
+                    self.assertEqual(result.stdout, "")
+
                 self.assertIn(pa, bapi.request(op="status")["recent_peers"])
                 api.request(op="enable")
                 url = api.request(op="open", host=pb, service="website")["url"]

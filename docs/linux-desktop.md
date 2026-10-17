@@ -23,11 +23,12 @@ The same installer automatically selects node-only mode when `graphical-session.
 ```sh
 python3 scripts/install_node_desktop.py --headless
 ~/.local/libexec/wipsnet-node/wipsnet host-status --config ~/.config/wipsnet-node/host.toml
-~/.local/libexec/wipsnet-node/wipsnet host-catalog --config ~/.config/wipsnet-node/host.toml --peer PINNED_HOST_ID
+# Query the running node without a second identity lease:
+printf '%s\n' '{"op":"catalog","host":"PINNED_HOST_ID"}' | ~/.local/bin/wispnet-node
 systemctl --user status wipsnet-host.service
 ```
 
-This mode installs/enables the node and preserves its existing configuration, identity and grants. It skips Qt, the desktop launcher and tray service; it does not require a display server or a graphical login. The node's owner-only socket, pairing/control/catalog and browser gateway remain available for headless clients and automation. Run the graphical mode later only if a desktop session is actually wanted. For unattended boot, the user service manager must run without a login (for example, an already enabled user linger setting); the installer does not change that host policy.
+This mode installs/enables the node and preserves its existing configuration, identity and grants. It skips Qt, the desktop launcher and tray service; it does not require a display server or a graphical login. The dependency-free `~/.local/bin/wispnet-node` command reads one bounded JSON request from stdin (an empty request returns status) and talks to the running node's owner-only socket. It verifies socket permissions and OS peer credentials. Pairing capabilities and other request material stay out of process arguments. Use operations such as `catalog`, `pair`, `mutate`, `enable`, `open` and `stop` from headless automation; `open` returns a protected browser bootstrap URL for the caller. Treat that URL as a short-lived secret. This reuses the daemon identity/endpoint; the older standalone `host-catalog`/`pairing-request` transport probes require a separate identity lease and are not the live-node management interface. Run the graphical mode later only if a desktop session is actually wanted. For unattended boot, the user service manager must run without a login (for example, an already enabled user linger setting); the installer does not change that host policy.
 
 ## Views and actions
 
@@ -51,6 +52,6 @@ The current catalog supplies service IDs, not richer descriptions or explicit we
 Installed the updated desktop/node on CachyOS/KDE (`j-strix`) and the same node on headless Ubuntu 24.04 (`desktop.home` / `j-desktop`). The remote host has no graphical session, no Wispnet tray unit or Qt app installation, and its already enabled user linger setting keeps the node independent of SSH sessions. Both nodes were independently paired and explicitly approved through their own local administration; each peer was added to the relevant existing service allowlists, preserving the phone/tablet grants and both host identities/generations.
 
 - Local GUI → headless host: a Qt interaction check using the installed desktop selected the actual remote `website` row and double-clicked it. The real private handoff HTML opened the remote WispShell site in Chromium with an HttpOnly gateway session. The GUI displayed the authenticated peer catalog and persisted its private snapshot.
-- Headless host → local computer: installed Firefox in headless mode, driven locally by its existing geckodriver, loaded the actual GIKE and Llama UIs through the headless node's protected browser gateway. The Llama health API returned HTTP 200 through that browser session. No display server, Qt GUI, USB forwarding or SSH port forwarding carried the service traffic.
+- Headless host → local computer: the existing Firefox installation, run headlessly through its existing geckodriver, loaded the actual GIKE and Llama UIs through the headless node's protected browser gateway. The Llama health API returned HTTP 200 through that browser session. No display server, Qt GUI, USB forwarding or SSH port forwarding carried the service traffic.
 
 Browser access returned to its original disabled setting on both nodes; temporary browser profiles, handoff files and test processes were cleaned. The paired peer identities and explicit grants remain for normal use. This proves physical GUI/headless peer browsing in both directions, not machine power-off, deployed relay replacement, a second visible GUI, or a new Llama generation/streaming run.
