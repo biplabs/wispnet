@@ -11,7 +11,7 @@ public final class AccessService extends Service {
  public static volatile String networkStatus="Access stopped";
  private final ExecutorService networkWork=Executors.newSingleThreadExecutor();
  private final Object networkLock=new Object();
- private boolean destroyed=false,worker=false;
+ private boolean destroyed=false,worker=false,starting=false;
  private long generation=0;
  private Network current;
  private ConnectivityManager manager;
@@ -43,7 +43,8 @@ public final class AccessService extends Service {
  }
  public int onStartCommand(Intent intent,int flags,int startId){
   if(intent!=null&&"stop".equals(intent.getAction())){stopSelf();return START_NOT_STICKY;}
-  try{Native.ensure(this);Native.command("enable");enabled=true;}catch(Exception failure){networkStatus="Cannot start browser access";stopSelf();}
+  synchronized(networkLock){if(destroyed||starting||enabled)return START_NOT_STICKY;starting=true;}
+  networkWork.execute(()->{try{Native.ensure(this);synchronized(networkLock){if(destroyed)return;Native.command("enable");enabled=true;}}catch(Exception failure){networkStatus="Cannot start browser access";stopSelf();}finally{synchronized(networkLock){starting=false;}}});
   return START_NOT_STICKY;
  }
  public void onDestroy(){

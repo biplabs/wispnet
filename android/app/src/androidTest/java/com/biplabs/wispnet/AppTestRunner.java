@@ -16,8 +16,8 @@ public final class AppTestRunner extends Instrumentation {
  interface Check{boolean ok()throws Exception;}
  void await(Check check,String message)throws Exception{long end=System.currentTimeMillis()+45000;while(System.currentTimeMillis()<end){if(check.ok())return;Thread.sleep(200);}throw new Exception(message);}
  void stage(String name)throws Exception{Bundle state=new Bundle();state.putString("stage",name);state.putString("peer",Native.command("identity").getString("peer"));sendStatus(0,state);}
- Button find(View view,String title){if(view instanceof Button&&((Button)view).getText().toString().equals(title))return(Button)view;if(view instanceof ViewGroup){ViewGroup group=(ViewGroup)view;for(int i=0;i<group.getChildCount();i++){Button b=find(group.getChildAt(i),title);if(b!=null)return b;}}return null;}
- void click(String title)throws Exception{final boolean[] found={false};runOnMainSync(()->{if(title.equals("Request pairing"))activity.hostVerified.setChecked(true);Button b=find(activity.root,title);if(b!=null){found[0]=true;b.performClick();}});if(!found[0])throw new Exception("Missing UI control: "+title);}
+ Button find(View view,String title){if(view instanceof Button&&(((Button)view).getText().toString().equals(title)||title.equals(view.getTag())))return(Button)view;if(view instanceof ViewGroup){ViewGroup group=(ViewGroup)view;for(int i=0;i<group.getChildCount();i++){Button b=find(group.getChildAt(i),title);if(b!=null)return b;}}return null;}
+ void click(String title)throws Exception{if(title.startsWith("Open "))await(()->activity.spaceShown&&!activity.jumping,"Services not visible");final boolean[] found={false};runOnMainSync(()->{if(title.equals("Request pairing"))activity.hostVerified.setChecked(true);Button b=java.util.List.of("Start browser access","Stop browser access").contains(title)?activity.access:find(activity.root,title);if(b!=null){found[0]=true;b.performClick();}});if(!found[0])throw new Exception("Missing UI control: "+title);}
  boolean text(AccessibilityNodeInfo node,String needle){if(node==null)return false;if(node.getText()!=null&&node.getText().toString().contains(needle))return true;if(node.getContentDescription()!=null&&node.getContentDescription().toString().contains(needle))return true;for(int i=0;i<node.getChildCount();i++){if(text(node.getChild(i),needle))return true;}return false;}
  boolean browserText(String needle){AccessibilityNodeInfo root=getUiAutomation().getRootInActiveWindow();return root!=null&&"com.android.chrome".contentEquals(root.getPackageName())&&text(root,needle);}
  String http(UriParts url,String path,String method,String extra,String body)throws Exception{
@@ -43,6 +43,7 @@ public final class AppTestRunner extends Instrumentation {
  }
  void resume(){Intent intent=getTargetContext().getPackageManager().getLaunchIntentForPackage(getTargetContext().getPackageName());intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_CLEAR_TOP);activity=(MainActivity)startActivitySync(intent);waitForIdleSync();}
  public void onStart(){Bundle result=new Bundle();try{
+  if("space-ui".equals(args.getString("mode"))){SpaceChecks.run(this);result.putString("result","passed");finish(Activity.RESULT_OK,result);return;}
   if("qr-auto-pair".equals(args.getString("mode"))){AutoPairChecks.run(this);result.putString("result","passed");finish(Activity.RESULT_OK,result);return;}
   if("scanner-launch".equals(args.getString("mode"))){ScannerChecks.run(this);result.putString("result","passed");finish(Activity.RESULT_OK,result);return;}
   if("platform-timeout".equals(args.getString("mode"))){PlatformChecks.run(this);result.putString("result","passed");finish(Activity.RESULT_OK,result);return;}
