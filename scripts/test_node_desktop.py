@@ -86,6 +86,37 @@ class NodeIntegration(unittest.TestCase):
             try:
                 a, sa, pa, porta, api = host("a")
                 b, sb, pb, portb, bapi = host("b")
+                # Target acknowledgements are durable and scoped to this owner-local host.
+                _, _, pc, _, capi = host("combined")
+                approval = {
+                    "op": "apply_operation",
+                    "host": pc,
+                    "id": "1" * 64,
+                    "action": {"op": "approve", "peer": pa, "name": "Combined fixture"},
+                }
+                receipt = capi.request(**approval)
+                self.assertEqual(receipt["state"], "applied")
+                self.assertEqual(receipt["host"], pc)
+                self.assertEqual(capi.request(**approval), receipt)
+                capi.request(
+                    op="apply_operation",
+                    host=pc,
+                    id="2" * 64,
+                    action={"op": "revoke", "peer": pa},
+                )
+                self.assertEqual(capi.request(**approval), receipt)
+                self.assertEqual(capi.request(op="status")["host"]["clients"], [])
+                with self.assertRaisesRegex(ValueError, "Wrong target host"):
+                    capi.request(**{**approval, "host": pb})
+                rejected = capi.request(
+                    op="apply_operation",
+                    host=pc,
+                    id="3" * 64,
+                    action={"op": "revoke", "peer": pa},
+                )
+                self.assertEqual(rejected["state"], "rejected")
+                self.assertEqual(capi.request(op="status")["host"]["revision"], 2)
+
                 self.assertEqual(api.request(op="status")["connected_peers"], {})
                 self.assertEqual(bapi.request(op="status")["host"]["clients"], [])
                 with self.assertRaises(ValueError):

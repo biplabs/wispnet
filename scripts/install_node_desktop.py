@@ -36,7 +36,7 @@ if node_changed:
 # The headless command shares the existing node API and needs only Python stdlib.
 api_package = node_binary.parent / "wispnet_desktop"
 api_package.mkdir(exist_ok=True)
-for name in ["__init__.py", "api.py"]:
+for name in ["__init__.py", "api.py", "combined.py"]:
     shutil.copy2(ROOT / "apps/node/desktop/wispnet_desktop" / name, api_package / name)
 shutil.copy2(ROOT / "scripts/node_request.py", node_binary.parent / "node_request.py")
 node_launcher = home / ".local/bin/wispnet-node"

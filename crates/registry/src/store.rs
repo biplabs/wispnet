@@ -83,7 +83,7 @@ impl Store {
                 CREATE TABLE services (id TEXT PRIMARY KEY, host TEXT NOT NULL REFERENCES devices(id));
                 CREATE TABLE grants (service TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE, device TEXT NOT NULL REFERENCES devices(id), PRIMARY KEY(service,device));
                 PRAGMA user_version=1;")?,
-            1..=5 => {},
+            1..=6 => {},
             _ => return Err(Error::UnsupportedSchema),
         }
         if version < 2 {
@@ -112,6 +112,15 @@ impl Store {
             state TEXT NOT NULL, peer TEXT, name TEXT, challenge TEXT,
             window INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0);
             PRAGMA user_version=5;",
+            )?;
+        }
+        if version < 6 {
+            tx.execute_batch(
+                "CREATE TABLE host_operation_receipts (
+                id TEXT PRIMARY KEY CHECK(length(id)=64), payload TEXT NOT NULL CHECK(length(payload)=64),
+                state TEXT NOT NULL CHECK(state IN ('applied','rejected')),
+                revision INTEGER CHECK(revision>=0), reason TEXT);
+                PRAGMA user_version=6;",
             )?;
         }
         tx.commit()?;
@@ -339,7 +348,7 @@ mod tests {
             ),
             Err(Error::InvalidInput)
         );
-        store.0.pragma_update(None, "user_version", 6).unwrap();
+        store.0.pragma_update(None, "user_version", 999).unwrap();
         drop(store);
         assert!(matches!(Store::open(&path), Err(Error::UnsupportedSchema)));
     }

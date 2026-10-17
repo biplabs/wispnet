@@ -8,6 +8,10 @@ import stat
 import tomllib
 
 
+class NodeRejected(ValueError):
+    """Explicit negative acknowledgement from the authenticated local node."""
+
+
 class NodeAPI:
     def __init__(self, config):
         self.config = Path(config).expanduser().resolve()
@@ -52,7 +56,7 @@ class NodeAPI:
                 raise ValueError("Invalid or oversized node response")
             response = json.loads(data)
             if not response.get("ok"):
-                raise ValueError(response.get("error", "Node operation failed"))
+                raise NodeRejected(response.get("error", "Node operation failed"))
             result = response["result"]
             if request.get("op") == "status" and result.get("api_version") != 1:
                 raise ValueError("Unsupported node API version")

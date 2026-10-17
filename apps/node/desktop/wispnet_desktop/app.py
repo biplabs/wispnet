@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 from wispnet_desktop.catalog_cache import CatalogCache, valid_catalog
+from wispnet_desktop.combined import Combined, validate_plan
 from PySide6.QtCore import (
     QObject,
     QRunnable,
@@ -145,6 +146,8 @@ class Window(QMainWindow):
         self.api = api
         self.snapshot = None
         self.catalogs = {}
+        self.combined = Combined(api.config) if hasattr(api, "config") else None
+        self.operation_routes = []
         self.catalog_cache = CatalogCache(getattr(api, "state", None))
         self.cache_loaded = set()
         self.peer_busy = set()
@@ -229,6 +232,37 @@ class Window(QMainWindow):
         self.pending = self.table(
             ["Invitation", "Client", "Peer ID", "State"], "Pairing requests"
         )
+        self.operations = self.table(
+            [
+                "Operation",
+                "Action",
+                "Target host",
+                "State",
+                "Applied revision",
+                "Details",
+            ],
+            "Combined operations",
+        )
+        self.tabs.removeTab(self.tabs.count() - 1)
+        operations_panel = QWidget()
+        operations_layout = QVBoxLayout(operations_panel)
+        self.operations_summary = QLabel("Each host acknowledges independently")
+        self.operations_summary.setTextFormat(Qt.TextFormat.PlainText)
+        operations_layout.addWidget(self.operations_summary)
+        operations_layout.addWidget(self.operations)
+        self.operations.show()
+        operation_actions = QHBoxLayout()
+        for title, callback in [
+            ("Add client across hosts", lambda: self.combined_dialog("approve")),
+            ("Revoke across hosts", lambda: self.combined_dialog("revoke")),
+            ("Retry pending hosts", self.retry_combined),
+        ]:
+            button = QPushButton(title)
+            button.clicked.connect(callback)
+            button.setEnabled(self.combined is not None)
+            operation_actions.addWidget(button)
+        operations_layout.addLayout(operation_actions)
+        self.tabs.addTab(operations_panel, "Combined operations")
         actions = QHBoxLayout()
         actions.setSpacing(10)
         for title, fn, variant in [
@@ -321,6 +355,7 @@ class Window(QMainWindow):
 
     def updated(self, result, error):
         self.busy = False
+        self.draw_operations()
         self.online = error is None
         if error:
             self.snapshot = None
@@ -374,14 +409,24 @@ class Window(QMainWindow):
                     c["peer"],
                     "Approved",
                     result["connected_peers"].get(c["peer"], 0),
-                    "Connected" if c["peer"] in result["connected_peers"] else (
-                        f"Seen {recent[c['peer']]}s ago" if c["peer"] in recent else "Idle"
+                    "Connected"
+                    if c["peer"] in result["connected_peers"]
+                    else (
+                        f"Seen {recent[c['peer']]}s ago"
+                        if c["peer"] in recent
+                        else "Idle"
                     ),
                 ]
                 for c in clients
             ]
             + [
-                ["Unapproved/revoked peer", peer, "Not approved", count, "Transport only"]
+                [
+                    "Unapproved/revoked peer",
+                    peer,
+                    "Not approved",
+                    count,
+                    "Transport only",
+                ]
                 for peer, count in result["connected_peers"].items()
                 if peer not in known
             ],
@@ -404,7 +449,9 @@ class Window(QMainWindow):
                     if cached and peer not in self.catalogs:
                         self.catalogs[peer] = cached
                 except (OSError, ValueError):
-                    self.message.setText("Invalid catalog cache ignored; refreshing its pinned host")
+                    self.message.setText(
+                        "Invalid catalog cache ignored; refreshing its pinned host"
+                    )
             if peer not in self.peer_busy:
                 self.peer_busy.add(peer)
                 self.submit(
@@ -468,7 +515,9 @@ class Window(QMainWindow):
             try:
                 self.catalog_cache.save(peer, self.catalogs[peer])
             except (OSError, ValueError):
-                self.message.setText("Catalog refreshed, but its cache could not be saved")
+                self.message.setText(
+                    "Catalog refreshed, but its cache could not be saved"
+                )
         self.draw_peers()
 
     def draw_peers(self):
@@ -741,6 +790,149 @@ class Window(QMainWindow):
             if path:
                 Path(path).unlink(missing_ok=True)
         self.refresh()
+
+    def draw_operations(self):
+        if self.combined is None:
+            return
+        try:
+            operations = self.combined.list()
+            rows = []
+            self.operation_routes = []
+            for operation in operations:
+                for target in operation["targets"]:
+                    rows.append(
+                        [
+                            operation["id"][:12],
+                            operation["action"]["op"]
+                            + " "
+                            + operation["action"]["peer"][:12],
+                            target.get("ssh", "This host")
+                            + " · "
+                            + target["host"][:12],
+                            target["state"],
+                            target.get("revision") or "—",
+                            target.get("reason") or "Acknowledged by this host",
+                        ]
+                    )
+                    self.operation_routes.append(operation["id"])
+            self.fill(self.operations, rows)
+            pending = sum(
+                t["state"] == "pending" for o in operations for t in o["targets"]
+            )
+            rejected = sum(
+                t["state"] == "rejected" for o in operations for t in o["targets"]
+            )
+            complete = sum(o["complete"] for o in operations)
+            self.operations_summary.setText(
+                f"{complete} fully acknowledged · {pending} pending hosts · {rejected} rejected hosts"
+            )
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            self.operations_summary.setText(
+                "Cannot read operation status: " + str(error)
+            )
+
+    def combined_dialog(self, op):
+        if self.combined is None or not self.snapshot:
+            return
+        targets = [{"host": self.snapshot["host"]["host"]}]
+        path = self.api.config.parent / "admin-targets.json"
+        try:
+            if path.exists():
+                targets = self.combined.read_private(path)
+            validate_plan(
+                {
+                    "action": {"op": "revoke", "peer": self.snapshot["host"]["host"]},
+                    "targets": targets,
+                }
+            )
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            self.message.setText("Cannot load owner targets: " + str(error))
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle(
+            "Add client across hosts" if op == "approve" else "Revoke across hosts"
+        )
+        form = QFormLayout(dialog)
+        peer = QLineEdit()
+        name = QLineEdit()
+        selected = self.devices.currentRow()
+        if selected >= 0:
+            peer.setText(self.devices.item(selected, 1).text())
+            name.setText(self.devices.item(selected, 0).text())
+        form.addRow("Client public ID", peer)
+        if op == "approve":
+            form.addRow("Client name", name)
+        choices = QListWidget()
+        for target in targets:
+            row = QListWidgetItem(
+                target.get("ssh", "This host") + " · " + target["host"]
+            )
+            row.setData(Qt.ItemDataRole.UserRole, target)
+            row.setCheckState(Qt.CheckState.Unchecked)
+            choices.addItem(row)
+        form.addRow("Selected owner targets", choices)
+        note = QLabel(
+            "Each selected host applies independently. Offline hosts remain pending. Adding a client grants no services automatically."
+        )
+        note.setWordWrap(True)
+        form.addRow(note)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        action = {"op": op, "peer": peer.text().strip()}
+        if op == "approve":
+            action["name"] = name.text().strip()
+        plan = {
+            "action": action,
+            "targets": [
+                choices.item(i).data(Qt.ItemDataRole.UserRole)
+                for i in range(choices.count())
+                if choices.item(i).checkState() == Qt.CheckState.Checked
+            ],
+        }
+        try:
+            validate_plan(plan)
+        except ValueError as error:
+            self.message.setText(str(error))
+            return
+        if (
+            QMessageBox.question(
+                self,
+                "Confirm host operations",
+                "Apply this client action independently on "
+                + str(len(plan["targets"]))
+                + " selected hosts? Offline targets will remain pending.",
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+        self.submit(lambda: self.combined.start(plan), self.combined_result)
+        self.tabs.setCurrentIndex(4)
+
+    def retry_combined(self):
+        row = self.operations.currentRow()
+        if self.combined is None or row < 0 or row >= len(self.operation_routes):
+            return
+        operation = self.operation_routes[row]
+        self.submit(lambda: self.combined.retry(operation), self.combined_result)
+
+    def combined_result(self, value, error):
+        self.draw_operations()
+        if error:
+            self.message.setText(str(error))
+        elif value["complete"]:
+            self.message.setText(
+                "Every selected host acknowledged this operation. Current permissions may have changed since it was applied."
+            )
+        else:
+            self.message.setText(
+                "Not fully applied. Review each host's pending or rejected status."
+            )
 
     def open_local(self, *args):
         row = self.services.currentRow()

@@ -212,85 +212,92 @@ impl Store {
         if revision as u64 != expected {
             return Err(ControlError::Conflict);
         }
-        match operation {
-            Mutation::ApproveInvitation { invitation, .. } => {
-                crate::pairing::approve(&tx, &invitation, crate::enrollment::now())?;
-            }
-            Mutation::RejectInvitation { invitation, .. } => {
-                crate::pairing::reject(&tx, &invitation)?;
-            }
-            Mutation::Approve { peer, name, .. } => {
-                if !valid_name(&name) {
-                    return Err(ControlError::Invalid);
-                }
-                let count: i64 = tx.query_row(
-                    "SELECT count(*) FROM host_clients WHERE id!=?1",
-                    [peer.to_string()],
-                    |r| r.get(0),
-                )?;
-                if count >= 1024 {
-                    return Err(ControlError::Invalid);
-                }
-                tx.execute("INSERT INTO host_clients VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET name=excluded.name",params![peer.to_string(),name])?;
-            }
-            Mutation::Revoke { peer, .. } => {
-                if tx.execute("DELETE FROM host_clients WHERE id=?1", [peer.to_string()])? == 0 {
-                    return Err(ControlError::Invalid);
-                }
-                tx.execute(
-                    "UPDATE host_invitations SET state='revoked',challenge=NULL
-                    WHERE peer=?1 AND state IN ('issued','challenged','pending')",
-                    [peer.to_string()],
-                )?;
-            }
-            Mutation::Service {
-                id, backend, allow, ..
-            } => {
-                wipsnet_core::config::validate_services(&[ServiceConfig {
-                    id: id.clone(),
-                    backend,
-                    allow: allow.clone(),
-                }])
-                .map_err(|_| ControlError::Invalid)?;
-                let count: i64 = tx.query_row(
-                    "SELECT count(*) FROM host_services WHERE id!=?1",
-                    [&id],
-                    |r| r.get(0),
-                )?;
-                if count >= 128 {
-                    return Err(ControlError::Invalid);
-                }
-                for peer in &allow {
-                    let approved: bool = tx.query_row(
-                        "SELECT EXISTS(SELECT 1 FROM host_clients WHERE id=?1)",
-                        [peer.to_string()],
-                        |r| r.get(0),
-                    )?;
-                    if !approved {
-                        return Err(ControlError::Forbidden);
-                    }
-                }
-                tx.execute("INSERT INTO host_services VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET backend=excluded.backend",params![id,backend.to_string()])?;
-                tx.execute("DELETE FROM host_grants WHERE service=?1", [&id])?;
-                for peer in allow {
-                    tx.execute(
-                        "INSERT INTO host_grants VALUES(?1,?2)",
-                        params![id, peer.to_string()],
-                    )?;
-                }
-            }
-            Mutation::Remove { id, .. } => {
-                if !valid_service_id(&id)
-                    || tx.execute("DELETE FROM host_services WHERE id=?1", [id])? == 0
-                {
-                    return Err(ControlError::Invalid);
-                }
-            }
-        }
+        apply_mutation(&tx, operation)?;
         tx.execute("UPDATE revision SET value=value+1 WHERE id=1", [])?;
         tx.commit()?;
         Ok(expected + 1)
     }
+}
+pub(crate) fn apply_mutation(
+    tx: &rusqlite::Transaction<'_>,
+    operation: Mutation,
+) -> Result<(), ControlError> {
+    match operation {
+        Mutation::ApproveInvitation { invitation, .. } => {
+            crate::pairing::approve(tx, &invitation, crate::enrollment::now())?;
+        }
+        Mutation::RejectInvitation { invitation, .. } => {
+            crate::pairing::reject(tx, &invitation)?;
+        }
+        Mutation::Approve { peer, name, .. } => {
+            if !valid_name(&name) {
+                return Err(ControlError::Invalid);
+            }
+            let count: i64 = tx.query_row(
+                "SELECT count(*) FROM host_clients WHERE id!=?1",
+                [peer.to_string()],
+                |r| r.get(0),
+            )?;
+            if count >= 1024 {
+                return Err(ControlError::Invalid);
+            }
+            tx.execute("INSERT INTO host_clients VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET name=excluded.name",params![peer.to_string(),name])?;
+        }
+        Mutation::Revoke { peer, .. } => {
+            if tx.execute("DELETE FROM host_clients WHERE id=?1", [peer.to_string()])? == 0 {
+                return Err(ControlError::Invalid);
+            }
+            tx.execute(
+                "UPDATE host_invitations SET state='revoked',challenge=NULL
+                    WHERE peer=?1 AND state IN ('issued','challenged','pending')",
+                [peer.to_string()],
+            )?;
+        }
+        Mutation::Service {
+            id, backend, allow, ..
+        } => {
+            wipsnet_core::config::validate_services(&[ServiceConfig {
+                id: id.clone(),
+                backend,
+                allow: allow.clone(),
+            }])
+            .map_err(|_| ControlError::Invalid)?;
+            let count: i64 = tx.query_row(
+                "SELECT count(*) FROM host_services WHERE id!=?1",
+                [&id],
+                |r| r.get(0),
+            )?;
+            if count >= 128 {
+                return Err(ControlError::Invalid);
+            }
+            for peer in &allow {
+                let approved: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM host_clients WHERE id=?1)",
+                    [peer.to_string()],
+                    |r| r.get(0),
+                )?;
+                if !approved {
+                    return Err(ControlError::Forbidden);
+                }
+            }
+            tx.execute("INSERT INTO host_services VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET backend=excluded.backend",params![id,backend.to_string()])?;
+            tx.execute("DELETE FROM host_grants WHERE service=?1", [&id])?;
+            for peer in allow {
+                tx.execute(
+                    "INSERT INTO host_grants VALUES(?1,?2)",
+                    params![id, peer.to_string()],
+                )?;
+            }
+        }
+        Mutation::Remove { id, .. } => {
+            if !valid_service_id(&id)
+                || tx.execute("DELETE FROM host_services WHERE id=?1", [id])? == 0
+            {
+                return Err(ControlError::Invalid);
+            }
+        }
+    }
+    Ok(())
 }
 #[derive(Clone)]
 pub struct Authority {

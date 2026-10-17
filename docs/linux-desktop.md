@@ -45,7 +45,7 @@ The tray reports node availability, the active-client total (live connections or
 
 `scripts/test.sh` includes real two-node local-socket tests for pairing/pins, target-owner approval, permissions, conflict rejection, browser bootstrap/service access, live connection increase/decrease, recent-activity refresh/expiry and revocation filtering, and native Stop, plus real owner-local HTTP/bootstrap/origin/removal/Stop checks with no self-pin or self-grant, and Qt offscreen tests for device selection, catalog persistence across window restart, rollback/generation rejection, stale Open blocking, local Open routing and token-free browser arguments. Cache regressions cover corrupt/oversized/foreign-host files, permissions, symlinks and deletion independent of pins. All original Rust/relay/browser tests remain local; the pre-push hook runs them. Qt tests use display fixtures; live installation is checked against KDE's registered StatusNotifierItem and actual node services/client records.
 
-The current catalog supplies service IDs, not richer descriptions or explicit web/non-web types. This desktop uses the existing HTTP browser gateway. Own-service local browsing and persistent desktop catalog caching are implemented. The broader full-power-off/rebuild acceptance and combined multi-host operation status under #11 remain separate work. The second physical computer can be headless; it does not require another desktop GUI. Service-ID removal/recreation generation semantics remain #8/#9 work; binding checks do not claim to distinguish recreation at the identical backend address. Package distribution beyond this development user-local installation remains #15. This checkpoint does not close those issues.
+The current catalog supplies service IDs, not richer descriptions or explicit web/non-web types. This desktop uses the existing HTTP browser gateway. Own-service local browsing and persistent desktop catalog caching are implemented. The broader full-power-off/rebuild acceptance under #11 remains separate work. Combined multi-host operation status is implemented below. The second physical computer can be headless; it does not require another desktop GUI. Service-ID removal/recreation generation semantics remain #8/#9 work; binding checks do not claim to distinguish recreation at the identical backend address. Package distribution beyond this development user-local installation remains #15. This checkpoint does not close those issues.
 
 ## Physical GUI/headless checkpoint — 2026-10-17
 
@@ -55,3 +55,47 @@ Installed the updated desktop/node on CachyOS/KDE (`j-strix`) and the same node 
 - Headless host → local computer: the existing Firefox installation, run headlessly through its existing geckodriver, loaded the actual GIKE and Llama UIs through the headless node's protected browser gateway. The Llama health API returned HTTP 200 through that browser session. No display server, Qt GUI, USB forwarding or SSH port forwarding carried the service traffic.
 
 Browser access returned to its original disabled setting on both nodes; temporary browser profiles, handoff files and test processes were cleaned. The paired peer identities and explicit grants remain for normal use. This proves physical GUI/headless peer browsing in both directions, not machine power-off, deployed relay replacement, a second visible GUI, or a new Llama generation/streaming run.
+
+## Combined owner operations
+
+The **Combined operations** tab adds or revokes a specified client independently on selected hosts and shows one **applied**, **pending** or **rejected** row per host. Adding a client does not grant services automatically. Current service grants and local approvals remain owned by each host. This is an optional owner workflow, not a required controller or delegated mesh-wide administration.
+
+The local host uses its existing private node socket. Other hosts require an explicitly configured, already trusted SSH owner connection; service pairing alone never supplies administrative rights. Store the selected owner routes in the private (mode 0600) `~/.config/wipsnet-node/admin-targets.json`, for example:
+
+```json
+[
+  {"host": "FULL_LOCAL_HOST_ID"},
+  {"host": "FULL_REMOTE_HOST_ID", "ssh": "desktop.home"}
+]
+```
+
+The UI lists only these owner routes (or just this host if no file exists), requires target selection and confirmation, and shows pending/rejected results without claiming global completion. SSH uses existing strict host-key verification and noninteractive authentication; it does not copy host keys, Wispnet owner tokens, or global credentials. The contacted node checks its own full host ID before touching policy. There is no new public or Iroh admin RPC.
+
+Headless clients use the same workflow without Qt. A private plan file contains an action and its selected targets:
+
+```json
+{
+  "action": {"op": "revoke", "peer": "FULL_CLIENT_ID"},
+  "targets": [
+    {"host": "FULL_LOCAL_HOST_ID"},
+    {"host": "FULL_REMOTE_HOST_ID", "ssh": "desktop.home"}
+  ]
+}
+```
+
+```sh
+chmod 600 /private/revoke-plan.json
+wispnet-node --batch /private/revoke-plan.json
+wispnet-node --operations
+wispnet-node --retry OPERATION_ID
+```
+
+For explicit owner approval, use `{"op":"approve","peer":"FULL_CLIENT_ID","name":"Client name"}` as the action. This is the existing owner-local known-key approval decision, not an invitation proof, reciprocal grant or admin delegation. Target service grants still require separate host-owner decisions.
+
+An intent is atomically saved before dispatch in private `combined-operations/` journals. Up to four targets execute independently. An unreachable target, failed owner connection, timeout or unconfirmed reply remains **pending**; a negative host acknowledgement is **rejected**. Only all-applied targets make `complete` true. A batch with rejections can be `finished` without being complete. Retry acts only on pending targets; rejected targets need a newly reviewed operation. No background retries or automatic replay of arbitrary HTTP/application writes occur.
+
+Each host stores the operation ID, immutable action hash and acknowledgement atomically with its own authority mutation in SQLite schema 6. A repeated ID returns the saved receipt; changing its action fails closed. If a reply was lost after commit, retry confirms the earlier result without re-executing it. An old approval receipt cannot recreate approval after a later local revocation. Applied revisions are historical acknowledgements, not a promise that current permissions still match that earlier action; the serving host's current policy always wins. New-access policy is durable at acknowledgement; affected active streams close under the existing bounded host-policy checks, not through catalog propagation.
+
+Limits are 32 selected hosts, four concurrent attempts, 128 local operation journals and 10,000 retained target receipts. Receipt replay protection is not automatically evicted; hitting its limit rejects new operations. Completed local journals can be archived explicitly without changing host permissions or deleting target receipts. Host recovery must preserve receipts along with authority; stale-backup recovery remains #19 work. Older binaries that support only schema 5 cannot open schema 6; the new installer preserves identities/configuration rather than resetting authority.
+
+Observed on both physical computers on 2026-10-17: combined approval applied at both hosts; revocation with headless desktop.home stopped showed local applied / remote pending, while its offline registry still contained the client. Pending status survived a local node restart and completed after the remote node restarted, without repeating the local mutation. Already-revoked and wrong-host actions produced explicit rejection. A deliberately discarded real applied reply remained pending; after remote restart and a later revocation, retry returned its earlier applied revision without restoring access or advancing the current revision. The headless CLI also performed a target-local combined operation and reported its rejection. The installed GUI displayed actual applied/pending/rejected journals, including a pending host, and its rendered table was inspected. Tests used a temporary client without service grants; fixture approvals were removed, phone/tablet grants and backend bindings were preserved, and original browser settings were restored.

@@ -190,6 +190,50 @@ class DesktopChecks(unittest.TestCase):
                 )
             window.deleteLater()
 
+    def test_combined_view_never_calls_partial_results_complete(self):
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(Window, "refresh", lambda self: None),
+        ):
+            api = API()
+            api.state = Path(directory)
+            api.config = Path(directory) / "host.toml"
+            api.config.write_text(f'state_dir="{directory}"\n')
+            window = Window(api, tray=False)
+            window.timer.stop()
+            states = {"a" * 64: "applied", "b" * 64: "pending", "c" * 64: "rejected"}
+
+            def attempt(value, target):
+                state = states[target["host"]]
+                return {
+                    "state": state,
+                    "revision": 1 if state == "applied" else None,
+                    "reason": state,
+                }
+
+            with patch.object(window.combined, "attempt", side_effect=attempt):
+                value = window.combined.start(
+                    {
+                        "action": {"op": "revoke", "peer": "d" * 64},
+                        "targets": [{"host": p} for p in states],
+                    }
+                )
+            window.combined_result(value, None)
+            window.tabs.setCurrentIndex(4)
+            window.show()
+            QApplication.processEvents()
+            self.assertTrue(window.operations.isVisible())
+            self.assertGreater(window.operations.height(), 100)
+            self.assertEqual(window.operations.rowCount(), 3)
+            self.assertEqual(
+                {window.operations.item(i, 3).text() for i in range(3)},
+                set(states.values()),
+            )
+            self.assertIn("0 fully acknowledged", window.operations_summary.text())
+            self.assertIn("1 pending", window.operations_summary.text())
+            self.assertIn("Not fully applied", window.message.text())
+            window.deleteLater()
+
     def test_peer_catalog_origin_and_versions_remain_isolated(self):
         window = Window(API(), tray=False)
         window.timer.stop()

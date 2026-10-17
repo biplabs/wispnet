@@ -374,7 +374,7 @@ fn schema_two_migration_preserves_existing_credentials_and_marks_legacy_devices(
     drop(store);
     let path = dir.path().join("db");
     let db = rusqlite::Connection::open(&path).unwrap();
-    db.execute_batch("DROP TABLE host_grants; DROP TABLE host_services; DROP TABLE host_clients; DROP TABLE host_authority; DROP TABLE invitations; DROP TABLE device_records; PRAGMA user_version=2;")
+    db.execute_batch("DROP TABLE host_operation_receipts; DROP TABLE host_grants; DROP TABLE host_services; DROP TABLE host_clients; DROP TABLE host_authority; DROP TABLE invitations; DROP TABLE device_records; PRAGMA user_version=2;")
         .unwrap();
     drop(db);
     let mut migrated = Store::open(&path).unwrap();

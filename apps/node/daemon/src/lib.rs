@@ -53,6 +53,49 @@ impl State {
                     json!({"api_version":1,"host":snapshot,"host_name":host_name,"connected_peers":peers,"recent_peers":recent,"presence_timeout_seconds":wipsnet_agent::tunnel::PRESENCE_TIMEOUT.as_secs(),"transport_streams":self.counts.streams(),"invitations":invitations,"peer_pins":pins,"relay":wipsnet_agent::diagnostics::relay_state(&self.client.endpoint,self.relay_configured),"access_enabled":self.client.gateway.is_enabled()}),
                 )
             }
+            "apply_operation" => {
+                let host = value["host"].as_str().ok_or("Missing target host")?;
+                if host != self.client.endpoint.id().to_string() {
+                    return Err("Wrong target host".into());
+                }
+                let id = value["id"]
+                    .as_str()
+                    .ok_or("Missing operation ID")?
+                    .to_owned();
+                let action = serde_json::from_value(value["action"].clone())
+                    .map_err(|_| "Invalid combined action")?;
+                let directory = self.state_dir.clone();
+                let host = self.client.endpoint.id();
+                let operation_id = id.clone();
+                let outcome = tokio::task::spawn_blocking(move || {
+                    let (mut store, secret) =
+                        wipsnet_registry::host::owner_store(&directory, host)?;
+                    store.host_apply_operation(host, &secret, &operation_id, action)
+                })
+                .await;
+                use wipsnet_registry::control::ControlError;
+                let mut receipt = match outcome {
+                    Ok(Ok(receipt)) => {
+                        json!({"state":receipt.state,"revision":receipt.revision,"reason":receipt.reason})
+                    }
+                    Ok(Err(
+                        error @ (ControlError::Invalid
+                        | ControlError::Forbidden
+                        | ControlError::Conflict
+                        | ControlError::RateLimited),
+                    )) => {
+                        json!({"state":"rejected","revision":null,"reason":error.to_string()})
+                    }
+                    // A commit may have happened before an I/O/handler failure.
+                    // Only a replayed durable receipt can resolve that uncertainty.
+                    _ => {
+                        json!({"state":"pending","revision":null,"reason":"Target storage unavailable or acknowledgement unconfirmed"})
+                    }
+                };
+                receipt["host"] = json!(host.to_string());
+                receipt["id"] = json!(id);
+                Ok(receipt)
+            }
             "mutate" => {
                 let operation = value
                     .get("operation")

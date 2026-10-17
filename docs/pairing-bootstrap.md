@@ -139,7 +139,7 @@ or treat a queued/offline multi-host intent as authorization.
 Linux and authorized Android native relay fixtures exercise issuance, proof,
 pending denial, local approval, separate service grants, restart and revocation
 against each host while the other is off. These are native CLI fixtures, not APK,
-QR/UI, cellular or physical two-computer acceptance. Multi-target status UX and final app/deployment checks remain open.
+QR/UI, cellular or physical two-computer acceptance. The later Linux/headless combined-owner status workflow is documented below; final app/deployment checks remain separate.
 
 ## Saved client bootstrap
 
@@ -181,3 +181,7 @@ disabled, and check secret-free independent pin records, protected modes,
 corruption/link rejection, locking and location overrides. The native lifecycle
 harness deletes issued invitation files on Linux and the authorized tablet before
 approval/restart/recovery checks and verifies both saved records remain secret-free.
+
+## Combined owner workflows
+
+Linux desktop and headless owner tools now provide durable per-target add/revoke results. See [combined owner operations](linux-desktop.md#combined-owner-operations) for explicit owner routes, private plans, pending-only retries and atomic target receipts. This uses each target's protected local administration (optionally reached through an already trusted SSH owner session); ordinary Iroh pairing never grants remote admin rights. A queued offline revocation is not delivered until that host acknowledges it. Full-machine power-off, deployed relay replacement, Android combined-owner UI and stale-backup recovery are separate from this Linux/headless checkpoint.
