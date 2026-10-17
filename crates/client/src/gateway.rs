@@ -72,7 +72,11 @@ impl Gateways {
                         .await
                         .map_err(|e| e.to_string())?
                         .into_iter()
-                        .find(|s| s.id == service && s.incarnation == incarnation)
+                        .find(|s| {
+                            s.id == service
+                                && s.incarnation == incarnation
+                                && s.kind == wipsnet_core::host::ServiceKind::Http
+                        })
                         .ok_or("Service no longer permitted")?
                         .backend,
                 )
@@ -355,6 +359,7 @@ impl Route {
                     .find(|s| {
                         s.id == self.service
                             && s.incarnation == self.incarnation
+                            && s.kind == wipsnet_core::host::ServiceKind::Http
                             && Some(s.backend) == self.local_binding
                     })
                     .map(|s| s.backend),
@@ -518,7 +523,7 @@ impl Route {
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 let current =
                     tokio::time::timeout(Duration::from_secs(1), authority.services()).await;
-                if !matches!(current, Ok(Ok(ref services)) if services.iter().any(|s| s.id == self.service && s.incarnation == self.incarnation && Some(s.backend) == binding))
+                if !matches!(current, Ok(Ok(ref services)) if services.iter().any(|s| s.id == self.service && s.incarnation == self.incarnation && s.kind == wipsnet_core::host::ServiceKind::Http && Some(s.backend) == binding))
                 {
                     return;
                 }

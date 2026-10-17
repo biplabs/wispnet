@@ -83,7 +83,7 @@ impl Store {
                 CREATE TABLE services (id TEXT PRIMARY KEY, host TEXT NOT NULL REFERENCES devices(id));
                 CREATE TABLE grants (service TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE, device TEXT NOT NULL REFERENCES devices(id), PRIMARY KEY(service,device));
                 PRAGMA user_version=1;")?,
-            1..=7 => {},
+            1..=8 => {},
             _ => return Err(Error::UnsupportedSchema),
         }
         if version < 2 {
@@ -129,6 +129,15 @@ impl Store {
                 UPDATE host_services SET incarnation=lower(hex(randomblob(32)));
                 UPDATE revision SET value=value+1 WHERE EXISTS(SELECT 1 FROM host_services);
                 PRAGMA user_version=7;",
+            )?;
+        }
+        if version < 8 {
+            tx.execute_batch(
+                "ALTER TABLE host_services ADD COLUMN display_name TEXT NOT NULL DEFAULT '';
+                ALTER TABLE host_services ADD COLUMN kind TEXT NOT NULL DEFAULT 'http';
+                UPDATE host_services SET display_name=id;
+                UPDATE revision SET value=value+1 WHERE EXISTS(SELECT 1 FROM host_services);
+                PRAGMA user_version=8;",
             )?;
         }
         tx.commit()?;

@@ -1,6 +1,7 @@
 //! Agent identity and authenticated service-host lifecycle.
 use std::future::Future;
 use wipsnet_core::config::Config;
+pub mod catalogs;
 pub mod control;
 pub mod diagnostics;
 pub mod identity;

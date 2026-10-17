@@ -93,6 +93,8 @@ async fn native_catalog_and_service_need_no_peer_address() {
             identity.endpoint_id(),
             &owner,
             Mutation::Service {
+                display_name: None,
+                kind: None,
                 expected_revision: 1,
                 id: "echo".into(),
                 backend: backend.local_addr().unwrap(),

@@ -4,7 +4,7 @@ A dynamic service has identity `(host EndpointId, local service ID, incarnation)
 The incarnation is a host-generated 32-byte random value encoded as 64 lowercase
 hex characters. It is public identity metadata, not a credential or permission.
 Creating a service saves it atomically with its backend and grants; editing the
-existing row preserves it. Removing that row cascades its grants. Registering the
+existing row preserves it, except an HTTP/TCP type change rotates it. Removing that row cascades its grants. Registering the
 same local ID again generates a new incarnation even if its backend address and
 explicitly supplied grants are identical. Another host's same local ID remains
 independent. Incarnations persist in the host's SQLite authority across restart.
@@ -95,4 +95,5 @@ incarnations/backends/grants and pins afterward. The relay PID remained unchange
 desktop.home retained no GUI/tray unit. HTTP checks run headlessly against the
 real protected browser-session protocol; this checkpoint is not a new visual
 Chromium/Firefox interaction test. Full-machine power-off, relay/disk replacement,
-richer catalog completeness/types and stale-backup recovery remain separate.
+stale-backup recovery remain separate. Versioned complete catalog/types and
+native high-water checks are now documented in [catalog snapshots](catalog-snapshots.md).

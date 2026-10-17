@@ -12,9 +12,19 @@ class CacheChecks(unittest.TestCase):
             entry = {
                 "catalog": {
                     "host": peer,
-                    "generation": "g",
+                    "version": 1,
+                    "complete": True,
+                    "service_count": 1,
+                    "generation": "c" * 64,
                     "revision": 2,
-                    "services": [{"id": "web.site", "incarnation": "a" * 64}],
+                    "services": [
+                        {
+                            "id": "web.site",
+                            "incarnation": "a" * 64,
+                            "display_name": "Website",
+                            "kind": "http",
+                        }
+                    ],
                 },
                 "fetched": 123.5,
             }
@@ -60,8 +70,18 @@ class CacheChecks(unittest.TestCase):
             for services in [
                 [{"id": "<script>"}],
                 [
-                    {"id": "website", "incarnation": "a" * 64},
-                    {"id": "website", "incarnation": "a" * 64},
+                    {
+                        "id": "website",
+                        "incarnation": "a" * 64,
+                        "display_name": "Website",
+                        "kind": "http",
+                    },
+                    {
+                        "id": "website",
+                        "incarnation": "a" * 64,
+                        "display_name": "Website",
+                        "kind": "http",
+                    },
                 ],
             ]:
                 with self.assertRaises(ValueError):
@@ -70,7 +90,10 @@ class CacheChecks(unittest.TestCase):
                         {
                             "catalog": {
                                 "host": peer,
-                                "generation": "g",
+                                "version": 1,
+                                "complete": True,
+                                "service_count": 1,
+                                "generation": "c" * 64,
                                 "revision": 1,
                                 "services": services,
                             },

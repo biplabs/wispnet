@@ -8,7 +8,7 @@ IPC and persistent desktop catalogs are implemented; see
 [pairing](pairing-bootstrap.md) and [desktop/headless](linux-desktop.md).
 Service-incarnation removal/recreation safety is implemented; see
 [service lifecycle](service-lifecycle.md). Full-machine power-off, deployed relay
-replacement and richer catalog records remain open acceptance work (#8/#9/#14/#18).
+replacement remain open acceptance work (#8/#9/#14/#18).
 
 ## Initialize each host independently
 
@@ -99,8 +99,9 @@ Backends must be explicit loopback IPs with nonzero ports. A host allows at most
 clients cannot appear in an allowlist. An empty allowlist exposes nothing.
 A service update replaces its binding/grants atomically; only protected local
 administration can select a backend. No remote RPC accepts an upstream address.
-These are initial local bindings, not the full display/version/tombstone model
-in #8.
+Optional `display_name` and `kind` (`http`/`tcp`) are supported; omitted metadata
+preserves an existing row. See [versioned complete catalogs](catalog-snapshots.md)
+for record validation, filtered removal and durable client version checks.
 
 ```json
 {"op":"remove","expected_revision":2,"id":"llama"}
@@ -143,19 +144,15 @@ local store denies rather than falling back to static permissions.
 Unknown peers are denied before private RPC/service access. Approved peers get
 only IDs they may access, in a catalog shaped as:
 
-```json
-{"host":"HOST_ENDPOINT_ID","generation":"64_HEX_DIGITS","revision":2,"services":[{"id":"llama"}]}
-```
-
-The canonical service identity is `(catalog.host, service.id)`, verified against
-the transport peer pin. Equal local IDs at two hosts are distinct. Backend
-addresses, grant lists, owner credentials and another host's records are not
-returned. Receiving this catalog does not mutate any local ACL or peer pin.
-The catalog is a complete current filtered ID snapshot for this protocol; it is
-not a signed forwarding record or persisted client cache. Recipient/completeness,
-rollback/high-water and richer record contracts will evolve under #8/#9 before
-client synchronization is enabled. The generation is host-local; rollback-safe
-restore semantics remain #19.
+The response is the [version-1 complete catalog](catalog-snapshots.md): explicit
+version/completeness/count plus host generation/revision and sorted typed service
+records containing ID, incarnation and display name. Its canonical service
+identity includes `(catalog.host, service.id, service.incarnation)`, verified
+against the transport peer pin. Backend addresses, grants, owner credentials and
+another host's records are not returned. Receiving a catalog never mutates local
+ACLs or pins. The shared native client durably validates per-host high-water
+before returning snapshots to Linux desktop/headless or Android callers.
+Rollback-safe authoritative restore remains #19.
 
 ## Development setup scope
 

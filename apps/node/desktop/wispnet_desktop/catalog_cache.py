@@ -14,24 +14,47 @@ MAX_BYTES = 128 * 1024
 def valid_catalog(peer, value):
     return (
         isinstance(value, dict)
-        and set(value) == {"host", "generation", "revision", "services"}
+        and set(value)
+        == {
+            "version",
+            "complete",
+            "service_count",
+            "host",
+            "generation",
+            "revision",
+            "services",
+        }
+        and type(value["version"]) is int
+        and value["version"] == 1
+        and value["complete"] is True
+        and type(value["service_count"]) is int
         and value["host"] == peer
         and isinstance(value["generation"], str)
-        and 0 < len(value["generation"]) <= 128
+        and re.fullmatch(r"[0-9a-f]{64}", value["generation"])
         and type(value["revision"]) is int
-        and 0 <= value["revision"] < 2**64
+        and 0 <= value["revision"] < 2**63
         and isinstance(value["services"], list)
-        and len(value["services"]) <= 1024
+        and len(value["services"]) <= 128
+        and value["service_count"] == len(value["services"])
         and all(
             isinstance(s, dict)
-            and set(s) == {"id", "incarnation"}
+            and set(s) == {"id", "incarnation", "display_name", "kind"}
+            and s["kind"] in ("http", "tcp")
+            and isinstance(s["display_name"], str)
+            and bool(s["display_name"].strip())
+            and len(s["display_name"].encode("utf-8", errors="surrogatepass")) <= 128
+            and not any(
+                ord(c) < 32 or 127 <= ord(c) <= 159 or 0xD800 <= ord(c) <= 0xDFFF
+                for c in s["display_name"]
+            )
             and isinstance(s["incarnation"], str)
             and re.fullmatch(r"[0-9a-f]{64}", s["incarnation"])
             and isinstance(s["id"], str)
             and re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", s["id"])
             for s in value["services"]
         )
-        and len({s["id"] for s in value["services"]}) == len(value["services"])
+        and [s["id"] for s in value["services"]]
+        == sorted({s["id"] for s in value["services"]})
     )
 
 

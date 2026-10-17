@@ -125,9 +125,19 @@ class DesktopChecks(unittest.TestCase):
             peer = "a" * 64
             catalog = {
                 "host": peer,
-                "generation": "g",
+                "version": 1,
+                "complete": True,
+                "service_count": 1,
+                "generation": "c" * 64,
                 "revision": 5,
-                "services": [{"id": "website", "incarnation": "a" * 64}],
+                "services": [
+                    {
+                        "id": "website",
+                        "incarnation": "a" * 64,
+                        "display_name": "Website",
+                        "kind": "http",
+                    }
+                ],
             }
             first = Window(api, tray=False)
             first.timer.stop()
@@ -163,6 +173,14 @@ class DesktopChecks(unittest.TestCase):
             self.assertEqual(second.catalog_cache.load(peer)["catalog"], catalog)
             second.peer_updated(peer, catalog, None)
             self.assertEqual(second.catalogs[peer]["state"], "Available")
+            for now in [1.0, 9_999_999_999.0]:
+                with patch("wispnet_desktop.app.time.time", return_value=now):
+                    second.peer_updated(peer, {**catalog, "revision": 4}, None)
+                    self.assertEqual(second.catalogs[peer]["catalog"], catalog)
+            removed = {**catalog, "revision": 6, "services": [], "service_count": 0}
+            second.peer_updated(peer, removed, None)
+            self.assertEqual(second.catalogs[peer]["catalog"], removed)
+            self.assertEqual(second.catalog_cache.load(peer)["catalog"], removed)
             second.updated({**snapshot, "peer_pins": []}, None)
             self.assertNotIn(peer, second.catalogs)
             first.deleteLater()
@@ -176,7 +194,14 @@ class DesktopChecks(unittest.TestCase):
             window.snapshot = {
                 "host": {
                     "host": "f" * 64,
-                    "services": [{"id": "website", "incarnation": "a" * 64}],
+                    "services": [
+                        {
+                            "id": "website",
+                            "incarnation": "a" * 64,
+                            "display_name": "Website",
+                            "kind": "http",
+                        }
+                    ],
                 }
             }
             window.fill(window.services, [["website", "127.0.0.1:1234", "Nobody"]])
@@ -245,9 +270,19 @@ class DesktopChecks(unittest.TestCase):
         peer = "a" * 64
         good = {
             "host": peer,
-            "generation": "g",
+            "version": 1,
+            "complete": True,
+            "service_count": 1,
+            "generation": "c" * 64,
             "revision": 2,
-            "services": [{"id": "website", "incarnation": "a" * 64}],
+            "services": [
+                {
+                    "id": "website",
+                    "incarnation": "a" * 64,
+                    "display_name": "Website",
+                    "kind": "http",
+                }
+            ],
         }
         window.peer_updated(peer, good, None)
         window.peer_updated(peer, {**good, "revision": 1}, None)
@@ -255,7 +290,15 @@ class DesktopChecks(unittest.TestCase):
         self.assertIn("rejected", window.catalogs[peer]["state"])
         window.peer_updated(
             "b" * 64,
-            {"host": "b" * 64, "generation": "z", "revision": 1, "services": []},
+            {
+                "host": "b" * 64,
+                "version": 1,
+                "complete": True,
+                "service_count": 0,
+                "generation": "d" * 64,
+                "revision": 1,
+                "services": [],
+            },
             None,
         )
         self.assertEqual(window.catalogs[peer]["catalog"]["host"], peer)

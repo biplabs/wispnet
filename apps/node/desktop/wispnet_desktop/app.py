@@ -49,6 +49,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QLineEdit,
+    QComboBox,
     QFormLayout,
     QListWidget,
     QListWidgetItem,
@@ -491,7 +492,13 @@ class Window(QMainWindow):
         self.peer_busy.discard(peer)
         previous = self.catalogs.get(peer, {})
         if error:
-            previous["state"] = "Denied" if "denied" in error.lower() else "Unavailable"
+            previous["state"] = (
+                "Denied"
+                if "denied" in error.lower()
+                else "Catalog rejected; refresh or verify this host"
+                if "catalog" in error.lower()
+                else "Unavailable"
+            )
             self.catalogs[peer] = previous
         elif not valid_catalog(peer, value):
             previous["state"] = "Catalog rejected; invalid or wrong host"
@@ -538,7 +545,12 @@ class Window(QMainWindow):
                     [
                         self.peer_names.get(peer, "Host " + peer[:8]) + "\n" + peer,
                         state,
-                        service["id"] if service else "No services",
+                        (
+                            service["display_name"]
+                            + (" · TCP" if service["kind"] == "tcp" else "")
+                        )
+                        if service
+                        else "No services",
                         age,
                     ]
                 )
@@ -589,6 +601,10 @@ class Window(QMainWindow):
         form = QFormLayout(dialog)
         name = QLineEdit()
         backend = QLineEdit("127.0.0.1:")
+        display_name = QLineEdit()
+        kind = QComboBox()
+        kind.addItem("Web service", "http")
+        kind.addItem("TCP (native tunnel CLI)", "tcp")
         clients = QListWidget()
         for client in self.snapshot["host"]["clients"]:
             row = QListWidgetItem(client["name"] + " · " + client["peer"][:12])
@@ -613,7 +629,11 @@ class Window(QMainWindow):
             name.setText(existing)
             name.setReadOnly(True)
             backend.setText(service["backend"])
+            display_name.setText(service["display_name"])
+            kind.setCurrentIndex(0 if service["kind"] == "http" else 1)
         form.addRow("Service ID", name)
+        form.addRow("Display name", display_name)
+        form.addRow("Service type", kind)
         form.addRow("Loopback backend", backend)
         form.addRow("Grant access to", clients)
         buttons = QDialogButtonBox(
@@ -643,6 +663,8 @@ class Window(QMainWindow):
                     "expected_revision": revision,
                     "id": name.text().strip(),
                     "backend": backend.text().strip(),
+                    "display_name": display_name.text().strip() or None,
+                    "kind": kind.currentData(),
                     "allow": [
                         clients.item(i).data(Qt.ItemDataRole.UserRole)
                         for i in range(clients.count())
@@ -975,6 +997,12 @@ class Window(QMainWindow):
         if not self.access.isChecked():
             self.message.setText("Enable Browser access first")
             return
+        record = next(
+            s for s in self.catalogs[peer]["catalog"]["services"] if s["id"] == service
+        )
+        if record["kind"] != "http":
+            self.message.setText("This TCP service requires the native tunnel CLI")
+            return
         self.submit(
             lambda: self.api.request(
                 op="open", host=peer, service=service, incarnation=incarnation
@@ -1160,7 +1188,8 @@ def appearance(app):
             border-bottom: 1px solid #243659;
             font-weight: 600;
         }
-        QLineEdit, QListWidget {
+        QLineEdit,
+    QComboBox, QListWidget {
             background: #0d1526;
             color: #edf2ff;
             padding: 10px 12px;

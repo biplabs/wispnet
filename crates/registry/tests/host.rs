@@ -11,6 +11,91 @@ fn directory() -> tempfile::TempDir {
     dir
 }
 
+#[tokio::test]
+async fn complete_filtered_catalog_metadata_and_type_changes_are_host_local() {
+    use wipsnet_core::host::ServiceKind;
+    let id = Identity::generate().endpoint_id();
+    let client = Identity::generate().endpoint_id();
+    let dir = directory();
+    host::initialize(dir.path(), id).unwrap();
+    let (mut store, secret) = host::owner_store(dir.path(), id).unwrap();
+    store
+        .host_mutate(
+            id,
+            &secret,
+            Mutation::Approve {
+                expected_revision: 0,
+                peer: client,
+                name: "Client".into(),
+            },
+        )
+        .unwrap();
+    let operation = |revision, name: Option<String>, kind| Mutation::Service {
+        expected_revision: revision,
+        id: "website".into(),
+        backend: "127.0.0.1:8080".parse().unwrap(),
+        allow: vec![client],
+        display_name: name,
+        kind,
+    };
+    store
+        .host_mutate(
+            id,
+            &secret,
+            operation(1, Some("My site".into()), Some(ServiceKind::Http)),
+        )
+        .unwrap();
+    let first = store.host_snapshot(id).unwrap().services[0]
+        .incarnation
+        .clone();
+    store
+        .host_mutate(id, &secret, operation(2, None, None))
+        .unwrap();
+    assert_eq!(
+        store.host_snapshot(id).unwrap().services[0].display_name,
+        "My site"
+    );
+    assert_eq!(
+        store.host_snapshot(id).unwrap().services[0].incarnation,
+        first
+    );
+    assert!(
+        store
+            .host_mutate(id, &secret, operation(3, Some("bad\nname".into()), None))
+            .is_err()
+    );
+    assert_eq!(store.host_snapshot(id).unwrap().revision, 3);
+    store
+        .host_mutate(id, &secret, operation(3, None, Some(ServiceKind::Tcp)))
+        .unwrap();
+    assert_ne!(
+        store.host_snapshot(id).unwrap().services[0].incarnation,
+        first
+    );
+    drop(store);
+    let authority = host::Authority::open(dir.path(), id).unwrap();
+    let snapshot = authority.catalog(client).await.unwrap();
+    assert!(snapshot.valid(id));
+    assert_eq!(snapshot.services[0].kind, ServiceKind::Tcp);
+    assert_eq!(snapshot.services[0].display_name, "My site");
+    let (mut store, secret) = host::owner_store(dir.path(), id).unwrap();
+    store
+        .host_mutate(
+            id,
+            &secret,
+            Mutation::Remove {
+                expected_revision: 4,
+                id: "website".into(),
+            },
+        )
+        .unwrap();
+    let removed = authority.catalog(client).await.unwrap();
+    assert!(removed.valid(id));
+    assert_eq!(removed.service_count, 0);
+    assert!(removed.services.is_empty());
+    assert!(removed.follows(&snapshot));
+}
+
 #[test]
 fn service_incarnation_persists_on_edit_and_restart_but_not_recreation() {
     let id = Identity::generate().endpoint_id();
@@ -18,6 +103,8 @@ fn service_incarnation_persists_on_edit_and_restart_but_not_recreation() {
     host::initialize(dir.path(), id).unwrap();
     let (mut store, secret) = host::owner_store(dir.path(), id).unwrap();
     let edit = |revision| Mutation::Service {
+        display_name: None,
+        kind: None,
         expected_revision: revision,
         id: "website".into(),
         backend: "127.0.0.1:8080".parse().unwrap(),
@@ -56,12 +143,12 @@ fn service_incarnation_persists_on_edit_and_restart_but_not_recreation() {
     // Simulate the real schema-6 table, preserving the authority and grants.
     drop(store);
     let db = rusqlite::Connection::open(dir.path().join("host.sqlite3")).unwrap();
-    db.execute_batch("ALTER TABLE host_services DROP COLUMN incarnation; PRAGMA user_version=6;")
+    db.execute_batch("ALTER TABLE host_services DROP COLUMN incarnation; ALTER TABLE host_services DROP COLUMN display_name; ALTER TABLE host_services DROP COLUMN kind; PRAGMA user_version=6;")
         .unwrap();
     drop(db);
     let (mut store, _) = host::owner_store(dir.path(), id).unwrap();
     let migrated = store.host_snapshot(id).unwrap();
-    assert_eq!(migrated.revision, 5);
+    assert_eq!(migrated.revision, 6);
     assert_eq!(migrated.host, id);
     assert!(wipsnet_core::enrollment::valid_code(
         &migrated.services[0].incarnation
@@ -132,6 +219,8 @@ fn wrong_backend_unapproved_grants_and_legacy_in_place_conversion_fail_closed() 
                     host,
                     &secret,
                     Mutation::Service {
+                        display_name: None,
+                        kind: None,
                         expected_revision: 0,
                         id: "web".into(),
                         backend: backend.parse().unwrap(),
@@ -147,6 +236,8 @@ fn wrong_backend_unapproved_grants_and_legacy_in_place_conversion_fail_closed() 
                 host,
                 &secret,
                 Mutation::Service {
+                    display_name: None,
+                    kind: None,
                     expected_revision: 0,
                     id: "web".into(),
                     backend: "127.0.0.1:8080".parse().unwrap(),

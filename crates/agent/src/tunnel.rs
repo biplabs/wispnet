@@ -169,6 +169,8 @@ impl Services {
                 .map(|s| wipsnet_registry::host::LocalService {
                     id: s.id.clone(),
                     incarnation: String::new(),
+                    display_name: s.id.clone(),
+                    kind: wipsnet_core::host::ServiceKind::Tcp,
                     backend: s.backend,
                     allow: s.allow.clone(),
                 })
@@ -456,22 +458,23 @@ async fn serve_stream(
                     id.to_owned(),
                     service.backend,
                     service.incarnation.clone(),
+                    service.kind,
                 )
             })
     };
-    let (backend, service_id, binding, incarnation) = match timeout(HANDSHAKE_TIMEOUT, opened).await
-    {
-        Ok(Ok(backend)) => backend,
-        outcome => {
-            let status = match outcome {
-                Ok(Err(status)) => status,
-                _ => Status::Timeout,
-            };
-            let _ = reply(&mut send, status).await;
-            let _ = recv.stop(1u32.into());
-            return;
-        }
-    };
+    let (backend, service_id, binding, incarnation, kind) =
+        match timeout(HANDSHAKE_TIMEOUT, opened).await {
+            Ok(Ok(backend)) => backend,
+            outcome => {
+                let status = match outcome {
+                    Ok(Err(status)) => status,
+                    _ => Status::Timeout,
+                };
+                let _ = reply(&mut send, status).await;
+                let _ = recv.stop(1u32.into());
+                return;
+            }
+        };
     if !matches!(
         timeout(
             HANDSHAKE_TIMEOUT,
@@ -502,7 +505,7 @@ async fn serve_stream(
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             let allowed = timeout(std::time::Duration::from_secs(1), services.load()).await;
-            if !matches!(allowed, Ok(Ok(ref current)) if current.iter().any(|s| s.id == service_id && s.incarnation == incarnation && s.backend == binding && s.allow.contains(&peer)))
+            if !matches!(allowed, Ok(Ok(ref current)) if current.iter().any(|s| s.id == service_id && s.incarnation == incarnation && s.kind == kind && s.backend == binding && s.allow.contains(&peer)))
             {
                 break;
             }

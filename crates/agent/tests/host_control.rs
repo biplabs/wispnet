@@ -37,6 +37,8 @@ fn service(
         directory,
         host,
         Mutation::Service {
+            display_name: None,
+            kind: None,
             expected_revision: rev,
             id: "llama".into(),
             backend,

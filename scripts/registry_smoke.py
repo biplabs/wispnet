@@ -279,7 +279,7 @@ with tempfile.TemporaryDirectory(prefix="wipsnet-registry-") as temporary:
         revoked = next(d for d in listing()["devices"] if d["device"] == identity)
         assert revoked["state"] == "revoked" and revoked["revoked_at"] is not None
         with sqlite3.connect(restored / "registry.sqlite3") as db:
-            assert db.execute("PRAGMA user_version").fetchone() == (7,)
+            assert db.execute("PRAGMA user_version").fetchone() == (8,)
             assert db.execute("SELECT value FROM revision").fetchone() == (expected["revision"] + 1,)
     finally:
         if process and process.poll() is None:

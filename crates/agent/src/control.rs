@@ -126,23 +126,7 @@ pub async fn catalog_on(
         }
         let catalog: Catalog = serde_json::from_slice(&bytes)
             .map_err(|_| TunnelError::Transport("invalid catalog"))?;
-        if catalog.host != expected
-            || connection.remote_id() != expected
-            || catalog.revision > i64::MAX as u64
-            || catalog.services.len() > 128
-            || catalog
-                .services
-                .iter()
-                .map(|s| &s.id)
-                .collect::<std::collections::HashSet<_>>()
-                .len()
-                != catalog.services.len()
-            || !wipsnet_core::enrollment::valid_code(&catalog.generation)
-            || catalog.services.iter().any(|s| {
-                !wipsnet_core::protocol::valid_service_id(&s.id)
-                    || !wipsnet_core::enrollment::valid_code(&s.incarnation)
-            })
-        {
+        if !catalog.valid(expected) || connection.remote_id() != expected {
             return Err(TunnelError::Transport("catalog host or schema mismatch"));
         }
         Ok(catalog)

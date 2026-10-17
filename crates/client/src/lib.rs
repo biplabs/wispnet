@@ -87,6 +87,11 @@ impl Client {
         }))
     }
     pub async fn catalog(&self, host: EndpointId) -> Result<Value, String> {
+        let state = self.state.clone();
+        let epoch =
+            tokio::task::spawn_blocking(move || wipsnet_agent::catalogs::begin(&state, host))
+                .await
+                .map_err(|_| "Catalog baseline task failed")??;
         let target = self.target(host)?;
         let connection = wipsnet_agent::control::connect_target(&self.endpoint, target)
             .await
@@ -95,7 +100,15 @@ impl Client {
             .await
             .map_err(|e| e.to_string());
         connection.close(0u32.into(), b"catalog complete");
-        serde_json::to_value(result?).map_err(|_| "Invalid catalog".into())
+        let catalog = result?;
+        let state = self.state.clone();
+        let accepted = catalog.clone();
+        tokio::task::spawn_blocking(move || {
+            wipsnet_agent::catalogs::accept(&state, host, &epoch, &accepted)
+        })
+        .await
+        .map_err(|_| "Catalog baseline task failed")??;
+        serde_json::to_value(catalog).map_err(|_| "Invalid catalog".into())
     }
     pub fn target(&self, host: EndpointId) -> Result<iroh::EndpointAddr, String> {
         wipsnet_agent::tunnel::peer_target(
@@ -149,6 +162,10 @@ impl Client {
                 .map_err(|e| e.to_string())?;
                 wipsnet_agent::peers::save(&self.state, &bootstrap)
                     .map_err(|_| "Cannot save host pin")?;
+                let state = self.state.clone();
+                tokio::task::spawn_blocking(move || wipsnet_agent::catalogs::reset(&state, host))
+                    .await
+                    .map_err(|_| "Cannot reset catalog baseline")??;
                 Ok(json!({"state":"pending_owner_approval","host":pending.host.to_string()}))
             }
             "catalog" => {
@@ -188,10 +205,11 @@ impl Client {
                     // Only the owner-only node API constructs a local authority client.
                     // Local owner access needs neither a self-pin nor a self-grant.
                     let services = authority.services().await.map_err(|e| e.to_string())?;
-                    if !services
-                        .iter()
-                        .any(|s| s.id == id && s.incarnation == incarnation)
-                    {
+                    if !services.iter().any(|s| {
+                        s.id == id
+                            && s.incarnation == incarnation
+                            && s.kind == wipsnet_core::host::ServiceKind::Http
+                    }) {
                         return Err("Service no longer permitted".into());
                     }
                 } else {
@@ -203,8 +221,9 @@ impl Client {
                     }
                     let catalog = self.catalog(host).await?;
                     if !catalog["services"].as_array().is_some_and(|s| {
-                        s.iter()
-                            .any(|s| s["id"] == id && s["incarnation"] == incarnation)
+                        s.iter().any(|s| {
+                            s["id"] == id && s["incarnation"] == incarnation && s["kind"] == "http"
+                        })
                     }) {
                         return Err("Service no longer permitted".into());
                     }
@@ -254,6 +273,14 @@ pub fn call(text: &str) -> String {
         Err(error) => {
             let code = match error.as_str() {
                 "access denied" => "host_denied",
+                "catalog host or schema mismatch"
+                | "invalid catalog"
+                | "control frame truncated"
+                | "control trailing data"
+                | "control frame too large"
+                | "Catalog rollback, changed generation or inconsistent snapshot"
+                | "Catalog baseline unavailable or corrupt"
+                | "Pairing changed during catalog refresh" => "catalog_rejected",
                 "Service no longer permitted" => "service_denied",
                 "pairing request denied" => "invitation_denied",
                 "Expired invitation or wrong host pin" => "invitation_invalid",

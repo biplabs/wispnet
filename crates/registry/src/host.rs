@@ -10,7 +10,7 @@ use tokio::sync::Mutex;
 use wipsnet_core::{
     config::ServiceConfig,
     enrollment::valid_name,
-    host::{Catalog, Service},
+    host::{Catalog, Service, ServiceKind},
     identity::EndpointId,
     protocol::valid_service_id,
 };
@@ -40,6 +40,10 @@ pub enum Mutation {
         id: String,
         backend: std::net::SocketAddr,
         allow: Vec<EndpointId>,
+        #[serde(default)]
+        display_name: Option<String>,
+        #[serde(default)]
+        kind: Option<ServiceKind>,
     },
     Remove {
         expected_revision: u64,
@@ -87,6 +91,8 @@ pub struct Client {
 pub struct LocalService {
     pub id: String,
     pub incarnation: String,
+    pub display_name: String,
+    pub kind: ServiceKind,
     pub backend: std::net::SocketAddr,
     pub allow: Vec<EndpointId>,
 }
@@ -159,16 +165,27 @@ impl Store {
                     name,
                 });
             }
-            let mut stmt =
-                tx.prepare("SELECT id,backend,incarnation FROM host_services ORDER BY id")?;
+            let mut stmt = tx.prepare(
+                "SELECT id,backend,incarnation,display_name,kind FROM host_services ORDER BY id",
+            )?;
             for row in stmt.query_map([], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
                     r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
                 ))
             })? {
-                let (id, backend, incarnation) = row?;
+                let (id, backend, incarnation, display_name, kind) = row?;
+                if !valid_name(&display_name) {
+                    return Err(ControlError::Storage);
+                }
+                let kind = match kind.as_str() {
+                    "http" => ServiceKind::Http,
+                    "tcp" => ServiceKind::Tcp,
+                    _ => return Err(ControlError::Storage),
+                };
                 if !wipsnet_core::enrollment::valid_code(&incarnation) {
                     return Err(ControlError::Storage);
                 }
@@ -192,6 +209,8 @@ impl Store {
                 services.push(LocalService {
                     id,
                     incarnation,
+                    display_name,
+                    kind,
                     backend,
                     allow,
                 });
@@ -268,7 +287,12 @@ pub(crate) fn apply_mutation(
             )?;
         }
         Mutation::Service {
-            id, backend, allow, ..
+            id,
+            backend,
+            allow,
+            display_name,
+            kind,
+            ..
         } => {
             wipsnet_core::config::validate_services(&[ServiceConfig {
                 id: id.clone(),
@@ -294,7 +318,22 @@ pub(crate) fn apply_mutation(
                     return Err(ControlError::Forbidden);
                 }
             }
-            tx.execute("INSERT INTO host_services(id,backend,incarnation) VALUES(?1,?2,lower(hex(randomblob(32)))) ON CONFLICT(id) DO UPDATE SET backend=excluded.backend",params![id,backend.to_string()])?;
+            if display_name
+                .as_deref()
+                .is_some_and(|name| !valid_name(name))
+            {
+                return Err(ControlError::Invalid);
+            }
+            let kind = kind.map(|k| match k {
+                ServiceKind::Http => "http",
+                ServiceKind::Tcp => "tcp",
+            });
+            tx.execute("INSERT INTO host_services(id,backend,incarnation,display_name,kind)
+                VALUES(?1,?2,lower(hex(randomblob(32))),coalesce(?3,?1),coalesce(?4,'http'))
+                ON CONFLICT(id) DO UPDATE SET backend=excluded.backend,
+                incarnation=CASE WHEN ?4 IS NOT NULL AND ?4!=host_services.kind THEN lower(hex(randomblob(32))) ELSE host_services.incarnation END,
+                display_name=coalesce(?3,host_services.display_name),kind=coalesce(?4,host_services.kind)",
+                params![id,backend.to_string(),display_name,kind])?;
             tx.execute("DELETE FROM host_grants WHERE service=?1", [&id])?;
             for peer in allow {
                 tx.execute(
@@ -364,19 +403,25 @@ impl Authority {
         if !snapshot.clients.iter().any(|c| c.peer == peer) {
             return Err(ControlError::Forbidden);
         }
+        let services: Vec<Service> = snapshot
+            .services
+            .into_iter()
+            .filter(|s| s.allow.contains(&peer))
+            .map(|s| Service {
+                id: s.id,
+                incarnation: s.incarnation,
+                display_name: s.display_name,
+                kind: s.kind,
+            })
+            .collect();
         Ok(Catalog {
+            version: 1,
+            complete: true,
+            service_count: services.len() as u16,
             host: self.host,
             generation: snapshot.generation,
             revision: snapshot.revision,
-            services: snapshot
-                .services
-                .into_iter()
-                .filter(|s| s.allow.contains(&peer))
-                .map(|s| Service {
-                    id: s.id,
-                    incarnation: s.incarnation,
-                })
-                .collect(),
+            services,
         })
     }
 }
