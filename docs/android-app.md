@@ -180,7 +180,7 @@ The physical peer harness now generates a real PNG from each local target invita
 
 Observed on the physical Android 14 tablet (2026-10-16): local-first independent pairing passed with the real host-exported QR PNG decoder, unconfirmed review, malformed/oversized image rejection, cancelled-scan fallback, URL rejection and simulated scanner-result handling. Cold browsers, grant withdrawal, active revocation, restart denial and explicit re-pairing passed afterward. No camera was used or granted for this run. Live optical scanning and the Android image-picker chooser interaction remain unverified.
 
-For optimized AAB generation, upload signing, API 36/16 KB validation and the deferred Play internal camera check, see [Android internal-testing build](android-release.md).
+For optimized AAB generation, upload signing, API 36/16 KB validation and recorded internal Play publishing checkpoints, see [Android internal-testing build](android-release.md). Optical phone scanning and target approval are now recorded in [issue #17](https://github.com/biplabs/wispnet/issues/17); the preceding dated camera-less tablet check retains its original scope.
 
 ## Scanner launch regression
 

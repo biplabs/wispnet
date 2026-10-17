@@ -4,6 +4,10 @@ The desktop window and tray attach to the running node through its owner-only `n
 
 ## Build and install
 
+For installation without a checkout or Rust toolchain, use the
+[Linux distribution bundle](linux-distribution.md). Files-only staging keeps
+first-time initialization explicit and supports headless hosts.
+
 For an already initialized schema-2 node using `~/.config/wipsnet-node/host.toml`:
 
 ```sh
@@ -45,7 +49,8 @@ The tray reports node availability, the active-client total (live connections or
 
 `scripts/test.sh` includes real two-node local-socket tests for pairing/pins, target-owner approval, permissions, conflict rejection, browser bootstrap/service access, live connection increase/decrease, recent-activity refresh/expiry and revocation filtering, and native Stop, plus real owner-local HTTP/bootstrap/origin/removal/Stop checks with no self-pin or self-grant, and Qt offscreen tests for device selection, catalog persistence across window restart, rollback/generation rejection, stale Open blocking, local Open routing and token-free browser arguments. Cache regressions cover corrupt/oversized/foreign-host files, permissions, symlinks and deletion independent of pins. All original Rust/relay/browser tests remain local; the pre-push hook runs them. Qt tests use display fixtures; live installation is checked against KDE's registered StatusNotifierItem and actual node services/client records.
 
-The current catalog supplies service IDs, not richer descriptions or explicit web/non-web types. This desktop uses the existing HTTP browser gateway. Own-service local browsing and persistent desktop catalog caching are implemented. The broader full-power-off/rebuild acceptance under #11 remains separate work. Combined multi-host operation status is implemented below. The second physical computer can be headless; it does not require another desktop GUI. Service-ID removal/recreation generation semantics remain #8/#9 work; binding checks do not claim to distinguish recreation at the identical backend address. Package distribution beyond this development user-local installation remains #15. This checkpoint does not close those issues.
+The current catalog supplies service IDs, not richer descriptions or explicit web/non-web types. This desktop uses the existing HTTP browser gateway. Own-service local browsing and persistent desktop catalog caching are implemented. The broader full-power-off/rebuild acceptance under #11 remains separate work. Combined multi-host operation status is implemented below. The second physical computer can be headless; it does not require another desktop GUI. Service-ID removal/recreation generation semantics remain #8/#9 work; binding checks do not claim to distinguish recreation at the identical backend address. A checkout-independent Linux x86_64 bundle and installer are available; see
+[distribution](linux-distribution.md). Full release distribution acceptance remains #15. This checkpoint does not close those issues.
 
 ## Physical GUI/headless checkpoint — 2026-10-17
 

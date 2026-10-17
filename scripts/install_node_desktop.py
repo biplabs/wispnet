@@ -8,8 +8,16 @@ import filecmp
 import shutil
 import subprocess
 import time
+import hashlib
+import json
+import sys
 
 parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument(
+    "--no-start",
+    action="store_true",
+    help="Install files only; do not enable, start or restart services",
+)
 parser.add_argument(
     "--headless",
     action="store_true",
@@ -17,6 +25,24 @@ parser.add_argument(
 )
 args = parser.parse_args()
 ROOT = Path(__file__).resolve().parents[1]
+node_source = ROOT / "bin/wipsnet"
+if node_source.exists():
+    # Distribution checks happen before changing any installed file or service.
+    manifest = json.loads((ROOT / "manifest.json").read_text())
+    for name, expected in manifest["sha256"].items():
+        path = ROOT / name
+        if (
+            Path(name).is_absolute()
+            or ".." in Path(name).parts
+            or path.is_symlink()
+            or hashlib.sha256(path.read_bytes()).hexdigest() != expected
+        ):
+            raise SystemExit(f"Bundle checksum mismatch: {name}")
+else:
+    node_source = ROOT / "target/debug/wipsnet"
+if sys.version_info < (3, 11):
+    raise SystemExit("Python 3.11 or newer is required")
+subprocess.run([str(node_source), "--help"], check=True, stdout=subprocess.DEVNULL)
 home = Path.home()
 units = home / ".config/systemd/user"
 units.mkdir(parents=True, exist_ok=True)
@@ -26,11 +52,11 @@ if not node_unit.exists():
 node_binary = home / ".local/libexec/wipsnet-node/wipsnet"
 node_binary.parent.mkdir(parents=True, exist_ok=True)
 node_changed = not node_binary.exists() or not filecmp.cmp(
-    ROOT / "target/debug/wipsnet", node_binary, shallow=False
+    node_source, node_binary, shallow=False
 )
 if node_changed:
     node_temporary = node_binary.with_name("wipsnet.installing")
-    shutil.copy2(ROOT / "target/debug/wipsnet", node_temporary)
+    shutil.copy2(node_source, node_temporary)
     node_temporary.chmod(0o755)
     os.replace(node_temporary, node_binary)
 # The headless command shares the existing node API and needs only Python stdlib.
@@ -47,9 +73,12 @@ node_launcher.write_text(
     + ",*sys.argv[1:]])\n"
 )
 node_launcher.chmod(0o755)
-subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
-subprocess.run(["systemctl", "--user", "enable", "wipsnet-host.service"], check=True)
-if (
+if not args.no_start:
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+    subprocess.run(
+        ["systemctl", "--user", "enable", "wipsnet-host.service"], check=True
+    )
+if not args.no_start and (
     node_changed
     or subprocess.run(
         ["systemctl", "--user", "is-active", "--quiet", "wipsnet-host.service"]
@@ -104,6 +133,9 @@ applications.mkdir(parents=True, exist_ok=True)
 shutil.copy2(
     ROOT / "deploy/node/wispnet-desktop.service", units / "wispnet-desktop.service"
 )
+if args.no_start:
+    print("Installed desktop files; services were not enabled or started.")
+    raise SystemExit(0)
 subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
 subprocess.run(["systemctl", "--user", "enable", "wispnet-desktop.service"], check=True)
 subprocess.run(

@@ -37,7 +37,9 @@ Local tests exercise unapproved hello through a real TLS relay with UDP disabled
 unchanged authority/private-access denial, malformed/stalled requests, false
 response identity/version/schema, pin rejection before stream creation, CLI use,
 and shutdown cleanup. Linux namespace network auditing includes the relay hello
-in the existing host-control/CLI fixtures. Android app invitation UI remains #17/#12 work.
+in the existing host-control/CLI fixtures. Android invitation review, camera,
+code/file and QR-image routes are implemented; [app evidence](android-app.md)
+distinguishes optical phone scanning from tablet fixture coverage.
 
 ## Invitation contract and protected preflight
 

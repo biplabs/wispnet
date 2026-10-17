@@ -1,6 +1,7 @@
 # Android internal-testing build
 
-Live optical camera verification is deferred to the Play Console internal-testing track. Camera-free code, invitation-file and QR-image paths remain available. This guide prepares and validates an artifact; it does not publish to Play or claim that all #12/#10 acceptance is complete.
+Internal Play publishing and a real Play-phone optical scan/pending owner approval are recorded in
+[issue #17](https://github.com/biplabs/wispnet/issues/17). Camera-free code, invitation-file and QR-image paths are also implemented. See [app camera evidence](android-app.md#automatic-camera-qr-pairing) and the dated publishing checkpoint below; real-phone browser/lifecycle and broader #12/#10 acceptance remain open. Earlier preparation sections retain their dated scope.
 
 ## Build and inspect
 

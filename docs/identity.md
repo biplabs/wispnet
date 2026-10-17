@@ -12,8 +12,9 @@ cargo run -p wipsnet-cli -- agent --config "$HOME/.config/wipsnet/agent.toml"
 
 Initialization returns an existing valid identity unchanged. Status prints the
 configured device name and public endpoint ID, including while the agent runs.
-Device name is a display label, not an authenticated human identity. Enrollment,
-device approval and service grants are not implemented yet.
+Device name is a display label, not an authenticated human identity. Target-host
+pairing, approvals and service grants are implemented; see
+[pairing](pairing-bootstrap.md) and [host control](per-host-control.md).
 
 ## Linux storage
 
@@ -42,8 +43,10 @@ identity backups as secrets. Never copy a key to enroll another device.
 
 An agent holds a separate identity-use lease until shutdown. Reset and a second
 agent using the same state fail while that lease is held; status remains usable.
-Identity authentication alone does not authorize services. The [service tunnel](service-tunnel.md) enforces static host-side grants; registry
-policy and revocation remain #9 work.
+Identity authentication alone does not authorize services. Schema-2 hosts enforce
+current durable approvals/grants, including active-stream cancellation. The
+[static tunnel walkthrough](service-tunnel.md) retains its historical scope;
+see [current host control](per-host-control.md).
 
 ## Recovery and reset
 
@@ -55,8 +58,10 @@ hard links cause a safe failure. Stop the agent and inspect ownership, record
 integrity and links before removing a verified orphan. No automatic cleanup
 chooses an identity on your behalf.
 
-For deliberate replacement, stop the agent and revoke the old device in the
-controller first (revocation UI/API comes in #7). Copy its public ID from status:
+For deliberate replacement of a client identity, stop the agent and revoke its
+old public identity independently at every host that approved it. Host-authority
+identity replacement additionally requires explicit migration/re-pairing; these
+key-only commands do not migrate a host registry. Copy its public ID from status:
 
 ```sh
 cargo run -p wipsnet-cli -- identity-reset --config "$HOME/.config/wipsnet/agent.toml" --expect-id PUBLIC_ID
@@ -71,23 +76,16 @@ manual recovery requires stopping the agent and protecting or removing the bad
 record after recording/revoking the old public identity. Never delete the entire
 state directory merely to repair one key: future policy/state may live there.
 
-## Android protection strategy (implementation pending #12)
+## Android app protection
 
-Implement IdentityStore at the native boundary with the same explicit init,
-no-replacement, atomic-commit and reset semantics. The proposed approach wraps
-the Iroh seed with an Android Keystore AES-GCM key and stores ciphertext in private
-app storage excluded from backup. Use a fresh nonce for every encryption and bind
-record version/device metadata as authenticated data. A missing or invalidated
-wrapping key must fail closed rather than regenerate the endpoint identity.
-
-This proposed design would use Keystore to protect the wrapping key; Iroh
-signing would still use the software secret in memory.
-Hardware backing must be inspected on the actual device; Android documents that
-support depends on the algorithm and hardware configuration in its
-[Keystore guide](https://developer.android.com/privacy-and-security/keystore).
-Keystore lifecycle, backup exclusion, browser handoff and screen-off behavior
-still require Android implementation and physical-device validation. The shared
-Rust core is type-checked for Android ARM64, not an APK or secure-storage test.
+The native app wraps its Iroh seed using an Android Keystore AES-GCM key and
+stores the envelope in private app storage, with backup disabled. Missing or
+corrupt envelopes fail closed; startup does not silently replace the identity.
+Signing still uses software key material in memory. Hardware backing is
+device-dependent and is not claimed by this implementation. See the
+[Android app guide](android-app.md) for implementation and physical test scope.
+The shell-UID native diagnostic harness below uses separate filesystem keys;
+it does not establish app Keystore or Play-install acceptance.
 
 ## Local verification
 
@@ -104,4 +102,5 @@ The native Android enrollment harness uses this same private filesystem format
 under the shell UID in a temporary private directory. Its exclusive lease uses
 OS `flock` because Rust standard file locking is unsupported on Android. The
 [physical harness](enrollment.md) verifies on-device key creation and cross-process
-reset protection; app-scoped Android Keystore wrapping remains #12.
+reset protection. App-scoped Keystore wrapping is implemented separately;
+see [Android app](android-app.md).

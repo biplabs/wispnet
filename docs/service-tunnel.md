@@ -1,5 +1,9 @@
 # Authenticated service tunnel (#5)
 
+This is the historical schema-1 static-grant walkthrough. Current schema-2 hosts
+use durable live policy with active-stream cancellation and protected browser
+access; see [host control](per-host-control.md) and [desktop/headless](linux-desktop.md).
+
 The Rust agent can host fixed loopback TCP services over authenticated Iroh, with
 explicit static peer grants. The development client relays stdin/stdout over one
 service stream. It does not expose a local browser listener or replace #10's
@@ -45,14 +49,15 @@ prove different-machine, Wi-Fi, cellular or forced-relay operation.
 An absent transport section retains the original offline lifecycle mode. Services
 without transport fail configuration validation. The registry remains a lifecycle
 shell. Empty allow lists deny all peers. Changing static services/grants requires
-an agent restart, which closes all streams; live policy/revocation is #9.
+an agent restart, which closes all streams. This restriction applies to the
+static-grant fixture, not current schema-2 host authority.
 
 The CLI client takes its installation's identity-use lease for the whole session.
 Use separate host/client state for the development walkthrough; it cannot take
 that same lease while a separate agent process owns it. The library can open
 outgoing streams using a hosting agent's existing endpoint, and this simultaneous
-host/access behavior is tested in both directions. #11 will connect ordinary CLI
-commands to the running agent rather than start a duplicate installation.
+host/access behavior is tested in both directions. The installed `wispnet-node` CLI and desktop now attach to the running agent
+without starting a duplicate installation.
 
 ## Wire protocol
 

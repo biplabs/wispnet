@@ -22,6 +22,7 @@ python3 scripts/smoke.py
 python3 scripts/registry_smoke.py
 python3 scripts/host_smoke.py
 python3 scripts/test_node_desktop.py
+python3 -m unittest discover -s scripts -p test_linux_distribution.py
 QT_QPA_PLATFORM=offscreen uv run --project apps/node/desktop --locked python -m unittest discover -s apps/node/desktop/tests
 python3 -m unittest discover -s scripts -p test_android_release.py
 python3 -m unittest discover -s scripts -p test_android_publish.py

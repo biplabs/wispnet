@@ -45,8 +45,8 @@ or a persisted service cache; #9 owns cache/revocation integration.
 
 The pinned Iroh 1.3.0 API exposes `Endpoint::network_change()` for platforms whose
 native route monitor cannot observe changes. Its Android native monitor is a
-stub; a future Android app must forward its platform network callback to the
-same owned endpoint. Replacing its key or restarting the endpoint is unnecessary.
+stub; the Android app forwards its platform network callback to the
+same owned endpoint through AccessService/JNI. Replacing its key or restarting the endpoint is unnecessary.
 
 `peer-watch` provides a local SIGUSR1 bridge for native testing:
 
@@ -57,7 +57,7 @@ kill -USR1 WATCH_PID
 This cancels an in-flight read-only diagnostic if needed, notifies the existing
 endpoint, and probes again with the same pin and key. It does not accept remote
 administrative instructions. The signal bridge demonstrates the transport API;
-it does not implement Android app/JNI callback registration (#12).
+it is separate from the implemented Android app/JNI callback registration.
 
 The physical test in [native relay validation](native-relay-validation.md) keeps
 one Android watch process alive across Wi-Fi off/on, sends notifications after

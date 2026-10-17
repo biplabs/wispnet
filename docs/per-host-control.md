@@ -1,12 +1,13 @@
 # Independent host control: first #16 checkpoint
 
 [ADR 0002](decisions/0002-per-host-authority.md) is the accepted architecture.
-This checkpoint adds an explicit independent-host configuration, protected local
-administration, a host-local SQLite authority and a bounded Iroh catalog protocol
-on the service endpoint. It does not complete #16: full network-change/relay evidence (#13), target-bound invitations (#17), the complete service record model
-(#8), aggregate catalog synchronization and active-session cancellation (#9)
-remain open. Direct UDP and explicit TLS relay paths are tested locally; see
-[relay connectivity](relay-connectivity.md).
+Each host has an independent configuration, protected local administration,
+host-local SQLite authority and bounded Iroh catalog protocol on its service
+endpoint. Target-host invitations, active-stream cancellation, desktop/headless
+IPC and persistent desktop catalogs are implemented; see
+[pairing](pairing-bootstrap.md) and [desktop/headless](linux-desktop.md).
+Full-machine power-off, deployed relay replacement and the richer catalog/service
+incarnation model remain open acceptance work (#8/#9/#14/#18).
 
 ## Initialize each host independently
 
@@ -32,7 +33,7 @@ and `registry-directory` commands are rejected with schema-2 configurations.
 The agent holds one persistent identity lease and owns one Iroh endpoint with
 one accept loop for service and control ALPNs. The same endpoint can initiate
 outgoing connections; it does not require a second daemon or another copy of the
-private key. The interactive Linux access/IPC workflow remains #11; the standalone
+private key. The [Linux access/IPC workflow](linux-desktop.md) attaches to that endpoint; the standalone
 `host-catalog` diagnostic below uses a separate client's identity and cannot
 acquire the key lease of a running host agent.
 
@@ -108,9 +109,12 @@ in #8.
 Revocation removes the local approval and cascades its service grants. New control
 and service requests reread current local state, including on existing connections.
 There is no unrelated-host lease or catalog TTL controlling these durable grants.
-Already open service streams are not yet canceled by changes: measured runtime
-revocation/cancellation acknowledgement is #9. Do not treat this checkpoint as
-completion of that release requirement.
+Already open streams check durable policy every second, with a one-second store
+read deadline, and cancel on lost permission, removal, changed binding or unreadable
+authority. These are implementation deadlines, not a universal measured latency
+guarantee. Local and physical revocation evidence is recorded in the
+[Android](android-app.md) and [desktop](linux-desktop.md) guides; deployed relay
+replacement and final release measurements remain #9/#14/#18.
 
 ## Catalog/control transport
 
