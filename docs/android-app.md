@@ -181,3 +181,15 @@ The physical peer harness now generates a real PNG from each local target invita
 Observed on the physical Android 14 tablet (2026-10-16): local-first independent pairing passed with the real host-exported QR PNG decoder, unconfirmed review, malformed/oversized image rejection, cancelled-scan fallback, URL rejection and simulated scanner-result handling. Cold browsers, grant withdrawal, active revocation, restart denial and explicit re-pairing passed afterward. No camera was used or granted for this run. Live optical scanning and the Android image-picker chooser interaction remain unverified.
 
 For optimized AAB generation, upload signing, API 36/16 KB validation and the deferred Play internal camera check, see [Android internal-testing build](android-release.md).
+
+## Scanner launch regression
+
+The first Play camera attempt exposed a missing runtime dependency: ZXing 4.3.0's published POM omits AndroidX implementation dependencies. Opening its capture activity threw `NoClassDefFoundError: androidx.core.content.ContextCompat`. Wispnet now explicitly packages pinned AndroidX Core 1.17.0; it uses the Activity-based scanner API rather than the Fragment integration.
+
+On a disposable camera-equipped Android 15 x86_64 emulator, build/install matching debug app and test APKs with `-PwispnetAndroidAbi=x86_64`, grant CAMERA and POST_NOTIFICATIONS to `app.wispnet.android`, then run:
+
+```sh
+adb -s emulator-5584 shell am instrument -w -e mode scanner-launch app.wispnet.android.test/com.biplabs.wispnet.AppTestRunner
+```
+
+`ScannerChecks` opens the real scanner via the production button, waits for the capture activity, verifies the camera preview starts, and cancels back to the camera-free fallback. This test reproduced the pre-fix process crash and passed after the dependency fix. It requires a camera feature; the camera-less tablet cannot substitute. It does not establish optical QR recognition or a Play-signed phone install.
