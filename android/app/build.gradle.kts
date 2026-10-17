@@ -2,7 +2,7 @@ plugins { id("com.android.application") }
 android {
     namespace = "com.biplabs.wispnet"
     compileSdk = 36
-    defaultConfig { applicationId = "com.biplabs.wispnet"; minSdk = 34; targetSdk = 36; versionCode = providers.gradleProperty("wispnetVersionCode").orElse("1").get().toInt(); versionName = providers.gradleProperty("wispnetVersionName").orElse("0.1.0").get(); testInstrumentationRunner = "com.biplabs.wispnet.AppTestRunner"; ndk { abiFilters += providers.gradleProperty("wispnetAndroidAbi").orElse("arm64-v8a").get() } }
+    defaultConfig { applicationId = "app.wispnet.android"; minSdk = 34; targetSdk = 36; versionCode = providers.gradleProperty("wispnetVersionCode").orElse("1").get().toInt(); versionName = providers.gradleProperty("wispnetVersionName").orElse("0.1.0").get(); testInstrumentationRunner = "com.biplabs.wispnet.AppTestRunner"; ndk { abiFilters += providers.gradleProperty("wispnetAndroidAbi").orElse("arm64-v8a").get() } }
     val uploadEnvironment = listOf("WIPSNET_UPLOAD_KEYSTORE", "WIPSNET_UPLOAD_STORE_PASSWORD", "WIPSNET_UPLOAD_KEY_ALIAS", "WIPSNET_UPLOAD_KEY_PASSWORD")
     val supplied = uploadEnvironment.map { providers.environmentVariable(it).orNull }
     require(supplied.all { it == null } || supplied.all { !it.isNullOrBlank() }) { "Supply all upload signing environment variables, or none for an unsigned build" }

@@ -16,7 +16,7 @@ class ReleaseChecks(unittest.TestCase):
         for data in [self.elf(4096),self.elf(relro_end=4096),self.elf(machine=62),self.elf()[:80]]:
             with self.assertRaises(ValueError):check_elf(data,'arm64-v8a')
     def test_manifest_rejects_debug_backup_old_target_and_required_camera(self):
-        manifest='<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.biplabs.wispnet" android:versionCode="2"><uses-sdk android:targetSdkVersion="36"/><uses-feature android:name="android.hardware.camera.any" android:required="false"/><application android:debuggable="false" android:allowBackup="false"/></manifest>'
+        manifest='<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="app.wispnet.android" android:versionCode="2"><uses-sdk android:targetSdkVersion="36"/><uses-feature android:name="android.hardware.camera.any" android:required="false"/><application android:debuggable="false" android:allowBackup="false"/></manifest>'
         self.assertEqual(check_manifest(manifest),'2')
         for invalid in [manifest.replace('targetSdkVersion="36"','targetSdkVersion="35"'),manifest.replace('debuggable="false"','debuggable="true"'),manifest.replace('allowBackup="false"','allowBackup="true"'),manifest.replace('required="false"','required="true"')]:
             with self.assertRaises(ValueError):check_manifest(invalid)

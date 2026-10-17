@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from check_android_release import check
 
-PACKAGE='com.biplabs.wispnet'
+PACKAGE='app.wispnet.android'
 BASE=f'https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{PACKAGE}/edits'
 MEDIA=f'https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications/{PACKAGE}/edits'
 

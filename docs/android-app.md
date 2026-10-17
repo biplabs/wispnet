@@ -83,7 +83,7 @@ The host now rechecks durable policy for active service streams approximately on
 
 Authenticated catalog denial has a distinct native error code. The app retains cached catalog provenance while marking a host's denial and disabling its cached Open controls. Pending approval, unavailable/unverified responses, service withdrawal, and a host's explicit denial are distinct states. An outage does not erase an already-known denial or silently promote a pending request. Other hosts continue refreshing independently. Re-pairing is an explicit target-host request and still needs that host's approval and fresh service grants.
 
-The physical permission harness uses a separately installed `com.biplabs.wispnet.peercheck` app sandbox. Clearing that sandbox produces fresh test identities without touching the normal app's Keystore key, pins, or host grants. It temporarily stops only one **node** service at a time; the independent desktop relay keeps running. It creates unique loopback fixture services, removes them, revokes test peers, restores both node services, and uninstalls the test variant afterward.
+The physical permission harness uses a separately installed `app.wispnet.android.peercheck` app sandbox. Clearing that sandbox produces fresh test identities without touching the normal app's Keystore key, pins, or host grants. It temporarily stops only one **node** service at a time; the independent desktop relay keeps running. It creates unique loopback fixture services, removes them, revokes test peers, restores both node services, and uninstalls the test variant afterward.
 
 ```sh
 scripts/build_android.sh

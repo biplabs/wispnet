@@ -42,11 +42,11 @@ def main():
                         remote_files.append(path);local=root/f'invitation-{i}.json'
                         run(['scp','-q','-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','desktop.home:'+path,local])
                     else:local=Path(path)
-                    adb('shell','-T',shlex.join(['run-as','com.biplabs.wispnet','sh','-c',f'umask 077; cat > files/invitation-{i}.json']),input=local.read_text())
-            adb('shell','pm','grant','com.biplabs.wispnet','android.permission.POST_NOTIFICATIONS')
+                    adb('shell','-T',shlex.join(['run-as','app.wispnet.android','sh','-c',f'umask 077; cat > files/invitation-{i}.json']),input=local.read_text())
+            adb('shell','pm','grant','app.wispnet.android','android.permission.POST_NOTIFICATIONS')
             command=['adb','-s',args.serial,'shell','am','instrument','-w','-e','host_a',hosts[0]['host'],'-e','host_b',hosts[1]['host']]
             if args.resume:command+=['-e','mode','resume']
-            command+=['com.biplabs.wispnet.test/com.biplabs.wispnet.AppTestRunner']
+            command+=['app.wispnet.android.test/com.biplabs.wispnet.AppTestRunner']
             with open('/tmp/wispnet-android-instrumentation.log','w') as log:
                 process=subprocess.Popen(command,stdout=log,stderr=log,text=True)
                 if not args.resume:
@@ -76,7 +76,7 @@ def main():
         finally:
             if process and process.poll() is None:process.terminate();process.wait(timeout=10)
             for file in remote_files:run([*SSH,'desktop.home',shlex.join(['rm','-f',file])])
-            for i in range(2):adb('shell','run-as','com.biplabs.wispnet','rm','-f',f'files/invitation-{i}.json')
+            for i in range(2):adb('shell','run-as','app.wispnet.android','rm','-f',f'files/invitation-{i}.json')
     print('Installed app pairing, independent catalogs and normal-browser handoff passed; hosts/app pairing retained')
 
 if __name__=='__main__':main()

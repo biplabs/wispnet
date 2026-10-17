@@ -72,7 +72,7 @@ def main():
     original_configs=[]
 
     def relay(action):return run([*SSH,'desktop.home','systemctl --user '+action+' wipsnet-relay.service'])
-    def ack():adb('shell','run-as','com.biplabs.wispnet','touch','files/lifecycle-continue')
+    def ack():adb('shell','run-as','app.wispnet.android','touch','files/lifecycle-continue')
     def awake():adb('shell','input','keyevent','224');adb('shell','wm','dismiss-keyguard');adb('shell','input','swipe','600','1400','600','300','300')
     marker=Path('/tmp/wispnet-network-switch-ready');marker.unlink(missing_ok=True)
     fixture='lifecycle-'+uuid.uuid4().hex[:12];registered=False;process=None
@@ -96,7 +96,7 @@ def main():
         request=Path(temporary)/'request.json'
         def mutate(value):
             value['expected_revision']=json.loads(owner('host-status').stdout)['revision'];request.write_text(json.dumps(value));request.chmod(0o600);owner('host-mutate','--request',request)
-        def command(mode):return ['adb','-s',args.serial,'shell','am','instrument','-w','-e','host_a',hosts[0]['host'],'-e','host_b',hosts[1]['host'],'-e','fixture',fixture,'-e','mode',mode,'com.biplabs.wispnet.test/com.biplabs.wispnet.AppTestRunner']
+        def command(mode):return ['adb','-s',args.serial,'shell','am','instrument','-w','-e','host_a',hosts[0]['host'],'-e','host_b',hosts[1]['host'],'-e','fixture',fixture,'-e','mode',mode,'app.wispnet.android.test/com.biplabs.wispnet.AppTestRunner']
         try:
             if args.force_relay:
                 for record in hosts:
@@ -107,7 +107,7 @@ def main():
                     host_command(record,['systemctl','--user','restart','wipsnet-host.service'])
                 print('Both host agents use relay-only transports; direct IP transports disabled',flush=True)
             mutate({'op':'service','id':fixture,'backend':f'127.0.0.1:{server.server_port}','allow':[tablet]});registered=True
-            adb('shell','am','force-stop','com.biplabs.wispnet');awake();adb('shell','settings','put','system','screen_off_timeout','1800000')
+            adb('shell','am','force-stop','app.wispnet.android');awake();adb('shell','settings','put','system','screen_off_timeout','1800000')
             adb('shell','svc','power','stayon','usb')
             log=Path('/tmp/wispnet-app-lifecycle.log');handled=set();start=time.monotonic()
             with log.open('w') as output:
@@ -140,7 +140,7 @@ def main():
                                     time.sleep(.5)
                             ack()
                         elif stage=='kill-ready':
-                            adb('shell','am','force-stop','com.biplabs.wispnet');process.wait(timeout=15)
+                            adb('shell','am','force-stop','app.wispnet.android');process.wait(timeout=15)
                             cold=run(command('lifecycle-cold'),timeout=120);log.write_text(text+'\n'+cold.stdout)
                             assert 'result=passed' in cold.stdout,cold.stdout
                             assert server.posts==1,'Side-effecting POST was replayed'
@@ -155,9 +155,9 @@ def main():
                 try:action()
                 except Exception as failure:cleanup_errors.append(failure)
             if process and process.poll() is None:
-                cleanup(lambda:adb('shell','am','force-stop','com.biplabs.wispnet',ok=None))
+                cleanup(lambda:adb('shell','am','force-stop','app.wispnet.android',ok=None))
                 cleanup(lambda:process.wait(timeout=15))
-            cleanup(lambda:adb('shell','am','force-stop','com.biplabs.wispnet',ok=None))
+            cleanup(lambda:adb('shell','am','force-stop','app.wispnet.android',ok=None))
             cleanup(lambda:adb('shell','svc','wifi','enable',ok=None))
             cleanup(lambda:adb('shell','dumpsys','deviceidle','unforce',ok=None))
             cleanup(lambda:adb('shell','dumpsys','battery','reset',ok=None))
@@ -168,7 +168,7 @@ def main():
             for record,content in reversed(original_configs):
                 cleanup(lambda record=record,content=content:write_config(record,content))
                 cleanup(lambda record=record:host_command(record,['systemctl','--user','restart','wipsnet-host.service']))
-            cleanup(lambda:adb('shell','run-as','com.biplabs.wispnet','rm','-f','files/lifecycle-continue','files/lifecycle-evidence.json',ok=None))
+            cleanup(lambda:adb('shell','run-as','app.wispnet.android','rm','-f','files/lifecycle-continue','files/lifecycle-evidence.json',ok=None))
             marker.unlink(missing_ok=True);cleanup(awake)
             if cleanup_errors:raise RuntimeError('Lifecycle cleanup failed; inspect device and host state') from cleanup_errors[0]
 

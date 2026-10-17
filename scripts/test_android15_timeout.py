@@ -8,9 +8,9 @@ import argparse
 import subprocess
 from relay_smoke import run
 
-PKG='com.biplabs.wispnet.peercheck'
+PKG='app.wispnet.android.peercheck'
 def main():
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--serial',required=True);parser.add_argument('--package',choices=['com.biplabs.wispnet.peercheck','com.biplabs.wispnet'],default=PKG);args=parser.parse_args();package=args.package
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--serial',required=True);parser.add_argument('--package',choices=['app.wispnet.android.peercheck','app.wispnet.android'],default=PKG);args=parser.parse_args();package=args.package
     assert args.serial.startswith('emulator-'),'Timeout override is restricted to a disposable emulator'
     def adb(*cmd,**kwargs):return run(['adb','-s',args.serial,*cmd],**kwargs)
     assert int(adb('shell','getprop','ro.build.version.sdk').stdout.strip())>=35,'Requires Android 15+'

@@ -50,7 +50,7 @@ def check_elf(data,abi):
 
 def check_manifest(text):
     manifest=ET.fromstring(text);app=manifest.find('application');sdk=manifest.find('uses-sdk')
-    if manifest.get('package')!='com.biplabs.wispnet':raise ValueError('Unexpected release application ID')
+    if manifest.get('package')!='app.wispnet.android':raise ValueError('Unexpected release application ID')
     if int(manifest.get(ANDROID+'versionCode','0'))<=0:raise ValueError('Invalid version code')
     if app is None or app.get(ANDROID+'debuggable','false')!='false' or app.get(ANDROID+'allowBackup')!='false':raise ValueError('Release must be non-debuggable with backup disabled')
     if sdk is None or int(sdk.get(ANDROID+'targetSdkVersion','0'))<36:raise ValueError('Release target must be API 36+')

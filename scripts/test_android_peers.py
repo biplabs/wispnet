@@ -18,7 +18,7 @@ import uuid
 import argparse
 from relay_smoke import ROOT,run
 from physical_relay_smoke import SSH
-PKG='com.biplabs.wispnet.peercheck'
+PKG='app.wispnet.android.peercheck'
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--serial',required=True);parser.add_argument('--order',choices=['both','local-first','desktop-first'],default='both');parser.add_argument('--acceptance',action='store_true');parser.add_argument('--session-expiry',action='store_true');parser.add_argument('--external-check',action='store_true');args=parser.parse_args()
