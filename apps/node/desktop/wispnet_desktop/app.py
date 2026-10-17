@@ -276,14 +276,14 @@ class Window(QMainWindow):
         self.access.setChecked(result["access_enabled"])
         count = len(result["connected_peers"])
         self.status.setText(
-            f"{result['host_name']}  ·  {count} connected clients  ·  {result['transport_streams']} transport streams  ·  Relay: {result['relay']}"
+            f"{result['host_name']}  ·  {count} clients with active connections  ·  {result['transport_streams']} transport streams  ·  Relay: {result['relay']}"
         )
         if self.tray:
             pending = sum(i["state"] == "pending" for i in result["invitations"])
             self.request_action.setText(f"{pending} pending pairing requests")
             self.tray.setIcon(icon(count, True))
             self.tray.setToolTip(
-                f"Wispnet · {count} connected clients · {len(result['host']['clients'])} approved · {pending} pending · relay {result['relay']}"
+                f"Wispnet · {count} clients with active connections · {len(result['host']['clients'])} approved · {pending} pending · relay {result['relay']}"
             )
         self.fill(
             self.services,

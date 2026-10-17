@@ -43,7 +43,7 @@ class DesktopChecks(unittest.TestCase):
             },
             None,
         )
-        self.assertIn("1 connected clients", window.status.text())
+        self.assertIn("1 clients with active connections", window.status.text())
         window.devices.selectRow(1)
         window.fill(
             window.devices,
