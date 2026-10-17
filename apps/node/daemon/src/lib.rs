@@ -27,6 +27,10 @@ impl State {
             "status" => {
                 let snapshot = self.authority.snapshot().await.map_err(|e| e.to_string())?;
                 let peers = self.counts.peers();
+                let mut recent = self.counts.recent_peers();
+                // A recent request is display metadata, never durable authority.
+                recent
+                    .retain(|peer, _| snapshot.clients.iter().any(|c| c.peer.to_string() == *peer));
                 let mut pins = Vec::new();
                 if let Ok(entries) = std::fs::read_dir(self.state_dir.join("peer-pins")) {
                     for entry in entries.take(129) {
@@ -46,7 +50,7 @@ impl State {
                 }
                 let (invitations, host_name) = self.owner(None).await?;
                 Ok(
-                    json!({"api_version":1,"host":snapshot,"host_name":host_name,"connected_peers":peers,"transport_streams":self.counts.streams(),"invitations":invitations,"peer_pins":pins,"relay":wipsnet_agent::diagnostics::relay_state(&self.client.endpoint,self.relay_configured),"access_enabled":self.client.gateway.is_enabled()}),
+                    json!({"api_version":1,"host":snapshot,"host_name":host_name,"connected_peers":peers,"recent_peers":recent,"presence_timeout_seconds":wipsnet_agent::tunnel::PRESENCE_TIMEOUT.as_secs(),"transport_streams":self.counts.streams(),"invitations":invitations,"peer_pins":pins,"relay":wipsnet_agent::diagnostics::relay_state(&self.client.endpoint,self.relay_configured),"access_enabled":self.client.gateway.is_enabled()}),
                 )
             }
             "mutate" => {

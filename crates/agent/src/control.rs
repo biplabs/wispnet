@@ -54,6 +54,7 @@ pub(crate) async fn serve_stream(
     mut recv: RecvStream,
     peer: EndpointId,
     authority: wipsnet_registry::host::Authority,
+    counts: crate::tunnel::ActiveCounts,
 ) {
     let outcome = timeout(HANDSHAKE_TIMEOUT, async {
         let request = read_frame(&mut recv, host::MAX_REQUEST).await?;
@@ -68,6 +69,7 @@ pub(crate) async fn serve_stream(
             }
             Err(_) => return Err(TunnelError::Transport("control unavailable")),
         };
+        counts.record_activity(peer);
         let bytes =
             serde_json::to_vec(&catalog).map_err(|_| TunnelError::Transport("invalid catalog"))?;
         if bytes.len() > host::MAX_RESPONSE {

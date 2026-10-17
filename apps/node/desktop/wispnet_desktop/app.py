@@ -163,7 +163,7 @@ class Window(QMainWindow):
             ["Service", "Backend", "Permitted clients"], "My services"
         )
         self.devices = self.table(
-            ["Client", "Peer ID", "Approval", "Live connections"], "Devices"
+            ["Client", "Peer ID", "Approval", "Live connections", "Activity"], "Devices"
         )
         self.peers = self.table(
             ["Peer", "Status", "Shared services", "Last refreshed"], "Peer services"
@@ -274,16 +274,19 @@ class Window(QMainWindow):
         self.snapshot = result
         self.access.setEnabled(True)
         self.access.setChecked(result["access_enabled"])
-        count = len(result["connected_peers"])
+        recent = result.get("recent_peers", {})
+        active = set(result["connected_peers"]) | set(recent)
+        count = len(active)
+        window = result.get("presence_timeout_seconds", 60)
         self.status.setText(
-            f"{result['host_name']}  ·  {count} clients with active connections  ·  {result['transport_streams']} transport streams  ·  Relay: {result['relay']}"
+            f"{result['host_name']}  ·  Active clients: {count}  ·  {result['transport_streams']} transport streams  ·  Activity window: {window}s  ·  Relay: {result['relay']}"
         )
         if self.tray:
             pending = sum(i["state"] == "pending" for i in result["invitations"])
             self.request_action.setText(f"{pending} pending pairing requests")
             self.tray.setIcon(icon(count, True))
             self.tray.setToolTip(
-                f"Wispnet · {count} clients with active connections · {len(result['host']['clients'])} approved · {pending} pending · relay {result['relay']}"
+                f"Wispnet · Active clients: {count} · {len(result['host']['clients'])} approved · {pending} pending · activity window {window}s · relay {result['relay']}"
             )
         self.fill(
             self.services,
@@ -306,11 +309,14 @@ class Window(QMainWindow):
                     c["peer"],
                     "Approved",
                     result["connected_peers"].get(c["peer"], 0),
+                    "Connected" if c["peer"] in result["connected_peers"] else (
+                        f"Seen {recent[c['peer']]}s ago" if c["peer"] in recent else "Idle"
+                    ),
                 ]
                 for c in clients
             ]
             + [
-                ["Unapproved/revoked peer", peer, "Not approved", count]
+                ["Unapproved/revoked peer", peer, "Not approved", count, "Transport only"]
                 for peer, count in result["connected_peers"].items()
                 if peer not in known
             ],

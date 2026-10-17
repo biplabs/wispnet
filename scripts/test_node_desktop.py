@@ -134,6 +134,7 @@ class NodeIntegration(unittest.TestCase):
                 catalog = api.request(op="catalog", host=pb)
                 self.assertEqual(catalog["host"], pb)
                 self.assertEqual(catalog["services"], [{"id": "website"}])
+                self.assertIn(pa, bapi.request(op="status")["recent_peers"])
                 api.request(op="enable")
                 url = api.request(op="open", host=pb, service="website")["url"]
                 from urllib.parse import urlsplit
@@ -202,6 +203,26 @@ class NodeIntegration(unittest.TestCase):
                 self.assertFalse(api.request(op="access_status")["enabled"])
                 with self.assertRaises(OSError):
                     socket.create_connection(("127.0.0.1", parsed.port), timeout=1)
+                # Successful requests retain recent activity after short connections
+                # close, without emitting background network traffic.
+                status = bapi.request(op="status")
+                self.assertEqual(status["presence_timeout_seconds"], 60)
+                self.assertEqual(status["connected_peers"], {})
+                self.assertIn(pa, status["recent_peers"])
+                deadline = time.monotonic() + 65
+                while pa in bapi.request(op="status")["recent_peers"]:
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(0.2)
+                self.assertEqual(len(bapi.request(op="status")["host"]["clients"]), 1)
+                api.request(op="catalog", host=pb)
+                self.assertIn(pa, bapi.request(op="status")["recent_peers"])
+                bapi.request(op="mutate", operation={
+                    "op": "revoke", "expected_revision": 2, "peer": pa
+                })
+                self.assertNotIn(pa, bapi.request(op="status")["recent_peers"])
+                with self.assertRaises(ValueError):
+                    api.request(op="catalog", host=pb)
+                self.assertNotIn(pa, bapi.request(op="status")["recent_peers"])
                 badpath = sa / "node.sock"
                 badpath.chmod(0o666)
                 with self.assertRaises(ValueError):

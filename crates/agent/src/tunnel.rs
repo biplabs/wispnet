@@ -31,6 +31,8 @@ use wipsnet_core::{
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 pub const BACKEND_TIMEOUT: Duration = Duration::from_secs(3);
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+/// UI activity indication only; never an authorization/session lease.
+pub const PRESENCE_TIMEOUT: Duration = Duration::from_secs(60);
 pub const MAX_SESSION: Duration = Duration::from_secs(3600);
 const BUFFER: usize = 16 * 1024;
 
@@ -51,11 +53,43 @@ impl std::error::Error for TunnelError {}
 
 #[derive(Clone, Default)]
 pub struct ActiveCounts {
+    seen: Arc<std::sync::Mutex<std::collections::BTreeMap<String, std::time::Instant>>>,
     connections: Arc<AtomicUsize>,
     streams: Arc<AtomicUsize>,
     peers: Arc<std::sync::Mutex<std::collections::BTreeMap<String, usize>>>,
 }
 impl ActiveCounts {
+    pub(crate) fn record_activity(&self, peer: EndpointId) {
+        self.record_activity_at(peer, std::time::Instant::now());
+    }
+    fn record_activity_at(&self, peer: EndpointId, now: std::time::Instant) {
+        let mut seen = self.seen.lock().unwrap_or_else(|e| e.into_inner());
+        seen.retain(|_, last| now.duration_since(*last) < PRESENCE_TIMEOUT);
+        let peer = peer.to_string();
+        if seen.len() >= 1024
+            && !seen.contains_key(&peer)
+            && let Some(oldest) = seen
+                .iter()
+                .min_by_key(|(_, last)| **last)
+                .map(|(peer, _)| peer.clone())
+        {
+            seen.remove(&oldest);
+        }
+        seen.entry(peer)
+            .and_modify(|last| *last = (*last).max(now))
+            .or_insert(now);
+    }
+    pub fn recent_peers(&self) -> std::collections::BTreeMap<String, u64> {
+        self.recent_peers_at(std::time::Instant::now())
+    }
+    fn recent_peers_at(&self, now: std::time::Instant) -> std::collections::BTreeMap<String, u64> {
+        let mut seen = self.seen.lock().unwrap_or_else(|e| e.into_inner());
+        seen.retain(|_, last| now.duration_since(*last) < PRESENCE_TIMEOUT);
+        seen.iter()
+            .map(|(peer, last)| (peer.clone(), now.duration_since(*last).as_secs()))
+            .collect()
+    }
+
     pub fn peers(&self) -> std::collections::BTreeMap<String, usize> {
         self.peers.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
@@ -335,13 +369,14 @@ async fn serve_connection(
                 };
                 let guard = CountGuard::new(counts.streams.clone());
                 let services = services.clone();
+                let counts = counts.clone();
                 tasks.spawn(async move {
                     let _permit = permit;
                     let _guard = guard;
                     if connection_control {
-                        if let Services::Host(host)=services {crate::control::serve_stream(send,recv,peer,host).await;}
+                        if let Services::Host(host)=services {crate::control::serve_stream(send,recv,peer,host,counts).await;}
                     } else {
-                        serve_stream(send, recv, peer, &services).await;
+                        serve_stream(send, recv, peer, &services, &counts).await;
                     }
                 });
             }
@@ -382,6 +417,7 @@ async fn serve_stream(
     mut recv: RecvStream,
     peer: EndpointId,
     services: &Services,
+    counts: &ActiveCounts,
 ) {
     let opened = async {
         let frame = read_frame(&mut recv).await?;
@@ -394,6 +430,7 @@ async fn serve_stream(
         if !service.allow.contains(&peer) {
             return Err(Status::Denied);
         }
+        counts.record_activity(peer);
         // This is deliberately after parsing + authenticating + checking the host-local grant.
         timeout(BACKEND_TIMEOUT, TcpStream::connect(service.backend))
             .await
@@ -450,6 +487,7 @@ async fn serve_stream(
         }
     };
     tokio::select! { _ = transfer => {}, _ = policy => {} }
+    counts.record_activity(peer);
 }
 
 /// Fixed per-direction buffer. Read idleness is shared across the session so
@@ -750,6 +788,31 @@ mod relay_tests;
 #[cfg(test)]
 mod idle_tests {
     use super::*;
+    #[test]
+    fn recent_activity_refreshes_and_expires_independently_of_live_connections() {
+        let counts = ActiveCounts::default();
+        let peer = SecretKey::generate().public();
+        assert!(counts.recent_peers().is_empty());
+        counts.record_activity(peer);
+        let first = counts.seen.lock().unwrap()[&peer.to_string()];
+        assert_eq!(
+            counts.recent_peers_at(first + Duration::from_secs(29))[&peer.to_string()],
+            29
+        );
+        assert!(counts.peers().is_empty());
+        // Refresh the timestamp with a later real request; old expiry must not win.
+        let later = first + Duration::from_secs(30);
+        counts.record_activity_at(peer, later);
+        // Concurrent requests may obtain the map lock out of timestamp order.
+        counts.record_activity_at(peer, first + Duration::from_secs(10));
+        assert!(
+            counts
+                .recent_peers_at(first + PRESENCE_TIMEOUT)
+                .contains_key(&peer.to_string())
+        );
+        assert!(counts.recent_peers_at(later + PRESENCE_TIMEOUT).is_empty());
+    }
+
     #[tokio::test]
     async fn one_way_progress_keeps_silent_direction_alive_but_total_idle_still_ends() {
         let (mut client, tunnel) = tokio::io::duplex(64);

@@ -27,6 +27,8 @@ class DesktopChecks(unittest.TestCase):
                 "access_enabled": False,
                 "host_name": "Local",
                 "connected_peers": {"a" * 64: 2},
+                "recent_peers": {"a" * 64: 1, "b" * 64: 12},
+                "presence_timeout_seconds": 60,
                 "transport_streams": 1,
                 "relay": "connected",
                 "invitations": [],
@@ -43,7 +45,15 @@ class DesktopChecks(unittest.TestCase):
             },
             None,
         )
-        self.assertIn("1 clients with active connections", window.status.text())
+        self.assertIn("Active clients: 2", window.status.text())
+        self.assertEqual(window.devices.item(0, 4).text(), "Connected")
+        self.assertEqual(window.devices.item(1, 4).text(), "Seen 12s ago")
+        # Expired recent activity does not hide an actually open connection.
+        snapshot = dict(window.snapshot)
+        snapshot["recent_peers"] = {}
+        window.updated(snapshot, None)
+        self.assertIn("Active clients: 1", window.status.text())
+        self.assertEqual(window.devices.item(1, 4).text(), "Idle")
         window.devices.selectRow(1)
         window.fill(
             window.devices,

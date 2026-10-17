@@ -248,6 +248,10 @@ async fn unauthorized_unknown_and_forged_requests_never_open_backend() {
         assert!(tunnel::open_service(&connection, "private").await.is_err());
     }
     assert_eq!(backend.total.load(Ordering::SeqCst), 0);
+    assert!(
+        host.counts().recent_peers().is_empty(),
+        "Denied/malformed requests must not refresh recent activity"
+    );
     unknown.close().await;
     endpoint.close().await;
     allowed_endpoint.close().await;
