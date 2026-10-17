@@ -24,7 +24,9 @@ def valid_catalog(peer, value):
         and len(value["services"]) <= 1024
         and all(
             isinstance(s, dict)
-            and set(s) == {"id"}
+            and set(s) == {"id", "incarnation"}
+            and isinstance(s["incarnation"], str)
+            and re.fullmatch(r"[0-9a-f]{64}", s["incarnation"])
             and isinstance(s["id"], str)
             and re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", s["id"])
             for s in value["services"]

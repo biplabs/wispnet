@@ -27,8 +27,9 @@ public final class AppTestRunner extends Instrumentation {
   }
  }
  static class UriParts {final String authority,token;final int port;UriParts(String url){android.net.Uri uri=android.net.Uri.parse(url);authority=uri.getAuthority();port=uri.getPort();token=uri.getFragment();}}
+ String incarnation(String host,String service)throws Exception{org.json.JSONArray services=Native.request(new JSONObject().put("op","catalog").put("host",host)).getJSONArray("services");for(int i=0;i<services.length();i++)if(service.equals(services.getJSONObject(i).getString("id")))return services.getJSONObject(i).getString("incarnation");throw new Exception("Service unavailable");}
  UriParts protectedRequestChecks(String host,String service)throws Exception{
-  UriParts url=new UriParts(Native.request(new JSONObject().put("op","open").put("host",host).put("service",service)).getString("url"));
+  UriParts url=new UriParts(Native.request(new JSONObject().put("op","open").put("host",host).put("service",service).put("incarnation",incarnation(host,service))).getString("url"));
   if(!http(url,"/","GET","","").startsWith("HTTP/1.1 401"))throw new Exception("Missing browser session accepted");
   if(!http(url,"/","GET","Origin: https://attacker.invalid\r\n","").startsWith("HTTP/1.1 403"))throw new Exception("Cross-origin browser request accepted");
   String exchange="Origin: http://"+url.authority+"\r\nAuthorization: Bearer "+url.token+"\r\n";

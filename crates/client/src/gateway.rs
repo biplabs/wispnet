@@ -59,6 +59,7 @@ impl Gateways {
         client: Arc<Client>,
         peer: EndpointId,
         service: String,
+        incarnation: String,
     ) -> Result<String, String> {
         if !self.enabled.load(Ordering::Acquire) {
             return Err("Start browser access first".into());
@@ -71,7 +72,7 @@ impl Gateways {
                         .await
                         .map_err(|e| e.to_string())?
                         .into_iter()
-                        .find(|s| s.id == service)
+                        .find(|s| s.id == service && s.incarnation == incarnation)
                         .ok_or("Service no longer permitted")?
                         .backend,
                 )
@@ -98,6 +99,7 @@ impl Gateways {
             client,
             peer,
             service,
+            incarnation,
             local_binding,
             authority,
             bootstrap: Mutex::new(Some(bootstrap)),
@@ -133,6 +135,7 @@ struct Route {
     client: Arc<Client>,
     peer: EndpointId,
     service: String,
+    incarnation: String,
     local_binding: Option<std::net::SocketAddr>,
     authority: String,
     bootstrap: Mutex<Option<String>>,
@@ -349,7 +352,11 @@ impl Route {
             match authority.services().await {
                 Ok(services) => services
                     .into_iter()
-                    .find(|s| s.id == self.service && Some(s.backend) == self.local_binding)
+                    .find(|s| {
+                        s.id == self.service
+                            && s.incarnation == self.incarnation
+                            && Some(s.backend) == self.local_binding
+                    })
                     .map(|s| s.backend),
                 Err(_) => None,
             }
@@ -384,7 +391,13 @@ impl Route {
                     return response(&mut socket, "502 Bad Gateway", "Host unavailable", "").await;
                 }
             };
-            match wipsnet_agent::tunnel::open_service(&_connection.0, &self.service).await {
+            match wipsnet_agent::tunnel::open_service_bound(
+                &_connection.0,
+                &self.service,
+                &self.incarnation,
+            )
+            .await
+            {
                 Ok(stream) => Box::new(stream),
                 Err(_) => {
                     return response(
@@ -505,7 +518,7 @@ impl Route {
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 let current =
                     tokio::time::timeout(Duration::from_secs(1), authority.services()).await;
-                if !matches!(current, Ok(Ok(ref services)) if services.iter().any(|s| s.id == self.service && Some(s.backend) == binding))
+                if !matches!(current, Ok(Ok(ref services)) if services.iter().any(|s| s.id == self.service && s.incarnation == self.incarnation && Some(s.backend) == binding))
                 {
                     return;
                 }
@@ -568,14 +581,14 @@ mod tests {
         assert!(
             client
                 .gateway
-                .open(client.clone(), peer, "website".into())
+                .open(client.clone(), peer, "website".into(), "a".repeat(64))
                 .await
                 .is_err()
         );
         client.gateway.enable();
         let url = client
             .gateway
-            .open(client.clone(), peer, "website".into())
+            .open(client.clone(), peer, "website".into(), "a".repeat(64))
             .await
             .unwrap();
         let (prefix, bootstrap) = url.split_once('#').unwrap();
@@ -641,7 +654,7 @@ mod tests {
         // A network interruption invalidates sessions but preserves explicit access.
         let reopened = client
             .gateway
-            .open(client.clone(), peer, "website".into())
+            .open(client.clone(), peer, "website".into(), "a".repeat(64))
             .await
             .unwrap();
         let new_port = reopened
@@ -663,7 +676,7 @@ mod tests {
         assert!(
             client
                 .gateway
-                .open(client.clone(), peer, "website".into())
+                .open(client.clone(), peer, "website".into(), "a".repeat(64))
                 .await
                 .is_err()
         );

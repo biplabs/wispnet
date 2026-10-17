@@ -14,7 +14,7 @@ class CacheChecks(unittest.TestCase):
                     "host": peer,
                     "generation": "g",
                     "revision": 2,
-                    "services": [{"id": "web.site"}],
+                    "services": [{"id": "web.site", "incarnation": "a" * 64}],
                 },
                 "fetched": 123.5,
             }
@@ -59,7 +59,10 @@ class CacheChecks(unittest.TestCase):
             peer = "a" * 64
             for services in [
                 [{"id": "<script>"}],
-                [{"id": "website"}, {"id": "website"}],
+                [
+                    {"id": "website", "incarnation": "a" * 64},
+                    {"id": "website", "incarnation": "a" * 64},
+                ],
             ]:
                 with self.assertRaises(ValueError):
                     cache.save(

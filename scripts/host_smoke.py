@@ -101,7 +101,7 @@ with tempfile.TemporaryDirectory(prefix="wipsnet-hosts-") as temporary:
             mutate(config, {"op": "approve", "expected_revision": 0, "peer": client_id, "name": "client"})
             mutate(config, {"op": "service", "expected_revision": 1, "id": "llama", "backend": binding, "allow": [client_id]})
             listing = catalog(client, host_id, address)
-            assert listing["host"] == host_id and listing["revision"] == 2 and listing["services"] == [{"id": "llama"}]
+            assert listing["host"] == host_id and listing["revision"] == 2 and [s["id"] for s in listing["services"]] == ["llama"]
             use(client, host_id, address)
             mutate(config, {"op": "approve", "expected_revision": 2, "peer": fresh_id, "name": "fresh client"})
             mutate(config, {"op": "service", "expected_revision": 3, "id": "llama", "backend": binding, "allow": [client_id, fresh_id]})

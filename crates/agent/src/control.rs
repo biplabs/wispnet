@@ -138,10 +138,10 @@ pub async fn catalog_on(
                 .len()
                 != catalog.services.len()
             || !wipsnet_core::enrollment::valid_code(&catalog.generation)
-            || catalog
-                .services
-                .iter()
-                .any(|s| !wipsnet_core::protocol::valid_service_id(&s.id))
+            || catalog.services.iter().any(|s| {
+                !wipsnet_core::protocol::valid_service_id(&s.id)
+                    || !wipsnet_core::enrollment::valid_code(&s.incarnation)
+            })
         {
             return Err(TunnelError::Transport("catalog host or schema mismatch"));
         }

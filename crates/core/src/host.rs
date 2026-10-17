@@ -21,4 +21,5 @@ pub struct Catalog {
 #[serde(deny_unknown_fields)]
 pub struct Service {
     pub id: String,
+    pub incarnation: String,
 }

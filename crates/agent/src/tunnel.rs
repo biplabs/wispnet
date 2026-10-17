@@ -162,9 +162,17 @@ enum Services {
     Host(wipsnet_registry::host::Authority),
 }
 impl Services {
-    async fn load(&self) -> Result<Vec<ServiceConfig>, Status> {
+    async fn load(&self) -> Result<Vec<wipsnet_registry::host::LocalService>, Status> {
         match self {
-            Self::Static(services) => Ok(services.as_ref().clone()),
+            Self::Static(services) => Ok(services
+                .iter()
+                .map(|s| wipsnet_registry::host::LocalService {
+                    id: s.id.clone(),
+                    incarnation: String::new(),
+                    backend: s.backend,
+                    allow: s.allow.clone(),
+                })
+                .collect()),
             Self::Host(host) => host.services().await.map_err(|_| Status::Denied),
         }
     }
@@ -421,12 +429,18 @@ async fn serve_stream(
 ) {
     let opened = async {
         let frame = read_frame(&mut recv).await?;
-        let id = protocol::decode_request(&frame)?;
+        let (id, incarnation) = protocol::decode_bound_request(&frame)?;
         let services = services.load().await?;
         let service = services
             .iter()
             .find(|service| service.id == id)
             .ok_or(Status::UnknownService)?;
+        if (!service.incarnation.is_empty()
+            && incarnation.as_deref() != Some(service.incarnation.as_str()))
+            || (service.incarnation.is_empty() && incarnation.is_some())
+        {
+            return Err(Status::Denied);
+        }
         if !service.allow.contains(&peer) {
             return Err(Status::Denied);
         }
@@ -436,9 +450,17 @@ async fn serve_stream(
             .await
             .map_err(|_| Status::BackendUnavailable)?
             .map_err(|_| Status::BackendUnavailable)
-            .map(|backend| (backend, id.to_owned(), service.backend))
+            .map(|backend| {
+                (
+                    backend,
+                    id.to_owned(),
+                    service.backend,
+                    service.incarnation.clone(),
+                )
+            })
     };
-    let (backend, service_id, binding) = match timeout(HANDSHAKE_TIMEOUT, opened).await {
+    let (backend, service_id, binding, incarnation) = match timeout(HANDSHAKE_TIMEOUT, opened).await
+    {
         Ok(Ok(backend)) => backend,
         outcome => {
             let status = match outcome {
@@ -480,7 +502,7 @@ async fn serve_stream(
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             let allowed = timeout(std::time::Duration::from_secs(1), services.load()).await;
-            if !matches!(allowed, Ok(Ok(ref current)) if current.iter().any(|s| s.id == service_id && s.backend == binding && s.allow.contains(&peer)))
+            if !matches!(allowed, Ok(Ok(ref current)) if current.iter().any(|s| s.id == service_id && s.incarnation == incarnation && s.backend == binding && s.allow.contains(&peer)))
             {
                 break;
             }
@@ -761,7 +783,27 @@ pub async fn connect(
     .map_err(|_| TunnelError::Transport("peer unavailable or identity/ALPN mismatch"))
 }
 pub async fn open_service(connection: &Connection, id: &str) -> Result<ServiceStream, TunnelError> {
-    let request = protocol::request(id).map_err(TunnelError::Status)?;
+    open_request(
+        connection,
+        protocol::request(id).map_err(TunnelError::Status)?,
+    )
+    .await
+}
+pub async fn open_service_bound(
+    connection: &Connection,
+    id: &str,
+    incarnation: &str,
+) -> Result<ServiceStream, TunnelError> {
+    open_request(
+        connection,
+        protocol::request_bound(id, incarnation).map_err(TunnelError::Status)?,
+    )
+    .await
+}
+async fn open_request(
+    connection: &Connection,
+    request: Vec<u8>,
+) -> Result<ServiceStream, TunnelError> {
     timeout(HANDSHAKE_TIMEOUT, async {
         let (mut send, mut recv) = connection
             .open_bi()

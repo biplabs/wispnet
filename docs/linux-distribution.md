@@ -85,8 +85,8 @@ automatic reinitialization. Graphical dependency/install failure is reported;
 installation is not a transactional rollback of all binaries and service files.
 
 Keep the previous bundle before upgrading. Rollback means reinstalling a verified
-older bundle whose binary supports the current SQLite schema. Schema-5 binaries
-cannot open schema-6 combined-operation state. Never downgrade by deleting the
+older bundle whose binary supports the current SQLite schema. Schema-5/6 binaries
+cannot open schema-7 service-incarnation state. Never downgrade by deleting the
 database or restoring an old grant snapshot: that could revive revoked access.
 Protected backup/recovery and stale-grant reconciliation remain #19; this package
 does not implement recovery or promise arbitrary downgrade compatibility.

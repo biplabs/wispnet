@@ -178,13 +178,20 @@ impl Client {
             "open" => {
                 let host = peer(value)?;
                 let id = argument(value, "service")?;
+                let incarnation = argument(value, "incarnation")?;
+                if !wipsnet_core::enrollment::valid_code(incarnation) {
+                    return Err("Refresh this service before opening".into());
+                }
                 if host == self.endpoint.id()
                     && let Some(authority) = &self.local_authority
                 {
                     // Only the owner-only node API constructs a local authority client.
                     // Local owner access needs neither a self-pin nor a self-grant.
                     let services = authority.services().await.map_err(|e| e.to_string())?;
-                    if !services.iter().any(|s| s.id == id) {
+                    if !services
+                        .iter()
+                        .any(|s| s.id == id && s.incarnation == incarnation)
+                    {
                         return Err("Service no longer permitted".into());
                     }
                 } else {
@@ -195,14 +202,17 @@ impl Client {
                         return Err("Pair with this host first".into());
                     }
                     let catalog = self.catalog(host).await?;
-                    if !catalog["services"]
-                        .as_array()
-                        .is_some_and(|s| s.iter().any(|s| s["id"] == id))
-                    {
+                    if !catalog["services"].as_array().is_some_and(|s| {
+                        s.iter()
+                            .any(|s| s["id"] == id && s["incarnation"] == incarnation)
+                    }) {
                         return Err("Service no longer permitted".into());
                     }
                 }
-                let url = self.gateway.open(self.clone(), host, id.to_owned()).await?;
+                let url = self
+                    .gateway
+                    .open(self.clone(), host, id.to_owned(), incarnation.to_owned())
+                    .await?;
                 Ok(json!({"url":url,"expires_in":gateway::SESSION_SECONDS}))
             }
             _ => Err("Unknown app operation".into()),

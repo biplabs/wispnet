@@ -659,7 +659,31 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
                     tunnel::peer_target(peer, transport.as_ref(), address)?,
                 )
                 .await?;
-                let stream = tunnel::open_service(&connection, &service).await?;
+                // An explicit CLI open resolves a fresh catalog. Browser/listing opens
+                // instead carry their already selected incarnation end to end.
+                let catalog = match wipsnet_agent::control::connect_target(
+                    &endpoint,
+                    tunnel::peer_target(peer, transport.as_ref(), address)?,
+                )
+                .await
+                {
+                    Ok(control) => {
+                        let result = wipsnet_agent::control::catalog_on(&control, peer).await;
+                        control.close(0u32.into(), b"catalog complete");
+                        result.ok()
+                    }
+                    Err(_) => None,
+                };
+                let stream = if let Some(catalog) = catalog {
+                    let selected = catalog.services.iter().find(|s| s.id == service).ok_or(
+                        tunnel::TunnelError::Status(wipsnet_core::protocol::Status::UnknownService),
+                    )?;
+                    tunnel::open_service_bound(&connection, &service, &selected.incarnation).await?
+                } else {
+                    // Legacy static fixtures have no control protocol. Dynamic hosts
+                    // categorically deny these unbound requests, including on failure.
+                    tunnel::open_service(&connection, &service).await?
+                };
                 let (mut reader, mut writer) = tokio::io::split(stream);
                 let mut input = tokio::io::stdin();
                 let mut output = tokio::io::stdout();

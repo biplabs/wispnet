@@ -64,7 +64,7 @@ final class PeerChecks {
     Future<Boolean> ended=reader.submit(()->{try{while(lines.readLine()!=null){}return true;}catch(IOException denied){return true;}finally{stream.close();}});
     barrier(t,"withdraw-service-grant");ended.get(8,TimeUnit.SECONDS);
     if(!a.request("/").startsWith("HTTP/1.1 403")||!b.request("/").contains("Peer fixture: Desktop"))throw new Exception("Service grant denial/isolation failed");
-    try{Native.request(new JSONObject().put("op","open").put("host",target).put("service",t.args.getString("fixture")));throw new Exception("Withdrawn service opened");}catch(Native.Failure denied){if(!"service_denied".equals(denied.code))throw denied;}
+    try{Native.request(new JSONObject().put("op","open").put("host",target).put("service",t.args.getString("fixture")).put("incarnation","a".repeat(64)));throw new Exception("Withdrawn service opened");}catch(Native.Failure denied){if(!"service_denied".equals(denied.code))throw denied;}
     available(t,target);JSONObject record=new HostStore(t.getTargetContext()).all().getJSONObject(target);
     if(record.getJSONObject("catalog").getJSONArray("services").length()!=0)throw new Exception("Withdrawn service remained in catalog");
     barrier(t,"restore-service-grant");available(t,target);browser(t,name);t.stage("service-withdrawal-stream-and-catalog-isolation");
@@ -79,7 +79,8 @@ final class PeerChecks {
     if(!b.request("/").contains("Peer fixture: Desktop"))throw new Exception("Revocation affected unrelated host session");
     String old=a.request("/");if(!old.startsWith("HTTP/1.1 403"))throw new Exception("Old browser session bypassed host revoke");
     // Click the cached entry before refreshing: a cached listing cannot authorize Open.
-    t.runOnMainSync(()->t.activity.open(target,t.args.getString("fixture")));
+    String incarnation=new HostStore(t.getTargetContext()).all().getJSONObject(target).getJSONObject("catalog").getJSONArray("services").getJSONObject(0).getString("incarnation");
+    t.runOnMainSync(()->t.activity.open(target,t.args.getString("fixture"),incarnation));
     t.await(()->"host_denied".equals(new HostStore(t.getTargetContext()).all().getJSONObject(target).optString("state")),"UI did not distinguish host denial");
     t.runOnMainSync(()->{android.widget.Button button=t.find(t.activity.root,"Open Local computer / "+t.args.getString("fixture"));if(button==null||button.isEnabled())throw new AssertionError("Denied cached entry still enabled");});
     barrier(t,"restart-revoked-host");

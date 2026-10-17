@@ -19,7 +19,7 @@ final class SpaceChecks {
   if(!management.managesHosts()||management.pairingScroll.getVisibility()!=View.VISIBLE)throw new Exception("Separate management activity missing");
   t.runOnMainSync(management::finish);t.waitForIdleSync();
   String host="4b5afc25209fc5aac1007be0b5a3f8adf1a1e7b7fdb8663a7f8a4ee2152f0320";
-  HostStore store=new HostStore(t.getTargetContext());store.paired(host,"j-strix");store.catalog(host,new JSONObject().put("host",host).put("generation","visual-fixture").put("revision",1).put("services",new JSONArray().put(new JSONObject().put("id","website")).put(new JSONObject().put("id","llama"))));
+  HostStore store=new HostStore(t.getTargetContext());store.paired(host,"j-strix");store.catalog(host,new JSONObject().put("host",host).put("generation","visual-fixture").put("revision",1).put("services",new JSONArray().put(new JSONObject().put("id","website").put("incarnation","a".repeat(64))).put(new JSONObject().put("id","llama").put("incarnation","b".repeat(64)))));
   t.runOnMainSync(()->{t.activity.showPairing(false);t.activity.render();});t.waitForIdleSync();
   if(t.activity.servicesScroll.getVisibility()!=View.GONE||t.activity.caption.getVisibility()!=View.VISIBLE||t.activity.status.getVisibility()!=View.GONE||!t.activity.caption.getText().toString().equals("enter wisp space"))throw new Exception("Idle home is cluttered");
   if(t.activity.stars.getWidth()!=t.activity.screen.getWidth()||t.activity.stars.getHeight()!=t.activity.screen.getHeight())throw new Exception("Warp background is not full bleed");
@@ -29,7 +29,7 @@ final class SpaceChecks {
   t.await(()->t.activity.spaceShown&&!t.activity.jumping,"Services not revealed after real access startup");
   if(!AccessService.enabled||!t.activity.access.isSelected()||t.activity.servicesScroll.getVisibility()!=View.VISIBLE||t.activity.caption.getVisibility()!=View.GONE)throw new Exception("Active UI and proxy disagree");
   // Reinstate deterministic display-only fixtures after the real unapproved catalog refresh.
-  store.paired(host,"j-strix");store.catalog(host,new JSONObject().put("host",host).put("generation","visual-fixture").put("revision",1).put("services",new JSONArray().put(new JSONObject().put("id","website")).put(new JSONObject().put("id","llama"))));
+  store.paired(host,"j-strix");store.catalog(host,new JSONObject().put("host",host).put("generation","visual-fixture").put("revision",1).put("services",new JSONArray().put(new JSONObject().put("id","website").put("incarnation","a".repeat(64))).put(new JSONObject().put("id","llama").put("incarnation","b".repeat(64)))));
   t.runOnMainSync(()->t.activity.render());Thread.sleep(500);snapshot(t,"space-services");
   t.runOnMainSync(()->t.activity.recreate());Thread.sleep(1000);t.resume();
   if(!t.activity.spaceShown||t.activity.pairingScroll.getVisibility()!=View.GONE)throw new Exception("Recreation lost active home");

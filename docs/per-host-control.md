@@ -6,8 +6,9 @@ host-local SQLite authority and bounded Iroh catalog protocol on its service
 endpoint. Target-host invitations, active-stream cancellation, desktop/headless
 IPC and persistent desktop catalogs are implemented; see
 [pairing](pairing-bootstrap.md) and [desktop/headless](linux-desktop.md).
-Full-machine power-off, deployed relay replacement and the richer catalog/service
-incarnation model remain open acceptance work (#8/#9/#14/#18).
+Service-incarnation removal/recreation safety is implemented; see
+[service lifecycle](service-lifecycle.md). Full-machine power-off, deployed relay
+replacement and richer catalog records remain open acceptance work (#8/#9/#14/#18).
 
 ## Initialize each host independently
 

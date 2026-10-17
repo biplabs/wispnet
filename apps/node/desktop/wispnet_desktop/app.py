@@ -943,8 +943,15 @@ class Window(QMainWindow):
             return
         host = self.snapshot["host"]["host"]
         service = self.services.item(row, 0).text()
+        incarnation = next(
+            s["incarnation"]
+            for s in self.snapshot["host"]["services"]
+            if s["id"] == service
+        )
         self.submit(
-            lambda: self.api.request(op="open", host=host, service=service),
+            lambda: self.api.request(
+                op="open", host=host, service=service, incarnation=incarnation
+            ),
             self.open_result,
         )
 
@@ -952,6 +959,16 @@ class Window(QMainWindow):
         if row >= len(self.peer_routes):
             return
         peer, service, state = self.peer_routes[row]
+        incarnation = next(
+            (
+                s.get("incarnation")
+                for s in self.catalogs.get(peer, {})
+                .get("catalog", {})
+                .get("services", [])
+                if s["id"] == service
+            ),
+            None,
+        )
         if not service or state != "Available" or not self.online:
             self.message.setText("Refresh this peer before opening its service")
             return
@@ -959,7 +976,9 @@ class Window(QMainWindow):
             self.message.setText("Enable Browser access first")
             return
         self.submit(
-            lambda: self.api.request(op="open", host=peer, service=service),
+            lambda: self.api.request(
+                op="open", host=peer, service=service, incarnation=incarnation
+            ),
             self.open_result,
         )
 

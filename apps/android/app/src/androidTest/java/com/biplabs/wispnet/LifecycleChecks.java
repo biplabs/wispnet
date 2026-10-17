@@ -10,7 +10,7 @@ import org.json.*;
 final class LifecycleChecks {
  static final class Session {
   final AppTestRunner t;final AppTestRunner.UriParts url;final String cookie;
-  Session(AppTestRunner runner,String host)throws Exception{t=runner;url=new AppTestRunner.UriParts(Native.request(new JSONObject().put("op","open").put("host",host).put("service",runner.args.getString("fixture"))).getString("url"));
+  Session(AppTestRunner runner,String host)throws Exception{t=runner;url=new AppTestRunner.UriParts(Native.request(new JSONObject().put("op","open").put("host",host).put("service",runner.args.getString("fixture")).put("incarnation",runner.incarnation(host,runner.args.getString("fixture")))).getString("url"));
    String r=t.http(url,"/_wipsnet/session","POST","Origin: http://"+url.authority+"\r\nAuthorization: Bearer "+url.token+"\r\n","");String c=null;for(String line:r.split("\r\n"))if(line.startsWith("Set-Cookie: "))c=line.substring(12).split(";",2)[0];if(c==null)throw new Exception("No lifecycle session");cookie=c;
   }
   String request(String path)throws Exception{return t.http(url,path,"GET","Cookie: "+cookie+"\r\n","");}

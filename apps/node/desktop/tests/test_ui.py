@@ -127,7 +127,7 @@ class DesktopChecks(unittest.TestCase):
                 "host": peer,
                 "generation": "g",
                 "revision": 5,
-                "services": [{"id": "website"}],
+                "services": [{"id": "website", "incarnation": "a" * 64}],
             }
             first = Window(api, tray=False)
             first.timer.stop()
@@ -173,7 +173,12 @@ class DesktopChecks(unittest.TestCase):
             window = Window(API(), tray=False)
             window.timer.stop()
             window.online = True
-            window.snapshot = {"host": {"host": "f" * 64}}
+            window.snapshot = {
+                "host": {
+                    "host": "f" * 64,
+                    "services": [{"id": "website", "incarnation": "a" * 64}],
+                }
+            }
             window.fill(window.services, [["website", "127.0.0.1:1234", "Nobody"]])
             window.services.selectRow(0)
             calls = []
@@ -186,7 +191,7 @@ class DesktopChecks(unittest.TestCase):
             with patch.object(window.api, "request", return_value={}) as call:
                 request()
                 call.assert_called_once_with(
-                    op="open", host="f" * 64, service="website"
+                    op="open", host="f" * 64, service="website", incarnation="a" * 64
                 )
             window.deleteLater()
 
@@ -242,7 +247,7 @@ class DesktopChecks(unittest.TestCase):
             "host": peer,
             "generation": "g",
             "revision": 2,
-            "services": [{"id": "website"}],
+            "services": [{"id": "website", "incarnation": "a" * 64}],
         }
         window.peer_updated(peer, good, None)
         window.peer_updated(peer, {**good, "revision": 1}, None)

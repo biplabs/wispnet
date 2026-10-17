@@ -48,6 +48,32 @@ pub fn request(id: &str) -> Result<Vec<u8>, Status> {
     frame.extend_from_slice(id.as_bytes());
     Ok(frame)
 }
+/// Version 2 pins the selected service incarnation. Version 1 is static-fixture only.
+pub fn request_bound(id: &str, incarnation: &str) -> Result<Vec<u8>, Status> {
+    if !valid_service_id(id) || !crate::enrollment::valid_code(incarnation) {
+        return Err(Status::Malformed);
+    }
+    let mut frame = Vec::with_capacity(36 + id.len());
+    frame.extend_from_slice(&((34 + id.len()) as u16).to_be_bytes());
+    frame.extend_from_slice(&2u16.to_be_bytes());
+    for i in (0..64).step_by(2) {
+        frame.push(u8::from_str_radix(&incarnation[i..i + 2], 16).map_err(|_| Status::Malformed)?);
+    }
+    frame.extend_from_slice(id.as_bytes());
+    Ok(frame)
+}
+pub fn decode_bound_request(payload: &[u8]) -> Result<(&str, Option<String>), Status> {
+    if payload.len() >= 35 && payload.len() <= MAX_FRAME && payload[..2] == 2u16.to_be_bytes() {
+        let id = std::str::from_utf8(&payload[34..]).map_err(|_| Status::Malformed)?;
+        if !valid_service_id(id) {
+            return Err(Status::Malformed);
+        }
+        let incarnation = payload[2..34].iter().map(|b| format!("{b:02x}")).collect();
+        Ok((id, Some(incarnation)))
+    } else {
+        decode_request(payload).map(|id| (id, None))
+    }
+}
 pub fn decode_request(payload: &[u8]) -> Result<&str, Status> {
     if payload.len() < 3 || payload.len() > MAX_FRAME {
         return Err(Status::Malformed);
@@ -87,6 +113,25 @@ pub fn decode_response(payload: &[u8]) -> Result<Status, Status> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bound_requests_carry_exact_incarnation_and_reject_invalid_frames() {
+        let incarnation = "ab".repeat(32);
+        let frame = request_bound("website", &incarnation).unwrap();
+        assert_eq!(
+            decode_bound_request(&frame[2..]),
+            Ok(("website", Some(incarnation)))
+        );
+        assert_eq!(
+            decode_bound_request(&request("website").unwrap()[2..]),
+            Ok(("website", None))
+        );
+        assert!(request_bound("website", "").is_err());
+        assert!(request_bound("website", &"z".repeat(64)).is_err());
+        assert!(decode_bound_request(&frame[2..34]).is_err());
+        let mut malformed = frame.clone();
+        malformed.push(0);
+        assert!(decode_bound_request(&malformed[2..]).is_err());
+    }
     #[test]
     fn bounded_wire_format_rejects_addresses_forgery_and_versions() {
         let frame = request("website").unwrap();

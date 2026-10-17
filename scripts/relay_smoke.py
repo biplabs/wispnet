@@ -315,7 +315,7 @@ def main():
                                   "allow": [client[3] for client in clients]})
                     for name, call, client_path, peer in clients:
                         listing = available(call, client_path, pin)
-                        assert listing["host"] == pin and listing["services"] == [{"id": "website"}]
+                        assert listing["host"] == pin and [s["id"] for s in listing["services"]] == ["website"]
                         use(call, client_path, pin)
                         count = len(requests)
                         catalog(call, client_path, pins[1 - index], ok=False)

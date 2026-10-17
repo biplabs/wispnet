@@ -55,6 +55,113 @@ fn config() -> TransportConfig {
         max_streams_per_connection: 4,
     }
 }
+
+#[tokio::test]
+async fn recreated_same_binding_rejects_old_and_unbound_streams_and_cancels_active() {
+    use tokio::{
+        net::TcpListener,
+        time::{Duration, timeout},
+    };
+    let directory = dir();
+    let host_key = Identity::generate();
+    let client = Identity::generate();
+    host::initialize(directory.path(), host_key.endpoint_id()).unwrap();
+    approve(
+        directory.path(),
+        host_key.endpoint_id(),
+        client.endpoint_id(),
+        0,
+    );
+    let backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    service(
+        directory.path(),
+        host_key.endpoint_id(),
+        client.endpoint_id(),
+        backend.local_addr().unwrap(),
+        1,
+    );
+    let authority = Authority::open(directory.path(), host_key.endpoint_id()).unwrap();
+    let first = authority
+        .catalog(client.endpoint_id())
+        .await
+        .unwrap()
+        .services[0]
+        .incarnation
+        .clone();
+    let server = tunnel::TunnelHost::bind_host(host_key.secret_key(), &config(), authority.clone())
+        .await
+        .unwrap();
+    let endpoint = tunnel::bind_client(client.secret_key()).await.unwrap();
+    let connection = tunnel::connect(
+        &endpoint,
+        host_key.endpoint_id(),
+        server.endpoint().bound_sockets()[0],
+    )
+    .await
+    .unwrap();
+    assert!(tunnel::open_service(&connection, "llama").await.is_err());
+    assert!(
+        timeout(Duration::from_millis(100), backend.accept())
+            .await
+            .is_err()
+    );
+    let mut stream = tunnel::open_service_bound(&connection, "llama", &first)
+        .await
+        .unwrap();
+    let (mut tcp, _) = backend.accept().await.unwrap();
+    tcp.write_all(b"old").await.unwrap();
+    let mut initial = [0; 3];
+    stream.read_exact(&mut initial).await.unwrap();
+    mutate(
+        directory.path(),
+        host_key.endpoint_id(),
+        Mutation::Remove {
+            expected_revision: 2,
+            id: "llama".into(),
+        },
+    );
+    service(
+        directory.path(),
+        host_key.endpoint_id(),
+        client.endpoint_id(),
+        backend.local_addr().unwrap(),
+        3,
+    );
+    let new = authority
+        .catalog(client.endpoint_id())
+        .await
+        .unwrap()
+        .services[0]
+        .incarnation
+        .clone();
+    assert_ne!(first, new);
+    let mut byte = [0; 1];
+    let ended = timeout(Duration::from_secs(3), stream.read(&mut byte))
+        .await
+        .unwrap();
+    assert!(matches!(ended, Ok(0) | Err(_)));
+    assert!(
+        tunnel::open_service_bound(&connection, "llama", &first)
+            .await
+            .is_err()
+    );
+    assert!(
+        timeout(Duration::from_millis(100), backend.accept())
+            .await
+            .is_err()
+    );
+    let _fresh = tunnel::open_service_bound(&connection, "llama", &new)
+        .await
+        .unwrap();
+    timeout(Duration::from_secs(2), backend.accept())
+        .await
+        .unwrap()
+        .unwrap();
+    drop(tcp);
+    connection.close(0u32.into(), b"done");
+    endpoint.close().await;
+    server.shutdown().await;
+}
 #[tokio::test]
 async fn symmetric_hosts_share_protocol_endpoint_and_isolate_local_authority() {
     let a = Identity::generate();
@@ -107,7 +214,7 @@ async fn symmetric_hosts_share_protocol_endpoint_and_isolate_local_authority() {
         .unwrap();
     let (parallel_catalog, parallel_stream) = tokio::join!(
         control::catalog_on(&cc, a.endpoint_id()),
-        tunnel::open_service(&sc, "llama")
+        tunnel::open_service_bound(&sc, "llama", &catalog.services[0].incarnation)
     );
     assert_eq!(parallel_catalog.unwrap().host, a.endpoint_id());
     let mut stream = parallel_stream.unwrap();
@@ -154,7 +261,9 @@ async fn symmetric_hosts_share_protocol_endpoint_and_isolate_local_authority() {
     let bs = tunnel::connect(&outgoing, b.endpoint_id(), ba)
         .await
         .unwrap();
-    let mut stream = tunnel::open_service(&bs, "llama").await.unwrap();
+    let mut stream = tunnel::open_service_bound(&bs, "llama", &catalog.services[0].incarnation)
+        .await
+        .unwrap();
     let (mut tcp, _) = backend.accept().await.unwrap();
     tcp.write_all(b"active").await.unwrap();
     let mut initial = [0; 6];
@@ -356,9 +465,17 @@ async fn explicit_tls_relay_without_udp_pins_identity_enforces_grants_and_recove
     let service_connection = tunnel::connect_target(&outgoing, target.clone())
         .await
         .unwrap();
-    let mut stream = tunnel::open_service(&service_connection, "llama")
-        .await
-        .unwrap();
+    let mut stream = tunnel::open_service_bound(
+        &service_connection,
+        "llama",
+        &control::catalog_on(&connection, key.endpoint_id())
+            .await
+            .unwrap()
+            .services[0]
+            .incarnation,
+    )
+    .await
+    .unwrap();
     let (mut tcp, _) = timeout(Duration::from_secs(2), backend.accept())
         .await
         .unwrap()
@@ -751,7 +868,17 @@ async fn udp_enabled_hosts_fall_back_to_relay_with_stale_hint() {
                     .any(|p| p.is_relay() && p.is_selected())
             );
         }
-        let mut stream = tunnel::open_service(&connection, "llama").await.unwrap();
+        let mut stream = tunnel::open_service_bound(
+            &connection,
+            "llama",
+            &control::catalog_on(&control, key.endpoint_id())
+                .await
+                .unwrap()
+                .services[0]
+                .incarnation,
+        )
+        .await
+        .unwrap();
         let (mut tcp, _) = timeout(Duration::from_secs(2), backend.accept())
             .await
             .unwrap()

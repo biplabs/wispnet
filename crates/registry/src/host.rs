@@ -83,9 +83,10 @@ pub struct Client {
     pub peer: EndpointId,
     pub name: String,
 }
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct LocalService {
     pub id: String,
+    pub incarnation: String,
     pub backend: std::net::SocketAddr,
     pub allow: Vec<EndpointId>,
 }
@@ -158,11 +159,19 @@ impl Store {
                     name,
                 });
             }
-            let mut stmt = tx.prepare("SELECT id,backend FROM host_services ORDER BY id")?;
-            for row in
-                stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
-            {
-                let (id, backend) = row?;
+            let mut stmt =
+                tx.prepare("SELECT id,backend,incarnation FROM host_services ORDER BY id")?;
+            for row in stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })? {
+                let (id, backend, incarnation) = row?;
+                if !wipsnet_core::enrollment::valid_code(&incarnation) {
+                    return Err(ControlError::Storage);
+                }
                 let mut allow = Vec::new();
                 let mut grants =
                     tx.prepare("SELECT client FROM host_grants WHERE service=?1 ORDER BY client")?;
@@ -180,7 +189,12 @@ impl Store {
                 };
                 wipsnet_core::config::validate_services(&[service])
                     .map_err(|_| ControlError::Storage)?;
-                services.push(LocalService { id, backend, allow });
+                services.push(LocalService {
+                    id,
+                    incarnation,
+                    backend,
+                    allow,
+                });
             }
         }
         tx.commit()?;
@@ -280,7 +294,7 @@ pub(crate) fn apply_mutation(
                     return Err(ControlError::Forbidden);
                 }
             }
-            tx.execute("INSERT INTO host_services VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET backend=excluded.backend",params![id,backend.to_string()])?;
+            tx.execute("INSERT INTO host_services(id,backend,incarnation) VALUES(?1,?2,lower(hex(randomblob(32)))) ON CONFLICT(id) DO UPDATE SET backend=excluded.backend",params![id,backend.to_string()])?;
             tx.execute("DELETE FROM host_grants WHERE service=?1", [&id])?;
             for peer in allow {
                 tx.execute(
@@ -342,18 +356,8 @@ impl Authority {
             .await
             .is_ok_and(|s| s.clients.iter().any(|c| c.peer == peer))
     }
-    pub async fn services(&self) -> Result<Vec<ServiceConfig>, ControlError> {
-        Ok(self
-            .snapshot()
-            .await?
-            .services
-            .into_iter()
-            .map(|s| ServiceConfig {
-                id: s.id,
-                backend: s.backend,
-                allow: s.allow,
-            })
-            .collect())
+    pub async fn services(&self) -> Result<Vec<LocalService>, ControlError> {
+        Ok(self.snapshot().await?.services)
     }
     pub async fn catalog(&self, peer: EndpointId) -> Result<Catalog, ControlError> {
         let snapshot = self.snapshot().await?;
@@ -368,7 +372,10 @@ impl Authority {
                 .services
                 .into_iter()
                 .filter(|s| s.allow.contains(&peer))
-                .map(|s| Service { id: s.id })
+                .map(|s| Service {
+                    id: s.id,
+                    incarnation: s.incarnation,
+                })
                 .collect(),
         })
     }

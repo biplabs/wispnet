@@ -10,6 +10,70 @@ fn directory() -> tempfile::TempDir {
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     dir
 }
+
+#[test]
+fn service_incarnation_persists_on_edit_and_restart_but_not_recreation() {
+    let id = Identity::generate().endpoint_id();
+    let dir = directory();
+    host::initialize(dir.path(), id).unwrap();
+    let (mut store, secret) = host::owner_store(dir.path(), id).unwrap();
+    let edit = |revision| Mutation::Service {
+        expected_revision: revision,
+        id: "website".into(),
+        backend: "127.0.0.1:8080".parse().unwrap(),
+        allow: vec![],
+    };
+    store.host_mutate(id, &secret, edit(0)).unwrap();
+    let first = store.host_snapshot(id).unwrap().services[0]
+        .incarnation
+        .clone();
+    store.host_mutate(id, &secret, edit(1)).unwrap();
+    assert_eq!(
+        store.host_snapshot(id).unwrap().services[0].incarnation,
+        first
+    );
+    drop(store);
+    let (mut store, secret) = host::owner_store(dir.path(), id).unwrap();
+    assert_eq!(
+        store.host_snapshot(id).unwrap().services[0].incarnation,
+        first
+    );
+    store
+        .host_mutate(
+            id,
+            &secret,
+            Mutation::Remove {
+                expected_revision: 2,
+                id: "website".into(),
+            },
+        )
+        .unwrap();
+    store.host_mutate(id, &secret, edit(3)).unwrap();
+    let new = store.host_snapshot(id).unwrap().services[0]
+        .incarnation
+        .clone();
+    assert_ne!(first, new);
+    // Simulate the real schema-6 table, preserving the authority and grants.
+    drop(store);
+    let db = rusqlite::Connection::open(dir.path().join("host.sqlite3")).unwrap();
+    db.execute_batch("ALTER TABLE host_services DROP COLUMN incarnation; PRAGMA user_version=6;")
+        .unwrap();
+    drop(db);
+    let (mut store, _) = host::owner_store(dir.path(), id).unwrap();
+    let migrated = store.host_snapshot(id).unwrap();
+    assert_eq!(migrated.revision, 5);
+    assert_eq!(migrated.host, id);
+    assert!(wipsnet_core::enrollment::valid_code(
+        &migrated.services[0].incarnation
+    ));
+    let generation = migrated.services[0].incarnation.clone();
+    drop(store);
+    let (mut store, _) = host::owner_store(dir.path(), id).unwrap();
+    assert_eq!(
+        store.host_snapshot(id).unwrap().services[0].incarnation,
+        generation
+    );
+}
 #[test]
 fn host_identity_and_admin_cannot_cross_authority_boundaries() {
     let a = Identity::generate().endpoint_id();

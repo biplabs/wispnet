@@ -169,7 +169,8 @@ class NodeIntegration(unittest.TestCase):
                 self.assertNotIn(invitation["code"], pin.read_text())
                 catalog = api.request(op="catalog", host=pb)
                 self.assertEqual(catalog["host"], pb)
-                self.assertEqual(catalog["services"], [{"id": "website"}])
+                self.assertEqual([s["id"] for s in catalog["services"]], ["website"])
+                remote_incarnation = catalog["services"][0]["incarnation"]
                 # The headless command reuses the daemon, without a key lease or Qt.
                 command = [
                     sys.executable,
@@ -215,7 +216,12 @@ class NodeIntegration(unittest.TestCase):
 
                 self.assertIn(pa, bapi.request(op="status")["recent_peers"])
                 api.request(op="enable")
-                url = api.request(op="open", host=pb, service="website")["url"]
+                url = api.request(
+                    op="open",
+                    host=pb,
+                    service="website",
+                    incarnation=remote_incarnation,
+                )["url"]
                 from urllib.parse import urlsplit
 
                 parsed = urlsplit(url)
@@ -294,13 +300,26 @@ class NodeIntegration(unittest.TestCase):
                         "allow": [],
                     },
                 )
+                local_incarnation = api.request(op="status")["host"]["services"][0][
+                    "incarnation"
+                ]
                 with self.assertRaises(ValueError):
-                    api.request(op="open", host=pa, service="website")
+                    api.request(
+                        op="open",
+                        host=pa,
+                        service="website",
+                        incarnation=local_incarnation,
+                    )
                 api.request(op="enable")
                 with self.assertRaises(ValueError):
                     api.request(op="open", host=pa, service="missing")
                 parsed = urlsplit(
-                    api.request(op="open", host=pa, service="website")["url"]
+                    api.request(
+                        op="open",
+                        host=pa,
+                        service="website",
+                        incarnation=local_incarnation,
+                    )["url"]
                 )
                 self.assertEqual(exchange("/")[0], 401)
                 self.assertEqual(exchange("/", {"Host": "other.localhost"})[0], 421)
@@ -341,29 +360,37 @@ class NodeIntegration(unittest.TestCase):
                     op="mutate",
                     operation={"op": "remove", "expected_revision": 1, "id": "website"},
                 )
+                # Recreate immediately, before the one-second policy tick, at
+                # exactly the same address. Missing the deleted row is harmless.
+                api.request(
+                    op="mutate",
+                    operation={
+                        "op": "service",
+                        "expected_revision": 2,
+                        "id": "website",
+                        "backend": f"127.0.0.1:{backend.server_port}",
+                        "allow": [],
+                    },
+                )
                 self.assertEqual(held_response.read(), b"")
                 self.assertLess(time.monotonic() - started, 3)
                 held_connection.close()
                 release.set()
                 self.assertEqual(exchange("/", {"Cookie": cookie})[0], 403)
                 with self.assertRaises(ValueError):
-                    api.request(op="open", host=pa, service="website")
-                # Recreating the ID at another binding must not rebind the old URL.
-                with socket.socket() as replacement_backend:
-                    replacement_backend.bind(("127.0.0.1", 0))
-                    replacement_backend.listen()
                     api.request(
-                        op="mutate",
-                        operation={
-                            "op": "service",
-                            "expected_revision": 2,
-                            "id": "website",
-                            "backend": f"127.0.0.1:{replacement_backend.getsockname()[1]}",
-                            "allow": [],
-                        },
+                        op="open",
+                        host=pa,
+                        service="website",
+                        incarnation=local_incarnation,
                     )
-                    self.assertEqual(exchange("/", {"Cookie": cookie})[0], 403)
-                    api.request(op="open", host=pa, service="website")
+                new_incarnation = api.request(op="status")["host"]["services"][0][
+                    "incarnation"
+                ]
+                self.assertNotEqual(new_incarnation, local_incarnation)
+                api.request(
+                    op="open", host=pa, service="website", incarnation=new_incarnation
+                )
                 api.request(op="stop")
                 with self.assertRaises(OSError):
                     socket.create_connection(("127.0.0.1", parsed.port), timeout=1)
