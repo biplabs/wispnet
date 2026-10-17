@@ -22,6 +22,7 @@ python3 scripts/smoke.py
 python3 scripts/registry_smoke.py
 python3 scripts/host_smoke.py
 python3 -m unittest discover -s scripts -p test_android_release.py
+python3 -m unittest discover -s scripts -p test_android_publish.py
 uv run --with qrcode==8.2 python -m unittest discover -s scripts -p test_pairing_qr.py
 if [ "${WIPSNET_ANDROID_RELAY_TEST:-0}" = 1 ]; then
     set -- --android

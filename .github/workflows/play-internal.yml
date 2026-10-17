@@ -1,0 +1,82 @@
+name: Play internal upload
+on:
+  workflow_dispatch:
+    inputs:
+      release_status:
+        description: Internal release status (draft for unfinished Play setup)
+        type: choice
+        options: [completed, draft]
+        default: completed
+      version_code:
+        description: Optional version code; default 1000 + workflow run number
+        type: string
+        required: false
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - 'crates/**'
+      - 'Cargo.*'
+      - 'scripts/*android*'
+      - '.github/workflows/play-internal.yml'
+permissions:
+  contents: read
+concurrency:
+  group: play-internal
+  cancel-in-progress: false
+jobs:
+  upload:
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || vars.WIPSNET_PLAY_AUTO_UPLOAD == 'true')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-linux-android
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - uses: astral-sh/setup-uv@v6
+      - uses: Swatinem/rust-cache@v2
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install Android build dependencies
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;27.2.12479018'
+      - name: Configure version and private keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.WIPSNET_UPLOAD_KEYSTORE_BASE64 }}
+          REQUESTED_VERSION: ${{ inputs.version_code }}
+        run: |
+          python3 - <<'PY'
+          import base64,os
+          from pathlib import Path
+          key=Path(os.environ['RUNNER_TEMP'])/'wispnet-upload.p12'
+          value=os.environ['KEYSTORE_BASE64']
+          if not value:raise SystemExit('Missing WIPSNET_UPLOAD_KEYSTORE_BASE64')
+          with os.fdopen(os.open(key,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600),'wb') as out:out.write(base64.b64decode(value,validate=True))
+          version=int(os.environ.get('REQUESTED_VERSION') or (1000+int(os.environ['GITHUB_RUN_NUMBER'])))
+          if not 0<version<=2100000000:raise SystemExit('Invalid version code')
+          with open(os.environ['GITHUB_ENV'],'a') as out:
+              out.write(f'WIPSNET_UPLOAD_KEYSTORE={key}\nWIPSNET_ANDROID_VERSION_CODE={version}\nWIPSNET_ANDROID_VERSION_NAME=0.1.{version}\n')
+          PY
+      - name: Build signed bundle and upload internal track
+        env:
+          WIPSNET_UPLOAD_STORE_PASSWORD: ${{ secrets.WIPSNET_UPLOAD_STORE_PASSWORD }}
+          WIPSNET_UPLOAD_KEY_ALIAS: ${{ secrets.WIPSNET_UPLOAD_KEY_ALIAS }}
+          WIPSNET_UPLOAD_KEY_PASSWORD: ${{ secrets.WIPSNET_UPLOAD_KEY_PASSWORD }}
+          ANDROID_PUBLISHER_CREDENTIALS: ${{ secrets.ANDROID_PUBLISHER_CREDENTIALS }}
+          RELEASE_STATUS: ${{ inputs.release_status || 'completed' }}
+        run: |
+          test -n "$ANDROID_PUBLISHER_CREDENTIALS" || { echo "Missing ANDROID_PUBLISHER_CREDENTIALS; configure the Play service account secret first." >&2; exit 1; }
+          scripts/build_android_release.sh --signed
+          uv run scripts/publish_android_internal.py android/app/build/outputs/bundle/release/app-release.aab --publish --release-status "$RELEASE_STATUS"
+      - name: Remove temporary keystore
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          (Path(os.environ['RUNNER_TEMP'])/'wispnet-upload.p12').unlink(missing_ok=True)
+          PY

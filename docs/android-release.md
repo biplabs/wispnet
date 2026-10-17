@@ -35,13 +35,13 @@ WIPSNET_ANDROID_VERSION_CODE=2 scripts/build_android_release.sh --signed
 python3 scripts/check_android_release.py android/app/build/outputs/bundle/release/app-release.aab --require-signed
 ```
 
-The signed builder fails before compilation if credentials are missing; partial signing configuration is rejected by Gradle. It never falls back to a debug key. Keystores and signing properties are ignored, but keep real credentials outside the checkout. This work does not create a permanent upload key or access a Play account. See [Play App Signing and upload keys](https://developer.android.com/studio/publish/app-signing).
+The signed builder fails before compilation if credentials are missing; partial signing configuration is rejected by Gradle. It never falls back to a debug key. Keystores and signing properties are ignored, but keep real credentials outside the checkout. The initial release-preparation checkpoint did not create a permanent key. The subsequent signing setup below provisions a separate Wispnet upload key; Console access remains user-managed. See [Play App Signing and upload keys](https://developer.android.com/studio/publish/app-signing).
 
 A Play-signed app cannot update the existing debug-signed tablet APK in place when certificates differ. Keep the current installation intact until the internal-testing switch is intentional; a fresh install loses that sandbox's identity and requires fresh host-specific pairing/approval. Do not uninstall it as a build step. Production migration is not part of this development workflow.
 
 ## Internal-testing verification
 
-Once a signed artifact and Play app are available, upload through the internal track and complete the required app/foreground-service/store declarations for the actual behavior. Use the opt-in install link on the intended devices. This repository does not automate that upload or fill declarations speculatively.
+Once a signed artifact and Play app are available, upload through the internal track and complete the required app/foreground-service/store declarations for the actual behavior. Use the opt-in install link on the intended devices. The internal-only uploader below automates subsequent uploads; Console declarations remain user-managed.
 
 Verify live optical scan, permission denial/cancellation and camera-free fallback on the Play-installed app. Repeat independent pairing and the real-service/browser lifecycle checks after fresh installation. Record the version code, Android/device versions and outcomes in #12; camera code being present is not evidence of an optical scan. Remaining public relay/cellular, OEM/long-duration and #10 browser compatibility work remains separate.
 
@@ -56,3 +56,57 @@ The tablet remains on its existing debug certificate and protected identity. API
 Release lint passed with warnings for the pinned tool/library versions, ARM-only distribution/ChromeOS ABI coverage, explicit backup-rule resources, missing launcher artwork and hard-coded UI text. Those warnings were not suppressed or presented as Play acceptance. Store artwork/declarations and remaining UI polish are still preparation work.
 
 The rebuilt API 36-targeted debug APK, using byte-for-byte the optimized ARM native library from the release AAB, passed the physical tablet normal-app harness: preserved identity/pairings, real GIKE, desktop WispShell, Llama chat UI and streamed API reply, gateway denial cases, 30-second browser handoff and Stop. The emulator settings and disposable AVD were removed afterward; SDK packages remain available for repeat builds.
+
+## Configured signing and your first Console upload
+
+A separate Wispnet upload key is now configured locally at `~/.config/wispnet/play-upload-keystore.p12`, with a private mode-0600 `~/.config/wispnet/play-upload.env`. WispShell's key and workflows were inspected but not changed. Wispnet's four signing secrets are configured in `biplabs/wispnet`; the Google publisher credential still needs to be supplied. Keep a private backup of the keystore and its environment file together.
+
+A preserved copy at `target/play-internal/wispnet-0.1.0-v1-signed.aab` (also in `android/app/build/outputs/bundle/release/app-release.aab`) is **signed**, version code **1**, package **com.biplabs.wispnet**, and passed the signature/native/bundle checks. Earlier unsigned artifacts described above were the preceding checkpoint.
+
+To rebuild with this key:
+
+```sh
+source "$HOME/.config/wispnet/play-upload.env"
+scripts/build_android_release.sh --signed
+```
+
+Do these steps in your Play Console account:
+
+1. Create **Wispnet** as a free app, with your chosen default language. The first uploaded bundle identifies package `com.biplabs.wispnet`; it is separate from WispShell's `com.biplabs.wisp`.
+2. Open **Test and release → Testing → Internal testing**, create a release, enable/configure Play App Signing, and upload `target/play-internal/wispnet-0.1.0-v1-signed.aab`. Complete any blocking tasks the Console displays, then roll out to internal testing. This is an internal testing track, not Internal app sharing or production. Internal tests can start before the full store listing is complete; see [Google's internal-testing instructions](https://support.google.com/googleplay/android-developer/answer/9845334?hl=en).
+3. Under **Internal testing → Testers**, add the Google account used on the tablet/phone, save the tester list and copy its opt-in link. Open that link while signed into the tester account, opt in and install from Play. A different Play certificate cannot update the existing debug-signed tablet app in place; the existing installation has not been removed. Switching that tablet requires a deliberate fresh install and new independent host approvals.
+4. For later automated uploads, grant the existing WispShell publishing service account access to **Wispnet**, including app visibility and release-to-testing permission. Reuse the Google Cloud project where Play Developer API is already enabled. In Google Cloud, obtain the original service-account JSON you kept, or create an additional JSON key for that same service account if the original is unavailable. GitHub does not reveal an existing secret's value. Do not put the JSON in this repo or chat.
+5. Add that raw JSON as `ANDROID_PUBLISHER_CREDENTIALS` in **biplabs/wispnet → Settings → Secrets and variables → Actions → Repository secrets**. The four `WIPSNET_UPLOAD_*` signing secrets are already installed; do not replace them with WispShell's key. Alternatively, from the local machine:
+
+   ```sh
+   gh secret set ANDROID_PUBLISHER_CREDENTIALS --repo biplabs/wispnet < /private/play-service-account.json
+   ```
+
+Google's [Publisher API setup](https://developers.google.com/android-publisher/getting_started) describes service-account access through Play Console Users and permissions. The first app/Console setup and credential grant are user-managed here. No upload has been claimed successful before a committed, verified track response.
+
+## Subsequent internal-track uploads
+
+The **Play internal upload** GitHub workflow builds/signs/validates and publishes only to `internal`; it cannot select production. It does not run the test suite on GitHub. Local `scripts/test.sh` and the pre-push hook remain the test gate.
+
+After first Console setup and the publisher secret:
+
+```sh
+# Default next version: 1000 + workflow run number.
+gh workflow run play-internal.yml --repo biplabs/wispnet
+# For an app still requiring draft releases:
+gh workflow run play-internal.yml --repo biplabs/wispnet -f release_status=draft
+```
+
+Automatic upload on relevant `main` pushes is initially disabled. To opt in after the first successful manual workflow, set repository variable `WIPSNET_PLAY_AUTO_UPLOAD=true` (or `gh variable set WIPSNET_PLAY_AUTO_UPLOAD --repo biplabs/wispnet --body true`). Publishing jobs serialize; version codes are configurable and monotonic by default. A manually supplied code must be unused and higher than earlier uploads.
+
+Local upload also works with a private service-account JSON file:
+
+```sh
+# Default is dry-run: validates the signed artifact without any Play API calls.
+uv run scripts/publish_android_internal.py android/app/build/outputs/bundle/release/app-release.aab
+# Once the app/account setup is complete, publish a new unused-version bundle:
+GOOGLE_APPLICATION_CREDENTIALS=/private/play-service-account.json \
+  uv run scripts/publish_android_internal.py android/app/build/outputs/bundle/release/app-release.aab --publish
+```
+
+The uploader creates an edit, uploads the bundle, updates only the internal track, validates, commits, then checks the committed version/status in a fresh edit. Failed pre-commit work attempts to discard its edit. A commit timeout or failed post-commit verification is reported as uncertain, with no automatic retry. Inspect the Console before retrying such an outcome. Local regressions cover success, draft bootstrap status, aborted upload cleanup, unsupported statuses, uncertain commit and post-commit verification failure. Signed dry-run passed; live upload awaits the user's Console/credential setup.
