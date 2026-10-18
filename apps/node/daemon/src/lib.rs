@@ -49,8 +49,21 @@ impl State {
                     }
                 }
                 let (invitations, host_name) = self.owner(None).await?;
+                let mut telemetry = serde_json::Map::new();
+                for (peer, (path, rtt_ms)) in self.client.telemetry_map() {
+                    if pins.contains(&peer) {
+                        telemetry.insert(peer, json!({"path": path, "rtt_ms": rtt_ms}));
+                    }
+                }
+                for (peer, (path, rtt_ms)) in self.counts.peer_telemetry() {
+                    if snapshot.clients.iter().any(|c| c.peer.to_string() == peer)
+                        || peers.contains_key(&peer)
+                    {
+                        telemetry.insert(peer, json!({"path": path, "rtt_ms": rtt_ms}));
+                    }
+                }
                 Ok(
-                    json!({"api_version":1,"host":snapshot,"host_name":host_name,"connected_peers":peers,"recent_peers":recent,"presence_timeout_seconds":wipsnet_agent::tunnel::PRESENCE_TIMEOUT.as_secs(),"transport_streams":self.counts.streams(),"invitations":invitations,"peer_pins":pins,"relay":wipsnet_agent::diagnostics::relay_state(&self.client.endpoint,self.relay_configured),"access_enabled":self.client.gateway.is_enabled()}),
+                    json!({"api_version":1,"host":snapshot,"host_name":host_name,"connected_peers":peers,"recent_peers":recent,"peer_telemetry":telemetry,"presence_timeout_seconds":wipsnet_agent::tunnel::PRESENCE_TIMEOUT.as_secs(),"transport_streams":self.counts.streams(),"invitations":invitations,"peer_pins":pins,"relay":wipsnet_agent::diagnostics::relay_state(&self.client.endpoint,self.relay_configured),"access_enabled":self.client.gateway.is_enabled()}),
                 )
             }
             "apply_operation" => {
@@ -108,9 +121,8 @@ impl State {
                 value["name"] = json!(self.device_name);
                 self.client.command(&value).await
             }
-            "preview_invitation" | "catalog" | "open" | "enable" | "stop" | "access_status" => {
-                self.client.command(&value).await
-            }
+            "preview_invitation" | "catalog" | "telemetry" | "open" | "enable" | "stop"
+            | "access_status" => self.client.command(&value).await,
             _ => Err("Unsupported local operation".into()),
         }
     }

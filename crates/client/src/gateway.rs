@@ -468,7 +468,10 @@ impl Route {
             )
             .await
             {
-                Ok(stream) => Box::new(stream),
+                Ok(stream) => {
+                    self.client.record_telemetry(self.peer, &_connection.0);
+                    Box::new(stream)
+                }
                 Err(_) => {
                     return response(
                         &mut socket,

@@ -51,16 +51,38 @@ impl fmt::Display for TunnelError {
 }
 impl std::error::Error for TunnelError {}
 
+pub type PeerTelemetry = std::collections::BTreeMap<String, (&'static str, Option<u64>)>;
+
 #[derive(Clone, Default)]
 pub struct ActiveCounts {
     seen: Arc<std::sync::Mutex<std::collections::BTreeMap<String, std::time::Instant>>>,
     connections: Arc<AtomicUsize>,
     streams: Arc<AtomicUsize>,
     peers: Arc<std::sync::Mutex<std::collections::BTreeMap<String, usize>>>,
+    telemetry: Arc<std::sync::Mutex<PeerTelemetry>>,
 }
 impl ActiveCounts {
     pub(crate) fn record_activity(&self, peer: EndpointId) {
         self.record_activity_at(peer, std::time::Instant::now());
+    }
+    pub(crate) fn record_telemetry(&self, peer: EndpointId, connection: &Connection) {
+        let path = crate::diagnostics::selected_path(connection);
+        let rtt = crate::diagnostics::selected_rtt_ms(connection);
+        let mut telemetry = self.telemetry.lock().unwrap_or_else(|e| e.into_inner());
+        let peer = peer.to_string();
+        if telemetry.len() >= 1024
+            && !telemetry.contains_key(&peer)
+            && let Some(first) = telemetry.keys().next().cloned()
+        {
+            telemetry.remove(&first);
+        }
+        telemetry.insert(peer, (path, rtt));
+    }
+    pub fn peer_telemetry(&self) -> PeerTelemetry {
+        self.telemetry
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
     fn record_activity_at(&self, peer: EndpointId, now: std::time::Instant) {
         let mut seen = self.seen.lock().unwrap_or_else(|e| e.into_inner());
@@ -362,15 +384,19 @@ async fn serve_connection(
 ) {
     let connection_control = connection.alpn() == wipsnet_core::host::ALPN;
     let _close = CloseConnection(connection.clone());
+    counts.record_telemetry(peer, &connection);
     let mut tasks = JoinSet::new();
     loop {
         tokio::select! {
             biased;
             _ = connection.closed() => break,
             _ = tokio::time::sleep(IDLE_TIMEOUT), if tasks.is_empty() => break,
-            Some(_) = tasks.join_next(), if !tasks.is_empty() => {},
+            Some(_) = tasks.join_next(), if !tasks.is_empty() => {
+                counts.record_telemetry(peer, &connection);
+            },
             stream = connection.accept_bi() => {
                 let Ok((mut send, mut recv)) = stream else { break };
+                counts.record_telemetry(peer, &connection);
                 let permit = if tasks.len() < max { streams.clone().try_acquire_owned().ok() } else { None };
                 let Some(permit) = permit else {
                     let _ = reply(&mut send, Status::Busy).await;
@@ -392,6 +418,7 @@ async fn serve_connection(
             }
         }
     }
+    counts.record_telemetry(peer, &connection);
     tasks.abort_all();
     while tasks.join_next().await.is_some() {}
 }

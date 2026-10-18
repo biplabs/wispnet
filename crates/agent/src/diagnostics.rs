@@ -28,6 +28,19 @@ pub fn selected_path(connection: &Connection) -> &'static str {
     "unknown"
 }
 
+/// Passive QUIC round-trip time estimate (in milliseconds) on the selected path.
+pub fn selected_rtt_ms(connection: &Connection) -> Option<u64> {
+    for path in connection.paths().iter() {
+        if path.is_selected() {
+            let rtt = path.rtt();
+            if !rtt.is_zero() {
+                return Some((rtt.as_millis() as u64).max(1));
+            }
+        }
+    }
+    None
+}
+
 /// Fixed labels only: relay-provided errors and reasons are untrusted text.
 pub fn relay_state(endpoint: &Endpoint, configured: bool) -> &'static str {
     if !configured {

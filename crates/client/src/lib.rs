@@ -30,6 +30,7 @@ pub struct Client {
     state: PathBuf,
     pub gateway: gateway::Gateways,
     pub(crate) local_authority: Option<wipsnet_registry::host::Authority>,
+    telemetry: Mutex<wipsnet_agent::tunnel::PeerTelemetry>,
 }
 fn token() -> String {
     SecretKey::generate()
@@ -64,6 +65,7 @@ impl Client {
             config,
             gateway: gateway::Gateways::default(),
             local_authority: Some(authority),
+            telemetry: Mutex::new(std::collections::BTreeMap::new()),
         })
     }
     pub async fn new(
@@ -84,7 +86,27 @@ impl Client {
             state,
             gateway: gateway::Gateways::default(),
             local_authority: None,
+            telemetry: Mutex::new(std::collections::BTreeMap::new()),
         }))
+    }
+    pub fn record_telemetry(&self, peer: EndpointId, connection: &iroh::endpoint::Connection) {
+        let path = wipsnet_agent::diagnostics::selected_path(connection);
+        let rtt = wipsnet_agent::diagnostics::selected_rtt_ms(connection);
+        let mut map = self.telemetry.lock().unwrap_or_else(|e| e.into_inner());
+        let key = peer.to_string();
+        if map.len() >= 1024
+            && !map.contains_key(&key)
+            && let Some(first) = map.keys().next().cloned()
+        {
+            map.remove(&first);
+        }
+        map.insert(key, (path, rtt));
+    }
+    pub fn telemetry_map(&self) -> wipsnet_agent::tunnel::PeerTelemetry {
+        self.telemetry
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
     pub async fn catalog(&self, host: EndpointId) -> Result<Value, String> {
         let state = self.state.clone();
@@ -99,6 +121,7 @@ impl Client {
         let result = wipsnet_agent::control::catalog_on(&connection, host)
             .await
             .map_err(|e| e.to_string());
+        self.record_telemetry(host, &connection);
         connection.close(0u32.into(), b"catalog complete");
         let catalog = result?;
         let state = self.state.clone();
@@ -177,6 +200,14 @@ impl Client {
                     return Err("Pair with this host first".into());
                 }
                 self.catalog(host).await
+            }
+            "telemetry" => {
+                let peers: serde_json::Map<String, Value> = self
+                    .telemetry_map()
+                    .into_iter()
+                    .map(|(k, (path, rtt_ms))| (k, json!({"path": path, "rtt_ms": rtt_ms})))
+                    .collect();
+                Ok(json!({"peers": peers}))
             }
             "access_status" => Ok(json!({"enabled":self.gateway.is_enabled()})),
             "enable" => {
