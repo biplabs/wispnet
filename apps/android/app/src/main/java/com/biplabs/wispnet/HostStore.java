@@ -9,6 +9,7 @@ final class HostStore {
  JSONObject all()throws JSONException{synchronized(LOCK){return new JSONObject(prefs.getString("records","{}"));}}
  void save(JSONObject records)throws Exception{synchronized(LOCK){if(records.length()>128||!prefs.edit().putString("records",records.toString()).commit())throw new Exception("Cannot save host directory");}}
  void paired(String host,String name)throws Exception{synchronized(LOCK){JSONObject records=all();records.put(host,new JSONObject().put("name",name).put("state","approval_pending").put("status","Pending approval on this host"));save(records);}}
+ void remove(String host)throws Exception{synchronized(LOCK){JSONObject records=all();records.remove(host);save(records);}}
  static void validate(String host,JSONObject c)throws Exception{
   if(c.length()!=7||!Integer.valueOf(1).equals(c.get("version"))||!Boolean.TRUE.equals(c.get("complete"))||!host.equals(c.getString("host"))||!c.getString("generation").matches("[0-9a-f]{64}"))throw new Exception("Invalid or incomplete catalog");
   Object rev=c.get("revision"),count=c.get("service_count");
