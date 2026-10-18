@@ -121,6 +121,9 @@ impl Client {
         let result = wipsnet_agent::control::catalog_on(&connection, host)
             .await
             .map_err(|e| e.to_string());
+        if result.is_ok() {
+            wipsnet_agent::diagnostics::settle_path(&connection).await;
+        }
         self.record_telemetry(host, &connection);
         connection.close(0u32.into(), b"catalog complete");
         let catalog = result?;

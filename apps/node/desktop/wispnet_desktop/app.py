@@ -1034,7 +1034,7 @@ class Window(QMainWindow):
         rtt = info.get("rtt_ms")
         parts = []
         if path in ("direct", "relay"):
-            parts.append(path.upper())
+            parts.append("Last path: " + path.upper())
         if isinstance(rtt, int) and rtt > 0:
             parts.append(f"{rtt}ms")
         return " · ".join(parts)

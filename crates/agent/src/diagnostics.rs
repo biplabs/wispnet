@@ -41,6 +41,19 @@ pub fn selected_rtt_ms(connection: &Connection) -> Option<u64> {
     None
 }
 
+/// Keep a short successful request alive while Iroh negotiates a direct path.
+/// Direct connections return immediately; relay-only peers add at most one second.
+/// A closed connection cannot negotiate further and must not delay its caller.
+pub async fn settle_path(connection: &Connection) {
+    let until = Instant::now() + Duration::from_secs(1);
+    while selected_path(connection) != "direct"
+        && connection.close_reason().is_none()
+        && Instant::now() < until
+    {
+        sleep(Duration::from_millis(20)).await;
+    }
+}
+
 /// Fixed labels only: relay-provided errors and reasons are untrusted text.
 pub fn relay_state(endpoint: &Endpoint, configured: bool) -> &'static str {
     if !configured {
@@ -73,14 +86,11 @@ pub async fn probe(
     let started = Instant::now();
     let connection = Close(control::connect_target(endpoint, target).await?);
     let catalog = control::catalog_on(&connection.0, expected).await?;
-    let until = Instant::now() + Duration::from_secs(1);
-    while selected_path(&connection.0) != "direct" && Instant::now() < until {
-        if connection.0.close_reason().is_some() {
-            return Err(TunnelError::Transport(
-                "peer closed during path observation",
-            ));
-        }
-        sleep(Duration::from_millis(20)).await;
+    settle_path(&connection.0).await;
+    if connection.0.close_reason().is_some() {
+        return Err(TunnelError::Transport(
+            "peer closed during path observation",
+        ));
     }
     Ok(serde_json::json!({
         "event":"probe", "ok":true, "host":expected, "client":endpoint.id(),

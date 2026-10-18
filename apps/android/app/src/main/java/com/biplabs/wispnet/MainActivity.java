@@ -28,7 +28,7 @@ public class MainActivity extends Activity {
  final ConcurrentHashMap<String,String> peerTelemetry=new ConcurrentHashMap<>();
  void syncTelemetry(){
   try{JSONObject peers=Native.command("telemetry").optJSONObject("peers");if(peers==null)return;
-   for(java.util.Iterator<String> it=peers.keys();it.hasNext();){String k=it.next();JSONObject t=peers.optJSONObject(k);if(t==null)continue;String p=t.optString("path","");long rtt=t.optLong("rtt_ms",0);String label=("direct".equals(p)?"DIRECT":"relay".equals(p)?"RELAY":"");if(rtt>0)label=label.isEmpty()?rtt+"ms":label+" · "+rtt+"ms";if(!label.isEmpty())peerTelemetry.put(k,label);}
+   for(java.util.Iterator<String> it=peers.keys();it.hasNext();){String k=it.next();JSONObject t=peers.optJSONObject(k);if(t==null)continue;String p=t.optString("path","");long rtt=t.optLong("rtt_ms",0);String label=("direct".equals(p)?"LAST PATH: DIRECT":"relay".equals(p)?"LAST PATH: RELAY":"");if(rtt>0)label=label.isEmpty()?rtt+"ms":label+" · "+rtt+"ms";if(!label.isEmpty())peerTelemetry.put(k,label);}
   }catch(Exception ignored){}
  }
  void text(LinearLayout parent,String value,int size){TextView t=new TextView(this);t.setText(value);t.setTextColor(size>=20?0xffedf2ff:0xff94a6c4);t.setTextSize(size);t.setTypeface(null,size>=20?android.graphics.Typeface.BOLD:android.graphics.Typeface.NORMAL);t.setPadding(0,dp(size>=20?18:8),0,dp(8));parent.addView(t);}

@@ -194,7 +194,21 @@ async fn relay_dns_ip_replacement_recovers_without_endpoint_or_policy_reset() {
     let before = control::catalog_on(&before_connection, host_key.endpoint_id())
         .await
         .unwrap();
+    let observation = tokio::time::Instant::now();
+    crate::diagnostics::settle_path(&before_connection).await;
+    assert!(observation.elapsed() >= Duration::from_secs(1));
+    assert_eq!(
+        crate::diagnostics::selected_path(&before_connection),
+        "relay"
+    );
     before_connection.close(0u32.into(), b"fixture reconnect");
+    // Once closed, observation must return promptly instead of waiting again.
+    timeout(
+        Duration::from_millis(100),
+        crate::diagnostics::settle_path(&before_connection),
+    )
+    .await
+    .unwrap();
     original.shutdown().await.unwrap();
     let changed = relay(&cert, SocketAddr::from(([127, 0, 0, 2], port))).await;
     dns.last_octet.store(2, Ordering::SeqCst);
