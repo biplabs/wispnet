@@ -34,7 +34,7 @@ public final class AccessService extends Service {
  // Call while holding networkLock. Drain every generation, including a callback
  // arriving during native recovery; coalescing must never lose the final network.
  private void changed(){
-  generation++;networkStatus=current==null?"Network lost. Requests interrupted; reconnect and reopen the service.":"Network changed. Reopen the service; requests are not retried.";
+  generation++;networkStatus=current==null?"Network lost. Requests interrupted; reconnect and reload the page.":"Network changed. Reload the page; requests are not retried.";
   if(worker)return;worker=true;
   networkWork.execute(()->{while(true){long observed;synchronized(networkLock){if(destroyed){worker=false;return;}observed=generation;}
    try{Native.command("network");}catch(Exception ignored){networkStatus="Network recovery failed. Stop and start access, then reopen the service.";}
@@ -51,7 +51,7 @@ public final class AccessService extends Service {
   enabled=false;synchronized(networkLock){destroyed=true;}
   try{if(callback!=null)manager.unregisterNetworkCallback(callback);}catch(Exception ignored){}
   try{Native.command("stop");}catch(Exception ignored){}
-  networkWork.shutdown();networkStatus="Access stopped. Start access and reopen a service.";
+  networkWork.shutdown();networkStatus="Access stopped. Go online to use your saved service addresses.";
   stopForeground(STOP_FOREGROUND_REMOVE);super.onDestroy();
  }
  @Override public void onTimeout(int startId,int fgsType){stopSelf();}

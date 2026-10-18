@@ -1691,29 +1691,16 @@ class Window(QMainWindow):
             parsed.scheme != "http"
             or not parsed.hostname
             or not parsed.hostname.endswith(".localhost")
-            or parsed.path != "/_wipsnet/start"
+            or parsed.path != "/"
+            or parsed.fragment
+            or parsed.query
+            or parsed.username
+            or parsed.password
+            or not parsed.port
         ):
             self._set_message("Invalid local browser handoff")
             return
-        # Keep the bootstrap capability out of browser process arguments.
-        fd, path = tempfile.mkstemp(
-            prefix="browser-handoff-", suffix=".html", dir=self.api.state
-        )
-        with os.fdopen(fd, "w") as output:
-            output.write(
-                '<!doctype html><meta name="referrer" content="no-referrer"><script>location.replace('
-                + json.dumps(value["url"])
-                + ")</script>"
-            )
-        self.launch_files.add(path)
-
-        def cleanup():
-            Path(path).unlink(missing_ok=True)
-            self.launch_files.discard(path)
-
-        QTimer.singleShot(60000, cleanup)
-        if not QDesktopServices.openUrl(QUrl.fromLocalFile(path)):
-            cleanup()
+        if not QDesktopServices.openUrl(url):
             self._set_message("Could not open your browser")
 
 

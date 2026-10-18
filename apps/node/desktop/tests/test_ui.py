@@ -71,7 +71,7 @@ class DesktopChecks(unittest.TestCase):
         QApplication.processEvents()
         window.deleteLater()
 
-    def test_browser_arguments_do_not_contain_bootstrap_capability(self):
+    def test_stable_browser_url_needs_no_capability_or_handoff_file(self):
         with tempfile.TemporaryDirectory() as directory:
             api = API()
             api.state = Path(directory)
@@ -83,15 +83,12 @@ class DesktopChecks(unittest.TestCase):
                 side_effect=lambda url: urls.append(url) or True,
             ):
                 window.open_result(
-                    {"url": "http://w0123.localhost:1234/_wipsnet/start#private-token"},
+                    {"url": "http://w0123.localhost:1234/"},
                     None,
                 )
             self.assertEqual(len(urls), 1)
-            self.assertEqual(urls[0].scheme(), "file")
-            self.assertNotIn("private-token", urls[0].toString())
-            file = Path(urls[0].toLocalFile())
-            self.assertEqual(file.stat().st_mode & 0o777, 0o600)
-            self.assertIn("private-token", file.read_text())
+            self.assertEqual(urls[0].toString(), "http://w0123.localhost:1234/")
+            self.assertEqual(list(Path(directory).iterdir()), [])
             window.pool.waitForDone()
             QApplication.processEvents()
             window.deleteLater()

@@ -21,7 +21,7 @@ from physical_relay_smoke import SSH
 PKG='app.wispnet.android.peercheck'
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--serial',required=True);parser.add_argument('--order',choices=['both','local-first','desktop-first'],default='both');parser.add_argument('--acceptance',action='store_true');parser.add_argument('--session-expiry',action='store_true');parser.add_argument('--external-check',action='store_true');args=parser.parse_args()
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--serial',required=True);parser.add_argument('--order',choices=['both','local-first','desktop-first'],default='both');parser.add_argument('--acceptance',action='store_true');parser.add_argument('--persistent-session','--session-expiry',dest='session_expiry',action='store_true');parser.add_argument('--external-check',action='store_true');args=parser.parse_args()
     assert not args.session_expiry or args.acceptance,'--session-expiry requires --acceptance'
     assert not args.external_check or args.acceptance,'--external-check requires --acceptance'
     hosts=json.loads(Path('/tmp/wispnet-app-hosts.json').read_text());tag=uuid.uuid4().hex[:12];fixture='peer-'+tag
@@ -129,7 +129,7 @@ def main():
                 if args.external_check:instrument('peers-egress',hosts[0],hosts[1])
                 if args.session_expiry:instrument('peers-expiry',hosts[0],hosts[1])
 
-            print('PASS: '+args.order+' pairing order; cold independent browsers, pin/replay rejection, active revocation and host isolation'+('; invitation repair' if args.acceptance else '')+('; external egress' if args.external_check else '')+('; ten-minute session expiry' if args.session_expiry else ''),flush=True)
+            print('PASS: '+args.order+' pairing order; cold independent browsers, pin/replay rejection, active revocation and host isolation'+('; invitation repair' if args.acceptance else '')+('; external egress' if args.external_check else '')+('; persistent session beyond ten minutes' if args.session_expiry else ''),flush=True)
         finally:
             adb('shell','am','force-stop',PKG,ok=None)
             errors=[]

@@ -215,6 +215,10 @@ impl Client {
             "access_status" => Ok(json!({"enabled":self.gateway.is_enabled()})),
             "enable" => {
                 self.gateway.enable();
+                if let Err(error) = self.gateway.restore(self.clone()).await {
+                    self.gateway.stop().await;
+                    return Err(error);
+                }
                 Ok(json!({"enabled":true}))
             }
             "stop" => {
@@ -224,6 +228,9 @@ impl Client {
             "network" => {
                 self.gateway.interrupt().await;
                 self.endpoint.network_change().await;
+                if self.gateway.is_enabled() {
+                    self.gateway.restore(self.clone()).await?;
+                }
                 Ok(json!({"network_changed":true}))
             }
             "open" => {
@@ -266,7 +273,8 @@ impl Client {
                     .gateway
                     .open(self.clone(), host, id.to_owned(), incarnation.to_owned())
                     .await?;
-                Ok(json!({"url":url,"expires_in":gateway::SESSION_SECONDS}))
+                let launch_url = self.gateway.launch_url(host, id).await?;
+                Ok(json!({"url":url,"launch_url":launch_url}))
             }
             _ => Err("Unknown app operation".into()),
         }

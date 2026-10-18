@@ -246,14 +246,14 @@ class NodeIntegration(unittest.TestCase):
 
                 self.assertEqual(exchange("/")[0], 401)
                 status, headers, _ = exchange(
-                    "/_wipsnet/session",
+                    "/",
                     {
-                        "Origin": "http://" + parsed.netloc,
-                        "Authorization": "Bearer " + parsed.fragment,
+                        "Sec-Fetch-Site": "none",
+                        "Sec-Fetch-Mode": "navigate",
+                        "Sec-Fetch-Dest": "document",
                     },
-                    b"",
                 )
-                self.assertEqual(status, 204)
+                self.assertEqual(status, 303)
                 cookie = headers["Set-Cookie"].split(";")[0]
                 self.assertEqual(
                     exchange("/", {"Cookie": cookie})[2], b"node-gateway-ok"
@@ -324,14 +324,14 @@ class NodeIntegration(unittest.TestCase):
                 self.assertEqual(exchange("/")[0], 401)
                 self.assertEqual(exchange("/", {"Host": "other.localhost"})[0], 421)
                 status, headers, _ = exchange(
-                    "/_wipsnet/session",
+                    "/",
                     {
-                        "Origin": "http://" + parsed.netloc,
-                        "Authorization": "Bearer " + parsed.fragment,
+                        "Sec-Fetch-Site": "none",
+                        "Sec-Fetch-Mode": "navigate",
+                        "Sec-Fetch-Dest": "document",
                     },
-                    b"",
                 )
-                self.assertEqual(status, 204)
+                self.assertEqual(status, 303)
                 cookie = headers["Set-Cookie"].split(";")[0]
                 self.assertEqual(
                     exchange("/", {"Cookie": cookie})[2], b"node-gateway-ok"

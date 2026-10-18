@@ -32,8 +32,8 @@ for method,path,extra,status in cases:
  c=http.client.HTTPConnection('127.0.0.1',u.port,timeout=15);h={'Host':u.netloc,'Cookie':v['cookie']};h.update(extra)
  c.request(method,path,headers=h);r=c.getresponse();assert r.status==status,(method,status,r.status);r.read();c.close()
 c=http.client.HTTPConnection('127.0.0.1',u.port,timeout=15)
-c.request('POST','/_wipsnet/session',headers={'Host':u.netloc,'Origin':origin,'Authorization':'Bearer '+u.fragment,'Content-Length':'0'})
-r=c.getresponse();assert r.status==403,'bootstrap replay';r.read();c.close()
+c.request('POST','/_wipsnet/session',headers={'Host':u.netloc,'Origin':origin,'Content-Length':'0'})
+r=c.getresponse();assert r.status==403,'missing app handoff token';r.read();c.close()
 # Actual non-loopback interface, not merely a different Host header.
 s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.connect(('192.0.2.1',9));ip=s.getsockname()[0];s.close();assert not ip.startswith('127.')
 s=socket.socket();s.settimeout(2)

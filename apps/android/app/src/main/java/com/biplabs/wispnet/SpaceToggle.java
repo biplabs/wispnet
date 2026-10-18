@@ -3,7 +3,7 @@ import android.content.Context;
 import android.graphics.*;
 import android.widget.Button;
 import android.view.accessibility.AccessibilityNodeInfo;
-/** Hyperdrive Navicomputer Core in standby, active Hyperspace Beacon Pill when docked, or first-run plus core. */
+/** Hyperdrive Navicomputer Core in standby, active Go offline control when docked, or first-run plus core. */
 final class SpaceToggle extends Button {
  final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
  final RectF arc=new RectF();
@@ -47,7 +47,7 @@ final class SpaceToggle extends Button {
   paint.setColor(0xff65ceff);c.drawCircle(bx,by,4.2f*d,paint);
   paint.setColor(0xfff4fcff);c.drawCircle(bx,by,1.8f*d,paint);
   paint.setColor(0xffedf4ff);paint.setTextSize(11.5f*d);paint.setTypeface(Typeface.create(Typeface.DEFAULT,Typeface.BOLD));paint.setLetterSpacing(0.08f);
-  Paint.FontMetrics fm=paint.getFontMetrics();c.drawText("HYPERSPACE",bx+12*d,by-(fm.ascent+fm.descent)/2f,paint);
+  Paint.FontMetrics fm=paint.getFontMetrics();c.drawText("GO OFFLINE",bx+12*d,by-(fm.ascent+fm.descent)/2f,paint);
  }
  public void setSelected(boolean value){super.setSelected(value);invalidate();}
  public void onInitializeAccessibilityNodeInfo(AccessibilityNodeInfo info){super.onInitializeAccessibilityNodeInfo(info);info.setClassName(plus?"android.widget.Button":"android.widget.Switch");info.setCheckable(!plus);info.setChecked(!plus&&isSelected());}

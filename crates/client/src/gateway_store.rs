@@ -1,0 +1,159 @@
+//! Owner-only address reservations. No browser credentials or authority are persisted.
+use iroh::EndpointId;
+use serde::{Deserialize, Serialize};
+use std::{
+    fs,
+    io::{Read, Write},
+    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+    path::Path,
+};
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Binding {
+    pub peer: EndpointId,
+    pub service: String,
+    pub incarnation: String,
+    pub hostname: String,
+    pub port: u16,
+}
+impl Binding {
+    pub fn authority(&self) -> String {
+        format!("{}:{}", self.hostname, self.port)
+    }
+    pub fn url(&self) -> String {
+        format!("http://{}/", self.authority())
+    }
+    fn valid(&self) -> bool {
+        self.port >= 1024
+            && wipsnet_core::protocol::valid_service_id(&self.service)
+            && wipsnet_core::enrollment::valid_code(&self.incarnation)
+            && self
+                .hostname
+                .strip_prefix('w')
+                .and_then(|s| s.strip_suffix(".localhost"))
+                .is_some_and(|s| {
+                    s.len() == 32
+                        && s.bytes()
+                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                })
+    }
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Saved {
+    version: u8,
+    owner: EndpointId,
+    routes: Vec<Binding>,
+}
+fn error() -> String {
+    "Saved browser addresses are unavailable or invalid".into()
+}
+fn root(state: &Path) -> Result<(), String> {
+    let m = fs::symlink_metadata(state).map_err(|_| error())?;
+    if !m.is_dir() || m.mode() & 0o777 != 0o700 || m.uid() != unsafe { libc::geteuid() } {
+        return Err(error());
+    }
+    Ok(())
+}
+pub(super) fn load(state: &Path, owner: EndpointId) -> Result<Vec<Binding>, String> {
+    root(state)?;
+    let file = match fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(state.join("browser-routes.json"))
+    {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(_) => return Err(error()),
+    };
+    let m = file.metadata().map_err(|_| error())?;
+    if !m.is_file()
+        || m.nlink() != 1
+        || m.mode() & 0o777 != 0o600
+        || m.uid() != unsafe { libc::geteuid() }
+        || m.len() > 32768
+    {
+        return Err(error());
+    }
+    let mut bytes = Vec::new();
+    file.take(32769)
+        .read_to_end(&mut bytes)
+        .map_err(|_| error())?;
+    let saved: Saved = serde_json::from_slice(&bytes).map_err(|_| error())?;
+    if saved.version != 1
+        || saved.owner != owner
+        || saved.routes.len() > 16
+        || saved.routes.iter().any(|r| !r.valid())
+    {
+        return Err(error());
+    }
+    for (i, r) in saved.routes.iter().enumerate() {
+        if saved.routes[..i].iter().any(|b| {
+            b.port == r.port
+                || b.hostname == r.hostname
+                || (b.peer == r.peer && b.service == r.service)
+        }) {
+            return Err(error());
+        }
+    }
+    Ok(saved.routes)
+}
+pub(super) fn save(state: &Path, owner: EndpointId, routes: &[Binding]) -> Result<(), String> {
+    root(state)?;
+    let path = state.join("browser-routes.json");
+    let mut file = wipsnet_registry::control::credential_temp(&path).map_err(|_| error())?;
+    file.as_file()
+        .set_permissions(fs::Permissions::from_mode(0o600))
+        .map_err(|_| error())?;
+    serde_json::to_writer(
+        &mut file,
+        &Saved {
+            version: 1,
+            owner,
+            routes: routes.to_vec(),
+        },
+    )
+    .map_err(|_| error())?;
+    file.flush().map_err(|_| error())?;
+    file.as_file().sync_all().map_err(|_| error())?;
+    file.persist(&path).map_err(|_| error())?;
+    fs::File::open(state)
+        .and_then(|f| f.sync_all())
+        .map_err(|_| error())?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn address_records_reject_corruption_duplicates_unsafe_permissions_and_symlinks() {
+        let state = tempfile::tempdir().unwrap();
+        fs::set_permissions(state.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let owner = wipsnet_core::identity::SecretKey::generate().public();
+        let binding = Binding {
+            peer: owner,
+            service: "site".into(),
+            incarnation: "a".repeat(64),
+            hostname: format!("w{}.localhost", "b".repeat(32)),
+            port: 49152,
+        };
+        save(state.path(), owner, std::slice::from_ref(&binding)).unwrap();
+        assert_eq!(load(state.path(), owner).unwrap()[0].url(), binding.url());
+        let path = state.path().join("browser-routes.json");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(load(state.path(), owner).is_err());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::write(&path, b"{truncated").unwrap();
+        assert!(load(state.path(), owner).is_err());
+        save(state.path(), owner, &[binding.clone(), binding]).unwrap();
+        assert!(load(state.path(), owner).is_err());
+        fs::remove_file(&path).unwrap();
+        let outside = state.path().join("outside");
+        fs::write(&outside, b"untouched").unwrap();
+        std::os::unix::fs::symlink(&outside, &path).unwrap();
+        assert!(load(state.path(), owner).is_err());
+        assert_eq!(fs::read(&outside).unwrap(), b"untouched");
+    }
+}

@@ -32,11 +32,9 @@ public final class AppTestRunner extends Instrumentation {
   UriParts url=new UriParts(Native.request(new JSONObject().put("op","open").put("host",host).put("service",service).put("incarnation",incarnation(host,service))).getString("url"));
   if(!http(url,"/","GET","","").startsWith("HTTP/1.1 401"))throw new Exception("Missing browser session accepted");
   if(!http(url,"/","GET","Origin: https://attacker.invalid\r\n","").startsWith("HTTP/1.1 403"))throw new Exception("Cross-origin browser request accepted");
-  String exchange="Origin: http://"+url.authority+"\r\nAuthorization: Bearer "+url.token+"\r\n";
-  String response=http(url,"/_wipsnet/session","POST",exchange,"");if(!response.startsWith("HTTP/1.1 204"))throw new Exception("Native gateway bootstrap failed");
+  String response=http(url,"/","GET","Sec-Fetch-Site: none\r\nSec-Fetch-Mode: navigate\r\nSec-Fetch-Dest: document\r\n","");if(!response.startsWith("HTTP/1.1 303"))throw new Exception("Browser navigation authorization failed");
   String cookie=null;for(String line:response.split("\r\n"))if(line.startsWith("Set-Cookie: "))cookie=line.substring(12).split(";",2)[0];
   if(cookie==null)throw new Exception("Gateway session cookie missing");
-  if(!http(url,"/_wipsnet/session","POST",exchange,"").startsWith("HTTP/1.1 403"))throw new Exception("Bootstrap was reusable");
   String body="{\"messages\":[{\"role\":\"user\",\"content\":\"Reply with OK.\"}],\"max_tokens\":32,\"stream\":true,\"chat_template_kwargs\":{\"enable_thinking\":false}}";
   String streamed=http(url,"/v1/chat/completions","POST","Origin: http://"+url.authority+"\r\nCookie: "+cookie+"\r\nContent-Type: application/json\r\n",body);
   if(!streamed.contains("data:")||!streamed.contains("[DONE]"))throw new Exception("Actual Llama streaming reply failed");

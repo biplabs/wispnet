@@ -10,6 +10,8 @@ name = "wipsnet_client"
 crate-type = ["rlib"]
 
 [dependencies]
+serde.workspace = true
+libc.workspace = true
 wipsnet-core.workspace = true
 wipsnet-agent.workspace = true
 wipsnet-registry.workspace = true
@@ -24,4 +26,5 @@ zeroize.workspace = true
 
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true

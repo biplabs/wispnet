@@ -11,7 +11,7 @@ final class LifecycleChecks {
  static final class Session {
   final AppTestRunner t;final AppTestRunner.UriParts url;final String cookie;
   Session(AppTestRunner runner,String host)throws Exception{t=runner;url=new AppTestRunner.UriParts(Native.request(new JSONObject().put("op","open").put("host",host).put("service",runner.args.getString("fixture")).put("incarnation",runner.incarnation(host,runner.args.getString("fixture")))).getString("url"));
-   String r=t.http(url,"/_wipsnet/session","POST","Origin: http://"+url.authority+"\r\nAuthorization: Bearer "+url.token+"\r\n","");String c=null;for(String line:r.split("\r\n"))if(line.startsWith("Set-Cookie: "))c=line.substring(12).split(";",2)[0];if(c==null)throw new Exception("No lifecycle session");cookie=c;
+   String r=t.http(url,"/","GET","Sec-Fetch-Site: none\r\nSec-Fetch-Mode: navigate\r\nSec-Fetch-Dest: document\r\n","");String c=null;for(String line:r.split("\r\n"))if(line.startsWith("Set-Cookie: "))c=line.substring(12).split(";",2)[0];if(c==null)throw new Exception("No lifecycle session");cookie=c;
   }
   String request(String path)throws Exception{return t.http(url,path,"GET","Cookie: "+cookie+"\r\n","");}
   Socket socket(String path,String method)throws Exception{Socket s=new Socket("127.0.0.1",url.port);s.setSoTimeout(90000);s.getOutputStream().write((method+" "+path+" HTTP/1.1\r\nHost: "+url.authority+"\r\nOrigin: http://"+url.authority+"\r\nCookie: "+cookie+"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").getBytes(java.nio.charset.StandardCharsets.US_ASCII));return s;}
@@ -52,7 +52,7 @@ final class LifecycleChecks {
    barrier(t,"doze-ready");Session afterIdle=recover(t,host);if(!afterIdle.request("/").contains("lifecycle-fixture"))throw new Exception("Access failed after device idle");t.stage("doze-recovered");
    Session interrupted=recover(t,host);Socket upload=interrupted.socket("/hold","POST");BufferedReader lines=new BufferedReader(new InputStreamReader(upload.getInputStream()));String line;boolean accepted=false;while((line=lines.readLine())!=null){if(line.equals("data: accepted")){accepted=true;break;}}if(!accepted)throw new Exception("Side-effecting POST not accepted");
    Future<Boolean> ended=reader.submit(()->{try{while(lines.readLine()!=null){}return true;}catch(IOException lost){return true;}finally{upload.close();}});
-   barrier(t,"wifi-drop-ready");if(!ended.get(15,TimeUnit.SECONDS))throw new Exception("Interrupted POST stayed active");closed(interrupted.url);
+   barrier(t,"wifi-drop-ready");if(!ended.get(15,TimeUnit.SECONDS))throw new Exception("Interrupted POST stayed active");if(interrupted.request("/").startsWith("HTTP/1.1 200"))throw new Exception("Old browser credential survived network interruption");
    Session recovered=recover(t,host);if(!recovered.request("/count").contains("post-count=1"))throw new Exception("Side-effecting request replayed");t.stage("wifi-recovered-no-post-replay");
    barrier(t,"relay-restart-ready");recovered=recover(t,host);websocket(recovered);t.stage("relay-recovered");
    barrier(t,"network-switch-ready");recovered=recover(t,host);if(!peer.equals(Native.command("identity").getString("peer"))||!new HostStore(t.getTargetContext()).all().has(t.args.getString("host_b")))throw new Exception("Recovery changed identity or pairings");t.stage("network-switch-recovered");

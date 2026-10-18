@@ -57,8 +57,8 @@ d=json.load(sys.stdin);u=urllib.parse.urlsplit(d['url'])
 c=http.client.HTTPConnection('127.0.0.1',u.port,timeout=15)
 h={'Host':u.netloc}
 if d['op']=='bootstrap':
- h.update({'Origin':'http://'+u.netloc,'Authorization':'Bearer '+u.fragment})
- c.request('POST','/_wipsnet/session',body=b'',headers=h)
+ h.update({'Sec-Fetch-Site':'none','Sec-Fetch-Mode':'navigate','Sec-Fetch-Dest':'document'})
+ c.request('GET','/',headers=h)
 else:
  h['Cookie']=d['cookie'];c.request('GET','/',headers=h)
 r=c.getresponse();body=r.read()
@@ -148,7 +148,7 @@ def main():
             }
             url = request(source, opening)["url"]
             bootstrap = http(source, url)
-            assert bootstrap["status"] == 204
+            assert bootstrap["status"] == 303
             cookie = bootstrap["cookie"]
             assert http(source, url, cookie)["status"] == 200
             # Same ID, address and grants, recreated before any one-second tick.
@@ -177,7 +177,7 @@ def main():
             opening["incarnation"] = fresh
             fresh_url = request(source, opening)["url"]
             fresh_bootstrap = http(source, fresh_url)
-            assert fresh_bootstrap["status"] == 204
+            assert fresh_bootstrap["status"] == 303
             assert http(source, fresh_url, fresh_bootstrap["cookie"])["status"] == 200
             mutate(target, {"op": "remove", "id": fixture})
             request(source, {"op": "stop"})

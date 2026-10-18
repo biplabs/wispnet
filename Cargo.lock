@@ -4393,6 +4393,8 @@ dependencies = [
  "base64 0.22.1",
  "httparse",
  "iroh",
+ "libc",
+ "serde",
  "serde_json",
  "sha1",
  "tempfile",

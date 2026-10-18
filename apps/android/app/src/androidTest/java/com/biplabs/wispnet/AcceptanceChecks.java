@@ -31,11 +31,11 @@ final class AcceptanceChecks {
   }else if(mode.equals("peers-expiry")){
    PeerChecks.available(t,target);PeerChecks.available(t,other);PeerChecks.start(t);PeerChecks.browser(t,name);
    LifecycleChecks.Session session=new LifecycleChecks.Session(t,target);String peer=Native.command("identity").getString("peer");long began=android.os.SystemClock.elapsedRealtime();int events=0;
-   try(Socket stream=session.socket("/stream","GET")){BufferedReader reader=new BufferedReader(new InputStreamReader(stream.getInputStream()));String line;t.stage("ten-minute-stream-started");while((line=reader.readLine())!=null){if(line.startsWith("data:"))events++;}}
+   try(Socket stream=session.socket("/stream","GET")){BufferedReader reader=new BufferedReader(new InputStreamReader(stream.getInputStream()));String line;t.stage("ten-minute-stream-started");while((line=reader.readLine())!=null){if(line.startsWith("data:"))events++;if(android.os.SystemClock.elapsedRealtime()-began>=610000)break;}}
    long elapsed=android.os.SystemClock.elapsedRealtime()-began;
-   if(elapsed<590000||elapsed>630000||events<2000||!AccessService.enabled)throw new Exception("Ten-minute session boundary or stream failed: elapsed_ms="+elapsed+", events="+events+", enabled="+AccessService.enabled);
-   LifecycleChecks.closed(session.url);t.resume();t.await(()->t.activity.status.getText().toString().contains("Browser session expired"),"Session expiry UI not distinct from host denial");
-   PeerChecks.available(t,target);PeerChecks.available(t,other);PeerChecks.browser(t,name);if(!peer.equals(Native.command("identity").getString("peer")))throw new Exception("Session expiry changed pairing");t.stage("ten-minute-stream-expired-and-reopened-without-pairing");
+   if(elapsed<600000||elapsed>630000||events<2000||!AccessService.enabled)throw new Exception("Persistent session stream failed: elapsed_ms="+elapsed+", events="+events+", enabled="+AccessService.enabled);
+   if(!session.request("/").startsWith("HTTP/1.1 200"))throw new Exception("Bookmark expired after ten minutes");t.resume();
+   PeerChecks.available(t,target);PeerChecks.available(t,other);PeerChecks.browser(t,name);if(!peer.equals(Native.command("identity").getString("peer")))throw new Exception("Session expiry changed pairing");t.stage("persistent-stream-survived-ten-minutes-without-pairing");
   }else throw new Exception("Unknown acceptance mode");
  }
 }

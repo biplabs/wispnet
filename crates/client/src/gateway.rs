@@ -1,4 +1,4 @@
-//! HTTP-aware loopback gateway. Composite peer/service routes, never arbitrary upstreams.
+//! Persistent, isolated loopback browser routes; authority is checked per request.
 use crate::{Client, token};
 use iroh::{EndpointId, endpoint::Connection};
 use std::{
@@ -6,7 +6,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
@@ -16,16 +16,18 @@ use tokio::{
 };
 #[path = "gateway_http.rs"]
 mod http;
-pub const SESSION_SECONDS: u64 = 600;
-struct Limits {
-    session: Duration,
-    bootstrap: Duration,
-}
+#[path = "gateway_store.rs"]
+mod store;
 const COOKIE: &str = "_wipsnet_session";
-const START: &str = r#"<!doctype html><meta name="referrer" content="no-referrer"><title>Wispnet</title><p id="status">Opening service…</p><script>const token=location.hash.slice(1);history.replaceState(null,'',location.pathname);fetch('/_wipsnet/session',{method:'POST',headers:{Authorization:'Bearer '+token}}).then(r=>{if(!r.ok)throw Error();location.replace('/')}).catch(()=>document.getElementById('status').textContent='Access expired. Open this service again in Wispnet.');</script>"#;
+const START: &str = r#"<!doctype html><meta name="referrer" content="no-referrer"><title>Wispnet</title><p id="status">Opening service…</p><script>const token=location.hash.slice(1);history.replaceState(null,'',location.pathname);fetch('/_wipsnet/session',{method:'POST',headers:{Authorization:'Bearer '+token}}).then(r=>{if(!r.ok)throw Error();location.replace('/')}).catch(()=>document.getElementById('status').textContent='Open this service again in Wispnet.');</script>"#;
+struct Worker {
+    binding: store::Binding,
+    task: JoinHandle<()>,
+    route: Arc<Route>,
+}
 pub struct Gateways {
     enabled: AtomicBool,
-    workers: Mutex<Vec<JoinHandle<()>>>,
+    workers: Mutex<Vec<Worker>>,
     connections: Arc<Semaphore>,
 }
 impl Default for Gateways {
@@ -48,17 +50,49 @@ impl Gateways {
         self.enabled.store(false, Ordering::Release);
         self.interrupt().await;
     }
-    /// Close existing browser sessions without changing the user's access setting.
-    /// Network changes never replay an in-flight HTTP request.
+    /// Interrupt sockets without replaying requests or discarding saved addresses.
     pub async fn interrupt(&self) {
         let mut guard = self.workers.lock().await;
-        let workers = std::mem::take(&mut *guard);
-        for worker in &workers {
-            worker.abort();
+        for worker in guard.drain(..) {
+            worker.task.abort();
+            let _ = worker.task.await;
         }
-        for worker in workers {
-            let _ = worker.await;
+    }
+    /// App handoff proves an explicit Open even when Android Chrome marks it cross-site.
+    /// This short-lived token never changes the bookmarked root address.
+    pub async fn launch_url(&self, peer: EndpointId, service: &str) -> Result<String, String> {
+        let workers = self.workers.lock().await;
+        let worker = workers
+            .iter()
+            .find(|w| w.binding.peer == peer && w.binding.service == service)
+            .ok_or("Browser route unavailable")?;
+        let mut tokens = worker.route.bootstraps.lock().await;
+        tokens.retain(|(_, expires)| *expires > std::time::Instant::now());
+        if tokens.len() >= 8 {
+            tokens.remove(0);
         }
+        let token = token();
+        tokens.push((
+            token.clone(),
+            std::time::Instant::now() + Duration::from_secs(60),
+        ));
+        Ok(format!(
+            "http://{}/_wipsnet/start#{token}",
+            worker.binding.authority()
+        ))
+    }
+    /// Rebind exactly the saved ports. Never silently move a bookmark to a new port.
+    pub async fn restore(&self, client: Arc<Client>) -> Result<(), String> {
+        for binding in store::load(&client.state, client.endpoint.id())? {
+            self.open(
+                client.clone(),
+                binding.peer,
+                binding.service,
+                binding.incarnation,
+            )
+            .await?;
+        }
+        Ok(())
     }
     pub async fn open(
         &self,
@@ -67,107 +101,113 @@ impl Gateways {
         service: String,
         incarnation: String,
     ) -> Result<String, String> {
-        self.open_for(
-            client,
+        if !wipsnet_core::protocol::valid_service_id(&service)
+            || !wipsnet_core::enrollment::valid_code(&incarnation)
+        {
+            return Err("Invalid browser route".into());
+        }
+        let mut workers = self.workers.lock().await;
+        workers.retain(|w| !w.task.is_finished());
+        if !self.is_enabled() {
+            return Err("Start browser access first".into());
+        }
+        if let Some(worker) = workers.iter().find(|w| {
+            w.binding.peer == peer
+                && w.binding.service == service
+                && w.binding.incarnation == incarnation
+        }) {
+            return Ok(worker.binding.url());
+        }
+        let mut saved = store::load(&client.state, client.endpoint.id())?;
+        let index = saved
+            .iter()
+            .position(|b| b.peer == peer && b.service == service);
+        if index.is_none() && saved.len() >= 16 {
+            return Err("Too many saved browser services".into());
+        }
+        let port = index.map(|i| saved[i].port).unwrap_or(0);
+        // An explicit new incarnation replaces the binding, preserving its origin.
+        if let Some(i) = workers
+            .iter()
+            .position(|w| w.binding.peer == peer && w.binding.service == service)
+        {
+            let old = workers.remove(i);
+            old.task.abort();
+            let _ = old.task.await;
+        }
+        let listener = TcpListener::bind(("127.0.0.1", port)).await.map_err(
+            |_| "Saved browser port unavailable; close the conflicting application and try again",
+        )?;
+        let binding = store::Binding {
             peer,
             service,
             incarnation,
-            Limits {
-                session: Duration::from_secs(SESSION_SECONDS),
-                bootstrap: Duration::from_secs(60),
-            },
-            None,
-        )
-        .await
-    }
-    async fn open_for(
-        &self,
-        client: Arc<Client>,
-        peer: EndpointId,
-        service: String,
-        incarnation: String,
-        limits: Limits,
-        listener: Option<TcpListener>,
-    ) -> Result<String, String> {
-        if !self.enabled.load(Ordering::Acquire) {
-            return Err("Start browser access first".into());
+            hostname: index
+                .map(|i| saved[i].hostname.clone())
+                .unwrap_or_else(|| format!("w{}.localhost", &token()[..32])),
+            port: listener
+                .local_addr()
+                .map_err(|_| "Cannot inspect browser port")?
+                .port(),
+        };
+        if let Some(i) = index {
+            saved[i] = binding.clone();
+        } else {
+            saved.push(binding.clone());
         }
+        store::save(&client.state, client.endpoint.id(), &saved)?;
         let local_binding = if peer == client.endpoint.id() {
             if let Some(authority) = &client.local_authority {
-                Some(
-                    authority
-                        .services()
-                        .await
-                        .map_err(|e| e.to_string())?
-                        .into_iter()
-                        .find(|s| {
-                            s.id == service
-                                && s.incarnation == incarnation
-                                && s.kind == wipsnet_core::host::ServiceKind::Http
-                        })
-                        .ok_or("Service no longer permitted")?
-                        .backend,
-                )
+                authority
+                    .services()
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .into_iter()
+                    .find(|s| {
+                        s.id == binding.service
+                            && s.incarnation == binding.incarnation
+                            && s.kind == wipsnet_core::host::ServiceKind::Http
+                    })
+                    .map(|s| s.backend)
             } else {
                 None
             }
         } else {
             None
         };
-        let listener = match listener {
-            Some(listener) => listener,
-            None => TcpListener::bind("127.0.0.1:0")
-                .await
-                .map_err(|_| "Cannot start loopback gateway")?,
-        };
-        if !listener
-            .local_addr()
-            .map_err(|_| "Cannot inspect gateway")?
-            .ip()
-            .is_loopback()
-        {
-            return Err("Gateway must be loopback-only".into());
-        }
-        let authority = format!(
-            "w{}.localhost:{}",
-            &token()[..32],
-            listener
-                .local_addr()
-                .map_err(|_| "Cannot inspect loopback gateway")?
-                .port()
-        );
-        let bootstrap = token();
-        let url = format!("http://{authority}/_wipsnet/start#{bootstrap}");
         let route = Arc::new(Route {
             client,
             peer,
-            service,
-            incarnation,
+            service: binding.service.clone(),
+            incarnation: binding.incarnation.clone(),
             local_binding,
-            authority,
-            bootstrap: Mutex::new(Some(bootstrap)),
+            authority: binding.authority(),
             credential: token(),
-            bootstrap_expires: Instant::now() + limits.bootstrap,
-            expires: Instant::now() + limits.session,
+            bootstraps: Mutex::new(Vec::new()),
         });
-        let mut workers = self.workers.lock().await;
-        workers.retain(|w| !w.is_finished());
-        if !self.enabled.load(Ordering::Acquire) || workers.len() >= 16 {
-            return Err("Access stopped or too many open services".into());
-        }
         let connections = self.connections.clone();
-        workers.push(tokio::spawn(async move {
-   let mut tasks=JoinSet::new();
-   loop {tokio::select!{
-    _=tokio::time::sleep_until(tokio::time::Instant::from_std(route.expires))=>break,
-    Some(_)=tasks.join_next(),if !tasks.is_empty()=>{},
-    accepted=listener.accept()=>{
-     let Ok((socket,address))=accepted else{break;};if !address.ip().is_loopback(){continue;}
-     let Ok(permit)=connections.clone().try_acquire_owned() else{continue;};let route=route.clone();
-     tasks.spawn(async move {let _permit=permit;let _=tokio::time::timeout_at(tokio::time::Instant::from_std(route.expires),route.handle(socket)).await;});
-    }
-   }}
-  }));
+        let active_route = route.clone();
+        let task = tokio::spawn(async move {
+            let mut tasks = JoinSet::new();
+            loop {
+                tokio::select! {
+                    Some(_) = tasks.join_next(), if !tasks.is_empty() => {},
+                    accepted = listener.accept() => {
+                        let Ok((socket, address)) = accepted else { break; };
+                        if !address.ip().is_loopback() { continue; }
+                        let Ok(permit) = connections.clone().try_acquire_owned() else { continue; };
+                        let route = route.clone();
+                        tasks.spawn(async move { let _permit=permit; let _=route.handle(socket).await; });
+                    }
+                }
+            }
+        });
+        let url = binding.url();
+        workers.push(Worker {
+            binding,
+            task,
+            route: active_route,
+        });
         Ok(url)
     }
 }
@@ -181,10 +221,8 @@ struct Route {
     incarnation: String,
     local_binding: Option<std::net::SocketAddr>,
     authority: String,
-    bootstrap: Mutex<Option<String>>,
     credential: String,
-    bootstrap_expires: Instant,
-    expires: Instant,
+    bootstraps: Mutex<Vec<(String, std::time::Instant)>>,
 }
 struct Close(Connection);
 impl Drop for Close {
@@ -318,39 +356,50 @@ impl Route {
             }
             return response(&mut socket,"200 OK",START,"Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'\r\n").await;
         }
+        if request.path == "/_wipsnet/session" {
+            let mut tokens = self.bootstraps.lock().await;
+            tokens.retain(|(_, expires)| *expires > std::time::Instant::now());
+            let index = tokens.iter().position(|(t, _)| {
+                request
+                    .one("authorization")
+                    .is_some_and(|a| constant_equal(a, &format!("Bearer {t}")))
+            });
+            if !request.same_origin(&origin)
+                || request.one("origin") != Some(origin.as_str())
+                || request.method != "POST"
+                || length != 0
+                || websocket
+                || index.is_none()
+            {
+                return response(&mut socket, "403 Forbidden", "Bootstrap denied", "").await;
+            }
+            tokens.remove(index.unwrap());
+            return response(
+                &mut socket,
+                "204 No Content",
+                "",
+                &format!(
+                    "Set-Cookie: {COOKIE}={}; Path=/; HttpOnly; SameSite=Strict\r\n",
+                    self.credential
+                ),
+            )
+            .await;
+        }
+        // Only a direct address-bar/bookmark/app navigation can establish a session.
+        // Cross-site links, frames, fetches and unsafe methods cannot mint cookies.
+        let navigation = request.method == "GET"
+            && length == 0
+            && !websocket
+            && request.one("sec-fetch-site") == Some("none")
+            && request.one("sec-fetch-mode") == Some("navigate")
+            && request.one("sec-fetch-dest") == Some("document")
+            && request.values("origin").is_empty();
         if !request.same_origin(&origin) {
             return response(
                 &mut socket,
                 "403 Forbidden",
                 "Cross-origin request denied",
                 "",
-            )
-            .await;
-        }
-        if request.path == "/_wipsnet/session" {
-            let mut bootstrap = self.bootstrap.lock().await;
-            if Instant::now() >= self.bootstrap_expires
-                || request.method != "POST"
-                || length != 0
-                || websocket
-                || request.one("origin") != Some(origin.as_str())
-                || !bootstrap.as_ref().is_some_and(|t| {
-                    request
-                        .one("authorization")
-                        .is_some_and(|a| constant_equal(a, &format!("Bearer {t}")))
-                })
-            {
-                return response(&mut socket, "403 Forbidden", "Bootstrap denied", "").await;
-            }
-            *bootstrap = None;
-            return response(
-                &mut socket,
-                "204 No Content",
-                "",
-                &format!(
-                    "Set-Cookie: {COOKIE}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_SECONDS}\r\n",
-                    self.credential
-                ),
             )
             .await;
         }
@@ -392,10 +441,13 @@ impl Route {
         if sessions.len() != 1
             || !constant_equal(sessions[0], &format!("{COOKIE}={}", self.credential))
         {
+            if navigation {
+                return response(&mut socket, "303 See Other", "", &format!("Location: {}\r\nSet-Cookie: {COOKIE}={}; Path=/; HttpOnly; SameSite=Strict\r\n", request.path, self.credential)).await;
+            }
             return response(
                 &mut socket,
                 "401 Unauthorized",
-                "Open this service from Wispnet",
+                "Open this address directly in your browser while Wispnet is online",
                 "",
             )
             .await;
@@ -452,6 +504,18 @@ impl Route {
                 }
             }
         } else {
+            if !matches!(
+                wipsnet_agent::peers::load(&self.client.state, self.peer),
+                Ok(Some(_))
+            ) {
+                return response(
+                    &mut socket,
+                    "403 Forbidden",
+                    "Pairing no longer available",
+                    "",
+                )
+                .await;
+            }
             let target = self.client.target(self.peer).map_err(|_| ())?;
             _connection = match wipsnet_agent::tunnel::connect_target(&self.client.endpoint, target)
                 .await
@@ -580,6 +644,7 @@ impl Route {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
     async fn raw(url: &str, method: &str, path: &str, extra: &str) -> String {
         let u = url::Url::parse(url).unwrap();
         let mut socket = TcpStream::connect(("127.0.0.1", u.port().unwrap()))
@@ -600,15 +665,8 @@ mod tests {
         socket.read_to_end(&mut data).await.unwrap();
         String::from_utf8(data).unwrap()
     }
-    fn exchange(url: &str) -> String {
-        let u = url::Url::parse(url).unwrap();
-        format!(
-            "Origin: http://{}:{}\r\nAuthorization: Bearer {}\r\nContent-Length: 0\r\n",
-            u.host_str().unwrap(),
-            u.port().unwrap(),
-            u.fragment().unwrap()
-        )
-    }
+    const NAV: &str =
+        "Sec-Fetch-Site: none\r\nSec-Fetch-Mode: navigate\r\nSec-Fetch-Dest: document\r\n";
     fn cookie(reply: &str) -> String {
         reply
             .lines()
@@ -619,108 +677,235 @@ mod tests {
             .unwrap()
             .into()
     }
-    #[tokio::test]
-    async fn expired_sessions_and_reused_ports_cannot_substitute_hosts_or_credentials() {
-        let state = tempfile::tempdir().unwrap();
-        let config =
-            serde_json::from_value(serde_json::json!({"bind_addr":"127.0.0.1:0"})).unwrap();
-        let client = Client::new(
-            wipsnet_core::identity::SecretKey::generate(),
-            state.path().into(),
-            config,
+    async fn client(
+        state: &std::path::Path,
+        key: wipsnet_core::identity::SecretKey,
+    ) -> Arc<Client> {
+        Client::new(
+            key,
+            state.into(),
+            serde_json::from_value(serde_json::json!({"bind_addr":"127.0.0.1:0"})).unwrap(),
         )
         .await
-        .unwrap();
-        client.gateway.enable();
+        .unwrap()
+    }
+    #[tokio::test]
+    async fn stable_bookmarks_restore_ports_rotate_credentials_and_reject_cross_origin() {
+        let state = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let key = wipsnet_core::identity::SecretKey::generate();
+        let c = client(state.path(), key.clone()).await;
         let peer = wipsnet_core::identity::SecretKey::generate().public();
-        let boot = client
-            .gateway
-            .open_for(
-                client.clone(),
-                peer,
-                "website".into(),
-                "a".repeat(64),
-                Limits {
-                    session: Duration::from_secs(5),
-                    bootstrap: Duration::from_millis(20),
-                },
-                None,
-            )
+        assert!(
+            c.gateway
+                .open(c.clone(), peer, "website".into(), "a".repeat(64))
+                .await
+                .is_err()
+        );
+        c.command(&serde_json::json!({"op":"enable"}))
             .await
             .unwrap();
-        tokio::time::sleep(Duration::from_millis(40)).await;
+        let url = c
+            .gateway
+            .open(c.clone(), peer, "website".into(), "a".repeat(64))
+            .await
+            .unwrap();
+        let launch = c.gateway.launch_url(peer, "website").await.unwrap();
+        let launch = url::Url::parse(&launch).unwrap();
+        let exchange = format!(
+            "Origin: http://{}\r\nAuthorization: Bearer {}\r\n",
+            launch.authority(),
+            launch.fragment().unwrap()
+        );
         assert!(
-            raw(&boot, "POST", "/_wipsnet/session", &exchange(&boot))
+            raw(&url, "POST", "/_wipsnet/session", &exchange)
+                .await
+                .starts_with("HTTP/1.1 204")
+        );
+        assert!(
+            raw(&url, "POST", "/_wipsnet/session", &exchange)
                 .await
                 .starts_with("HTTP/1.1 403")
         );
-        client.gateway.interrupt().await;
-        let old = client
-            .gateway
-            .open_for(
-                client.clone(),
-                peer,
-                "website".into(),
-                "a".repeat(64),
-                Limits {
-                    session: Duration::from_millis(150),
-                    bootstrap: Duration::from_secs(1),
-                },
-                None,
-            )
-            .await
-            .unwrap();
-        let reply = raw(&old, "POST", "/_wipsnet/session", &exchange(&old)).await;
-        assert!(reply.starts_with("HTTP/1.1 204"));
+        assert!(url.ends_with('/') && !url.contains('#'));
+        assert_eq!(
+            url,
+            c.gateway
+                .open(c.clone(), peer, "website".into(), "a".repeat(64))
+                .await
+                .unwrap()
+        );
+        assert!(raw(&url, "GET", "/", "").await.starts_with("HTTP/1.1 401"));
+        for headers in [
+            "Origin: https://attacker.invalid\r\n",
+            "Sec-Fetch-Site: cross-site\r\nSec-Fetch-Mode: navigate\r\nSec-Fetch-Dest: document\r\n",
+            "Sec-Fetch-Site: none\r\nSec-Fetch-Mode: navigate\r\nSec-Fetch-Dest: iframe\r\n",
+        ] {
+            assert!(!raw(&url, "GET", "/", headers).await.contains("Set-Cookie:"));
+        }
+        let reply = raw(&url, "GET", "/bookmarked?x=1", NAV).await;
+        assert!(reply.starts_with("HTTP/1.1 303") && reply.contains("Location: /bookmarked?x=1"));
+        assert!(reply.contains("HttpOnly; SameSite=Strict") && !reply.contains("Max-Age="));
         let old_cookie = cookie(&reply);
-        let port = url::Url::parse(&old).unwrap().port().unwrap();
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        assert!(TcpStream::connect(("127.0.0.1", port)).await.is_err());
-        let listener = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
-        let other = wipsnet_core::identity::SecretKey::generate().public();
-        let new = client
+        let other = c
             .gateway
-            .open_for(
-                client.clone(),
-                other,
-                "website".into(),
-                "b".repeat(64),
-                Limits {
-                    session: Duration::from_secs(5),
-                    bootstrap: Duration::from_secs(1),
-                },
-                Some(listener),
-            )
+            .open(c.clone(), peer, "other".into(), "b".repeat(64))
             .await
             .unwrap();
         assert_ne!(
-            url::Url::parse(&old).unwrap().host_str(),
-            url::Url::parse(&new).unwrap().host_str()
+            url::Url::parse(&url).unwrap().host_str(),
+            url::Url::parse(&other).unwrap().host_str()
         );
         assert!(
-            raw(&old, "GET", "/", &format!("Cookie: {old_cookie}\r\n"))
-                .await
-                .starts_with("HTTP/1.1 421")
-        );
-        assert!(
-            raw(&new, "GET", "/", &format!("Cookie: {old_cookie}\r\n"))
+            raw(&other, "GET", "/", &format!("Cookie: {old_cookie}\r\n"))
                 .await
                 .starts_with("HTTP/1.1 401")
         );
+        c.gateway.stop().await;
+        let port = url::Url::parse(&url).unwrap().port().unwrap();
+        assert!(TcpStream::connect(("127.0.0.1", port)).await.is_err());
+        let blocker = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
         assert!(
-            raw(&new, "POST", "/_wipsnet/session", &exchange(&old))
+            c.command(&serde_json::json!({"op":"enable"}))
+                .await
+                .is_err()
+        );
+        assert!(!c.gateway.is_enabled());
+        drop(blocker);
+        c.endpoint.close().await;
+        drop(c);
+        let c = client(state.path(), key).await;
+        c.command(&serde_json::json!({"op":"enable"}))
+            .await
+            .unwrap();
+        assert_eq!(
+            url,
+            c.gateway
+                .open(c.clone(), peer, "website".into(), "a".repeat(64))
+                .await
+                .unwrap()
+        );
+        assert!(
+            raw(&url, "GET", "/", &format!("Cookie: {old_cookie}\r\n"))
+                .await
+                .starts_with("HTTP/1.1 401")
+        );
+        assert_ne!(old_cookie, cookie(&raw(&url, "GET", "/", NAV).await));
+        c.command(&serde_json::json!({"op":"network"}))
+            .await
+            .unwrap();
+        assert!(raw(&url, "GET", "/", NAV).await.starts_with("HTTP/1.1 303"));
+        c.gateway.stop().await;
+        c.endpoint.close().await;
+        let different = client(state.path(), wipsnet_core::identity::SecretKey::generate()).await;
+        assert!(
+            different
+                .command(&serde_json::json!({"op":"enable"}))
+                .await
+                .is_err()
+        );
+        different.endpoint.close().await;
+    }
+    #[tokio::test]
+    async fn persistent_route_checks_local_policy_on_every_request_and_survives_old_deadline() {
+        use wipsnet_registry::host::{self, Authority, Mutation};
+        let state = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let key = wipsnet_core::identity::SecretKey::generate();
+        let peer = key.public();
+        host::initialize(state.path(), peer).unwrap();
+        let backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = backend.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut s, _)) = backend.accept().await else {
+                    break;
+                };
+                let _ = headers(&mut s).await;
+                let _ = s
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .await;
+            }
+        });
+        {
+            let (mut store, owner) = host::owner_store(state.path(), peer).unwrap();
+            store
+                .host_mutate(
+                    peer,
+                    &owner,
+                    Mutation::Service {
+                        expected_revision: 0,
+                        id: "site".into(),
+                        backend: address,
+                        allow: vec![],
+                        display_name: None,
+                        kind: None,
+                    },
+                )
+                .unwrap();
+        }
+        let authority = Authority::open(state.path(), peer).unwrap();
+        let service = authority.services().await.unwrap().remove(0);
+        let config =
+            serde_json::from_value(serde_json::json!({"bind_addr":"127.0.0.1:0"})).unwrap();
+        let endpoint = wipsnet_agent::tunnel::bind_configured_client(&key, Some(&config))
+            .await
+            .unwrap();
+        let c = Client::from_endpoint(
+            endpoint,
+            key,
+            state.path().into(),
+            config,
+            authority.clone(),
+        );
+        c.gateway.enable();
+        let url = c
+            .gateway
+            .open(c.clone(), peer, "site".into(), service.incarnation)
+            .await
+            .unwrap();
+        let session = cookie(&raw(&url, "GET", "/", NAV).await);
+        assert!(
+            raw(&url, "GET", "/", &format!("Cookie: {session}\r\n"))
+                .await
+                .ends_with("ok")
+        );
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(601)).await;
+        tokio::time::resume();
+        assert!(
+            raw(&url, "GET", "/", &format!("Cookie: {session}\r\n"))
+                .await
+                .ends_with("ok")
+        );
+        {
+            let (mut store, owner) = host::owner_store(state.path(), peer).unwrap();
+            store
+                .host_mutate(
+                    peer,
+                    &owner,
+                    Mutation::Remove {
+                        expected_revision: 1,
+                        id: "site".into(),
+                    },
+                )
+                .unwrap();
+        }
+        assert!(
+            raw(&url, "GET", "/", &format!("Cookie: {session}\r\n"))
                 .await
                 .starts_with("HTTP/1.1 403")
         );
-        let reply = raw(&new, "POST", "/_wipsnet/session", &exchange(&new)).await;
-        assert!(reply.starts_with("HTTP/1.1 204"));
-        assert_ne!(cookie(&reply), old_cookie);
-        client.gateway.stop().await;
-        client.endpoint.close().await;
+        c.gateway.stop().await;
+        c.endpoint.close().await;
+        server.abort();
     }
     #[tokio::test]
     async fn route_and_socket_limits_release_capacity_and_header_deadline_is_total() {
         let state = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let config =
             serde_json::from_value(serde_json::json!({"bind_addr":"127.0.0.1:0"})).unwrap();
         let client = Client::new(
@@ -733,11 +918,11 @@ mod tests {
         client.gateway.enable();
         let peer = wipsnet_core::identity::SecretKey::generate().public();
         let mut urls = Vec::new();
-        for _ in 0..16 {
+        for i in 0..16 {
             urls.push(
                 client
                     .gateway
-                    .open(client.clone(), peer, "website".into(), "a".repeat(64))
+                    .open(client.clone(), peer, format!("website-{i}"), "a".repeat(64))
                     .await
                     .unwrap(),
             );
@@ -745,7 +930,7 @@ mod tests {
         assert!(
             client
                 .gateway
-                .open(client.clone(), peer, "website".into(), "a".repeat(64))
+                .open(client.clone(), peer, "overflow".into(), "a".repeat(64))
                 .await
                 .is_err()
         );
@@ -789,7 +974,7 @@ mod tests {
         assert!(
             client
                 .gateway
-                .open(client.clone(), peer, "website".into(), "a".repeat(64))
+                .open(client.clone(), peer, "website-0".into(), "a".repeat(64))
                 .await
                 .is_ok()
         );
@@ -812,122 +997,5 @@ mod tests {
             Ok(Some("app=yes; Path=/".into()))
         );
         assert_eq!(http::clean_cookie("_wipsnet_session=bad; Path=/"), Ok(None));
-    }
-    #[tokio::test]
-    async fn live_gateway_requires_one_use_session_and_stop_closes_listener() {
-        let state = tempfile::tempdir().unwrap();
-        let config: wipsnet_core::config::TransportConfig =
-            serde_json::from_value(serde_json::json!({"bind_addr":"127.0.0.1:0"})).unwrap();
-        let client = Client::new(
-            wipsnet_core::identity::SecretKey::generate(),
-            state.path().into(),
-            config,
-        )
-        .await
-        .unwrap();
-        let peer = wipsnet_core::identity::SecretKey::generate().public();
-        assert!(
-            client
-                .gateway
-                .open(client.clone(), peer, "website".into(), "a".repeat(64))
-                .await
-                .is_err()
-        );
-        client.gateway.enable();
-        let url = client
-            .gateway
-            .open(client.clone(), peer, "website".into(), "a".repeat(64))
-            .await
-            .unwrap();
-        let (prefix, bootstrap) = url.split_once('#').unwrap();
-        let authority = prefix
-            .strip_prefix("http://")
-            .unwrap()
-            .split('/')
-            .next()
-            .unwrap();
-        let port = authority.rsplit(':').next().unwrap();
-        async fn request(
-            port: &str,
-            authority: &str,
-            path: &str,
-            extra: &str,
-            method: &str,
-        ) -> String {
-            let mut socket = TcpStream::connect(format!("127.0.0.1:{port}"))
-                .await
-                .unwrap();
-            socket.write_all(format!("{method} {path} HTTP/1.1\r\nHost: {authority}\r\nContent-Length: 0\r\n{extra}\r\n").as_bytes()).await.unwrap();
-            let mut bytes = Vec::new();
-            socket.read_to_end(&mut bytes).await.unwrap();
-            String::from_utf8(bytes).unwrap()
-        }
-        assert!(
-            request(port, "forged.localhost", "/", "", "GET")
-                .await
-                .starts_with("HTTP/1.1 421")
-        );
-        assert!(
-            request(port, authority, "/", "", "GET")
-                .await
-                .starts_with("HTTP/1.1 401")
-        );
-        assert!(
-            request(
-                port,
-                authority,
-                "/",
-                "Origin: https://attacker.invalid\r\n",
-                "GET"
-            )
-            .await
-            .starts_with("HTTP/1.1 403")
-        );
-        let exchange =
-            format!("Origin: http://{authority}\r\nAuthorization: Bearer {bootstrap}\r\n");
-        let reply = request(port, authority, "/_wipsnet/session", &exchange, "POST").await;
-        assert!(reply.starts_with("HTTP/1.1 204"));
-        assert!(reply.contains("HttpOnly; SameSite=Strict"));
-        assert!(
-            request(port, authority, "/_wipsnet/session", &exchange, "POST")
-                .await
-                .starts_with("HTTP/1.1 403")
-        );
-        client.gateway.interrupt().await;
-        assert!(
-            TcpStream::connect(format!("127.0.0.1:{port}"))
-                .await
-                .is_err()
-        );
-        // A network interruption invalidates sessions but preserves explicit access.
-        let reopened = client
-            .gateway
-            .open(client.clone(), peer, "website".into(), "a".repeat(64))
-            .await
-            .unwrap();
-        let new_port = reopened
-            .split('#')
-            .next()
-            .unwrap()
-            .split('/')
-            .nth(2)
-            .unwrap()
-            .rsplit(':')
-            .next()
-            .unwrap();
-        client.gateway.stop().await;
-        assert!(
-            TcpStream::connect(format!("127.0.0.1:{new_port}"))
-                .await
-                .is_err()
-        );
-        assert!(
-            client
-                .gateway
-                .open(client.clone(), peer, "website".into(), "a".repeat(64))
-                .await
-                .is_err()
-        );
-        client.endpoint.close().await;
     }
 }

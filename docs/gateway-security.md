@@ -2,22 +2,34 @@
 
 ## v1 decision
 
-The shared Rust Android/desktop gateway serves **HTTP only on IPv4 loopback**,
-using a fresh random `w<128-bit>.localhost:<port>` origin for every Open. There is
-no LAN listener, installed certificate authority, shared service domain, or TLS
-termination in the browser hop. Iroh separately encrypts the peer transport.
+The shared Rust Android/desktop gateway serves **HTTP only on IPv4 loopback**.
+Each client installation saves one `w<128-bit>.localhost:<port>` address per
+pinned system and service. Open returns the stable root URL, with no capability
+in its path, query or fragment. Repeated opens reuse the listener; going online
+restores saved listeners on exactly their original ports. A conflicting local
+port fails explicitly rather than silently changing a bookmark. Addresses are
+saved in owner-only `browser-routes.json`, bound to the installation identity;
+browser credentials are never persisted in this file.
+
+There is no ten-minute route or cookie deadline. Going offline and process death
+close sockets; going online restores the same addresses. Network changes cancel
+in-flight requests without replay, restore listeners, and rotate credentials.
+Each request checks current local service state or uses an authenticated peer
+connection whose host checks grants and service incarnation. Removing the local
+peer pin also denies forwarding. Explicitly opening a recreated service adopts
+its new incarnation at the same address; stale bindings stay denied.
+
+A browser address-bar, bookmark or app navigation (`Sec-Fetch-Site: none`,
+`Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`, GET without Origin) can
+establish a host-only HttpOnly SameSite=Strict session cookie and is redirected
+to the same path. Missing or stale cookies on fetches, frames, cross-site links,
+and unsafe methods cannot establish sessions. Cookies rotate when listeners are
+restored, but the address does not. This cookie is a browser session cookie,
+without Secure or a timed Max-Age; authorization still happens per request.
+
 The trust boundary excludes hostile same-UID/root processes and application
 scripts accessing their own origin. A browser secure-context flag does not
-establish transport encryption.
-
-The gateway cookie is host-only, HttpOnly, SameSite=Strict, Path=/ and expires
-at 600 seconds. It deliberately has no Secure flag or cookie prefix. A one-use
-256-bit bootstrap token expires after 60 seconds; the landing page removes its
-fragment before exchanging it with a same-origin POST. Desktop capability URLs
-travel through private handoff files/stdin, never browser command arguments.
-The route's monotonic ten-minute deadline closes its listener and active
-connections even if browser cookie expiry differs. Reauthorization requires
-an explicit new Open and a new origin/token/cookie; there is no silent renewal.
+establish transport encryption; Iroh encrypts the peer transport.
 
 Applications requiring HTTPS-specific cookie semantics are unsupported in v1.
 A response setting Secure, Partitioned, SameSite=None or `__Host-`, `__Secure-`,
@@ -30,11 +42,12 @@ claim that arbitrary web apps work over HTTP.
 
 Service workers are unsupported: script requests with `Service-Worker` or
 `Sec-Fetch-Dest: serviceworker` get 403 before connecting to the backend.
-`Service-Worker-Allowed` is removed from upstream responses. Random origins are
-never intentionally reused. Storage/cookies from an old origin cannot authorize
-a later route; expiry/Stop do not erase already rendered pages, downloaded data,
-or an application's own localStorage. Own-origin scripts remain application
-code trusted with that application's access.
+`Service-Worker-Allowed` is removed from upstream responses. Origins persist for
+the same logical system/service, including explicit backend
+replacement. Application cookies and localStorage therefore persist at that
+origin; offline does not erase rendered pages, downloaded data or application
+storage. A different system or service gets a separate hostname and port.
+Own-origin scripts remain application code trusted with that application's access.
 
 Relative and same-gateway-origin redirects work. Owner-local absolute redirects
 to the **exact current backend origin** are rewritten to the gateway origin.
@@ -50,8 +63,8 @@ URLs. Ordinary relative fixture login passes in Chromium and Firefox.
 - Exact Host, single Origin and Fetch Metadata are checked before backend access.
   Cross-site/sibling/null-origin requests are rejected, including GET and
   WebSocket. Non-GET/HEAD requests and WebSocket require exact same-origin Origin.
-  Only the public bootstrap landing page permits an external top-level document
-  navigation; it grants no backend access. Bootstrap replay/expiry fail closed.
+  Only direct user navigation can mint a session; external cross-site navigation
+  and missing app handoff tokens grant no access.
 - Browser-facing requests must be HTTP/1.1 origin-form. GET/HEAD/POST/PUT/PATCH/
   DELETE/OPTIONS are supported; TRACE/CONNECT and other methods get 405.
   Uploads require a single decimal Content-Length (zero if absent), at most
@@ -60,7 +73,7 @@ URLs. Ordinary relative fixture login passes in Chromium and Firefox.
 - Headers are bounded to 32 KiB/96 fields and a **total** ten-second deadline,
   not a per-byte idle timeout. The gateway allows 16 routes and 32 concurrent
   accepted connections across routes; excess connections close immediately.
-  Stop/expiry releases capacity. A slow reader applies bounded-copy backpressure;
+  Stop releases active socket capacity. A slow reader applies bounded-copy backpressure;
   there is no whole-response buffer and no total download-size cap.
 - HTTP/1.0 and 1.1 backend responses support exact Content-Length,
   close-delimited bodies and plain chunked transfer. Chunk lines are at most
@@ -102,7 +115,7 @@ An interrupted application POST commits exactly once; a fresh Open does not
 replay it. Fixtures restore services/grants/pins/access settings; the relay PID
 is unchanged and the remote Qt/tray unit remains absent.
 
-The seven `wipsnet-client` gateway unit tests also run as a native executable on
+Historical checks before persistent URLs: the seven `wipsnet-client` gateway unit tests also ran as a native executable on
 headless Ubuntu: strict request/response/cookie/redirect/WebSocket cases;
 single-use bootstrap and Stop; short **private test-only** expiry limits and
 forced exact port reuse by a different peer; 16-route/32-socket limits and a
@@ -141,3 +154,20 @@ APK build success.
 Normative references: [HTTP/1.1 message framing, RFC 9112](https://www.rfc-editor.org/rfc/rfc9112.html),
 [Set-Cookie semantics](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Set-Cookie),
 and [service-worker script requests](https://w3c.github.io/ServiceWorker/#service-worker-script-request).
+
+Android Chrome may classify app-to-browser intents as cross-site. Explicit Open
+therefore also issues a separate `launch_url` with a one-use, 60-second fragment
+token. Its isolated landing page exchanges that token for the same session cookie,
+then navigates to the stable root URL. Tokens are bounded, never stored on disk,
+and do not impose a lifetime on a service address or authenticated session.
+Desktop browsers can open the stable root directly. Bookmarks retain the root URL.
+
+## Persistent URL regression coverage
+
+Current native regressions check stable deduplicated addresses, exact-port restoration
+after client recreation, port conflict failure, credential rotation, cross-origin
+and iframe denial, missing cookies, service isolation, local policy withdrawal on
+an existing route, and continued access after advancing past the old ten-minute
+boundary. Header and aggregate socket limits remain bounded. The Android optional
+`--persistent-session` acceptance run streams for more than ten minutes and checks
+that the same address and credential still work; it replaces the old expiry test.
