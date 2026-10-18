@@ -61,11 +61,13 @@ side even if #5 transports an opaque byte stream.
 - Stream responses with bounded chunks and backpressure. Close the upstream on
   client disconnect. Never retry side-effecting requests automatically.
 
-The HTTP experiment does not set Secure/__Host- on its gateway cookie. Production
-cookie-prefix, HTTPS and certificate decisions remain release gates in #10 after
-the tests owned by #10. The tested applications currently work through the HTTP
-prototype; other clients/cookie policies are not supported by this evidence. Do not equate a browser secure-context
-flag with transport encryption or declare plaintext sessions production-safe.
+The v1 shared Rust gateway now selects loopback-only HTTP with a host-only,
+HttpOnly, SameSite=Strict credential cookie. It rejects HTTPS-specific application
+cookies, service workers, external redirects and unsupported HTTP features;
+it never strips Secure/prefix requirements to weaken a login. Ordinary relative
+login, cookies, storage, SSE and WebSocket are verified in Chromium and headless
+Firefox. See the [gateway contract and security evidence](../gateway-security.md)
+for exact limits, threat boundaries, production expiry and intentional exclusions.
 
 ## Trust boundaries
 
@@ -85,8 +87,8 @@ flag with transport encryption or declare plaintext sessions production-safe.
 | Gap | Owner |
 | --- | --- |
 | Native Android gateway, ordinary-browser handoff and lifecycle/network transitions | #12; compatibility evidence remains #2 |
-| Linux/Android Secure cookie, prefix, hostname and HTTPS decisions | #10, validated under #2 |
-| Per-service isolation against malicious cookie Domain settings, XSS, service workers and port/hostname reuse | #10 |
+| Final Play-phone browser coverage of the documented HTTP-only subset | #14; v1 decisions and Linux security matrix completed in #10 |
+| Per-service cookie/storage, service-worker rejection and port/origin reuse | #10 implemented and tested; own-origin scripts remain trusted application code |
 | Protected administrative API and authenticated nonbrowser API access | #10 |
 | Native gateway integration with authenticated transport and host-side authorization | #5 foundation landed; integration #10/#14 |
 | Atomic policy changes, active-stream revocation and expiry | #9 |

@@ -634,6 +634,43 @@ async fn explicit_tls_relay_without_udp_pins_identity_enforces_grants_and_recove
     .unwrap();
     assert_eq!(outgoing.id(), client.endpoint_id());
     assert_eq!(host.endpoint().id(), key.endpoint_id());
+    // Relay replacement cannot resurrect a host-locally revoked client, even
+    // after that client restarts with its original cryptographic identity.
+    stranger.close().await;
+    let revoked = tunnel::bind_configured_client(stranger_key.secret_key(), Some(&cfg))
+        .await
+        .unwrap();
+    timeout(Duration::from_secs(10), revoked.online())
+        .await
+        .unwrap();
+    assert_eq!(revoked.id(), stranger_key.endpoint_id());
+    let denied = control::connect_target(&revoked, target.clone())
+        .await
+        .unwrap();
+    assert!(
+        control::catalog_on(&denied, key.endpoint_id())
+            .await
+            .is_err()
+    );
+    let current = control::connect_target(&outgoing, target.clone())
+        .await
+        .unwrap();
+    let incarnation = control::catalog_on(&current, key.endpoint_id())
+        .await
+        .unwrap()
+        .services[0]
+        .incarnation
+        .clone();
+    let denied_service = tunnel::connect_target(&revoked, target.clone())
+        .await
+        .unwrap();
+    assert!(
+        tunnel::open_service_bound(&denied_service, "llama", &incarnation)
+            .await
+            .is_err()
+    );
+    revoked.close().await;
+
     // No replay of the previous service operation during relay recovery.
     assert!(
         timeout(Duration::from_millis(100), backend.accept())

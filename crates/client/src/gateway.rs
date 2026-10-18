@@ -14,7 +14,13 @@ use tokio::{
     sync::{Mutex, Semaphore},
     task::{JoinHandle, JoinSet},
 };
+#[path = "gateway_http.rs"]
+mod http;
 pub const SESSION_SECONDS: u64 = 600;
+struct Limits {
+    session: Duration,
+    bootstrap: Duration,
+}
 const COOKIE: &str = "_wipsnet_session";
 const START: &str = r#"<!doctype html><meta name="referrer" content="no-referrer"><title>Wispnet</title><p id="status">Opening service…</p><script>const token=location.hash.slice(1);history.replaceState(null,'',location.pathname);fetch('/_wipsnet/session',{method:'POST',headers:{Authorization:'Bearer '+token}}).then(r=>{if(!r.ok)throw Error();location.replace('/')}).catch(()=>document.getElementById('status').textContent='Access expired. Open this service again in Wispnet.');</script>"#;
 pub struct Gateways {
@@ -61,6 +67,28 @@ impl Gateways {
         service: String,
         incarnation: String,
     ) -> Result<String, String> {
+        self.open_for(
+            client,
+            peer,
+            service,
+            incarnation,
+            Limits {
+                session: Duration::from_secs(SESSION_SECONDS),
+                bootstrap: Duration::from_secs(60),
+            },
+            None,
+        )
+        .await
+    }
+    async fn open_for(
+        &self,
+        client: Arc<Client>,
+        peer: EndpointId,
+        service: String,
+        incarnation: String,
+        limits: Limits,
+        listener: Option<TcpListener>,
+    ) -> Result<String, String> {
         if !self.enabled.load(Ordering::Acquire) {
             return Err("Start browser access first".into());
         }
@@ -86,9 +114,20 @@ impl Gateways {
         } else {
             None
         };
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .map_err(|_| "Cannot start loopback gateway")?;
+        let listener = match listener {
+            Some(listener) => listener,
+            None => TcpListener::bind("127.0.0.1:0")
+                .await
+                .map_err(|_| "Cannot start loopback gateway")?,
+        };
+        if !listener
+            .local_addr()
+            .map_err(|_| "Cannot inspect gateway")?
+            .ip()
+            .is_loopback()
+        {
+            return Err("Gateway must be loopback-only".into());
+        }
         let authority = format!(
             "w{}.localhost:{}",
             &token()[..32],
@@ -108,8 +147,8 @@ impl Gateways {
             authority,
             bootstrap: Mutex::new(Some(bootstrap)),
             credential: token(),
-            bootstrap_expires: Instant::now() + Duration::from_secs(60),
-            expires: Instant::now() + Duration::from_secs(SESSION_SECONDS),
+            bootstrap_expires: Instant::now() + limits.bootstrap,
+            expires: Instant::now() + limits.session,
         });
         let mut workers = self.workers.lock().await;
         workers.retain(|w| !w.is_finished());
@@ -189,27 +228,28 @@ impl Request {
                 .is_none_or(|s| s == "none" || s == "same-origin")
             && self.values("origin").len() <= 1
             && self.values("sec-fetch-site").len() <= 1
+            && self.values("sec-fetch-mode").len() <= 1
+            && self.values("sec-fetch-dest").len() <= 1
     }
 }
 async fn headers(stream: &mut (impl AsyncRead + Unpin)) -> Result<Vec<u8>, ()> {
-    let mut bytes = Vec::new();
-    // Reading exactly through the terminator avoids losing streamed body bytes.
-    while bytes.len() < 32768 {
-        let byte = tokio::time::timeout(Duration::from_secs(10), stream.read_u8())
-            .await
-            .map_err(|_| ())?
-            .map_err(|_| ())?;
-        bytes.push(byte);
-        if bytes.ends_with(b"\r\n\r\n") {
-            return Ok(bytes);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let mut bytes = Vec::new();
+        while bytes.len() < 32768 {
+            bytes.push(stream.read_u8().await.map_err(|_| ())?);
+            if bytes.ends_with(b"\r\n\r\n") {
+                return Ok(bytes);
+            }
         }
-    }
-    Err(())
+        Err(())
+    })
+    .await
+    .map_err(|_| ())?
 }
 fn parse(bytes: &[u8]) -> Result<Request, ()> {
     let mut storage = [httparse::EMPTY_HEADER; 96];
     let mut request = httparse::Request::new(&mut storage);
-    if !request.parse(bytes).map_err(|_| ())?.is_complete() {
+    if !request.parse(bytes).map_err(|_| ())?.is_complete() || request.version != Some(1) {
         return Err(());
     }
     Ok(Request {
@@ -239,7 +279,12 @@ async fn response(socket: &mut TcpStream, status: &str, body: &str, extra: &str)
 }
 impl Route {
     async fn handle(&self, mut socket: TcpStream) -> Result<(), ()> {
-        let request = parse(&headers(&mut socket).await?)?;
+        let request = match headers(&mut socket).await.and_then(|bytes| parse(&bytes)) {
+            Ok(request) => request,
+            Err(()) => {
+                return response(&mut socket, "400 Bad Request", "Invalid HTTP headers", "").await;
+            }
+        };
         let origin = format!("http://{}", self.authority);
         if !request.safe(&self.authority) {
             return response(
@@ -249,6 +294,21 @@ impl Route {
                 "",
             )
             .await;
+        }
+        let (websocket, length) = match http::framing(&request) {
+            Ok(result) => result,
+            Err(()) => {
+                return response(
+                    &mut socket,
+                    "400 Bad Request",
+                    "Unsupported request framing",
+                    "",
+                )
+                .await;
+            }
+        };
+        if length > 16 * 1024 * 1024 {
+            return response(&mut socket, "413 Content Too Large", "", "").await;
         }
         if request.path == "/_wipsnet/start" && request.method == "GET" {
             let navigation = request.one("sec-fetch-mode") == Some("navigate")
@@ -271,6 +331,8 @@ impl Route {
             let mut bootstrap = self.bootstrap.lock().await;
             if Instant::now() >= self.bootstrap_expires
                 || request.method != "POST"
+                || length != 0
+                || websocket
                 || request.one("origin") != Some(origin.as_str())
                 || !bootstrap.as_ref().is_some_and(|t| {
                     request
@@ -295,6 +357,31 @@ impl Route {
         if request.path.starts_with("/_wipsnet/") {
             return response(&mut socket, "404 Not Found", "", "").await;
         }
+        if !request.values("service-worker").is_empty()
+            || request.one("sec-fetch-dest") == Some("serviceworker")
+        {
+            return response(
+                &mut socket,
+                "403 Forbidden",
+                "Service workers are unsupported",
+                "",
+            )
+            .await;
+        }
+        if !["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+            .contains(&request.method.as_str())
+        {
+            return response(
+                &mut socket,
+                "405 Method Not Allowed",
+                "Unsupported HTTP method",
+                "",
+            )
+            .await;
+        }
+        if http::cookies(&request).is_err() {
+            return response(&mut socket, "400 Bad Request", "Invalid cookies", "").await;
+        }
         let cookies = request.values("cookie");
         let sessions: Vec<_> = cookies
             .iter()
@@ -313,9 +400,6 @@ impl Route {
             )
             .await;
         }
-        let websocket = request
-            .one("upgrade")
-            .is_some_and(|s| s.eq_ignore_ascii_case("websocket"));
         if (websocket || !["GET", "HEAD"].contains(&request.method.as_str()))
             && request.one("origin") != Some(origin.as_str())
         {
@@ -326,25 +410,6 @@ impl Route {
                 "",
             )
             .await;
-        }
-        if !request.values("transfer-encoding").is_empty()
-            || !request.values("expect").is_empty()
-            || request.values("content-length").len() > 1
-        {
-            return response(
-                &mut socket,
-                "400 Bad Request",
-                "Unsupported request framing",
-                "",
-            )
-            .await;
-        }
-        let length = match request.one("content-length") {
-            Some(v) => v.parse::<u64>().map_err(|_| ())?,
-            None => 0,
-        };
-        if length > 16 * 1024 * 1024 {
-            return response(&mut socket, "413 Content Too Large", "", "").await;
         }
         let local = if self.peer == self.client.endpoint.id() {
             self.client.local_authority.as_ref()
@@ -433,6 +498,10 @@ impl Route {
                 }
                 if [
                     "connection",
+                    "keep-alive",
+                    "te",
+                    "trailer",
+                    "proxy-authenticate",
                     "proxy-authorization",
                     "proxy-connection",
                     "forwarded",
@@ -464,53 +533,26 @@ impl Route {
             if copied != length {
                 return Err(());
             }
-            let incoming = headers(&mut service).await?;
-            let incoming = std::str::from_utf8(&incoming).map_err(|_| ())?;
-            let mut lines = incoming.split("\r\n");
-            let status = lines.next().ok_or(())?;
-            if !status.starts_with("HTTP/1.") {
-                return Err(());
-            }
-            let mut filtered = format!("{status}\r\n");
-            for line in lines.filter(|s| !s.is_empty()) {
-                let (name, value) = line.split_once(':').ok_or(())?;
-                if name.eq_ignore_ascii_case("set-cookie") {
-                    if let Some(cookie) = clean_cookie(value.trim()) {
-                        filtered.push_str(&format!("Set-Cookie: {cookie}\r\n"));
-                    }
-                } else if name.eq_ignore_ascii_case("location") {
-                    let value = value.trim();
-                    if value.starts_with("//")
-                        || (value
-                            .split(['/', '?', '#'])
-                            .next()
-                            .unwrap_or("")
-                            .contains(':')
-                            && !value.starts_with(&format!("{origin}/")))
-                    {
-                        return response(
-                            &mut socket,
-                            "502 Bad Gateway",
-                            "Cross-origin redirect blocked",
-                            "",
-                        )
-                        .await;
-                    }
-                    filtered.push_str(&format!("Location: {value}\r\n"));
-                } else {
-                    filtered.push_str(line);
-                    filtered.push_str("\r\n");
-                }
-            }
-            filtered.push_str("Referrer-Policy: no-referrer\r\n\r\n");
-            socket
-                .write_all(filtered.as_bytes())
+            let head = match headers(&mut service)
                 .await
-                .map_err(|_| ())?;
-            if websocket && status.contains(" 101 ") {
+                .and_then(|bytes| http::response(&bytes, &request, &origin, binding, websocket))
+            {
+                Ok(head) => head,
+                Err(()) => {
+                    return response(
+                        &mut socket,
+                        "502 Bad Gateway",
+                        "Unsupported or malformed backend response",
+                        "",
+                    )
+                    .await;
+                }
+            };
+            socket.write_all(&head.bytes).await.map_err(|_| ())?;
+            if matches!(head.body, http::Body::WebSocket) {
                 let _ = tokio::io::copy_bidirectional(&mut socket, &mut service).await;
             } else {
-                let _ = tokio::io::copy(&mut service, &mut socket).await;
+                http::body(&mut service, &mut socket, head.body).await?;
             }
             Ok(())
         };
@@ -532,27 +574,225 @@ impl Route {
         tokio::select! { result = forwarding => result, _ = policy => Err(()) }
     }
 }
-fn clean_cookie(value: &str) -> Option<String> {
-    let name = value.split(';').next()?.split('=').next()?.trim();
-    if name == COOKIE {
-        return None;
-    }
-    Some(
-        value
-            .split(';')
-            .filter(|part| {
-                !part
-                    .split('=')
-                    .next()
-                    .is_some_and(|name| name.trim().eq_ignore_ascii_case("domain"))
-            })
-            .collect::<Vec<_>>()
-            .join(";"),
-    )
-}
 #[cfg(test)]
 mod tests {
     use super::*;
+    async fn raw(url: &str, method: &str, path: &str, extra: &str) -> String {
+        let u = url::Url::parse(url).unwrap();
+        let mut socket = TcpStream::connect(("127.0.0.1", u.port().unwrap()))
+            .await
+            .unwrap();
+        socket
+            .write_all(
+                format!(
+                    "{method} {path} HTTP/1.1\r\nHost: {}:{}\r\n{extra}\r\n",
+                    u.host_str().unwrap(),
+                    u.port().unwrap()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut data = Vec::new();
+        socket.read_to_end(&mut data).await.unwrap();
+        String::from_utf8(data).unwrap()
+    }
+    fn exchange(url: &str) -> String {
+        let u = url::Url::parse(url).unwrap();
+        format!(
+            "Origin: http://{}:{}\r\nAuthorization: Bearer {}\r\nContent-Length: 0\r\n",
+            u.host_str().unwrap(),
+            u.port().unwrap(),
+            u.fragment().unwrap()
+        )
+    }
+    fn cookie(reply: &str) -> String {
+        reply
+            .lines()
+            .find_map(|l| l.strip_prefix("Set-Cookie: "))
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .into()
+    }
+    #[tokio::test]
+    async fn expired_sessions_and_reused_ports_cannot_substitute_hosts_or_credentials() {
+        let state = tempfile::tempdir().unwrap();
+        let config =
+            serde_json::from_value(serde_json::json!({"bind_addr":"127.0.0.1:0"})).unwrap();
+        let client = Client::new(
+            wipsnet_core::identity::SecretKey::generate(),
+            state.path().into(),
+            config,
+        )
+        .await
+        .unwrap();
+        client.gateway.enable();
+        let peer = wipsnet_core::identity::SecretKey::generate().public();
+        let boot = client
+            .gateway
+            .open_for(
+                client.clone(),
+                peer,
+                "website".into(),
+                "a".repeat(64),
+                Limits {
+                    session: Duration::from_secs(5),
+                    bootstrap: Duration::from_millis(20),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        assert!(
+            raw(&boot, "POST", "/_wipsnet/session", &exchange(&boot))
+                .await
+                .starts_with("HTTP/1.1 403")
+        );
+        client.gateway.interrupt().await;
+        let old = client
+            .gateway
+            .open_for(
+                client.clone(),
+                peer,
+                "website".into(),
+                "a".repeat(64),
+                Limits {
+                    session: Duration::from_millis(150),
+                    bootstrap: Duration::from_secs(1),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        let reply = raw(&old, "POST", "/_wipsnet/session", &exchange(&old)).await;
+        assert!(reply.starts_with("HTTP/1.1 204"));
+        let old_cookie = cookie(&reply);
+        let port = url::Url::parse(&old).unwrap().port().unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(TcpStream::connect(("127.0.0.1", port)).await.is_err());
+        let listener = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
+        let other = wipsnet_core::identity::SecretKey::generate().public();
+        let new = client
+            .gateway
+            .open_for(
+                client.clone(),
+                other,
+                "website".into(),
+                "b".repeat(64),
+                Limits {
+                    session: Duration::from_secs(5),
+                    bootstrap: Duration::from_secs(1),
+                },
+                Some(listener),
+            )
+            .await
+            .unwrap();
+        assert_ne!(
+            url::Url::parse(&old).unwrap().host_str(),
+            url::Url::parse(&new).unwrap().host_str()
+        );
+        assert!(
+            raw(&old, "GET", "/", &format!("Cookie: {old_cookie}\r\n"))
+                .await
+                .starts_with("HTTP/1.1 421")
+        );
+        assert!(
+            raw(&new, "GET", "/", &format!("Cookie: {old_cookie}\r\n"))
+                .await
+                .starts_with("HTTP/1.1 401")
+        );
+        assert!(
+            raw(&new, "POST", "/_wipsnet/session", &exchange(&old))
+                .await
+                .starts_with("HTTP/1.1 403")
+        );
+        let reply = raw(&new, "POST", "/_wipsnet/session", &exchange(&new)).await;
+        assert!(reply.starts_with("HTTP/1.1 204"));
+        assert_ne!(cookie(&reply), old_cookie);
+        client.gateway.stop().await;
+        client.endpoint.close().await;
+    }
+    #[tokio::test]
+    async fn route_and_socket_limits_release_capacity_and_header_deadline_is_total() {
+        let state = tempfile::tempdir().unwrap();
+        let config =
+            serde_json::from_value(serde_json::json!({"bind_addr":"127.0.0.1:0"})).unwrap();
+        let client = Client::new(
+            wipsnet_core::identity::SecretKey::generate(),
+            state.path().into(),
+            config,
+        )
+        .await
+        .unwrap();
+        client.gateway.enable();
+        let peer = wipsnet_core::identity::SecretKey::generate().public();
+        let mut urls = Vec::new();
+        for _ in 0..16 {
+            urls.push(
+                client
+                    .gateway
+                    .open(client.clone(), peer, "website".into(), "a".repeat(64))
+                    .await
+                    .unwrap(),
+            );
+        }
+        assert!(
+            client
+                .gateway
+                .open(client.clone(), peer, "website".into(), "a".repeat(64))
+                .await
+                .is_err()
+        );
+        let port = url::Url::parse(&urls[0]).unwrap().port().unwrap();
+        let mut sockets = Vec::new();
+        for _ in 0..32 {
+            sockets.push(TcpStream::connect(("127.0.0.1", port)).await.unwrap());
+        }
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while client.gateway.connections.available_permits() != 0 {
+            assert!(tokio::time::Instant::now() < deadline);
+            tokio::task::yield_now().await;
+        }
+        let mut overflow = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let mut byte = [0];
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), overflow.read(&mut byte))
+                .await
+                .unwrap()
+                .unwrap(),
+            0
+        );
+        // A continuously trickling header cannot reset the overall ten-second deadline.
+        let (mut reader, mut writer) = tokio::io::duplex(64);
+        let trickle = tokio::spawn(async move {
+            loop {
+                if writer.write_all(b"x").await.is_err() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        });
+        let started = tokio::time::Instant::now();
+        assert!(headers(&mut reader).await.is_err());
+        assert!(started.elapsed() < Duration::from_secs(12));
+        trickle.abort();
+        client.gateway.stop().await;
+        assert_eq!(client.gateway.connections.available_permits(), 32);
+        assert!(TcpStream::connect(("127.0.0.1", port)).await.is_err());
+        client.gateway.enable();
+        assert!(
+            client
+                .gateway
+                .open(client.clone(), peer, "website".into(), "a".repeat(64))
+                .await
+                .is_ok()
+        );
+        client.gateway.stop().await;
+        client.endpoint.close().await;
+    }
     #[test]
     fn authority_origin_framing_and_cookie_isolation() {
         let request=parse(b"GET / HTTP/1.1\r\nHost: a.localhost:123\r\nOrigin: http://a.localhost:123\r\nSec-Fetch-Site: same-origin\r\n\r\n").unwrap();
@@ -565,10 +805,10 @@ mod tests {
                 .unwrap();
         assert!(!duplicate.safe("a.localhost:123"));
         assert_eq!(
-            clean_cookie("app=yes; Domain=.localhost; Path=/"),
-            Some("app=yes; Path=/".into())
+            http::clean_cookie("app=yes; Domain=.localhost; Path=/"),
+            Ok(Some("app=yes; Path=/".into()))
         );
-        assert_eq!(clean_cookie("_wipsnet_session=bad; Path=/"), None);
+        assert_eq!(http::clean_cookie("_wipsnet_session=bad; Path=/"), Ok(None));
     }
     #[tokio::test]
     async fn live_gateway_requires_one_use_session_and_stop_closes_listener() {

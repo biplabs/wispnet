@@ -1,5 +1,11 @@
 # Browser compatibility evidence (#2)
 
+The current shared Rust gateway contract, HTTP-only compatibility decisions and
+2026-10-17 Chromium/headless Firefox security matrix are in
+[gateway security](gateway-security.md). The dated prototype evidence below is
+retained with its original scope; it does not describe current unsupported-feature
+handling or substitute for final Play-phone acceptance.
+
 Observation date: 2026-10-15 (America/Vancouver). This matrix describes a local
 Python HTTP prototype, not the shipping Rust application or an Iroh end-to-end test.
 

@@ -4390,11 +4390,14 @@ dependencies = [
 name = "wipsnet-client"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "httparse",
  "iroh",
  "serde_json",
+ "sha1",
  "tempfile",
  "tokio",
+ "url",
  "wipsnet-agent",
  "wipsnet-core",
  "wipsnet-registry",
