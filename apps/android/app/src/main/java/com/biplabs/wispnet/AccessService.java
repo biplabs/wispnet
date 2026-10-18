@@ -19,17 +19,19 @@ public final class AccessService extends Service {
  public void onCreate(){
   super.onCreate();NotificationManager nm=getSystemService(NotificationManager.class);
   nm.createNotificationChannel(new NotificationChannel("access","Wispnet browser access",NotificationManager.IMPORTANCE_LOW));
-  Intent stop=new Intent(this,AccessService.class).setAction("stop");
-  PendingIntent pending=PendingIntent.getService(this,2,stop,PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
-  PendingIntent open=PendingIntent.getActivity(this,1,new Intent(this,MainActivity.class),PendingIntent.FLAG_IMMUTABLE);
-  Notification notification=new Notification.Builder(this,"access").setSmallIcon(android.R.drawable.ic_menu_share).setContentTitle("Wispnet access enabled").setContentText("Private browser connections to your paired hosts").setContentIntent(open).addAction(new Notification.Action.Builder(null,"Stop access",pending).build()).setOngoing(true).build();
-  startForeground(1,notification);
+  startForeground(1,notification("Wispnet starting…"));
   manager=getSystemService(ConnectivityManager.class);current=manager.getActiveNetwork();
   networkStatus=current==null?"No network. Reconnect, then reopen the service.":"Network available";
   callback=new ConnectivityManager.NetworkCallback(){
    public void onAvailable(Network network){synchronized(networkLock){if(destroyed||network.equals(current))return;current=network;changed();}}
    public void onLost(Network network){synchronized(networkLock){if(destroyed||!network.equals(current))return;current=null;changed();}}
   };manager.registerDefaultNetworkCallback(callback);
+ }
+ private Notification notification(String title){
+  Intent stop=new Intent(this,AccessService.class).setAction("stop");
+  PendingIntent pending=PendingIntent.getService(this,2,stop,PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
+  PendingIntent open=PendingIntent.getActivity(this,1,new Intent(this,MainActivity.class),PendingIntent.FLAG_IMMUTABLE);
+  return new Notification.Builder(this,"access").setSmallIcon(R.drawable.ic_stat_wispnet).setContentTitle(title).setContentText("Access to your paired systems is enabled").setContentIntent(open).addAction(new Notification.Action.Builder(null,"Go offline",pending).build()).setOngoing(true).setOnlyAlertOnce(true).setShowWhen(false).setCategory(Notification.CATEGORY_SERVICE).setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE).build();
  }
  // Call while holding networkLock. Drain every generation, including a callback
  // arriving during native recovery; coalescing must never lose the final network.
@@ -44,7 +46,7 @@ public final class AccessService extends Service {
  public int onStartCommand(Intent intent,int flags,int startId){
   if(intent!=null&&"stop".equals(intent.getAction())){stopSelf();return START_NOT_STICKY;}
   synchronized(networkLock){if(destroyed||starting||enabled)return START_NOT_STICKY;starting=true;}
-  networkWork.execute(()->{try{Native.ensure(this);synchronized(networkLock){if(destroyed)return;Native.command("enable");enabled=true;}}catch(Exception failure){networkStatus="Cannot start browser access";stopSelf();}finally{synchronized(networkLock){starting=false;}}});
+  networkWork.execute(()->{try{Native.ensure(this);synchronized(networkLock){if(destroyed)return;Native.command("enable");enabled=true;getSystemService(NotificationManager.class).notify(1,notification("Wispnet online"));}}catch(Exception failure){networkStatus="Cannot start browser access";stopSelf();}finally{synchronized(networkLock){starting=false;}}});
   return START_NOT_STICKY;
  }
  public void onDestroy(){
