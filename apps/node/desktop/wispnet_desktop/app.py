@@ -28,8 +28,11 @@ from PySide6.QtGui import (
     QDesktopServices,
     QIcon,
     QPainter,
+    QPen,
     QPixmap,
     QFont,
+    QRadialGradient,
+    QLinearGradient,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -37,6 +40,7 @@ from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
+    QGridLayout,
     QLabel,
     QPushButton,
     QTabWidget,
@@ -54,8 +58,233 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QFileDialog,
+    QFrame,
 )
+import math
+import random
 from .api import NodeAPI
+
+
+class StarfieldBanner(QWidget):
+    """Star Wars-inspired navicomputer header with drifting 3D starfield and 3-beat hyperjump."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("headerCard")
+        self.setMinimumHeight(112)
+        rng = random.Random(17)
+        self.stars = [
+            (rng.random() * math.tau, rng.random(), 0.6 + rng.random() * 0.8, i)
+            for i in range(96)
+        ]
+        self.hyperspace = False
+        self.warp_start = 0.0
+        self.warp_duration = 0.0
+        self.decelerating = False
+        self.anim_timer = QTimer(self)
+        self.anim_timer.timeout.connect(self._tick)
+        self.anim_timer.start(33)
+
+    def jump(self):
+        self.decelerating = False
+        self.warp_start = time.monotonic()
+        self.warp_duration = 0.9
+        self.update()
+
+    def drop_out(self):
+        self.decelerating = True
+        self.warp_start = time.monotonic()
+        self.warp_duration = 0.32
+        self.update()
+
+    def _tick(self):
+        if self.isVisible():
+            self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = float(self.width()), float(self.height())
+        cx, cy = w * 0.5, h * 0.5
+        scale = math.hypot(cx, cy)
+        now = time.monotonic()
+        elapsed = now - self.warp_start if self.warp_duration > 0 else 999.0
+        warp = elapsed < self.warp_duration
+        progress = min(1.0, max(0.0, elapsed / self.warp_duration)) if warp else 0.0
+        if not warp and self.warp_duration > 0:
+            self.warp_duration = 0.0
+            self.decelerating = False
+
+        bg = QLinearGradient(0, 0, w, h)
+        if self.hyperspace:
+            bg.setColorAt(0.0, QColor("#12244a"))
+            bg.setColorAt(0.55, QColor("#0c1834"))
+            bg.setColorAt(1.0, QColor("#081022"))
+        else:
+            bg.setColorAt(0.0, QColor("#0e1930"))
+            bg.setColorAt(0.55, QColor("#0a1224"))
+            bg.setColorAt(1.0, QColor("#070c18"))
+        painter.setBrush(bg)
+        painter.setPen(
+            QPen(QColor("#3868b8" if self.hyperspace else "#263c66"), 1.2)
+        )
+        painter.drawRoundedRect(1, 1, w - 2, h - 2, 18, 18)
+
+        pulse = 0.82 + 0.18 * math.sin(now * 1.6)
+        nebula = QRadialGradient(w * 0.72, cy, max(1.0, w * 0.45))
+        nebula.setColorAt(
+            0.0,
+            QColor(56, 118, 224, int((110 if self.hyperspace else 68) * pulse)),
+        )
+        nebula.setColorAt(0.55, QColor(24, 52, 112, int(45 * pulse)))
+        nebula.setColorAt(1.0, QColor(7, 11, 20, 0))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(nebula)
+        painter.drawRoundedRect(2, 2, w - 4, h - 4, 17, 17)
+
+        lock_on = (
+            math.sin((progress / 0.18) * math.pi)
+            if warp and not self.decelerating and progress < 0.18
+            else 0.0
+        )
+        warp_phase = (
+            max(0.0, (progress - 0.14) / 0.86)
+            if warp and not self.decelerating
+            else (1.0 - progress) * 0.45
+            if warp
+            else 0.0
+        )
+        surge = math.sin(math.pi * (warp_phase ** 0.75)) if warp else 0.0
+
+        if warp and surge > 0:
+            flash = QRadialGradient(cx, cy, max(1.0, w * 0.45))
+            flash.setColorAt(0.0, QColor(228, 251, 255, int(180 * surge)))
+            flash.setColorAt(0.2, QColor(101, 206, 255, int(120 * surge)))
+            flash.setColorAt(1.0, QColor(16, 25, 56, 0))
+            painter.setBrush(flash)
+            painter.drawRoundedRect(2, 2, w - 4, h - 4, 17, 17)
+
+        if warp and not self.decelerating and progress > 0.76:
+            wave = (progress - 0.76) / 0.24
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(
+                QPen(
+                    QColor(101, 206, 255, int((1.0 - wave) * 165)),
+                    max(1.0, 2.8 - wave * 2.0),
+                )
+            )
+            painter.drawEllipse(
+                int(cx - wave * scale * 0.65),
+                int(cy - wave * scale * 0.65),
+                int(wave * scale * 1.3),
+                int(wave * scale * 1.3),
+            )
+
+        cruise = ((now * (1.8 if self.hyperspace else 1.0)) / 24.0) % 1.0
+        for angle, base_depth, speed, idx in self.stars:
+            depth = (base_depth + cruise * speed + (warp_phase * 0.75 if warp else 0.0)) % 1.0
+            radius = max(4.0, ((0.03 + depth * depth) - lock_on * 0.02) * scale)
+            ux, uy = math.cos(angle), math.sin(angle)
+            twinkle = 0.7 + 0.3 * math.sin(now * 4.0 * (0.5 + speed) + idx)
+            tail = (
+                surge * surge * (0.025 + depth * 0.36) * scale
+                if warp
+                else depth * depth * (14.0 if self.hyperspace else 5.5)
+            )
+            c_hex = (
+                "#ffdfa8"
+                if idx % 15 == 0
+                else "#7da2ff"
+                if idx % 9 == 0
+                else "#65ceff"
+                if idx % 6 == 0
+                else "#f0f8ff"
+            )
+            alpha = int(
+                min(
+                    255,
+                    (125 + speed * 115 if warp else (75 + depth * 155) * twinkle)
+                    * (min(1.0, 0.35 + surge * 3.0) if warp else 1.0),
+                )
+            )
+            color = QColor(c_hex)
+            color.setAlpha(alpha)
+            width = 1.2 + speed * 1.5 if warp else 1.0 + depth * 1.8
+            pen = QPen(color, width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+            painter.setPen(pen)
+            x0, y0 = cx + ux * radius, cy + uy * radius
+            if tail < 1.5:
+                painter.drawPoint(int(x0), int(y0))
+            else:
+                painter.drawLine(
+                    int(x0),
+                    int(y0),
+                    int(cx + ux * (radius + tail)),
+                    int(cy + uy * (radius + tail)),
+                )
+        painter.end()
+
+
+class HyperspaceToggle(QCheckBox):
+    """Accessible QCheckBox styled as a Star Wars Hyperdrive Core / Hyperspace Beacon pill."""
+
+    def __init__(self, text="Browser access", parent=None):
+        super().__init__(text, parent)
+        self.setObjectName("accessToggle")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedSize(192, 42)
+
+    def hitButton(self, pos):
+        return self.rect().contains(pos)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        on = self.isChecked()
+        enabled = self.isEnabled()
+
+        painter.setPen(
+            QPen(
+                QColor("#5b9cf7" if on else "#2e4674" if enabled else "#1e2c46"),
+                1.5,
+            )
+        )
+        painter.setBrush(
+            QColor("#142b56" if on else "#0f1a30" if enabled else "#0b1220")
+        )
+        painter.drawRoundedRect(2, 2, w - 4, h - 4, (h - 4) / 2, (h - 4) / 2)
+
+        bx, by = 22, h // 2
+        if on:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(101, 206, 255, 72))
+            painter.drawEllipse(bx - 9, by - 9, 18, 18)
+            painter.setBrush(QColor("#65ceff"))
+            painter.drawEllipse(bx - 5, by - 5, 10, 10)
+            painter.setBrush(QColor("#f4fcff"))
+            painter.drawEllipse(bx - 2, by - 2, 4, 4)
+        else:
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(
+                QPen(QColor("#65ceff" if enabled else "#4a5d7a"), 1.5)
+            )
+            painter.drawEllipse(bx - 6, by - 6, 12, 12)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#65ceff" if enabled else "#4a5d7a"))
+            painter.drawEllipse(bx - 2, by - 2, 4, 4)
+
+        painter.setPen(
+            QColor("#f4f8ff" if enabled else "#5c6f8c")
+        )
+        font = QFont("sans-serif", 9, QFont.Weight.Bold)
+        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0.9)
+        painter.setFont(font)
+        label = "HYPERSPACE ON" if on else "JUMP TO SPACE"
+        painter.drawText(
+            38, 0, w - 46, h, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, label
+        )
+        painter.end()
 
 
 class Signals(QObject):
@@ -184,55 +413,114 @@ class Window(QMainWindow):
         self.jobs = set()
         self.setWindowTitle("Wispnet")
         self.setWindowIcon(icon())
-        self.resize(1100, 720)
+        self.resize(1140, 760)
         main = QWidget()
         layout = QVBoxLayout(main)
         layout.setContentsMargins(24, 20, 24, 20)
-        layout.setSpacing(16)
+        layout.setSpacing(14)
         self.setCentralWidget(main)
-        header_card = QWidget()
-        header_card.setObjectName("headerCard")
-        header_layout = QHBoxLayout(header_card)
-        header_layout.setContentsMargins(18, 14, 18, 14)
-        header_layout.setSpacing(14)
+        self.header_banner = StarfieldBanner()
+        header_layout = QHBoxLayout(self.header_banner)
+        header_layout.setContentsMargins(22, 16, 22, 16)
+        header_layout.setSpacing(16)
         logo = QLabel()
-        logo.setPixmap(icon().pixmap(44, 44))
-        logo.setFixedSize(44, 44)
+        logo.setPixmap(icon().pixmap(48, 48))
+        logo.setFixedSize(48, 48)
         header_layout.addWidget(logo)
         title_box = QVBoxLayout()
-        title_box.setSpacing(4)
-        name = QLabel("Your node")
-        name.setObjectName("heading")
-        title_box.addWidget(name)
+        title_box.setSpacing(5)
+        self.heading_label = QLabel("◈  YOUR NODE · NAVICOMPUTER")
+        self.heading_label.setObjectName("heading")
+        title_box.addWidget(self.heading_label)
         self.status = QLabel("Connecting to local node…")
         self.status.setObjectName("statusText")
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         self.status.setWordWrap(True)
         title_box.addWidget(self.status)
+        badges_row = QHBoxLayout()
+        badges_row.setSpacing(8)
+        self.relay_badge = QLabel("◌ RELAY STANDBY")
+        self.relay_badge.setObjectName("telemetryBadge")
+        self.clients_badge = QLabel("◈ 0 ACTIVE CLIENTS")
+        self.clients_badge.setObjectName("telemetryBadge")
+        self.streams_badge = QLabel("⇄ 0 STREAMS")
+        self.streams_badge.setObjectName("telemetryBadge")
+        for badge in (self.relay_badge, self.clients_badge, self.streams_badge):
+            badges_row.addWidget(badge)
+        badges_row.addStretch(1)
+        title_box.addLayout(badges_row)
         header_layout.addLayout(title_box, 1)
-        self.access = QCheckBox("Browser access")
-        self.access.setObjectName("accessToggle")
+        self.access = HyperspaceToggle("Browser access")
         self.access.clicked.connect(self.toggle_access)
         header_layout.addWidget(self.access)
-        refresh = QPushButton("Refresh")
+        refresh = QPushButton("↻  Scan")
         refresh.setProperty("variant", "secondary")
         refresh.clicked.connect(self.refresh)
         header_layout.addWidget(refresh)
-        layout.addWidget(header_card)
+        layout.addWidget(self.header_banner)
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)
+        self.local_cards_box = QWidget()
+        self.local_cards_layout = QHBoxLayout(self.local_cards_box)
+        self.local_cards_layout.setContentsMargins(0, 0, 0, 4)
+        self.local_cards_layout.setSpacing(10)
+        self.local_cards_box.hide()
         self.services = self.table(
-            ["Service", "Backend", "Permitted clients"], "My services"
+            ["Service", "Backend", "Permitted clients"],
+            "◈  Local Services",
+            "Loopback services shared from this node to approved peers",
+            [
+                ("✦ Open local service", self.open_local, "primary"),
+                ("+ Share service", self.share, "primary"),
+                ("Edit service", self.edit, "secondary"),
+                ("Remove service", self.remove, "danger"),
+            ],
+            cards=self.local_cards_box,
         )
         self.devices = self.table(
-            ["Client", "Peer ID", "Approval", "Live connections", "Activity"], "Devices"
+            ["Client", "Peer ID", "Approval", "Live connections", "Activity"],
+            "◈  Fleet & Devices",
+            "Approved client identities and active transport streams on this node",
+            [
+                (
+                    "+ Add client across hosts",
+                    lambda: self.combined_dialog("approve"),
+                    "primary",
+                ),
+                ("Revoke client", self.revoke, "danger"),
+            ],
         )
+        self.peer_cards_box = QWidget()
+        self.peer_cards_layout = QHBoxLayout(self.peer_cards_box)
+        self.peer_cards_layout.setContentsMargins(0, 0, 0, 4)
+        self.peer_cards_layout.setSpacing(10)
+        self.peer_cards_box.hide()
         self.peers = self.table(
-            ["Peer", "Status", "Shared services", "Last refreshed"], "Peer services"
+            ["Peer", "Status", "Shared services", "Last refreshed"],
+            "◈  Wisp Space · Peers",
+            "Remote systems and holographic service endpoints across your Wisp network",
+            [
+                (
+                    "✦ Open peer service",
+                    lambda: self.open_peer(max(0, self.peers.currentRow()), 0),
+                    "primary",
+                ),
+                ("+ Pair with a host", self.pair, "primary"),
+            ],
+            cards=self.peer_cards_box,
         )
         self.pending = self.table(
-            ["Invitation", "Client", "Peer ID", "State"], "Pairing requests"
+            ["Invitation", "Client", "Peer ID", "State"],
+            "◈  Pairing Beacons",
+            "Incoming pairing requests awaiting owner verification on this node",
+            [
+                ("✓ Approve request", lambda: self.decide(True), "primary"),
+                ("✕ Reject request", lambda: self.decide(False), "danger"),
+            ],
         )
+        self.operations_summary = QLabel("Each host acknowledges independently")
+        self.operations_summary.setObjectName("sectorSubtitle")
+        self.operations_summary.setTextFormat(Qt.TextFormat.PlainText)
         self.operations = self.table(
             [
                 "Operation",
@@ -242,45 +530,24 @@ class Window(QMainWindow):
                 "Applied revision",
                 "Details",
             ],
-            "Combined operations",
+            "◈  Combined Operations",
+            None,
+            [
+                (
+                    "+ Add client across hosts",
+                    lambda: self.combined_dialog("approve"),
+                    "primary",
+                ),
+                (
+                    "Revoke across hosts",
+                    lambda: self.combined_dialog("revoke"),
+                    "danger",
+                ),
+                ("↻ Retry pending hosts", self.retry_combined, "secondary"),
+            ],
+            summary_widget=self.operations_summary,
+            disable_actions=self.combined is None,
         )
-        self.tabs.removeTab(self.tabs.count() - 1)
-        operations_panel = QWidget()
-        operations_layout = QVBoxLayout(operations_panel)
-        self.operations_summary = QLabel("Each host acknowledges independently")
-        self.operations_summary.setTextFormat(Qt.TextFormat.PlainText)
-        operations_layout.addWidget(self.operations_summary)
-        operations_layout.addWidget(self.operations)
-        self.operations.show()
-        operation_actions = QHBoxLayout()
-        for title, callback in [
-            ("Add client across hosts", lambda: self.combined_dialog("approve")),
-            ("Revoke across hosts", lambda: self.combined_dialog("revoke")),
-            ("Retry pending hosts", self.retry_combined),
-        ]:
-            button = QPushButton(title)
-            button.clicked.connect(callback)
-            button.setEnabled(self.combined is not None)
-            operation_actions.addWidget(button)
-        operations_layout.addLayout(operation_actions)
-        self.tabs.addTab(operations_panel, "Combined operations")
-        actions = QHBoxLayout()
-        actions.setSpacing(10)
-        for title, fn, variant in [
-            ("Open local service", self.open_local, "primary"),
-            ("Share service", self.share, "primary"),
-            ("Edit service", self.edit, "secondary"),
-            ("Remove service", self.remove, "danger"),
-            ("Revoke client", self.revoke, "danger"),
-            ("Pair with a host", self.pair, "primary"),
-            ("Approve request", lambda: self.decide(True), "primary"),
-            ("Reject request", lambda: self.decide(False), "danger"),
-        ]:
-            button = QPushButton(title)
-            button.setProperty("variant", variant)
-            button.clicked.connect(fn)
-            actions.addWidget(button)
-        layout.addLayout(actions)
         self.message = QLabel("")
         self.message.setObjectName("messageBar")
         self.message.setTextFormat(Qt.TextFormat.PlainText)
@@ -315,7 +582,16 @@ class Window(QMainWindow):
         self.timer.start(2000)
         self.refresh()
 
-    def table(self, columns, title):
+    def table(
+        self,
+        columns,
+        title,
+        subtitle="",
+        actions=(),
+        cards=None,
+        summary_widget=None,
+        disable_actions=False,
+    ):
         table = QTableWidget(0, len(columns))
         table.setHorizontalHeaderLabels(columns)
         table.horizontalHeader().setStretchLastSection(True)
@@ -324,8 +600,37 @@ class Window(QMainWindow):
         table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         table.verticalHeader().hide()
-        self.tabs.addTab(table, title)
+        panel = QWidget()
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(14, 12, 14, 12)
+        panel_layout.setSpacing(10)
+        top_bar = QHBoxLayout()
+        top_bar.setSpacing(8)
+        if summary_widget is not None:
+            top_bar.addWidget(summary_widget, 1)
+        else:
+            sub = QLabel(subtitle)
+            sub.setObjectName("sectorSubtitle")
+            top_bar.addWidget(sub, 1)
+        for btn_title, fn, variant in actions:
+            button = QPushButton(btn_title)
+            button.setProperty("variant", variant)
+            button.clicked.connect(fn)
+            if disable_actions:
+                button.setEnabled(False)
+            top_bar.addWidget(button)
+        panel_layout.addLayout(top_bar)
+        if cards is not None:
+            panel_layout.addWidget(cards)
+        panel_layout.addWidget(table, 1)
+        self.tabs.addTab(panel, title)
         return table
+
+    def _clear_layout(self, box_layout):
+        while box_layout.count():
+            child = box_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
 
     def submit(self, fn, callback, peer=False):
         job = Job(fn, lambda result, error: self.finished(job, callback, result, error))
@@ -361,10 +666,17 @@ class Window(QMainWindow):
         if error:
             self.snapshot = None
             self.access.setEnabled(False)
+            self.header_banner.hyperspace = False
+            self.header_banner.update()
+            self.heading_label.setText("◈  NODE OFFLINE · NAVICOMPUTER")
+            self.relay_badge.setText("◌ RELAY OFFLINE")
+            self.clients_badge.setText("◈ 0 ACTIVE CLIENTS")
+            self.streams_badge.setText("⇄ 0 STREAMS")
             self.status.setText("Node unavailable — " + error)
             self.devices.setRowCount(0)
             self.pending.setRowCount(0)
             self.services.setRowCount(0)
+            self.local_cards_box.hide()
             for value in self.catalogs.values():
                 value["state"] = "Node unavailable"
             self.draw_peers()
@@ -375,10 +687,23 @@ class Window(QMainWindow):
         self.snapshot = result
         self.access.setEnabled(True)
         self.access.setChecked(result["access_enabled"])
+        self.header_banner.hyperspace = bool(result["access_enabled"])
+        self.header_banner.update()
         recent = result.get("recent_peers", {})
         active = set(result["connected_peers"]) | set(recent)
         count = len(active)
         window = result.get("presence_timeout_seconds", 60)
+        self.heading_label.setText(
+            f"◈  {result['host_name'].upper()} · NAVICOMPUTER"
+        )
+        relay_ok = str(result.get("relay", "")).lower() == "connected"
+        self.relay_badge.setText(
+            f"{'●' if relay_ok else '◌'} RELAY: {str(result.get('relay', 'unknown')).upper()}"
+        )
+        self.clients_badge.setText(f"◈ {count} ACTIVE CLIENT{'S' if count != 1 else ''}")
+        self.streams_badge.setText(
+            f"⇄ {result['transport_streams']} STREAM{'S' if result['transport_streams'] != 1 else ''}"
+        )
         self.status.setText(
             f"{result['host_name']}  ·  Active clients: {count}  ·  {result['transport_streams']} transport streams  ·  Activity window: {window}s  ·  Relay: {result['relay']}"
         )
@@ -400,6 +725,26 @@ class Window(QMainWindow):
                 for s in result["host"]["services"]
             ],
         )
+        self._clear_layout(self.local_cards_layout)
+        host_services = result["host"]["services"]
+        if host_services:
+            for idx, s in enumerate(host_services):
+                card_btn = QPushButton(
+                    f"✦  {s.get('display_name') or s['id']}   ↗\n{s.get('kind', 'http').upper()} · {s['backend']}"
+                )
+                card_btn.setObjectName("sectorServiceCard")
+                card_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                card_btn.clicked.connect(
+                    lambda _=False, r=idx: (
+                        self.services.selectRow(r),
+                        self.open_local(),
+                    )
+                )
+                self.local_cards_layout.addWidget(card_btn)
+            self.local_cards_layout.addStretch(1)
+            self.local_cards_box.show()
+        else:
+            self.local_cards_box.hide()
         clients = result["host"]["clients"]
         known = {c["peer"] for c in clients}
         self.fill(
@@ -530,20 +875,35 @@ class Window(QMainWindow):
     def draw_peers(self):
         rows = []
         self.peer_routes = []
+        self._clear_layout(self.peer_cards_layout)
         pins = self.snapshot["peer_pins"] if self.snapshot else list(self.catalogs)
         for peer in pins:
             data = self.catalogs.get(peer, {})
             services = data.get("catalog", {}).get("services", [])
             state = data.get("state", "Refreshing")
+            host_label = self.peer_names.get(peer, "Host " + peer[:8])
             age = (
                 f"{max(0, int(time.time() - data['fetched']))}s ago"
                 if "fetched" in data
                 else "Never"
             )
+            sector_frame = QFrame()
+            sector_frame.setObjectName("peerSectorCard")
+            sec_layout = QVBoxLayout(sector_frame)
+            sec_layout.setContentsMargins(12, 10, 12, 10)
+            sec_layout.setSpacing(6)
+            sec_head = QLabel(
+                f"◈  {host_label.upper()}   ·   {'● ONLINE' if state == 'Available' else '◌ ' + state.upper()}"
+            )
+            sec_head.setObjectName("peerSectorHeader")
+            sec_layout.addWidget(sec_head)
+            btn_row = QHBoxLayout()
+            btn_row.setSpacing(8)
             for service in services or [None]:
+                route_idx = len(self.peer_routes)
                 rows.append(
                     [
-                        self.peer_names.get(peer, "Host " + peer[:8]) + "\n" + peer,
+                        host_label + "\n" + peer,
                         state,
                         (
                             service["display_name"]
@@ -557,6 +917,28 @@ class Window(QMainWindow):
                 self.peer_routes.append(
                     (peer, service["id"] if service else None, state)
                 )
+                if service:
+                    s_btn = QPushButton(
+                        f"✦  {service['display_name']}   ↗\n{service['kind'].upper()} · {host_label}"
+                    )
+                    s_btn.setObjectName("sectorServiceCard")
+                    s_btn.setEnabled(state == "Available" and service["kind"] == "http")
+                    s_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                    s_btn.clicked.connect(
+                        lambda _=False, r=route_idx: (
+                            self.peers.selectRow(r),
+                            self.open_peer(r, 0),
+                        )
+                    )
+                    btn_row.addWidget(s_btn)
+            if services:
+                sec_layout.addLayout(btn_row)
+            self.peer_cards_layout.addWidget(sector_frame)
+        if pins:
+            self.peer_cards_layout.addStretch(1)
+            self.peer_cards_box.show()
+        else:
+            self.peer_cards_box.hide()
         self.fill(
             self.peers,
             rows
@@ -574,6 +956,11 @@ class Window(QMainWindow):
         self.refresh()
 
     def toggle_access(self, enabled):
+        self.header_banner.hyperspace = bool(enabled)
+        if enabled:
+            self.header_banner.jump()
+        else:
+            self.header_banner.drop_out()
         self.perform(
             {"op": "enable" if enabled else "stop"},
             "Browser access enabled" if enabled else "Browser access stopped",
@@ -1058,22 +1445,64 @@ def appearance(app):
         QMainWindow, QDialog, QMessageBox {
             background: #070b14;
         }
-        QWidget#headerCard {
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #111d38, stop:0.55 #0d162b, stop:1 #091020);
-            border: 1px solid #283c66;
-            border-radius: 16px;
-        }
         QWidget#headerCard QLabel {
             background: transparent;
         }
         QLabel#heading {
-            font-size: 22px;
+            font-size: 20px;
             font-weight: 700;
+            letter-spacing: 1.5px;
             color: #f4f8ff;
         }
         QLabel#statusText {
-            font-size: 13px;
+            font-size: 12px;
+            color: #8fa6c8;
+        }
+        QLabel#telemetryBadge {
+            background: rgba(16, 28, 52, 210);
+            color: #c6dcff;
+            border: 1px solid #2b4475;
+            border-radius: 10px;
+            padding: 3px 10px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.6px;
+        }
+        QLabel#sectorSubtitle {
             color: #94a6c4;
+            font-size: 13px;
+            background: transparent;
+        }
+        QFrame#peerSectorCard {
+            background: #0b1426;
+            border: 1px solid #263e6c;
+            border-radius: 14px;
+        }
+        QLabel#peerSectorHeader {
+            color: #edf4ff;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            background: transparent;
+        }
+        QPushButton#sectorServiceCard {
+            background: #111e38;
+            border: 1px solid #32518a;
+            border-radius: 12px;
+            padding: 10px 16px;
+            color: #f4f8ff;
+            font-weight: 700;
+            text-align: left;
+            min-width: 170px;
+        }
+        QPushButton#sectorServiceCard:hover {
+            background: #192d54;
+            border-color: #65ceff;
+        }
+        QPushButton#sectorServiceCard:disabled {
+            background: #0d1628;
+            border-color: #1d2842;
+            color: #687a98;
         }
         QLabel#messageBar {
             background: #101c34;
@@ -1085,9 +1514,9 @@ def appearance(app):
         QPushButton {
             background: #142038;
             color: #edf2ff;
-            padding: 9px 15px;
+            padding: 8px 14px;
             border: 1px solid #283b60;
-            border-radius: 12px;
+            border-radius: 11px;
             font-weight: 600;
         }
         QPushButton:hover {
@@ -1115,41 +1544,14 @@ def appearance(app):
             background: #311c36;
             border-color: #783a62;
         }
-        QCheckBox#accessToggle {
-            background: #142038;
-            border: 1px solid #2b4270;
-            border-radius: 12px;
-            padding: 8px 14px;
-            font-weight: 600;
-            color: #edf2ff;
-            spacing: 10px;
-        }
-        QCheckBox#accessToggle:hover {
-            border-color: #4b73c2;
-        }
-        QCheckBox::indicator {
-            width: 28px;
-            height: 16px;
-            border: 1px solid #30456e;
-            border-radius: 8px;
-            background: #0d1526;
-        }
-        QCheckBox::indicator:checked {
-            background: #3b66e6;
-            border: 1px solid #79b4ff;
-        }
-        QCheckBox::indicator:disabled {
-            background: #121a2b;
-            border-color: #222e47;
-        }
         QTabWidget::pane {
             border: 1px solid #243659;
-            border-radius: 14px;
-            background: #0d1526;
+            border-radius: 16px;
+            background: #0b1222;
             top: -1px;
         }
         QTabBar::tab {
-            background: #10192e;
+            background: #0f182c;
             color: #94a6c4;
             border: 1px solid #203050;
             border-radius: 10px;
@@ -1171,8 +1573,8 @@ def appearance(app):
             background: #0d1526;
             alternate-background-color: #101a30;
             gridline-color: #1c2a46;
-            border: 0;
-            border-radius: 14px;
+            border: 1px solid #1c2b48;
+            border-radius: 12px;
             selection-background-color: #1f3666;
             selection-color: #f4f8ff;
         }
@@ -1183,13 +1585,13 @@ def appearance(app):
         QHeaderView::section {
             background: #131f38;
             color: #94a6c4;
-            padding: 11px 12px;
+            padding: 10px 12px;
             border: 0;
             border-bottom: 1px solid #243659;
             font-weight: 600;
         }
         QLineEdit,
-    QComboBox, QListWidget {
+        QComboBox, QListWidget {
             background: #0d1526;
             color: #edf2ff;
             padding: 10px 12px;
