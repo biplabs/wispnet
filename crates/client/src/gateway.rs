@@ -96,6 +96,57 @@ impl Gateways {
             worker.binding.authority()
         ))
     }
+    /// Short-lived, route-scoped credentials for approved native applications.
+    pub async fn app_access(
+        &self,
+        peer: EndpointId,
+        service: &str,
+        grant: &str,
+    ) -> Result<String, String> {
+        if !wipsnet_core::enrollment::valid_code(grant) {
+            return Err("Invalid app grant".into());
+        }
+        let workers = self.workers.lock().await;
+        let worker = workers
+            .iter()
+            .find(|w| w.binding.peer == peer && w.binding.service == service)
+            .ok_or("Service route unavailable")?;
+        let mut access = worker.route.app_access.lock().await;
+        access.retain(|(_, _, expires)| *expires > std::time::Instant::now());
+        // Renewing a grant invalidates its previous credential.
+        access.retain(|(id, _, _)| id != grant);
+        if access.len() >= 32 {
+            return Err("Too many app sessions".into());
+        }
+        let credential = token();
+        access.push((
+            grant.to_owned(),
+            credential.clone(),
+            std::time::Instant::now() + Duration::from_secs(900),
+        ));
+        Ok(credential)
+    }
+    /// Cancel active requests as well as credentials on routes using this grant.
+    pub async fn revoke_app(&self, grant: &str) {
+        let mut workers = self.workers.lock().await;
+        let mut index = 0;
+        while index < workers.len() {
+            let affected = workers[index]
+                .route
+                .app_access
+                .lock()
+                .await
+                .iter()
+                .any(|(id, _, _)| id == grant);
+            if affected {
+                let worker = workers.remove(index);
+                worker.task.abort();
+                let _ = worker.task.await;
+            } else {
+                index += 1;
+            }
+        }
+    }
     /// Rebind exactly the saved ports. Never silently move a bookmark to a new port.
     pub async fn restore(&self, client: Arc<Client>) -> Result<(), String> {
         for binding in store::load(&client.state, client.endpoint.id())? {
@@ -238,6 +289,7 @@ impl Gateways {
                 .collect(),
             credential: token(),
             bootstraps: Mutex::new(Vec::new()),
+            app_access: Mutex::new(Vec::new()),
             active_requests: AtomicUsize::new(0),
         });
         let connections = self.connections.clone();
@@ -286,6 +338,7 @@ struct Route {
     authorities: Vec<String>,
     credential: String,
     bootstraps: Mutex<Vec<(String, std::time::Instant)>>,
+    app_access: Mutex<Vec<(String, String, std::time::Instant)>>,
 }
 struct Close(Connection);
 impl Drop for Close {
@@ -505,10 +558,22 @@ impl Route {
             .map(str::trim)
             .filter(|s| s.split('=').next() == Some(COOKIE))
             .collect();
-        if sessions.len() != 1
-            || !constant_equal(sessions[0], &format!("{COOKIE}={}", self.credential))
-        {
-            if navigation {
+        let app_credential = request.one("x-wispnet-access");
+        let app_authenticated = if let Some(credential) = app_credential {
+            self.app_access
+                .lock()
+                .await
+                .iter()
+                .any(|(_, expected, expires)| {
+                    *expires > std::time::Instant::now() && constant_equal(credential, expected)
+                })
+        } else {
+            false
+        };
+        let cookie_authenticated = sessions.len() == 1
+            && constant_equal(sessions[0], &format!("{COOKIE}={}", self.credential));
+        if !(app_authenticated || app_credential.is_none() && cookie_authenticated) {
+            if navigation && app_credential.is_none() {
                 return response(&mut socket, "303 See Other", "", &format!("Location: {}\r\nSet-Cookie: {COOKIE}={}; Path=/; HttpOnly; SameSite=Strict\r\n", request.path, self.credential)).await;
             }
             return response(
@@ -520,6 +585,7 @@ impl Route {
             .await;
         }
         if (websocket || !["GET", "HEAD"].contains(&request.method.as_str()))
+            && !app_authenticated
             && request.one("origin") != Some(origin.as_str())
         {
             return response(
@@ -639,6 +705,7 @@ impl Route {
                     "trailer",
                     "proxy-authenticate",
                     "proxy-authorization",
+                    "x-wispnet-access",
                     "proxy-connection",
                     "forwarded",
                     "sec-fetch-site",
@@ -1263,6 +1330,147 @@ mod tests {
                 .await
                 .starts_with("HTTP/1.1 403")
         );
+        c.gateway.stop().await;
+        c.endpoint.close().await;
+        server.abort();
+    }
+    #[tokio::test]
+    async fn native_app_credentials_are_scoped_rotate_expire_and_revoke() {
+        use wipsnet_registry::host::{self, Authority, Mutation};
+        let state = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let key = wipsnet_core::identity::SecretKey::generate();
+        let peer = key.public();
+        host::initialize(state.path(), peer).unwrap();
+        let backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = backend.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut s, _)) = backend.accept().await else {
+                    break;
+                };
+                let incoming = headers(&mut s).await.unwrap();
+                let text = String::from_utf8_lossy(&incoming).to_ascii_lowercase();
+                assert!(!text.contains("x-wispnet-access"));
+                assert!(text.contains("authorization: bearer backend-key"));
+                if text.starts_with("get /hold ") {
+                    s.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx\r\n")
+                        .await
+                        .unwrap();
+                    std::future::pending::<()>().await;
+                }
+                let _ = s
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .await;
+            }
+        });
+        {
+            let (mut store, owner) = host::owner_store(state.path(), peer).unwrap();
+            store
+                .host_mutate(
+                    peer,
+                    &owner,
+                    Mutation::Service {
+                        expected_revision: 0,
+                        id: "site".into(),
+                        backend: address,
+                        allow: vec![],
+                        display_name: None,
+                        kind: None,
+                    },
+                )
+                .unwrap();
+        }
+        let authority = Authority::open(state.path(), peer).unwrap();
+        let service = authority.services().await.unwrap().remove(0);
+        let config =
+            serde_json::from_value(serde_json::json!({"bind_addr":"127.0.0.1:0"})).unwrap();
+        let endpoint = wipsnet_agent::tunnel::bind_configured_client(&key, Some(&config))
+            .await
+            .unwrap();
+        let c = Client::from_endpoint(
+            endpoint,
+            key,
+            state.path().into(),
+            config,
+            authority.clone(),
+        );
+        c.gateway.enable();
+        let url = c
+            .gateway
+            .open(c.clone(), peer, "site".into(), service.incarnation)
+            .await
+            .unwrap();
+
+        let grant = "b".repeat(64);
+        let access = c.gateway.app_access(peer, "site", &grant).await.unwrap();
+        let auth = format!("X-Wispnet-Access: {access}\r\nAuthorization: Bearer backend-key\r\n");
+        assert!(raw(&url, "POST", "/", &auth).await.ends_with("ok"));
+        assert!(
+            raw(&url, "GET", "/", "X-Wispnet-Access: wrong\r\n")
+                .await
+                .starts_with("HTTP/1.1 401")
+        );
+        let cross = format!("{auth}Origin: https://evil.example\r\n");
+        assert!(
+            raw(&url, "POST", "/", &cross)
+                .await
+                .starts_with("HTTP/1.1 403")
+        );
+        let other = c
+            .gateway
+            .open(c.clone(), peer, "other".into(), "a".repeat(64))
+            .await
+            .unwrap();
+        assert!(
+            raw(&other, "GET", "/", &auth)
+                .await
+                .starts_with("HTTP/1.1 401")
+        );
+        let renewed = c.gateway.app_access(peer, "site", &grant).await.unwrap();
+        assert_ne!(access, renewed);
+        assert!(
+            raw(&url, "GET", "/", &auth)
+                .await
+                .starts_with("HTTP/1.1 401")
+        );
+        {
+            let workers = c.gateway.workers.lock().await;
+            let route = &workers
+                .iter()
+                .find(|w| w.binding.service == "site")
+                .unwrap()
+                .route;
+            route.app_access.lock().await[0].2 = std::time::Instant::now() - Duration::from_secs(1);
+        }
+        let auth = format!("X-Wispnet-Access: {renewed}\r\n");
+        assert!(
+            raw(&url, "GET", "/", &auth)
+                .await
+                .starts_with("HTTP/1.1 401")
+        );
+        let access = c.gateway.app_access(peer, "site", &grant).await.unwrap();
+        let parsed = url::Url::parse(&url).unwrap();
+        let mut stream = TcpStream::connect(("127.0.0.1", parsed.port().unwrap()))
+            .await
+            .unwrap();
+        stream.write_all(format!("GET /hold HTTP/1.1\r\nHost: {}:{}\r\nX-Wispnet-Access: {access}\r\nAuthorization: Bearer backend-key\r\n\r\n", parsed.host_str().unwrap(), parsed.port().unwrap()).as_bytes()).await.unwrap();
+        headers(&mut stream).await.unwrap();
+        c.gateway.revoke_app(&grant).await;
+        let mut rest = Vec::new();
+        tokio::time::timeout(Duration::from_secs(2), stream.read_to_end(&mut rest))
+            .await
+            .unwrap()
+            .unwrap();
+        c.gateway.restore(c.clone()).await.unwrap();
+        assert!(
+            raw(&url, "GET", "/", &format!("X-Wispnet-Access: {access}\r\n"))
+                .await
+                .starts_with("HTTP/1.1 401")
+        );
+        assert!(c.gateway.app_access(peer, "other", &grant).await.is_ok());
         c.gateway.stop().await;
         c.endpoint.close().await;
         server.abort();

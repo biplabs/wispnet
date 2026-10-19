@@ -221,3 +221,10 @@ The space background and warp now fill the entire window, including behind cutou
 Polish validation on 2026-10-16: the normal tablet development app retained its protected identity and both host pairings, and passed real GIKE/Desktop/Llama browser loading, a streamed Llama API reply, session denials, 30-second browser handoff and explicit Stop. A separate physical-tablet peercheck sandbox passed the final fullscreen warp/directory/recreation/native-Stop UI test; its captured cards use display fixtures. The tablet's animator duration scale was changed from 0 to 1 at the user's animation-preview request; the app still respects disabled system animations.
 
 Earlier emulator UI runs passed before the final fullscreen change. Final API-35 emulator attempts terminated the host QEMU render thread with SIGSEGV, including with software rendering, before the final UI/framework-timeout checks could finish. This is not counted as a final emulator pass or a fresh Android-15 timeout result. The existing timeout implementation and prior evidence remain documented separately; the final UI check used the physical tablet instead.
+
+## Integration with other Android apps
+
+The [Android service discovery API](android-service-discovery.md) resolves a full
+host ID and service ID to an authenticated local endpoint without manual port
+configuration. Access requires per-app user approval and the host's existing
+phone/service grants. A separate example app and physical Binder tests are included.

@@ -16,7 +16,7 @@ public final class Native {
  static { System.loadLibrary("wipsnet_android"); }
  public static native String call(String request);
  static final class Failure extends Exception {final String code;Failure(String message,String value){super(message);code=value;}}
- static boolean ready=false;
+ static volatile boolean ready=false;
  static JSONObject request(JSONObject request) throws Exception {
   String raw=call(request.toString());if(raw==null)throw new Exception("Native client unavailable");
   JSONObject reply=new JSONObject(raw);if(!reply.getBoolean("ok"))throw new Failure(reply.optString("error","Operation failed"),reply.optString("code","operation_failed"));return reply.getJSONObject("result");

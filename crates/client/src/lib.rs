@@ -266,7 +266,7 @@ impl Client {
                 }
                 Ok(json!({"network_changed":true,"interrupted_requests":interrupted}))
             }
-            "open" => {
+            "open" | "app_open" => {
                 let host = peer(value)?;
                 let id = argument(value, "service")?;
                 let incarnation = argument(value, "incarnation")?;
@@ -312,8 +312,26 @@ impl Client {
                         value.get("host_name").and_then(Value::as_str),
                     )
                     .await?;
+                if value["op"] == "app_open" {
+                    let access = self
+                        .gateway
+                        .app_access(host, id, argument(value, "grant")?)
+                        .await?;
+                    return Ok(json!({"url":url,"access_token":access,"expires_in_seconds":900}));
+                }
                 let launch_url = self.gateway.launch_url(host, id).await?;
                 Ok(json!({"url":url,"launch_url":launch_url}))
+            }
+            "app_revoke" => {
+                let grant = argument(value, "grant")?;
+                if !wipsnet_core::enrollment::valid_code(grant) {
+                    return Err("Invalid app grant".into());
+                }
+                self.gateway.revoke_app(grant).await;
+                if self.gateway.is_enabled() {
+                    self.gateway.restore(self.clone()).await?;
+                }
+                Ok(json!({"revoked":true}))
             }
             _ => Err("Unknown app operation".into()),
         }

@@ -22,7 +22,7 @@ public class MainActivity extends Activity {
  final Runnable updateAccess=new Runnable(){public void run(){syncSpace();for(Runnable age:ageUpdates)age.run();lifecycle.postDelayed(this,200);}};EditText label,host,invitation;Button access;
  LinearLayout pairingForm,header,machinesList,reviewBox,addMachineBox;FrameLayout space,screen;ScrollView pairingScroll,servicesScroll;StarJump stars;TextView caption,sheetTitle;Button machinesPill,addMachineBtn;boolean spaceShown=false,enterRequested=false,jumping=false,starting=false;long startAt;String lastNetwork="",devicePeer="";
  CheckBox hostVerified;
- HostStore store;Button deviceName;
+ HostStore store;Button deviceName;Runnable closeServicePermissions;
  boolean pairingBusy=false;
  final java.util.Set<String> refreshing=ConcurrentHashMap.newKeySet();
  final ConcurrentHashMap<String,String> peerTelemetry=new ConcurrentHashMap<>();
@@ -101,6 +101,7 @@ public class MainActivity extends Activity {
  android.graphics.drawable.GradientDrawable tint(int color,int radius){return card(color,0xff283b60,radius);}
  android.graphics.drawable.GradientDrawable card(int fill,int stroke,int radius){android.graphics.drawable.GradientDrawable d=new android.graphics.drawable.GradientDrawable();d.setColor(fill);d.setCornerRadius(dp(radius));d.setStroke(Math.max(1,dp(1)),stroke);return d;}
  void showPairing(boolean visible){
+  if(closeServicePermissions!=null)closeServicePermissions.run();
   pairingScroll.setVisibility(visible?View.VISIBLE:View.GONE);space.setVisibility(visible?View.GONE:View.VISIBLE);
   if(access!=null&&access.getParent()==header)access.setVisibility(visible?View.GONE:View.VISIBLE);
   if(visible&&pairingForm!=null){pairingForm.setTranslationY(dp(36));pairingForm.setAlpha(0f);pairingForm.animate().translationY(0).alpha(1f).setDuration(200);}
@@ -118,7 +119,7 @@ public class MainActivity extends Activity {
   FrameLayout.LayoutParams cap=(FrameLayout.LayoutParams)caption.getLayoutParams();cap.topMargin=dp(82);caption.setLayoutParams(cap);
   caption.setText(first?"establish your wisp network":"jump to wisp space");
   access.setOnClickListener(v->{if(first)showPairing(true);else toggleSpace();});
-  access.setVisibility(pairingScroll!=null&&pairingScroll.getVisibility()==View.VISIBLE&&docked?View.GONE:View.VISIBLE);access.setText("");access.setContentDescription(first?"Establish your wisp network":docked?"Go offline":"Enter wisp space");access.setAlpha(1);access.setSelected(docked);access.setTag(first?"Establish your wisp network":docked?"Stop browser access":"Start browser access");caption.setVisibility(docked?View.GONE:View.VISIBLE);access.invalidate();
+  access.setVisibility((closeServicePermissions!=null||pairingScroll!=null&&pairingScroll.getVisibility()==View.VISIBLE)&&docked?View.GONE:View.VISIBLE);access.setText("");access.setContentDescription(first?"Establish your wisp network":docked?"Go offline":"Enter wisp space");access.setAlpha(1);access.setSelected(docked);access.setTag(first?"Establish your wisp network":docked?"Stop browser access":"Start browser access");caption.setVisibility(docked?View.GONE:View.VISIBLE);access.invalidate();
  }
  void holoReveal(){
   if(!android.animation.ValueAnimator.areAnimatorsEnabled())return;
@@ -225,8 +226,15 @@ public class MainActivity extends Activity {
      boolean allowed="http".equals(kind)&&incarnation.matches("[0-9a-f]{64}")&&!java.util.List.of("host_denied","approval_pending","state_changed","unverified").contains(state);
      String sub=!"available".equals(state)?name+" · "+("host_denied".equals(state)?"Denied":"approval_pending".equals(state)?"Pending":"unreachable".equals(state)?"Offline · cached":"Unavailable"):kind.toUpperCase();
      if(i%2==0){gridRow=new LinearLayout(this);gridRow.setOrientation(LinearLayout.HORIZONTAL);sector.addView(gridRow,new LinearLayout.LayoutParams(-1,-2));}
-     Button row=button(gridRow,"✦  "+display+"   ↗\n"+sub,()->open(peer,service,incarnation));row.setText(styledCardText("✦  "+display+"   ↗",sub,allowed?0xff94a6c4:0xffff9aa8));row.setTag("Open "+name+" / "+service);row.setGravity(Gravity.LEFT|Gravity.CENTER_VERTICAL);row.setTextSize(17);row.setPadding(dp(18),dp(14),dp(18),dp(14));row.setBackground(card(0xff111e38,allowed?0xff32518a:0xff1d2842,16));
-     LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(0,dp(88),1);params.bottomMargin=dp(10);if(i%2==0&&i+1<services.length())params.rightMargin=dp(10);row.setLayoutParams(params);
+     FrameLayout tile=new FrameLayout(this);tile.setBackground(card(0xff111e38,allowed?0xff32518a:0xff1d2842,16));
+     LinearLayout labels=new LinearLayout(this);labels.setOrientation(LinearLayout.VERTICAL);labels.setGravity(Gravity.CENTER_VERTICAL);labels.setPadding(dp(12),0,dp(48),0);labels.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);tile.addView(labels,new FrameLayout.LayoutParams(-1,-1));
+     TextView title=new TextView(this);String titleText="✦  "+display+"   ↗";title.setText(styledCardText(titleText,sub,0xff94a6c4).subSequence(0,titleText.length()));title.setTextColor(0xffedf2ff);title.setTextSize(17);title.setSingleLine(true);title.setEllipsize(android.text.TextUtils.TruncateAt.END);labels.addView(title,new LinearLayout.LayoutParams(-1,-2));
+     TextView subtitle=new TextView(this);subtitle.setText(sub);subtitle.setTextColor(allowed?0xff94a6c4:0xffff9aa8);subtitle.setTextSize(13);subtitle.setSingleLine(true);subtitle.setEllipsize(android.text.TextUtils.TruncateAt.END);labels.addView(subtitle,new LinearLayout.LayoutParams(-1,-2));labels.setAlpha(allowed?1:.45f);
+     LinearLayout body=new LinearLayout(this);tile.addView(body,new FrameLayout.LayoutParams(-1,-1));
+     Button row=button(body,"✦  "+display+"   ↗\n"+sub,()->open(peer,service,incarnation));row.setText("");row.setTag("Open "+name+" / "+service);row.setGravity(Gravity.LEFT|Gravity.CENTER_VERTICAL);row.setTextSize(17);row.setPadding(dp(12),dp(14),dp(48),dp(14));row.setBackgroundColor(android.graphics.Color.TRANSPARENT);row.setLayoutParams(new LinearLayout.LayoutParams(-1,-1));
+     LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(0,dp(88),1);params.bottomMargin=dp(10);if(i%2==0&&i+1<services.length())params.rightMargin=dp(10);gridRow.addView(tile,params);
+     ImageButton gear=new ImageButton(this);gear.setImageResource(R.drawable.ic_service_settings);gear.setPadding(dp(12),dp(12),dp(12),dp(12));gear.setBackground(card(0x00111e38,0x00283b60,12));gear.setContentDescription("Permissions for "+display+" on "+name);gear.setTag("Configure "+name+" / "+service);
+     gear.setOnClickListener(v->ServicePermissions.show(this,peer,service,display));tile.addView(gear,new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.END|Gravity.CENTER_VERTICAL));
      row.setEnabled(allowed);row.setAlpha(allowed?1:.45f);row.setContentDescription(display+", "+name+", "+statusText);
      row.setOnLongClickListener(v->{new AlertDialog.Builder(this).setTitle(name).setMessage(cardSub+"\n\nHost ID\n"+peer+"\n\nDirectory age: "+Math.max(0,(System.currentTimeMillis()-record.optLong("fetched"))/1000)+" seconds").setPositiveButton("Done",null).show();return true;});
     }

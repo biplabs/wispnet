@@ -42,6 +42,7 @@ public final class AppTestRunner extends Instrumentation {
  }
  void resume(){Intent intent=getTargetContext().getPackageManager().getLaunchIntentForPackage(getTargetContext().getPackageName());intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_CLEAR_TOP);activity=(MainActivity)startActivitySync(intent);waitForIdleSync();}
  public void onStart(){Bundle result=new Bundle();try{
+  if("discovery".equals(args.getString("mode"))){DiscoveryChecks.run(this);result.putString("result","passed");finish(Activity.RESULT_OK,result);return;}
   if("header-layout".equals(args.getString("mode"))){SpaceChecks.headerLayout(this);result.putString("result","passed");finish(Activity.RESULT_OK,result);return;}
   if("network-feedback".equals(args.getString("mode"))){SpaceChecks.networkFeedback(this);result.putString("result","passed");finish(Activity.RESULT_OK,result);return;}
   if("button-layout".equals(args.getString("mode"))){SpaceChecks.buttonLayout(this);result.putString("result","passed");finish(Activity.RESULT_OK,result);return;}

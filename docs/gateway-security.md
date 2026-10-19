@@ -16,6 +16,15 @@ port fails explicitly rather than silently changing a bookmark. Addresses are
 saved in owner-only `browser-routes.json`, bound to the installation identity;
 browser credentials are never persisted in this file.
 
+Approved native Android apps can also obtain a route-scoped `X-Wispnet-Access`
+credential through the [service discovery API](android-service-discovery.md).
+These credentials expire after 15 minutes, are kept only in memory, and are
+stripped before forwarding. They do not replace upstream Authorization headers.
+Revocation closes the affected route's active requests and invalidates its
+credentials. Browser cookies retain the behavior described below. The API's
+per-app issuance checks do not isolate the browser listener from hostile native
+apps that can imitate browser navigation headers on loopback.
+
 There is no ten-minute route or cookie deadline. Going offline and process death
 close sockets; going online restores the same addresses. Network changes cancel
 in-flight requests without replay, restore listeners, and rotate credentials.
