@@ -10,6 +10,18 @@ final class SpaceChecks {
   final Bitmap[] bitmap={null};t.runOnMainSync(()->{View view=t.activity.screen;bitmap[0]=Bitmap.createBitmap(view.getWidth(),view.getHeight(),Bitmap.Config.ARGB_8888);view.draw(new Canvas(bitmap[0]));});
   try(FileOutputStream out=new FileOutputStream(new File(t.getTargetContext().getFilesDir(),name+".png"))){bitmap[0].compress(Bitmap.CompressFormat.PNG,100,out);}bitmap[0].recycle();
  }
+ static void buttonLayout(AppTestRunner t)throws Exception {
+  final Bitmap[] bitmap={null};
+  t.runOnMainSync(()->{
+   SpaceToggle button=new SpaceToggle(t.getTargetContext());button.setSelected(true);
+   float density=button.getResources().getDisplayMetrics().density;
+   int width=button.dockedWidth(),height=(int)Math.ceil(44*density);
+   button.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(height,View.MeasureSpec.EXACTLY));
+   button.layout(0,0,width,height);
+   bitmap[0]=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);button.draw(new Canvas(bitmap[0]));
+  });
+  try(FileOutputStream out=new FileOutputStream(new File(t.getTargetContext().getFilesDir(),"button-layout.png"))){bitmap[0].compress(Bitmap.CompressFormat.PNG,100,out);}bitmap[0].recycle();
+ }
  static void run(AppTestRunner t)throws Exception {
   t.resume();Native.ensure(t.getTargetContext());
   if(t.activity.pairingScroll.getVisibility()!=View.GONE||t.activity.header.getChildAt(0).getVisibility()!=View.GONE||!((SpaceToggle)t.activity.access).plus)throw new Exception("Unpaired home must hide management and hosts pill and show plus");

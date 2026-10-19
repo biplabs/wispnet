@@ -33,6 +33,14 @@ Errors contain static text, without database paths or submitted values.
 
 ## Backup and restore
 
+These are storage-level primitives, not a complete host recovery procedure.
+Automated protected recovery and stale-grant reconciliation (#19) are deferred.
+Keep protected identity, owner credentials and configuration backups separately;
+a database backup alone cannot recover a host identity. Do not activate an old
+policy snapshot as current authority: it may revive subsequently revoked grants.
+The offline restore below is suitable for isolated verification; production
+restore requires explicit policy reconciliation, which is not implemented here.
+
 Use `Store::backup(destination)` with a new destination filename in trusted
 private storage. It reserves a 0600 file, uses SQLite's online backup API, and
 syncs the resulting file. It refuses to overwrite an existing backup. A failed

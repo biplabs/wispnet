@@ -91,6 +91,19 @@ pub fn load(state: &Path, expected: EndpointId) -> Result<Option<Bootstrap>, Ide
     }
     Ok(Some(record))
 }
+/// Forget a validated saved host without changing any remote permissions.
+pub fn remove(state: &Path, host: EndpointId) -> Result<(), IdentityError> {
+    let Some(directory) = directory(state, false)? else {
+        return Ok(());
+    };
+    if load(state, host)?.is_some() {
+        fs::remove_file(directory.join(format!("{host}.json"))).map_err(|_| error())?;
+        fs::File::open(directory)
+            .and_then(|f| f.sync_all())
+            .map_err(|_| error())?;
+    }
+    Ok(())
+}
 /// Save only after authenticated pairing acknowledgement and explicit expected pin.
 /// Existing corrupt records are never overwritten as an implicit trust repair.
 pub fn save(state: &Path, record: &Bootstrap) -> Result<(), IdentityError> {

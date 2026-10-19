@@ -121,8 +121,8 @@ impl State {
                 value["name"] = json!(self.device_name);
                 self.client.command(&value).await
             }
-            "preview_invitation" | "catalog" | "telemetry" | "open" | "enable" | "stop"
-            | "access_status" => self.client.command(&value).await,
+            "unpair" | "preview_invitation" | "catalog" | "telemetry" | "open" | "enable"
+            | "stop" | "access_status" => self.client.command(&value).await,
             _ => Err("Unsupported local operation".into()),
         }
     }

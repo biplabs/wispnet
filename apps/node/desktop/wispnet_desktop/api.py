@@ -61,3 +61,28 @@ class NodeAPI:
             if request.get("op") == "status" and result.get("api_version") != 1:
                 raise ValueError("Unsupported node API version")
             return result
+
+    def set_online(self, online):
+        """Control the installed node independently of the desktop and relay."""
+        import subprocess
+        import time
+
+        expected = (Path.home() / ".config/wipsnet-node/host.toml").resolve()
+        if self.config != expected:
+            raise ValueError("Online control requires the installed node configuration")
+        result = subprocess.run(
+            ["systemctl", "--user", "start" if online else "stop", "wipsnet-host.service"],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        if result.returncode:
+            raise ValueError(result.stderr.strip() or "Could not change node state")
+        if not online:
+            return None
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                return self.request(op="status")
+            except (OSError, ValueError):
+                if time.monotonic() >= deadline:
+                    raise ValueError("Node started but its local API did not become ready")
+                time.sleep(0.1)

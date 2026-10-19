@@ -10,6 +10,13 @@ final class SpaceToggle extends Button {
  boolean plus=false;
  int[] beacons=new int[0];
  SpaceToggle(Context context){super(context);setBackgroundColor(Color.TRANSPARENT);setMinWidth(0);setMinHeight(0);}
+ void offlineText(float density){
+  paint.setTextSize(11.5f*density);paint.setTypeface(Typeface.create(Typeface.DEFAULT,Typeface.BOLD));paint.setLetterSpacing(0.08f);
+ }
+ int dockedWidth(){
+  float d=getResources().getDisplayMetrics().density;offlineText(d);
+  return (int)Math.ceil(paint.measureText("GO OFFLINE")+48*d);
+ }
  protected void onDraw(Canvas c){
   float d=getResources().getDisplayMetrics().density,cx=getWidth()/2f,cy=getHeight()/2f;
   boolean on=isSelected();
@@ -42,12 +49,15 @@ final class SpaceToggle extends Button {
   paint.setStyle(Paint.Style.FILL);paint.setColor(0x334582ff);c.drawRoundRect(x-2*d,y-2*d,x+w+2*d,y+h+2*d,(h+4*d)/2,(h+4*d)/2,paint);
   paint.setColor(0xd812254a);c.drawRoundRect(x,y,x+w,y+h,h/2,h/2,paint);
   paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1.4f*d);paint.setColor(0xff5b9cf7);c.drawRoundRect(x,y,x+w,y+h,h/2,h/2,paint);
-  float bx=x+18*d,by=y+h/2f;
+  offlineText(d);
+  float textWidth=paint.measureText("GO OFFLINE");
+  float contentWidth=8.4f*d+8*d+textWidth;
+  float bx=(getWidth()-contentWidth)/2f+4.2f*d,by=y+h/2f;
   paint.setStyle(Paint.Style.FILL);paint.setColor(0x4465ceff);c.drawCircle(bx,by,7.5f*d,paint);
   paint.setColor(0xff65ceff);c.drawCircle(bx,by,4.2f*d,paint);
   paint.setColor(0xfff4fcff);c.drawCircle(bx,by,1.8f*d,paint);
-  paint.setColor(0xffedf4ff);paint.setTextSize(11.5f*d);paint.setTypeface(Typeface.create(Typeface.DEFAULT,Typeface.BOLD));paint.setLetterSpacing(0.08f);
-  Paint.FontMetrics fm=paint.getFontMetrics();c.drawText("GO OFFLINE",bx+12*d,by-(fm.ascent+fm.descent)/2f,paint);
+  paint.setColor(0xffedf4ff);offlineText(d);
+  Paint.FontMetrics fm=paint.getFontMetrics();c.drawText("GO OFFLINE",bx+12.2f*d,by-(fm.ascent+fm.descent)/2f,paint);
  }
  public void setSelected(boolean value){super.setSelected(value);invalidate();}
  public void onInitializeAccessibilityNodeInfo(AccessibilityNodeInfo info){super.onInitializeAccessibilityNodeInfo(info);info.setClassName(plus?"android.widget.Button":"android.widget.Switch");info.setCheckable(!plus);info.setChecked(!plus&&isSelected());}

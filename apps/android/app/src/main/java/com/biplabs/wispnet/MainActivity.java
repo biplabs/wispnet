@@ -100,7 +100,7 @@ public class MainActivity extends Activity {
   if(stars!=null)stars.hyperspace=docked;
   if(!managesHosts())header.getChildAt(0).setVisibility(paired?View.VISIBLE:View.GONE);
   ViewGroup parent=(ViewGroup)access.getParent();if(parent!=null)parent.removeView(access);
-  if(docked&&!managesHosts())header.addView(access,new LinearLayout.LayoutParams(dp(132),dp(44)));
+  if(docked&&!managesHosts())header.addView(access,new LinearLayout.LayoutParams(((SpaceToggle)access).dockedWidth(),dp(44)));
   else space.addView(access,new FrameLayout.LayoutParams(dp(108),dp(108),Gravity.CENTER));
   FrameLayout.LayoutParams cap=(FrameLayout.LayoutParams)caption.getLayoutParams();cap.topMargin=dp(82);caption.setLayoutParams(cap);
   caption.setText(first?"establish your wisp network":"jump to wisp space");

@@ -194,6 +194,15 @@ impl Client {
                     .map_err(|_| "Cannot reset catalog baseline")??;
                 Ok(json!({"state":"pending_owner_approval","host":pending.host.to_string()}))
             }
+            "unpair" => {
+                let host = peer(value)?;
+                if host == self.endpoint.id() {
+                    return Err("Cannot unpair this machine".into());
+                }
+                self.gateway.forget(self, host).await?;
+                wipsnet_agent::peers::remove(&self.state, host).map_err(|e| e.to_string())?;
+                Ok(json!({"unpaired":host.to_string()}))
+            }
             "set_name" => {
                 let host = peer(value)?;
                 let name = argument(value, "name")?;

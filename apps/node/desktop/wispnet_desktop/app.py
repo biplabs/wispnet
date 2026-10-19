@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import socket
 import tempfile
 import stat
 import re
@@ -12,6 +13,7 @@ from wispnet_desktop.catalog_cache import CatalogCache, valid_catalog
 from wispnet_desktop.combined import Combined, validate_plan
 from PySide6.QtCore import (
     QObject,
+    QPointF,
     QRunnable,
     QThreadPool,
     QTimer,
@@ -43,13 +45,11 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QLabel,
     QPushButton,
-    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QSystemTrayIcon,
     QMenu,
     QMessageBox,
-    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QLineEdit,
@@ -60,7 +60,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QScrollArea,
-    QStackedWidget,
 )
 import math
 import random
@@ -227,68 +226,6 @@ class StarfieldBanner(QWidget):
         painter.end()
 
 
-class HyperspaceToggle(QCheckBox):
-    """Accessible QCheckBox styled as a Star Wars Hyperdrive Core / Hyperspace Beacon pill."""
-
-    def __init__(self, text="Browser access", parent=None):
-        super().__init__(text, parent)
-        self.setObjectName("accessToggle")
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedSize(208, 44)
-
-    def hitButton(self, pos):
-        return self.rect().contains(pos)
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = self.width(), self.height()
-        on = self.isChecked()
-        enabled = self.isEnabled()
-
-        painter.setPen(
-            QPen(
-                QColor("#65ceff" if on else "#2e4674" if enabled else "#1e2c46"),
-                1.6,
-            )
-        )
-        painter.setBrush(
-            QColor("#163264" if on else "#0f1a30" if enabled else "#0b1220")
-        )
-        painter.drawRoundedRect(2, 2, w - 4, h - 4, (h - 4) / 2, (h - 4) / 2)
-
-        bx, by = 24, h // 2
-        if on:
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(101, 206, 255, 76))
-            painter.drawEllipse(bx - 9, by - 9, 18, 18)
-            painter.setBrush(QColor("#65ceff"))
-            painter.drawEllipse(bx - 5, by - 5, 10, 10)
-            painter.setBrush(QColor("#f4fcff"))
-            painter.drawEllipse(bx - 2, by - 2, 4, 4)
-        else:
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.setPen(
-                QPen(QColor("#65ceff" if enabled else "#4a5d7a"), 1.5)
-            )
-            painter.drawEllipse(bx - 6, by - 6, 12, 12)
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor("#65ceff" if enabled else "#4a5d7a"))
-            painter.drawEllipse(bx - 2, by - 2, 4, 4)
-
-        painter.setPen(
-            QColor("#f4f8ff" if enabled else "#5c6f8c")
-        )
-        font = QFont("sans-serif", 9, QFont.Weight.Bold)
-        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.0)
-        painter.setFont(font)
-        label = "ON" if on else "OFF"
-        painter.drawText(
-            42, 0, w - 50, h, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, label
-        )
-        painter.end()
-
-
 class Signals(QObject):
     done = Signal(object, object)
 
@@ -372,6 +309,23 @@ def icon(count=0, online=False):
     return QIcon(pixmap)
 
 
+def node_state_icon(online):
+    pixmap = QPixmap(16, 16)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(Qt.PenStyle.NoPen)
+    for radius, color in (
+        (7.5, "#4465ceff" if online else "#224a5d7a"),
+        (4.2, "#65ceff" if online else "#7a8da8"),
+        (1.8, "#f4fcff" if online else "#b5c2d4"),
+    ):
+        painter.setBrush(QColor(color))
+        painter.drawEllipse(QPointF(8, 8), radius, radius)
+    painter.end()
+    return QIcon(pixmap)
+
+
 class Window(QMainWindow):
     def __init__(self, api, tray=True):
         super().__init__()
@@ -385,6 +339,8 @@ class Window(QMainWindow):
         self.peer_busy = set()
         self.busy = False
         self.online = False
+        self.node_transition = False
+        self.offline_requested = False
         self.launch_files = set()
         self.peer_names = {}
         if hasattr(api, "state"):
@@ -423,43 +379,56 @@ class Window(QMainWindow):
         layout.setSpacing(14)
         self.setCentralWidget(main)
 
-        # ── Minimal Starfield Command Header ──
+        # ── Unified Local Machine Command Card (Header + Local Services) ──
         self.header_banner = StarfieldBanner()
-        header_layout = QHBoxLayout(self.header_banner)
-        header_layout.setContentsMargins(20, 14, 20, 14)
-        header_layout.setSpacing(14)
+        banner_vbox = QVBoxLayout(self.header_banner)
+        banner_vbox.setContentsMargins(18, 14, 18, 14)
+        banner_vbox.setSpacing(12)
+
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(10)
 
         logo = QLabel()
         logo.setPixmap(icon().pixmap(40, 40))
         logo.setFixedSize(40, 40)
         header_layout.addWidget(logo)
 
-        title_box = QVBoxLayout()
-        title_box.setSpacing(2)
         self.heading_label = QLabel("◈  WISPNET")
         self.heading_label.setObjectName("heading")
-        title_box.addWidget(self.heading_label)
-        self.subtitle_label = QLabel("◌ Off")
-        self.subtitle_label.setObjectName("statusText")
-        title_box.addWidget(self.subtitle_label)
-        header_layout.addLayout(title_box, 1)
+        header_layout.addWidget(self.heading_label, 1)
 
-        self.access = HyperspaceToggle("Browser access")
-        self.access.clicked.connect(self.toggle_access)
-        header_layout.addWidget(self.access)
+        self.node_button = QPushButton("Go online")
+        self.node_button.setIcon(node_state_icon(False))
+        self.node_button.setProperty("variant", "secondary")
+        self.node_button.setFixedHeight(36)
+        self.node_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.node_button.setToolTip("Start or stop this machine's Wispnet node")
+        self.node_button.clicked.connect(self.toggle_node)
+        header_layout.addWidget(self.node_button)
+
+        self.share_btn = QPushButton("+  Add service")
+        self.share_btn.setProperty("variant", "primary")
+        self.share_btn.setFixedHeight(36)
+        self.share_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.share_btn.clicked.connect(self.share)
+        header_layout.addWidget(self.share_btn)
 
         self.link_btn = QPushButton("+  Pair")
         self.link_btn.setProperty("variant", "primary")
+        self.link_btn.setFixedHeight(36)
         self.link_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.link_btn.clicked.connect(self.pair)
         header_layout.addWidget(self.link_btn)
 
-        self.settings_btn = QPushButton("⚙")
-        self.settings_btn.setProperty("variant", "secondary")
-        self.settings_btn.setToolTip("Fleet, requests & diagnostics")
-        self.settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.settings_btn.clicked.connect(self.toggle_settings_view)
-        header_layout.addWidget(self.settings_btn)
+        banner_vbox.addLayout(header_layout)
+
+        self.local_cards_box = QWidget()
+        self.local_cards_box.setObjectName("localCardsBox")
+        self.local_cards_layout = QGridLayout(self.local_cards_box)
+        self.local_cards_layout.setContentsMargins(0, 2, 0, 0)
+        self.local_cards_layout.setSpacing(10)
+        banner_vbox.addWidget(self.local_cards_box)
 
         layout.addWidget(self.header_banner)
 
@@ -483,11 +452,6 @@ class Window(QMainWindow):
         self.incoming_banner.hide()
         layout.addWidget(self.incoming_banner)
 
-        # ── Main Content Stack: Page 0 = Simple Home Canvas, Page 1 = Settings & Diagnostics ──
-        self.view_stack = QStackedWidget()
-        layout.addWidget(self.view_stack, 1)
-
-        # Page 0: Single-Page Navicomputer Canvas (No Tabs, No Tables)
         self.home_page = QScrollArea()
         self.home_page.setWidgetResizable(True)
         self.home_page.setFrameShape(QFrame.Shape.NoFrame)
@@ -496,35 +460,11 @@ class Window(QMainWindow):
         home_container.setObjectName("homeContainer")
         home_layout = QVBoxLayout(home_container)
         home_layout.setContentsMargins(2, 4, 2, 8)
-        home_layout.setSpacing(16)
+        home_layout.setSpacing(12)
 
-        # Section 1: This Machine
-        local_sector = QFrame()
-        local_sector.setObjectName("peerSectorCard")
-        local_sector_layout = QVBoxLayout(local_sector)
-        local_sector_layout.setContentsMargins(16, 14, 16, 14)
-        local_sector_layout.setSpacing(10)
-        local_head_row = QHBoxLayout()
-        self.local_sector_title = QLabel("◈  THIS MACHINE")
-        self.local_sector_title.setObjectName("peerSectorHeader")
-        local_head_row.addWidget(self.local_sector_title, 1)
-        share_btn = QPushButton("+  Add service")
-        share_btn.setProperty("variant", "primary")
-        share_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        share_btn.clicked.connect(self.share)
-        local_head_row.addWidget(share_btn)
-        local_sector_layout.addLayout(local_head_row)
-
-        self.local_cards_box = QWidget()
-        self.local_cards_layout = QGridLayout(self.local_cards_box)
-        self.local_cards_layout.setContentsMargins(0, 2, 0, 0)
-        self.local_cards_layout.setSpacing(10)
-        local_sector_layout.addWidget(self.local_cards_box)
-        home_layout.addWidget(local_sector)
-
-        # Section 2: Paired Machines & Devices (Wisp Space)
+        # Paired Machines & Devices (Wisp Space)
         peers_head_row = QHBoxLayout()
-        peers_head_row.setContentsMargins(4, 4, 4, 0)
+        peers_head_row.setContentsMargins(4, 2, 4, 0)
         peers_title = QLabel("◈  PAIRED MACHINES & DEVICES")
         peers_title.setObjectName("peerSectorHeader")
         peers_head_row.addWidget(peers_title, 1)
@@ -536,27 +476,20 @@ class Window(QMainWindow):
         home_layout.addLayout(peers_head_row)
 
         self.peer_cards_box = QWidget()
+        self.peer_cards_box.setObjectName("peerCardsBox")
         self.peer_cards_layout = QVBoxLayout(self.peer_cards_box)
         self.peer_cards_layout.setContentsMargins(0, 0, 0, 0)
         self.peer_cards_layout.setSpacing(12)
         home_layout.addWidget(self.peer_cards_box)
         home_layout.addStretch(1)
         self.home_page.setWidget(home_container)
-        self.view_stack.addWidget(self.home_page)
+        layout.addWidget(self.home_page, 1)
 
-        # Page 1: Settings, Fleet & Diagnostics (Tucked behind ⚙ button)
-        self.settings_page = QWidget()
-        settings_layout = QVBoxLayout(self.settings_page)
-        settings_layout.setContentsMargins(0, 0, 0, 0)
-        settings_layout.setSpacing(10)
         self.status = QLabel("Connecting to local node…")
         self.status.setObjectName("statusText")
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         self.status.setWordWrap(True)
-        settings_layout.addWidget(self.status)
-        self.tabs = QTabWidget()
-        settings_layout.addWidget(self.tabs, 1)
-        self.view_stack.addWidget(self.settings_page)
+        layout.addWidget(self.status)
 
         self.services = self.table(
             ["Service", "Backend", "Permitted clients"],
@@ -634,8 +567,6 @@ class Window(QMainWindow):
             summary_widget=self.operations_summary,
             disable_actions=self.combined is None,
         )
-        self.view_stack.setCurrentWidget(self.home_page)
-        self.tabs.currentChanged.connect(self._on_tab_selected)
 
         self.message = QLabel("")
         self.message.setObjectName("messageBar")
@@ -652,7 +583,7 @@ class Window(QMainWindow):
             menu.addAction("Refresh", self.refresh)
             self.request_action = menu.addAction(
                 "Pairing requests",
-                lambda: (self.tabs.setCurrentIndex(3), self.reveal()),
+                self.reveal,
             )
             menu.addSeparator()
             menu.addAction(
@@ -671,18 +602,6 @@ class Window(QMainWindow):
         self.timer.timeout.connect(self.refresh)
         self.timer.start(2000)
         self.refresh()
-
-    def toggle_settings_view(self):
-        if self.view_stack.currentWidget() is self.settings_page:
-            self.view_stack.setCurrentWidget(self.home_page)
-            self.settings_btn.setText("⚙")
-        else:
-            self.view_stack.setCurrentWidget(self.settings_page)
-            self.settings_btn.setText("←  Back")
-
-    def _on_tab_selected(self, _index):
-        self.view_stack.setCurrentWidget(self.settings_page)
-        self.settings_btn.setText("←  Back")
 
     def _approve_first_pending(self):
         for r in range(self.pending.rowCount()):
@@ -715,38 +634,10 @@ class Window(QMainWindow):
         summary_widget=None,
         disable_actions=False,
     ):
-        table = QTableWidget(0, len(columns))
+        # Internal row selections support the card actions; no settings screen.
+        table = QTableWidget(0, len(columns), self)
         table.setHorizontalHeaderLabels(columns)
-        table.horizontalHeader().setStretchLastSection(True)
-        table.setAlternatingRowColors(True)
-        table.setShowGrid(False)
-        table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
-        table.verticalHeader().hide()
-        panel = QWidget()
-        panel_layout = QVBoxLayout(panel)
-        panel_layout.setContentsMargins(14, 12, 14, 12)
-        panel_layout.setSpacing(10)
-        top_bar = QHBoxLayout()
-        top_bar.setSpacing(8)
-        if summary_widget is not None:
-            top_bar.addWidget(summary_widget, 1)
-        else:
-            sub = QLabel(subtitle)
-            sub.setObjectName("sectorSubtitle")
-            top_bar.addWidget(sub, 1)
-        for btn_title, fn, variant in actions:
-            button = QPushButton(btn_title)
-            button.setProperty("variant", variant)
-            button.clicked.connect(fn)
-            if disable_actions:
-                button.setEnabled(False)
-            top_bar.addWidget(button)
-        panel_layout.addLayout(top_bar)
-        if cards is not None:
-            panel_layout.addWidget(cards)
-        panel_layout.addWidget(table, 1)
-        self.tabs.addTab(panel, title)
+        table.hide()
         return table
 
     def _clear_layout(self, box_layout):
@@ -777,7 +668,7 @@ class Window(QMainWindow):
             event.accept()
 
     def refresh(self):
-        if self.busy:
+        if self.busy or self.node_transition:
             return
         self.busy = True
         self.submit(lambda: self.api.request(op="status"), self.updated)
@@ -788,12 +679,13 @@ class Window(QMainWindow):
         self.online = error is None
         if error:
             self.snapshot = None
-            self.access.setEnabled(False)
+            self.node_button.setEnabled(not self.node_transition)
+            self.node_button.setText("Go online")
+            self.node_button.setIcon(node_state_icon(False))
             self.header_banner.hyperspace = False
             self.header_banner.update()
             self.heading_label.setText("◈  NODE OFFLINE")
-            self.subtitle_label.setText("✕ Local background service unavailable")
-            self.status.setText("Node unavailable — " + error)
+            self.status.setText("Node offline" if self.offline_requested else "Node unavailable — " + error)
             self.incoming_banner.hide()
             self.devices.setRowCount(0)
             self.pending.setRowCount(0)
@@ -807,27 +699,26 @@ class Window(QMainWindow):
                 self.tray.setToolTip("Wispnet · node unavailable")
             return
         self.snapshot = result
-        self.access.setEnabled(True)
-        self.access.setChecked(result["access_enabled"])
-        self.header_banner.hyperspace = bool(result["access_enabled"])
+        self.offline_requested = False
+        self.node_button.setEnabled(not self.node_transition)
+        self.node_button.setText("Go offline")
+        self.node_button.setIcon(node_state_icon(True))
+        self.header_banner.hyperspace = True
         self.header_banner.update()
         recent = result.get("recent_peers", {})
         active = set(result["connected_peers"]) | set(recent)
         count = len(active)
         window = result.get("presence_timeout_seconds", 60)
-        host_title = result["host_name"].upper()
-        self.heading_label.setText(f"◈  {host_title}")
-        self.local_sector_title.setText(f"◈  THIS MACHINE · {host_title}")
-        if result["access_enabled"]:
-            self.subtitle_label.setText(
-                f"● On  ·  {count} connected device{'s' if count != 1 else ''}"
-            )
-        else:
-            self.subtitle_label.setText(
-                f"◌ Off  ·  {len(result['host']['clients'])} paired device{'s' if len(result['host']['clients']) != 1 else ''}"
-            )
+        raw_name = (result.get("host_name") or "").strip()
+        if not raw_name or raw_name.lower() == "local computer":
+            raw_name = socket.gethostname() or "This Machine"
+        host_title = raw_name.upper()
+        host_id = result.get("host", {}).get("host", "")
+        self.heading_label.setText(
+            f"◈  {host_title} · {host_id[:8]}" if host_id else f"◈  {host_title}"
+        )
         self.status.setText(
-            f"{result['host_name']}  ·  Active clients: {count}  ·  {result['transport_streams']} transport streams  ·  Activity window: {window}s  ·  Relay: {result['relay']}"
+            f"● Relay: {result['relay']}"
         )
         pending_reqs = [i for i in result["invitations"] if i["state"] == "pending"]
         if pending_reqs:
@@ -864,21 +755,40 @@ class Window(QMainWindow):
                 tile = QFrame()
                 tile.setObjectName("serviceTileFrame")
                 tile_layout = QHBoxLayout(tile)
-                tile_layout.setContentsMargins(12, 10, 10, 10)
+                tile_layout.setContentsMargins(12, 8, 10, 8)
                 tile_layout.setSpacing(8)
+                left_col = QVBoxLayout()
+                left_col.setContentsMargins(0, 0, 0, 0)
+                left_col.setSpacing(2)
                 port_label = s["backend"].removeprefix("127.0.0.1:")
                 open_btn = QPushButton(
-                    f"✦  {s.get('display_name') or s['id']}   ↗\n:{port_label}  ·  {len(s['allow'])} device{'s' if len(s['allow']) != 1 else ''}"
+                    f"✦  {s.get('display_name') or s['id']}   ↗"
                 )
                 open_btn.setObjectName("sectorServiceCard")
                 open_btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 open_btn.clicked.connect(
-                    lambda _=False, r=idx: (
-                        self.services.selectRow(r),
-                        self.open_local(),
-                    )
+                    lambda _=False, r=idx: self._open_local_card(r)
                 )
-                tile_layout.addWidget(open_btn, 1)
+                left_col.addWidget(open_btn)
+                meta_row = QHBoxLayout()
+                meta_row.setContentsMargins(6, 0, 0, 0)
+                meta_row.setSpacing(6)
+                port_lbl = QLabel(f"{port_label}  ·")
+                port_lbl.setObjectName("sectorSubtitle")
+                meta_row.addWidget(port_lbl)
+                dev_btn = QPushButton(
+                    f"{len(s['allow'])} device{'s' if len(s['allow']) != 1 else ''}"
+                )
+                dev_btn.setObjectName("tileDevicesBtn")
+                dev_btn.setToolTip("Edit which paired devices can access this service")
+                dev_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                dev_btn.clicked.connect(
+                    lambda _=False, sid=s["id"]: self.edit_service_devices(sid)
+                )
+                meta_row.addWidget(dev_btn)
+                meta_row.addStretch(1)
+                left_col.addLayout(meta_row)
+                tile_layout.addLayout(left_col, 1)
                 del_btn = QPushButton("✕")
                 del_btn.setObjectName("tileIconBtn")
                 del_btn.setToolTip("Stop sharing this port")
@@ -1034,7 +944,7 @@ class Window(QMainWindow):
         rtt = info.get("rtt_ms")
         parts = []
         if path in ("direct", "relay"):
-            parts.append("Last path: " + path.upper())
+            parts.append(path.upper())
         if isinstance(rtt, int) and rtt > 0:
             parts.append(f"{rtt}ms")
         return " · ".join(parts)
@@ -1079,11 +989,21 @@ class Window(QMainWindow):
             sec_layout = QVBoxLayout(sector_frame)
             sec_layout.setContentsMargins(16, 14, 16, 14)
             sec_layout.setSpacing(10)
+            head_row = QHBoxLayout()
             sec_head = QLabel(
                 f"◈  {host_label.upper()} · {peer[:8]}   ·   {status_badge}"
             )
             sec_head.setObjectName("peerSectorHeader")
-            sec_layout.addWidget(sec_head)
+            head_row.addWidget(sec_head, 1)
+            revoke_btn = QPushButton("✕")
+            revoke_btn.setObjectName("tileIconBtn")
+            revoke_btn.setToolTip("Unpair this machine and revoke its local grants")
+            revoke_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            revoke_btn.clicked.connect(
+                lambda _=False, p=peer: self._unpair_peer(p)
+            )
+            head_row.addWidget(revoke_btn)
+            sec_layout.addLayout(head_row)
             grid = QGridLayout()
             grid.setSpacing(10)
             for idx, service in enumerate(services or [None]):
@@ -1106,16 +1026,13 @@ class Window(QMainWindow):
                 )
                 if service:
                     s_btn = QPushButton(
-                        f"✦  {service['display_name']}   ↗\n{service['kind'].upper()} · {host_label}"
+                        f"✦  {service['display_name']}   ↗\n{service['kind'].upper()}"
                     )
                     s_btn.setObjectName("sectorServiceCard")
                     s_btn.setEnabled(state == "Available" and service["kind"] == "http")
                     s_btn.setCursor(Qt.CursorShape.PointingHandCursor)
                     s_btn.clicked.connect(
-                        lambda _=False, r=route_idx: (
-                            self.peers.selectRow(r),
-                            self.open_peer(r, 0),
-                        )
+                        lambda _=False, r=route_idx: self._open_peer_card(r)
                     )
                     grid.addWidget(s_btn, idx // 2, idx % 2)
             if services:
@@ -1145,7 +1062,7 @@ class Window(QMainWindow):
             else:
                 c_status = "◌ STANDBY · CLIENT"
                 if tel_badge:
-                    c_status += f" · LAST: {tel_badge}"
+                    c_status += f" · {tel_badge}"
             allowed = [
                 s.get("display_name") or s["id"]
                 for s in local_services
@@ -1200,6 +1117,25 @@ class Window(QMainWindow):
             or [["No paired hosts — use Pair with a host", "Not paired", "—", "—"]],
         )
 
+    def _unpair_peer(self, peer):
+        if QMessageBox.question(
+            self, "Unpair machine",
+            "Forget this machine and revoke its grants on this node?\n"
+            "Permissions on the remote machine must be revoked there.\n" + peer,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        is_client = any(c["peer"] == peer for c in self.snapshot["host"]["clients"])
+        revision = self.snapshot["host"]["revision"]
+
+        def run():
+            if is_client:
+                self.api.request(op="mutate", operation={
+                    "op": "revoke", "peer": peer, "expected_revision": revision,
+                })
+            return self.api.request(op="unpair", host=peer)
+
+        self.submit(run, lambda value, error: self.result(value, error, "Machine unpaired"))
+
     def _revoke_peer_by_id(self, peer):
         for r in range(self.devices.rowCount()):
             if self.devices.item(r, 1) and self.devices.item(r, 1).text() == peer:
@@ -1217,16 +1153,25 @@ class Window(QMainWindow):
         self._set_message(error or success)
         self.refresh()
 
-    def toggle_access(self, enabled):
-        self.header_banner.hyperspace = bool(enabled)
-        if enabled:
-            self.header_banner.jump()
-        else:
-            self.header_banner.drop_out()
-        self.perform(
-            {"op": "enable" if enabled else "stop"},
-            "Browser access enabled" if enabled else "Browser access stopped",
-        )
+    def toggle_node(self):
+        if self.node_transition:
+            return
+        online = not self.online
+        self.node_transition = True
+        self.node_button.setEnabled(False)
+        self.node_button.setText("Going online…" if online else "Going offline…")
+
+        def finished(value, error):
+            self.node_transition = False
+            if error:
+                self._set_message(error)
+                self.refresh()
+                return
+            self._set_message("")
+            self.offline_requested = not online
+            self.updated(value, None if online else "Node offline")
+
+        self.submit(lambda: self.api.set_online(online), finished)
 
     def mutation(self, operation):
         if not self.snapshot:
@@ -1238,6 +1183,67 @@ class Window(QMainWindow):
         row = self.services.currentRow()
         if row >= 0:
             self.share(self.services.item(row, 0).text())
+
+    def edit_service_devices(self, service_id):
+        if not self.snapshot:
+            return
+        service = next(
+            (
+                s
+                for s in self.snapshot["host"]["services"]
+                if s["id"] == service_id
+            ),
+            None,
+        )
+        if not service:
+            return
+        revision = self.snapshot["host"]["revision"]
+        title = service.get("display_name") or service["id"]
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Granted devices · {title}")
+        dialog.setMinimumWidth(380)
+        vbox = QVBoxLayout(dialog)
+        vbox.setContentsMargins(16, 14, 16, 14)
+        vbox.setSpacing(10)
+        hint = QLabel(f"Select which paired devices can access {title}:")
+        hint.setObjectName("sectorSubtitle")
+        vbox.addWidget(hint)
+        clients = QListWidget()
+        allowed_set = set(service.get("allow", []))
+        for client in self.snapshot["host"]["clients"]:
+            row = QListWidgetItem(client["name"] + " · " + client["peer"][:8])
+            row.setData(Qt.ItemDataRole.UserRole, client["peer"])
+            row.setFlags(row.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            row.setCheckState(
+                Qt.CheckState.Checked
+                if client["peer"] in allowed_set
+                else Qt.CheckState.Unchecked
+            )
+            clients.addItem(row)
+        vbox.addWidget(clients)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        vbox.addWidget(buttons)
+        if dialog.exec():
+            self.mutation(
+                {
+                    "op": "service",
+                    "expected_revision": revision,
+                    "id": service["id"],
+                    "backend": service["backend"],
+                    "display_name": title,
+                    "kind": service["kind"],
+                    "allow": [
+                        clients.item(i).data(Qt.ItemDataRole.UserRole)
+                        for i in range(clients.count())
+                        if clients.item(i).checkState() == Qt.CheckState.Checked
+                    ],
+                }
+            )
 
     def share(self, existing=None):
         if not self.snapshot:
@@ -1605,7 +1611,6 @@ class Window(QMainWindow):
         ):
             return
         self.submit(lambda: self.combined.start(plan), self.combined_result)
-        self.tabs.setCurrentIndex(4)
 
     def retry_combined(self):
         row = self.operations.currentRow()
@@ -1627,13 +1632,10 @@ class Window(QMainWindow):
                 "Not fully applied. Review each host's pending or rejected status."
             )
 
-    def open_local(self, *args):
-        row = self.services.currentRow()
+    def _open_local_card(self, row):
         if not self.online or not self.snapshot or row < 0:
             return
-        if not self.access.isChecked():
-            self._set_message("Enable Browser access first")
-            return
+        self.services.selectRow(row)
         host = self.snapshot["host"]["host"]
         service = self.services.item(row, 0).text()
         incarnation = next(
@@ -1641,17 +1643,27 @@ class Window(QMainWindow):
             for s in self.snapshot["host"]["services"]
             if s["id"] == service
         )
-        self.submit(
-            lambda: self.api.request(
-                op="open", host=host, service=service, incarnation=incarnation,
-                host_name=self.snapshot["host_name"],
-            ),
-            self.open_result,
-        )
+        host_name = self.snapshot["host_name"]
+        need_enable = not self.snapshot.get("access_enabled", False)
+        self.header_banner.jump()
 
-    def open_peer(self, row, column):
+        def run_open():
+            if need_enable:
+                self.api.request(op="enable")
+            return self.api.request(
+                op="open",
+                host=host,
+                service=service,
+                incarnation=incarnation,
+                host_name=host_name,
+            )
+
+        self.submit(run_open, self.open_result)
+
+    def _open_peer_card(self, row):
         if row >= len(self.peer_routes):
             return
+        self.peers.selectRow(row)
         peer, service, state = self.peer_routes[row]
         incarnation = next(
             (
@@ -1666,22 +1678,34 @@ class Window(QMainWindow):
         if not service or state != "Available" or not self.online:
             self._set_message("Refresh this peer before opening its service")
             return
-        if not self.access.isChecked():
-            self._set_message("Enable Browser access first")
-            return
         record = next(
             s for s in self.catalogs[peer]["catalog"]["services"] if s["id"] == service
         )
         if record["kind"] != "http":
             self._set_message("This TCP service requires the native tunnel CLI")
             return
-        self.submit(
-            lambda: self.api.request(
-                op="open", host=peer, service=service, incarnation=incarnation,
-                host_name=self.peer_names.get(peer) or "System",
-            ),
-            self.open_result,
-        )
+        host_name = self.peer_names.get(peer) or "System"
+        need_enable = not self.snapshot.get("access_enabled", False)
+        self.header_banner.jump()
+
+        def run_open():
+            if need_enable:
+                self.api.request(op="enable")
+            return self.api.request(
+                op="open",
+                host=peer,
+                service=service,
+                incarnation=incarnation,
+                host_name=host_name,
+            )
+
+        self.submit(run_open, self.open_result)
+
+    def open_local(self, *args):
+        self._open_local_card(self.services.currentRow())
+
+    def open_peer(self, row, column):
+        self._open_peer_card(row)
 
     def open_result(self, value, error):
         if error:
@@ -1718,7 +1742,11 @@ def appearance(app):
         QMainWindow, QDialog, QMessageBox, QScrollArea#homeScroll, QWidget#homeContainer {
             background: #070b14;
         }
-        QWidget#headerCard QLabel {
+        QWidget#headerCard QLabel,
+        QWidget#localCardsBox,
+        QWidget#peerCardsBox,
+        QFrame#peerSectorCard QLabel,
+        QFrame#serviceTileFrame QLabel {
             background: transparent;
         }
         QLabel#heading {
@@ -1775,7 +1803,7 @@ def appearance(app):
         QFrame#serviceTileFrame QPushButton#sectorServiceCard {
             background: transparent;
             border: 0;
-            padding: 4px 6px;
+            padding: 2px 6px;
         }
         QPushButton#sectorServiceCard:hover {
             background: #192d54;
@@ -1785,6 +1813,20 @@ def appearance(app):
             background: #0d1628;
             border-color: #1d2842;
             color: #687a98;
+        }
+        QPushButton#tileDevicesBtn {
+            background: #16284a;
+            border: 1px solid #2f4f88;
+            border-radius: 7px;
+            color: #b8d8ff;
+            padding: 1px 8px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        QPushButton#tileDevicesBtn:hover {
+            background: #223e72;
+            border-color: #65ceff;
+            color: #f4f8ff;
         }
         QPushButton#tileIconBtn {
             background: transparent;

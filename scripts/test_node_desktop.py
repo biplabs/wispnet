@@ -415,6 +415,13 @@ class NodeIntegration(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     api.request(op="catalog", host=pb)
                 self.assertNotIn(pa, bapi.request(op="status")["recent_peers"])
+                self.assertIn(pb, api.request(op="status")["peer_pins"])
+                api.request(op="unpair", host=pb)
+                self.assertNotIn(pb, api.request(op="status")["peer_pins"])
+                with self.assertRaises(ValueError):
+                    api.request(op="catalog", host=pb)
+                # Forgetting locally never modifies remote owner permissions.
+                self.assertEqual(bapi.request(op="status")["host"]["clients"], [])
                 badpath = sa / "node.sock"
                 badpath.chmod(0o666)
                 with self.assertRaises(ValueError):

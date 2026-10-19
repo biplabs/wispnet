@@ -50,6 +50,12 @@ see [current host control](per-host-control.md).
 
 ## Recovery and reset
 
+Automated protected host recovery (#19) is deferred. If a host identity is lost
+and no usable protected original exists, a new identity requires explicit
+re-pairing by every client that trusted that host. Do not copy another host's
+identity or assume the old registry can be reused with a replacement key.
+Other hosts retain their own identities and permissions.
+
 Missing, truncated, unreadable, wrong-permission, or inconsistent key state stops
 startup. Restore the original identity from a protected backup when possible;
 initialization will not overwrite corrupt state. Incomplete .identity-write-*

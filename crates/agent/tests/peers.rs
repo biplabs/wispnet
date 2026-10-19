@@ -90,3 +90,20 @@ fn private_directory_and_lock_are_required() {
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert!(peers::load(state.path(), record.host).is_err());
 }
+
+#[test]
+fn forgetting_host_preserves_other_pins_and_is_idempotent() {
+    let state = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let a = record();
+    let b = record();
+    peers::save(state.path(), &a).unwrap();
+    peers::save(state.path(), &b).unwrap();
+    peers::remove(state.path(), a.host).unwrap();
+    peers::remove(state.path(), a.host).unwrap();
+    assert!(peers::load(state.path(), a.host).unwrap().is_none());
+    assert_eq!(
+        peers::load(state.path(), b.host).unwrap().unwrap().host,
+        b.host
+    );
+}

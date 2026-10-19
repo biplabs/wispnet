@@ -58,6 +58,18 @@ impl Gateways {
             let _ = worker.task.await;
         }
     }
+    /// Remove this host's listeners and bookmarks while preserving other hosts.
+    pub async fn forget(&self, client: &Client, peer: EndpointId) -> Result<(), String> {
+        let mut workers = self.workers.lock().await;
+        let mut saved = store::load(&client.state, client.endpoint.id())?;
+        saved.retain(|binding| binding.peer != peer);
+        store::save(&client.state, client.endpoint.id(), &saved)?;
+        for worker in workers.iter().filter(|w| w.binding.peer == peer) {
+            worker.task.abort();
+        }
+        workers.retain(|w| w.binding.peer != peer);
+        Ok(())
+    }
     /// App handoff proves an explicit Open even when Android Chrome marks it cross-site.
     /// This short-lived token never changes the bookmarked root address.
     pub async fn launch_url(&self, peer: EndpointId, service: &str) -> Result<String, String> {
@@ -827,6 +839,65 @@ mod tests {
             raw(&binding.url(), "GET", "/", NAV)
                 .await
                 .starts_with("HTTP/1.1 303")
+        );
+        c.gateway.stop().await;
+        c.endpoint.close().await;
+    }
+    #[tokio::test]
+    async fn unpair_removes_only_target_routes_and_pin() {
+        let state = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let c = client(state.path(), wipsnet_core::identity::SecretKey::generate()).await;
+        let peer = wipsnet_core::identity::SecretKey::generate().public();
+        let other = wipsnet_core::identity::SecretKey::generate().public();
+        for host in [peer, other] {
+            wipsnet_agent::peers::save(
+                state.path(),
+                &wipsnet_core::pairing::Bootstrap {
+                    version: 1,
+                    host,
+                    relay_url: "https://relay.example/".into(),
+                    direct_hint: None,
+                },
+            )
+            .unwrap();
+        }
+        c.gateway.enable();
+        for host in [peer, other] {
+            c.gateway
+                .open(c.clone(), host, "website".into(), "a".repeat(64))
+                .await
+                .unwrap();
+        }
+        let port = store::load(state.path(), c.endpoint.id())
+            .unwrap()
+            .into_iter()
+            .find(|binding| binding.peer == peer)
+            .unwrap()
+            .port;
+        c.command(&serde_json::json!({"op":"unpair", "host":peer.to_string()}))
+            .await
+            .unwrap();
+        assert!(
+            wipsnet_agent::peers::load(state.path(), peer)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            wipsnet_agent::peers::load(state.path(), other)
+                .unwrap()
+                .is_some()
+        );
+        assert!(c.gateway.launch_url(peer, "website").await.is_err());
+        assert!(c.gateway.launch_url(other, "website").await.is_ok());
+        assert!(TcpStream::connect(("127.0.0.1", port)).await.is_err());
+        let saved = store::load(state.path(), c.endpoint.id()).unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].peer, other);
+        assert!(
+            c.command(&serde_json::json!({"op":"unpair", "host":c.endpoint.id().to_string()}))
+                .await
+                .is_err()
         );
         c.gateway.stop().await;
         c.endpoint.close().await;

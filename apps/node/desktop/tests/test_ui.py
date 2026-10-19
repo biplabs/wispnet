@@ -2,7 +2,7 @@ import unittest
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox, QTabWidget, QPushButton
 from PySide6.QtCore import Qt
 from wispnet_desktop.app import Window, appearance
 
@@ -45,14 +45,17 @@ class DesktopChecks(unittest.TestCase):
             },
             None,
         )
-        self.assertIn("Active clients: 2", window.status.text())
+        self.assertIn("Relay: connected", window.status.text())
+        self.assertEqual(window.node_button.text(), "Go offline")
         self.assertEqual(window.devices.item(0, 4).text(), "Connected")
         self.assertEqual(window.devices.item(1, 4).text(), "Seen 12s ago")
         # Expired recent activity does not hide an actually open connection.
         snapshot = dict(window.snapshot)
         snapshot["recent_peers"] = {}
+        snapshot["access_enabled"] = True
         window.updated(snapshot, None)
-        self.assertIn("Active clients: 1", window.status.text())
+        self.assertIn("Relay:", window.status.text())
+        self.assertEqual(window.node_button.text(), "Go offline")
         self.assertEqual(window.devices.item(1, 4).text(), "Idle")
         window.devices.selectRow(1)
         window.fill(
@@ -65,7 +68,6 @@ class DesktopChecks(unittest.TestCase):
         window.updated(None, "offline")
         self.assertFalse(window.online)
         self.assertEqual(window.devices.rowCount(), 0)
-        self.assertFalse(window.access.isEnabled())
         self.assertIn("unavailable", window.status.text())
         window.pool.waitForDone()
         QApplication.processEvents()
@@ -183,7 +185,7 @@ class DesktopChecks(unittest.TestCase):
             first.deleteLater()
             second.deleteLater()
 
-    def test_local_open_uses_owner_host_and_requires_access(self):
+    def test_local_open_enables_access_and_uses_owner_host(self):
         with patch.object(Window, "refresh", lambda self: None):
             window = Window(API(), tray=False)
             window.timer.stop()
@@ -207,16 +209,70 @@ class DesktopChecks(unittest.TestCase):
             calls = []
             window.submit = lambda fn, callback, peer=False: calls.append(fn)
             window.open_local()
-            self.assertEqual(calls, [])
-            window.access.setChecked(True)
-            window.open_local()
             request = calls[-1]
             with patch.object(window.api, "request", return_value={}) as call:
                 request()
-                call.assert_called_once_with(
-                    op="open", host="f" * 64, service="website", incarnation="a" * 64,
-                    host_name="J Strix",
-                )
+                self.assertEqual(call.call_args_list[0].kwargs, {"op": "enable"})
+                self.assertEqual(call.call_args_list[1].kwargs, {
+                    "op": "open", "host": "f" * 64, "service": "website",
+                    "incarnation": "a" * 64, "host_name": "J Strix",
+                })
+            window.deleteLater()
+
+    def test_node_button_controls_lifecycle_independently_of_browser_access(self):
+        with patch.object(Window, "refresh", lambda self: None):
+            window = Window(API(), tray=False)
+            window.timer.stop()
+            snapshot = {
+                "access_enabled": False, "host_name": "Local", "connected_peers": {},
+                "transport_streams": 0, "relay": "connected", "invitations": [],
+                "peer_pins": [], "host": {"host": "f" * 64, "clients": [], "services": []},
+            }
+            window.updated(snapshot, None)
+            self.assertEqual(window.node_button.text(), "Go offline")
+            calls = []
+            window.api.set_online = lambda online: calls.append(online) or (snapshot if online else None)
+            window.submit = lambda fn, callback, peer=False: callback(fn(), None)
+            window._set_message("old message")
+            window.node_button.click()
+            self.assertEqual(calls, [False])
+            self.assertFalse(window.online)
+            self.assertTrue(window.node_button.isEnabled())
+            self.assertEqual(window.node_button.text(), "Go online")
+            self.assertEqual(window.status.text(), "Node offline")
+            self.assertEqual(window.message.text(), "")
+            window.node_button.click()
+            self.assertEqual(calls, [False, True])
+            self.assertTrue(window.online)
+            self.assertEqual(window.node_button.text(), "Go offline")
+            window.deleteLater()
+
+    def test_single_page_and_remote_machine_unpair(self):
+        with patch.object(Window, "refresh", lambda self: None):
+            window = Window(API(), tray=False)
+            window.timer.stop()
+            peer = "a" * 64
+            window.snapshot = {
+                "peer_pins": [peer],
+                "host": {"revision": 4, "clients": [], "services": []},
+            }
+            window.draw_peers()
+            self.assertEqual(window.findChildren(QTabWidget), [])
+            buttons = window.peer_cards_box.findChildren(QPushButton)
+            remove = next(b for b in buttons if b.text() == "✕")
+            requests = []
+            window.submit = lambda fn, callback, peer=False: fn()
+            window.api.request = lambda **kw: requests.append(kw)
+            with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+                remove.click()
+            self.assertEqual(requests, [{"op": "unpair", "host": peer}])
+            window.snapshot["host"]["clients"] = [{"peer": peer}]
+            with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+                remove.click()
+            self.assertEqual(requests[-2:], [
+                {"op": "mutate", "operation": {"op": "revoke", "peer": peer, "expected_revision": 4}},
+                {"op": "unpair", "host": peer},
+            ])
             window.deleteLater()
 
     def test_combined_view_never_calls_partial_results_complete(self):
@@ -248,11 +304,9 @@ class DesktopChecks(unittest.TestCase):
                     }
                 )
             window.combined_result(value, None)
-            window.tabs.setCurrentIndex(4)
             window.show()
             QApplication.processEvents()
-            self.assertTrue(window.operations.isVisible())
-            self.assertGreater(window.operations.height(), 100)
+            self.assertFalse(window.operations.isVisible())
             self.assertEqual(window.operations.rowCount(), 3)
             self.assertEqual(
                 {window.operations.item(i, 3).text() for i in range(3)},
