@@ -324,6 +324,24 @@ def node_state_icon(online, idle=False):
     return QIcon(pixmap)
 
 
+def config_icon():
+    pixmap = QPixmap(20, 20)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(QPen(QColor("#b8c8df"), 1.8))
+    painter.drawEllipse(QPointF(10, 10), 5.5, 5.5)
+    painter.drawEllipse(QPointF(10, 10), 2, 2)
+    for tooth in range(8):
+        angle = tooth * math.pi / 4
+        painter.drawLine(
+            QPointF(10 + 5.5 * math.cos(angle), 10 + 5.5 * math.sin(angle)),
+            QPointF(10 + 8 * math.cos(angle), 10 + 8 * math.sin(angle)),
+        )
+    painter.end()
+    return QIcon(pixmap)
+
+
 def trash_icon():
     pixmap = QPixmap(20, 20)
     pixmap.fill(Qt.GlobalColor.transparent)
@@ -806,19 +824,16 @@ class Window(QMainWindow):
                 meta_row.addStretch(1)
                 left_col.addLayout(meta_row)
                 tile_layout.addLayout(left_col, 1)
-                del_btn = QPushButton()
-                del_btn.setIcon(trash_icon())
-                del_btn.setAccessibleName("Remove service")
-                del_btn.setObjectName("tileIconBtn")
-                del_btn.setToolTip("Remove this service and stop sharing it")
-                del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-                del_btn.clicked.connect(
-                    lambda _=False, r=idx: (
-                        self.services.selectRow(r),
-                        self.remove(),
-                    )
+                config_btn = QPushButton()
+                config_btn.setIcon(config_icon())
+                config_btn.setAccessibleName("Configure service")
+                config_btn.setObjectName("tileIconBtn")
+                config_btn.setToolTip("Configure this service")
+                config_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                config_btn.clicked.connect(
+                    lambda _=False, sid=s["id"]: self.share(sid)
                 )
-                tile_layout.addWidget(del_btn)
+                tile_layout.addWidget(config_btn)
                 self.local_cards_layout.addWidget(tile, idx // 2, idx % 2)
         else:
             empty = QLabel(
@@ -1290,13 +1305,13 @@ class Window(QMainWindow):
             existing = None
         revision = self.snapshot["host"]["revision"]
         dialog = QDialog(self)
-        dialog.setWindowTitle("Edit service" if existing else "Add service")
+        dialog.setWindowTitle("Configure service" if existing else "Add service")
         dialog.setMinimumWidth(400)
         form = QFormLayout(dialog)
         display_name = QLineEdit()
         display_name.setPlaceholderText("e.g. Jellyfin, Syncthing, Dashboard")
         backend = QLineEdit()
-        backend.setPlaceholderText("e.g. 8096 or 127.0.0.1:8096")
+        backend.setPlaceholderText("e.g. 8096")
         kind = QComboBox()
         kind.addItem("Web service (HTTP)", "http")
         kind.addItem("TCP (native tunnel CLI)", "tcp")
@@ -1324,7 +1339,7 @@ class Window(QMainWindow):
                 s for s in self.snapshot["host"]["services"] if s["id"] == existing
             )
             display_name.setText(service["display_name"] or existing)
-            backend.setText(service["backend"])
+            backend.setText(service["backend"].removeprefix("127.0.0.1:"))
             kind.setCurrentIndex(0 if service["kind"] == "http" else 1)
         form.addRow("Service name", display_name)
         form.addRow("Local port", backend)
@@ -1335,6 +1350,24 @@ class Window(QMainWindow):
             QDialogButtonBox.StandardButton.Save
             | QDialogButtonBox.StandardButton.Cancel
         )
+        if existing:
+            remove_button = buttons.addButton(
+                "Remove service…", QDialogButtonBox.ButtonRole.DestructiveRole
+            )
+
+            def remove_service():
+                if QMessageBox.question(
+                    dialog,
+                    "Remove service",
+                    "Remove this local service and interrupt its active access?",
+                ) == QMessageBox.StandardButton.Yes:
+                    dialog.reject()
+                    self.mutation({
+                        "op": "remove", "id": existing,
+                        "expected_revision": revision,
+                    })
+
+            remove_button.clicked.connect(remove_service)
         form.addRow(buttons)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
@@ -1351,7 +1384,8 @@ class Window(QMainWindow):
                 or "service"
             )
             if (
-                any(
+                not existing
+                and any(
                     s["id"] == svc_id
                     for s in self.snapshot["host"]["services"]
                 )

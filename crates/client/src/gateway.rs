@@ -148,17 +148,27 @@ impl Gateways {
             return Err("Too many saved browser services".into());
         }
         let old = index.map(|i| &saved[i]);
-        let migrate =
-            old.is_some_and(|b| store::legacy_hostname(&b.hostname)) && system_name.is_some();
+        let id_component = format!("-{}-", &peer.to_string()[..12]);
         let hostname = match old {
-            Some(binding) if !migrate => binding.hostname.clone(),
-            _ => store::readable_hostname(system_name, &service, &saved),
+            Some(binding)
+                if binding.hostname.contains(&id_component)
+                    && !(system_name.is_some()
+                        && binding
+                            .hostname
+                            .starts_with(&format!("system{id_component}"))) =>
+            {
+                binding.hostname.clone()
+            }
+            _ => {
+                let others: Vec<_> = saved
+                    .iter()
+                    .filter(|b| b.peer != peer || b.service != service)
+                    .cloned()
+                    .collect();
+                store::readable_hostname(system_name, peer, &service, &others)
+            }
         };
-        let aliases = if migrate {
-            vec![old.unwrap().hostname.clone()]
-        } else {
-            old.map(|b| b.aliases.clone()).unwrap_or_default()
-        };
+        let aliases = Vec::new();
         if let Some(worker) = workers.iter().find(|w| {
             w.binding.peer == peer
                 && w.binding.service == service
@@ -749,7 +759,7 @@ mod tests {
         .unwrap()
     }
     #[tokio::test]
-    async fn readable_names_migrate_preserve_aliases_and_survive_duplicate_system_names() {
+    async fn readable_names_include_host_identity_and_survive_duplicate_system_names() {
         let state = tempfile::tempdir().unwrap();
         std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let key = wipsnet_core::identity::SecretKey::generate();
@@ -792,12 +802,16 @@ mod tests {
             .unwrap();
         assert_eq!(
             url,
-            format!("http://j-strix-llama.localhost:{}/", binding.port)
+            format!(
+                "http://j-strix-{}-llama.localhost:{}/",
+                &peer.to_string()[..12],
+                binding.port
+            )
         );
         assert!(
             raw(&binding.url(), "GET", "/", NAV)
                 .await
-                .starts_with("HTTP/1.1 303")
+                .starts_with("HTTP/1.1 421")
         );
         assert!(raw(&url, "GET", "/", NAV).await.starts_with("HTTP/1.1 303"));
         let other_peer = wipsnet_core::identity::SecretKey::generate().public();
@@ -814,7 +828,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             url::Url::parse(&other).unwrap().host_str(),
-            Some("j-strix-llama-2.localhost")
+            Some(format!("j-strix-{}-llama.localhost", &other_peer.to_string()[..12]).as_str())
         );
         c.gateway.stop().await;
         c.endpoint.close().await;
@@ -852,7 +866,7 @@ mod tests {
         assert!(
             raw(&binding.url(), "GET", "/", NAV)
                 .await
-                .starts_with("HTTP/1.1 303")
+                .starts_with("HTTP/1.1 421")
         );
         c.gateway.stop().await;
         c.endpoint.close().await;

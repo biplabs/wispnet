@@ -61,10 +61,10 @@ pub(super) fn legacy_hostname(hostname: &str) -> bool {
                     .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
         })
 }
-fn slug(name: &str, fallback: &str) -> String {
+fn slug(name: &str, fallback: &str, limit: usize) -> String {
     let mut result = String::new();
     for b in name.bytes() {
-        if result.len() >= 28 {
+        if result.len() >= limit {
             break;
         }
         if b.is_ascii_alphanumeric() {
@@ -80,11 +80,17 @@ fn slug(name: &str, fallback: &str) -> String {
         trimmed.into()
     }
 }
-pub(super) fn readable_hostname(system: Option<&str>, service: &str, saved: &[Binding]) -> String {
+pub(super) fn readable_hostname(
+    system: Option<&str>,
+    peer: EndpointId,
+    service: &str,
+    saved: &[Binding],
+) -> String {
     let base = format!(
-        "{}-{}",
-        slug(system.unwrap_or("system"), "system"),
-        slug(service, "service")
+        "{}-{}-{}",
+        slug(system.unwrap_or("system"), "system", 20),
+        &peer.to_string()[..12],
+        slug(service, "service", 24)
     );
     for suffix in 1..=17 {
         let candidate = if suffix == 1 {
@@ -194,13 +200,13 @@ mod tests {
         let owner = wipsnet_core::identity::SecretKey::generate().public();
         let mut saved = Vec::new();
         for n in 1..=16 {
-            let name = readable_hostname(Some("J Strix"), "llama", &saved);
+            let name = readable_hostname(Some("J Strix"), owner, "llama", &saved);
             assert_eq!(
                 name,
                 if n == 1 {
-                    "j-strix-llama.localhost".into()
+                    format!("j-strix-{}-llama.localhost", &owner.to_string()[..12])
                 } else {
-                    format!("j-strix-llama-{n}.localhost")
+                    format!("j-strix-{}-llama-{n}.localhost", &owner.to_string()[..12])
                 }
             );
             saved.push(Binding {
@@ -213,15 +219,20 @@ mod tests {
             });
         }
         assert_eq!(
-            readable_hostname(Some("j-strix"), "llama", &saved),
-            "j-strix-llama-17.localhost"
+            readable_hostname(Some("j-strix"), owner, "llama", &saved),
+            format!("j-strix-{}-llama-17.localhost", &owner.to_string()[..12])
         );
         for name in ["", "中文", "../../example.com", &"A".repeat(256)] {
-            assert!(valid_hostname(&readable_hostname(Some(name), "llama", &[])));
+            assert!(valid_hostname(&readable_hostname(
+                Some(name),
+                owner,
+                &"s".repeat(64),
+                &[]
+            )));
         }
         assert_eq!(
-            readable_hostname(None, "llama", &[]),
-            "system-llama.localhost"
+            readable_hostname(None, owner, "llama", &[]),
+            format!("system-{}-llama.localhost", &owner.to_string()[..12])
         );
     }
     #[test]

@@ -73,6 +73,59 @@ class DesktopChecks(unittest.TestCase):
         QApplication.processEvents()
         window.deleteLater()
 
+    def test_service_configuration_saves_existing_identity_and_cancel_is_safe(self):
+        from PySide6.QtWidgets import QDialog, QLineEdit, QComboBox, QListWidget
+
+        with patch.object(Window, "refresh", lambda self: None):
+            window = Window(API(), tray=False)
+            window.timer.stop()
+            window.snapshot = {"host": {
+                "revision": 7,
+                "clients": [{"peer": "a" * 64, "name": "Tablet"}],
+                "services": [{"id": "website", "display_name": "Website",
+                              "backend": "127.0.0.1:8310", "kind": "http",
+                              "allow": ["a" * 64]}],
+            }}
+            requests = []
+            window.perform = requests.append
+
+            def save(dialog):
+                self.assertEqual(dialog.windowTitle(), "Configure service")
+                name, backend = dialog.findChildren(QLineEdit)
+                self.assertEqual(backend.text(), "8310")
+                name.setText("Dashboard")
+                backend.setText("8201")
+                dialog.findChild(QComboBox).setCurrentIndex(1)
+                dialog.findChild(QListWidget).item(0).setCheckState(Qt.CheckState.Unchecked)
+                return QDialog.DialogCode.Accepted
+
+            with patch.object(QDialog, "exec", save), patch.object(QMessageBox, "question") as question:
+                window.share("website")
+                question.assert_not_called()
+            self.assertEqual(requests, [{"op": "mutate", "operation": {
+                "op": "service", "expected_revision": 7, "id": "website",
+                "display_name": "Dashboard", "backend": "127.0.0.1:8201",
+                "kind": "tcp", "allow": [],
+            }}])
+            with patch.object(QDialog, "exec", return_value=QDialog.DialogCode.Rejected):
+                window.share("website")
+            self.assertEqual(len(requests), 1)
+
+            def remove(dialog):
+                button = next(b for b in dialog.findChildren(QPushButton)
+                              if b.text() == "Remove service…")
+                button.click()
+                return QDialog.DialogCode.Rejected
+
+            with patch.object(QDialog, "exec", remove), patch.object(
+                QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes
+            ):
+                window.share("website")
+            self.assertEqual(requests[-1], {"op": "mutate", "operation": {
+                "op": "remove", "id": "website", "expected_revision": 7,
+            }})
+            window.deleteLater()
+
     def test_stable_browser_url_needs_no_capability_or_handoff_file(self):
         with tempfile.TemporaryDirectory() as directory:
             api = API()
