@@ -89,6 +89,23 @@ class ApprovalChecks(unittest.TestCase):
         import subprocess
         import tempfile
         from wispnet_desktop.api import NodeAPI
+        import http.server
+        import http.client
+        import threading
+        from urllib.parse import urlsplit
+        class Backend(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'reverse-access-ok')
+            def log_message(self,*args):
+                pass
+        backend = http.server.ThreadingHTTPServer(('127.0.0.1',0),Backend)
+        thread = threading.Thread(target=backend.serve_forever,daemon=True)
+        thread.start()
+        self.addCleanup(thread.join,5)
+        self.addCleanup(backend.server_close)
+        self.addCleanup(backend.shutdown)
         binary = Path(__file__).resolve().parents[4] / 'target/debug/wispnet'
         processes = []
         window = None
@@ -113,6 +130,8 @@ class ApprovalChecks(unittest.TestCase):
                         time.sleep(.02)
                     return config,NodeAPI(config),peer,port
                 a,aapi,pa,_ = host('gui-phone')
+                aapi.request(op='mutate',operation={'op':'service','expected_revision':0,
+                             'id':'reverse','backend':f'127.0.0.1:{backend.server_port}','allow':[]})
                 b,bapi,pb,portb = host('gui-host')
                 for revision,sid in enumerate(['alpha','beta']):
                     bapi.request(op='mutate',operation={'op':'service','expected_revision':revision,
@@ -149,6 +168,64 @@ class ApprovalChecks(unittest.TestCase):
                 self.assertEqual({s['id']:s['allow'] for s in status['services']},
                                  {'alpha':[],'beta':[pa]})
                 self.assertEqual([s['id'] for s in aapi.request(op='catalog',host=pb)['services']],['beta'])
+                # One invitation introduces both hosts; reverse services stay denied.
+                self.assertIn(pa,bapi.request(op='status')['peer_pins'])
+                self.assertIn(pb,aapi.request(op='status')['peer_pins'])
+                self.assertEqual(bapi.request(op='catalog',host=pa)['services'],[])
+                self.assertEqual(aapi.request(op='status')['host']['services'][0]['allow'],[])
+                aapi.request(op='mutate',operation={'op':'service','expected_revision':2,
+                             'id':'reverse','backend':f'127.0.0.1:{backend.server_port}','allow':[pb]})
+                self.assertEqual([s['id'] for s in bapi.request(op='catalog',host=pa)['services']],['reverse'])
+                self.assertEqual([s['id'] for s in aapi.request(op='catalog',host=pb)['services']],['beta'])
+                bapi.request(op='enable')
+                service = bapi.request(op='catalog',host=pa)['services'][0]
+                url = bapi.request(op='open',host=pa,service='reverse',incarnation=service['incarnation'])['url']
+                parsed = urlsplit(url)
+                def exchange(headers):
+                    connection = http.client.HTTPConnection('127.0.0.1',parsed.port,timeout=5)
+                    connection.request('GET','/',headers={'Host':parsed.netloc,**headers})
+                    response = connection.getresponse()
+                    result = response.status,dict(response.getheaders()),response.read()
+                    connection.close()
+                    return result
+                status,headers,_ = exchange({'Sec-Fetch-Site':'none','Sec-Fetch-Mode':'navigate','Sec-Fetch-Dest':'document'})
+                self.assertEqual(status,303)
+                cookie = headers['Set-Cookie'].split(';')[0]
+                self.assertEqual(exchange({'Cookie':cookie})[2],b'reverse-access-ok')
+                aapi.request(op='mutate',operation={'op':'service','expected_revision':3,
+                             'id':'reverse','backend':f'127.0.0.1:{backend.server_port}','allow':[]})
+                self.assertEqual(bapi.request(op='catalog',host=pa)['services'],[])
+                self.assertEqual(exchange({'Cookie':cookie})[0],403)
+                aapi.request(op='mutate',operation={'op':'service','expected_revision':4,
+                             'id':'reverse','backend':f'127.0.0.1:{backend.server_port}','allow':[pb]})
+                # Both halves survive daemon restarts without another invitation.
+                for process in processes:
+                    process.terminate()
+                    process.wait(timeout=10)
+                processes.clear()
+                for config in (a,b):
+                    process = subprocess.Popen([binary,'agent','--config',config],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+                    processes.append(process)
+                deadline = time.monotonic()+10
+                while True:
+                    try:
+                        self.assertIn(pa,bapi.request(op='status')['peer_pins'])
+                        self.assertIn(pb,aapi.request(op='status')['peer_pins'])
+                        break
+                    except (OSError,ValueError):
+                        self.assertLess(time.monotonic(),deadline)
+                        time.sleep(.02)
+                self.assertEqual([s['id'] for s in bapi.request(op='catalog',host=pa)['services']],['reverse'])
+                # Local removal drops the reciprocal pin and all local grants only.
+                bapi.request(op='unpair',host=pa)
+                removed = bapi.request(op='status')
+                self.assertNotIn(pa,removed['peer_pins'])
+                self.assertEqual(removed['host']['clients'],[])
+                self.assertTrue(all(not service['allow'] for service in removed['host']['services']))
+                self.assertEqual(aapi.request(op='status')['host']['services'][0]['allow'],[pb])
+                with self.assertRaises(ValueError):
+                    bapi.request(op='catalog',host=pa)
+
             finally:
                 if window is not None:
                     window.pool.waitForDone()

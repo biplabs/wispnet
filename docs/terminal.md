@@ -63,7 +63,14 @@ service ID explicitly warns that the backend and full access list will be replac
 To pair this computer to a remote host, use **Pair remote host** and paste its
 pairing code or import its bounded mode-0600 invitation file. Compare the full
 host ID in the preview before confirming the request. Its owner must approve
-this computer and grant services there. The TUI shares display names with the
+this computer and select which services to grant there. Between two desktop/headless
+nodes, one request pairs both machines: the target also saves the scanning
+machine as a host when approving. The scanning machine grants the target no new
+service access. On either machine, use **Local services → Edit service and
+permitted devices** to allow access independently. A second QR scan is unnecessary.
+Both nodes need the updated mutual-pairing implementation; existing phone clients
+keep their client-only flow. Existing pairings are not automatically converted.
+The TUI shares display names with the
 desktop and clears that host's stale display catalog after explicit re-pairing.
 
 ## Machines and services

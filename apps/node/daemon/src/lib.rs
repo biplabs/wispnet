@@ -58,6 +58,17 @@ impl State {
                         }
                     }
                 }
+                for record in self
+                    .authority
+                    .paired_hosts()
+                    .await
+                    .map_err(|e| e.to_string())?
+                {
+                    let id = record.host.to_string();
+                    if !pins.contains(&id) {
+                        pins.push(id);
+                    }
+                }
                 let (invitations, host_name) = self.owner(None).await?;
                 let mut telemetry = serde_json::Map::new();
                 for (peer, (path, rtt_ms)) in self.client.telemetry_map() {

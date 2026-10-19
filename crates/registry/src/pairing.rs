@@ -21,8 +21,83 @@ pub struct Entry {
     pub expires_at: u64,
     pub peer: Option<EndpointId>,
     pub name: Option<String>,
+    pub mutual: bool,
 }
 impl Store {
+    /// Owner-local consent to recognize the scanned host. Existing grants are preserved;
+    /// a newly recognized host receives no grants.
+    pub fn pairing_accept_host(
+        &mut self,
+        host: EndpointId,
+        owner: &str,
+        bootstrap: &wispnet_core::pairing::Bootstrap,
+        name: &str,
+    ) -> Result<(), ControlError> {
+        self.host_check(host, Some(owner))?;
+        if !bootstrap.valid(bootstrap.host) || bootstrap.host == host || !valid_name(name) {
+            return Err(ControlError::Invalid);
+        }
+        let tx = self
+            .0
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let peer = bootstrap.host.to_string();
+        let count: i64 = tx.query_row(
+            "SELECT count(*) FROM host_clients WHERE id!=?1",
+            [&peer],
+            |r| r.get(0),
+        )?;
+        if count >= 1024 {
+            return Err(ControlError::RateLimited);
+        }
+        tx.execute(
+            "INSERT INTO host_clients VALUES(?1,?2) ON CONFLICT(id) DO NOTHING",
+            params![peer, name],
+        )?;
+        tx.execute("INSERT INTO host_pairings VALUES(?1,?2) ON CONFLICT(peer) DO UPDATE SET bootstrap=excluded.bootstrap",
+            params![peer, serde_json::to_string(bootstrap).map_err(|_| ControlError::Invalid)?])?;
+        tx.execute("UPDATE revision SET value=value+1 WHERE id=1", [])?;
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn paired_hosts(
+        &self,
+        host: EndpointId,
+    ) -> Result<Vec<wispnet_core::pairing::Bootstrap>, ControlError> {
+        self.host_check(host, None)?;
+        let mut stmt = self
+            .0
+            .prepare("SELECT peer,bootstrap FROM host_pairings ORDER BY peer")?;
+        let mut hosts = Vec::new();
+        for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+            let (peer, text) = row?;
+            let peer = peer.parse().map_err(|_| ControlError::Storage)?;
+            let record: wispnet_core::pairing::Bootstrap =
+                serde_json::from_str(&text).map_err(|_| ControlError::Storage)?;
+            if !record.valid(peer) {
+                return Err(ControlError::Storage);
+            }
+            hosts.push(record);
+        }
+        Ok(hosts)
+    }
+    pub fn pairing_forget_host(
+        &mut self,
+        host: EndpointId,
+        owner: &str,
+        peer: EndpointId,
+    ) -> Result<(), ControlError> {
+        self.host_check(host, Some(owner))?;
+        let tx = self
+            .0
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // Removing a mutual relationship also revokes all grants on this machine.
+        if tx.execute("DELETE FROM host_clients WHERE id=?1 AND EXISTS(SELECT 1 FROM host_pairings WHERE peer=?1)", [peer.to_string()])? > 0 {
+            tx.execute("UPDATE host_invitations SET state='revoked',challenge=NULL WHERE peer=?1 AND state IN ('issued','challenged','pending')", [peer.to_string()])?;
+            tx.execute("UPDATE revision SET value=value+1 WHERE id=1", [])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
     pub fn pairing_invite(
         &mut self,
         host: EndpointId,
@@ -97,6 +172,11 @@ impl Store {
                 ))
             })? {
                 let (invitation, state, expires, peer, name) = row?;
+                let mutual = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM host_pairing_offers WHERE invitation=?1)",
+                    [&invitation],
+                    |r| r.get(0),
+                )?;
                 entries.push(Entry {
                     invitation,
                     state,
@@ -106,6 +186,7 @@ impl Store {
                         .transpose()
                         .map_err(|_| ControlError::Storage)?,
                     name,
+                    mutual,
                 });
             }
             entries
@@ -190,7 +271,20 @@ impl Store {
         proof: &Proof,
         now: u64,
     ) -> Result<Pending, ControlError> {
+        self.pairing_prove_with_bootstrap(host, peer, proof, None, now)
+    }
+    pub fn pairing_prove_with_bootstrap(
+        &mut self,
+        host: EndpointId,
+        peer: EndpointId,
+        proof: &Proof,
+        bootstrap: Option<&wispnet_core::pairing::Bootstrap>,
+        now: u64,
+    ) -> Result<Pending, ControlError> {
         self.host_check(host, None)?;
+        if bootstrap.is_some_and(|b| !b.valid(peer) || peer == host) {
+            return Err(ControlError::Invalid);
+        }
         if !valid_code(&proof.challenge.invitation) || !proof.challenge.valid(now) {
             return Err(ControlError::Invalid);
         }
@@ -230,6 +324,15 @@ impl Store {
         )?;
         if changed != 1 {
             return Err(ControlError::Conflict);
+        }
+        if let Some(bootstrap) = bootstrap {
+            tx.execute(
+                "INSERT INTO host_pairing_offers VALUES(?1,?2)",
+                params![
+                    challenge.invitation,
+                    serde_json::to_string(bootstrap).map_err(|_| ControlError::Invalid)?
+                ],
+            )?;
         }
         tx.commit()?;
         Ok(Pending {
@@ -295,6 +398,13 @@ pub(crate) fn approve(tx: &Transaction<'_>, id: &str, now: u64) -> Result<String
         params![peer, name],
     )?;
     tx.execute(
+        "INSERT INTO host_pairings(peer,bootstrap)
+        SELECT ?1,bootstrap FROM host_pairing_offers WHERE invitation=?2
+        ON CONFLICT(peer) DO UPDATE SET bootstrap=excluded.bootstrap",
+        params![peer, id],
+    )?;
+    tx.execute("DELETE FROM host_pairing_offers WHERE invitation=?1", [id])?;
+    tx.execute(
         "UPDATE host_invitations SET state='spent',challenge=NULL WHERE id=?1",
         [id],
     )?;
@@ -313,6 +423,15 @@ pub(crate) fn reject(tx: &Transaction<'_>, id: &str) -> Result<(), ControlError>
     Ok(())
 }
 impl Authority {
+    pub async fn paired_hosts(
+        &self,
+    ) -> Result<Vec<wispnet_core::pairing::Bootstrap>, ControlError> {
+        let store = self.store.clone().lock_owned().await;
+        let host = self.host;
+        tokio::task::spawn_blocking(move || store.paired_hosts(host))
+            .await
+            .map_err(|_| ControlError::Storage)?
+    }
     pub async fn pairing_challenge(
         &self,
         peer: EndpointId,
@@ -336,6 +455,14 @@ impl Authority {
         peer: EndpointId,
         proof: Proof,
     ) -> Result<Pending, ControlError> {
+        self.pairing_prove_mutual(peer, proof, None).await
+    }
+    pub async fn pairing_prove_mutual(
+        &self,
+        peer: EndpointId,
+        proof: Proof,
+        bootstrap: Option<wispnet_core::pairing::Bootstrap>,
+    ) -> Result<Pending, ControlError> {
         let mut store = tokio::time::timeout(
             std::time::Duration::from_millis(500),
             self.store.clone().lock_owned(),
@@ -344,7 +471,13 @@ impl Authority {
         .map_err(|_| ControlError::RateLimited)?;
         let host = self.host;
         tokio::task::spawn_blocking(move || {
-            store.pairing_prove(host, peer, &proof, crate::enrollment::now())
+            store.pairing_prove_with_bootstrap(
+                host,
+                peer,
+                &proof,
+                bootstrap.as_ref(),
+                crate::enrollment::now(),
+            )
         })
         .await
         .map_err(|_| ControlError::Storage)?

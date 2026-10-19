@@ -590,3 +590,140 @@ fn approval_and_selected_grants_commit_together_and_preserve_other_access() {
             .contains(&device.endpoint_id())
     );
 }
+
+#[test]
+fn mutual_bootstrap_requires_proof_and_owner_consent_and_never_grants_services() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let host = Identity::generate().endpoint_id();
+    let requester = Identity::generate();
+    let peer = requester.endpoint_id();
+    host::initialize(directory.path(), host).unwrap();
+    let (mut store, owner) = host::owner_store(directory.path(), host).unwrap();
+    let now = wispnet_registry::enrollment::now();
+    let invitation = store
+        .pairing_invite(host, &owner, "https://relay.example", now, 300)
+        .unwrap();
+    let challenge = store
+        .pairing_challenge(
+            host,
+            peer,
+            &Claim {
+                invitation: invitation.invitation.clone(),
+                code: invitation.code.clone(),
+                name: "Requester".into(),
+            },
+            now,
+        )
+        .unwrap();
+    let proof = Proof {
+        signature: requester.secret_key().sign(&challenge.signing_bytes()),
+        challenge,
+    };
+    let mut bootstrap = wispnet_core::pairing::Bootstrap {
+        version: 1,
+        host,
+        relay_url: "https://relay.example/".into(),
+        direct_hint: None,
+    };
+    // A proved peer cannot substitute a third machine's identity for the reverse pin.
+    assert!(
+        store
+            .pairing_prove_with_bootstrap(host, peer, &proof, Some(&bootstrap), now)
+            .is_err()
+    );
+    bootstrap.host = peer;
+    store
+        .pairing_prove_with_bootstrap(host, peer, &proof, Some(&bootstrap), now)
+        .unwrap();
+    assert!(store.paired_hosts(host).unwrap().is_empty());
+    assert!(store.host_snapshot(host).unwrap().clients.is_empty());
+    assert!(store.pairing_list(host, &owner, now).unwrap()[0].mutual);
+    // A failed owner transaction cannot expose the reverse pin either.
+    assert!(
+        store
+            .host_mutate(
+                host,
+                &owner,
+                Mutation::ApproveInvitation {
+                    expected_revision: 0,
+                    invitation: invitation.invitation.clone(),
+                    services: vec!["missing".into()],
+                }
+            )
+            .is_err()
+    );
+    assert!(store.paired_hosts(host).unwrap().is_empty());
+    store
+        .host_mutate(
+            host,
+            &owner,
+            Mutation::ApproveInvitation {
+                expected_revision: 0,
+                invitation: invitation.invitation.clone(),
+                services: vec![],
+            },
+        )
+        .unwrap();
+    assert_eq!(store.paired_hosts(host).unwrap()[0].host, peer);
+    drop(store);
+    let (mut store, _) = host::owner_store(directory.path(), host).unwrap();
+    assert_eq!(store.paired_hosts(host).unwrap()[0].host, peer);
+    assert!(
+        store
+            .pairing_accept_host(host, "wrong owner", &bootstrap, "Requester")
+            .is_err()
+    );
+    store
+        .host_mutate(
+            host,
+            &owner,
+            Mutation::Service {
+                expected_revision: 1,
+                id: "private".into(),
+                display_name: Some("Private".into()),
+                kind: Some(wispnet_core::host::ServiceKind::Http),
+                backend: "127.0.0.1:8201".parse().unwrap(),
+                allow: vec![],
+            },
+        )
+        .unwrap();
+    assert!(
+        store.host_snapshot(host).unwrap().services[0]
+            .allow
+            .is_empty()
+    );
+    store
+        .host_mutate(
+            host,
+            &owner,
+            Mutation::Service {
+                expected_revision: 2,
+                id: "private".into(),
+                display_name: None,
+                kind: None,
+                backend: "127.0.0.1:8201".parse().unwrap(),
+                allow: vec![peer],
+            },
+        )
+        .unwrap();
+    // Re-pairing preserves an existing owner's choices rather than clearing grants.
+    store
+        .pairing_accept_host(host, &owner, &bootstrap, "Requester")
+        .unwrap();
+    assert_eq!(
+        store.host_snapshot(host).unwrap().services[0].allow,
+        vec![peer]
+    );
+    store
+        .host_mutate(
+            host,
+            &owner,
+            Mutation::Revoke {
+                expected_revision: 4,
+                peer,
+            },
+        )
+        .unwrap();
+    assert!(store.paired_hosts(host).unwrap().is_empty());
+}

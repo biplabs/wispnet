@@ -640,10 +640,7 @@ impl Route {
                 }
             }
         } else {
-            if !matches!(
-                wispnet_agent::peers::load(&self.client.state, self.peer),
-                Ok(Some(_))
-            ) {
+            if !matches!(self.client.saved_host(self.peer).await, Ok(Some(_))) {
                 return response(
                     &mut socket,
                     "403 Forbidden",
@@ -652,7 +649,7 @@ impl Route {
                 )
                 .await;
             }
-            let target = self.client.target(self.peer).map_err(|_| ())?;
+            let target = self.client.target(self.peer).await.map_err(|_| ())?;
             _connection = match wispnet_agent::tunnel::connect_target(&self.client.endpoint, target)
                 .await
             {

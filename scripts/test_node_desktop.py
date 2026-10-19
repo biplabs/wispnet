@@ -136,6 +136,9 @@ class NodeIntegration(unittest.TestCase):
                 pending = bapi.request(op="status")
                 self.assertEqual(pending["host"]["clients"], [])
                 self.assertEqual(pending["invitations"][0]["peer"], pa)
+                self.assertTrue(pending["invitations"][0]["mutual"])
+                self.assertNotIn(pa, pending["peer_pins"])
+                self.assertEqual(api.request(op="status")["host"]["clients"][0]["peer"], pb)
                 bapi.request(
                     op="mutate",
                     operation={
@@ -163,10 +166,15 @@ class NodeIntegration(unittest.TestCase):
                             "id": "website",
                         },
                     )
-                # Pairing persisted only the protected target pin, not invitation capabilities.
-                pin = sa / "peer-pins" / (pb + ".json")
-                self.assertEqual(pin.stat().st_mode & 0o777, 0o600)
-                self.assertNotIn(invitation["code"], pin.read_text())
+                # Mutual bootstrap is durable and secret-free in the protected policy DB.
+                import sqlite3
+                database = sa / "host.sqlite3"
+                with sqlite3.connect(database) as db:
+                    saved = db.execute("SELECT bootstrap FROM host_pairings WHERE peer=?", (pb,)).fetchone()[0]
+                self.assertNotIn(invitation["code"], saved)
+                self.assertEqual(json.loads(saved)["host"], pb)
+                self.assertIn(pa, bapi.request(op="status")["peer_pins"])
+                self.assertEqual(bapi.request(op="catalog", host=pa)["services"], [])
                 catalog = api.request(op="catalog", host=pb)
                 self.assertEqual(catalog["host"], pb)
                 self.assertEqual([s["id"] for s in catalog["services"]], ["website"])
@@ -294,7 +302,7 @@ class NodeIntegration(unittest.TestCase):
                     op="mutate",
                     operation={
                         "op": "service",
-                        "expected_revision": 0,
+                        "expected_revision": 1,
                         "id": "website",
                         "backend": f"127.0.0.1:{backend.server_port}",
                         "allow": [],
@@ -343,7 +351,7 @@ class NodeIntegration(unittest.TestCase):
                     403,
                 )
                 self.assertEqual(api.request(op="status")["connected_peers"], {})
-                self.assertEqual(api.request(op="status")["host"]["clients"], [])
+                self.assertEqual(api.request(op="status")["host"]["clients"][0]["peer"], pb)
                 self.assertNotIn(pa, api.request(op="status")["peer_pins"])
                 # Removing the binding interrupts an active local response and
                 # rejects subsequent requests using the old browser session.
@@ -358,7 +366,7 @@ class NodeIntegration(unittest.TestCase):
                 started = time.monotonic()
                 api.request(
                     op="mutate",
-                    operation={"op": "remove", "expected_revision": 1, "id": "website"},
+                    operation={"op": "remove", "expected_revision": 2, "id": "website"},
                 )
                 # Recreate immediately, before the one-second policy tick, at
                 # exactly the same address. Missing the deleted row is harmless.
@@ -366,7 +374,7 @@ class NodeIntegration(unittest.TestCase):
                     op="mutate",
                     operation={
                         "op": "service",
-                        "expected_revision": 2,
+                        "expected_revision": 3,
                         "id": "website",
                         "backend": f"127.0.0.1:{backend.server_port}",
                         "allow": [],

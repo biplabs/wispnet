@@ -15,8 +15,17 @@ pub const MAX_RESPONSE: usize = 4096;
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
     Hello {},
-    Challenge { claim: Claim },
-    Prove { proof: Proof },
+    Challenge {
+        claim: Claim,
+    },
+    Prove {
+        proof: Proof,
+    },
+    /// Host-to-host pairing: authenticated reverse bootstrap, never service grants.
+    ProveMutual {
+        proof: Proof,
+        bootstrap: Bootstrap,
+    },
 }
 
 #[derive(Serialize, Deserialize)]

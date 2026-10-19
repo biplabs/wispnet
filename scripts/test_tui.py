@@ -206,12 +206,12 @@ class TerminalManagement(unittest.TestCase):
 
         # Remove a specific approved client, using the same confirmation as the desktop.
         term.send('4')
-        term.send(b'\r\r')
+        term.send(b'\r\x1b[B\r')
         term.expect('Remove this machine')
         self.assertIn(pa, term.text)
         term.send(b'\x1b')
         self.assertEqual(len(bapi.request(op='status')['host']['clients']), 1)
-        term.send(b'\r\r\r')
+        term.send(b'\r\x1b[B\r\r')
         self.changed(bapi, lambda s: s['host']['clients'] == [])
         term.expect('0 clients')
 

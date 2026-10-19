@@ -114,7 +114,7 @@ impl Client {
             tokio::task::spawn_blocking(move || wispnet_agent::catalogs::begin(&state, host))
                 .await
                 .map_err(|_| "Catalog baseline task failed")??;
-        let target = self.target(host)?;
+        let target = self.target(host).await?;
         let connection = wispnet_agent::control::connect_target(&self.endpoint, target)
             .await
             .map_err(|e| e.to_string())?;
@@ -136,13 +136,27 @@ impl Client {
         .map_err(|_| "Catalog baseline task failed")??;
         serde_json::to_value(catalog).map_err(|_| "Invalid catalog".into())
     }
-    pub fn target(&self, host: EndpointId) -> Result<iroh::EndpointAddr, String> {
+    pub async fn saved_host(
+        &self,
+        host: EndpointId,
+    ) -> Result<Option<wispnet_core::pairing::Bootstrap>, String> {
+        if let Some(authority) = &self.local_authority
+            && let Some(record) = authority
+                .paired_hosts()
+                .await
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .find(|b| b.host == host)
+        {
+            return Ok(Some(record));
+        }
+        wispnet_agent::peers::load(&self.state, host).map_err(|_| "Invalid saved host".into())
+    }
+    pub async fn target(&self, host: EndpointId) -> Result<iroh::EndpointAddr, String> {
         wispnet_agent::tunnel::peer_target(
             host,
             Some(&self.config),
-            wispnet_agent::peers::load(&self.state, host)
-                .map_err(|_| "Invalid saved host")?
-                .and_then(|p| p.direct_hint),
+            self.saved_host(host).await?.and_then(|p| p.direct_hint),
         )
         .map_err(|e| e.to_string())
     }
@@ -173,7 +187,20 @@ impl Client {
                 let bootstrap = invitation
                     .bootstrap(host, wispnet_registry::enrollment::now())
                     .ok_or("Expired invitation or wrong host pin")?;
-                let pending = wispnet_agent::pairing::request_enrollment(
+                let reverse =
+                    self.local_authority
+                        .as_ref()
+                        .map(|_| wispnet_core::pairing::Bootstrap {
+                            version: wispnet_core::pairing::VERSION,
+                            host: self.endpoint.id(),
+                            relay_url: bootstrap.relay_url.clone(),
+                            direct_hint: self
+                                .endpoint
+                                .bound_sockets()
+                                .into_iter()
+                                .find(|a| !a.ip().is_unspecified()),
+                        });
+                let pending = wispnet_agent::pairing::request_enrollment_with_bootstrap(
                     &self.endpoint,
                     host,
                     &invitation,
@@ -183,11 +210,30 @@ impl Client {
                         .get("name")
                         .and_then(Value::as_str)
                         .unwrap_or("Wispnet Android"),
+                    reverse,
                 )
                 .await
                 .map_err(|e| e.to_string())?;
-                wispnet_agent::peers::save(&self.state, &bootstrap)
-                    .map_err(|_| "Cannot save host pin")?;
+                if self.local_authority.is_some() {
+                    let state = self.state.clone();
+                    let own = self.endpoint.id();
+                    let name = invitation
+                        .host_name
+                        .clone()
+                        .unwrap_or_else(|| host.to_string());
+                    tokio::task::spawn_blocking(move || {
+                        let (mut store, owner) = wispnet_registry::host::owner_store(&state, own)
+                            .map_err(|e| e.to_string())?;
+                        store
+                            .pairing_accept_host(own, &owner, &bootstrap, &name)
+                            .map_err(|e| e.to_string())
+                    })
+                    .await
+                    .map_err(|_| "Cannot save mutual pairing")??;
+                } else {
+                    wispnet_agent::peers::save(&self.state, &bootstrap)
+                        .map_err(|_| "Cannot save host pin")?;
+                }
                 let state = self.state.clone();
                 tokio::task::spawn_blocking(move || wispnet_agent::catalogs::reset(&state, host))
                     .await
@@ -200,6 +246,19 @@ impl Client {
                     return Err("Cannot unpair this machine".into());
                 }
                 self.gateway.forget(self, host).await?;
+                if self.local_authority.is_some() {
+                    let state = self.state.clone();
+                    let own = self.endpoint.id();
+                    tokio::task::spawn_blocking(move || {
+                        let (mut store, owner) = wispnet_registry::host::owner_store(&state, own)
+                            .map_err(|e| e.to_string())?;
+                        store
+                            .pairing_forget_host(own, &owner, host)
+                            .map_err(|e| e.to_string())
+                    })
+                    .await
+                    .map_err(|_| "Cannot remove mutual pairing")??;
+                }
                 wispnet_agent::peers::remove(&self.state, host).map_err(|e| e.to_string())?;
                 Ok(json!({"unpaired":host.to_string()}))
             }
@@ -209,16 +268,15 @@ impl Client {
                 if !wispnet_core::enrollment::valid_name(name) {
                     return Err("Invalid device name".into());
                 }
-                if wispnet_agent::peers::load(&self.state, host)
-                    .map_err(|_| "Invalid saved host")?
-                    .is_none()
-                {
+                if self.saved_host(host).await?.is_none() {
                     return Err("Pair with this host first".into());
                 }
-                let connection =
-                    wispnet_agent::control::connect_target(&self.endpoint, self.target(host)?)
-                        .await
-                        .map_err(|e| e.to_string())?;
+                let connection = wispnet_agent::control::connect_target(
+                    &self.endpoint,
+                    self.target(host).await?,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
                 let result = wispnet_agent::control::set_name_on(&connection, host, name).await;
                 connection.close(0u32.into(), b"name update complete");
                 result.map_err(|e| e.to_string())?;
@@ -226,10 +284,7 @@ impl Client {
             }
             "catalog" => {
                 let host = peer(value)?;
-                if wispnet_agent::peers::load(&self.state, host)
-                    .map_err(|_| "Invalid saved host")?
-                    .is_none()
-                {
+                if self.saved_host(host).await?.is_none() {
                     return Err("Pair with this host first".into());
                 }
                 self.catalog(host).await
@@ -287,10 +342,7 @@ impl Client {
                         return Err("Service no longer permitted".into());
                     }
                 } else {
-                    if wispnet_agent::peers::load(&self.state, host)
-                        .map_err(|_| "Invalid saved host")?
-                        .is_none()
-                    {
+                    if self.saved_host(host).await?.is_none() {
                         return Err("Pair with this host first".into());
                     }
                     let catalog = self.catalog(host).await?;

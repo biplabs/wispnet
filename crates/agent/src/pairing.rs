@@ -37,6 +37,13 @@ pub(crate) async fn serve_stream(
                 Ok(challenge) => serde_json::to_vec(&challenge),
                 Err(_) => serde_json::to_vec(&serde_json::json!({"error":"denied"})),
             },
+            Request::ProveMutual { proof, bootstrap } => match authority
+                .pairing_prove_mutual(peer, proof, Some(bootstrap))
+                .await
+            {
+                Ok(pending) => serde_json::to_vec(&pending),
+                Err(_) => serde_json::to_vec(&serde_json::json!({"error":"denied"})),
+            },
             Request::Prove { proof } => match authority.pairing_prove(peer, proof).await {
                 Ok(pending) => serde_json::to_vec(&pending),
                 Err(_) => serde_json::to_vec(&serde_json::json!({"error":"denied"})),
@@ -222,6 +229,18 @@ pub async fn request_enrollment(
     key: &wispnet_core::identity::SecretKey,
     name: &str,
 ) -> Result<pairing::Pending, TunnelError> {
+    request_enrollment_with_bootstrap(endpoint, expected, invitation, config, key, name, None).await
+}
+
+pub async fn request_enrollment_with_bootstrap(
+    endpoint: &Endpoint,
+    expected: EndpointId,
+    invitation: &pairing::Invitation,
+    config: &wispnet_core::config::TransportConfig,
+    key: &wispnet_core::identity::SecretKey,
+    name: &str,
+    bootstrap: Option<pairing::Bootstrap>,
+) -> Result<pairing::Pending, TunnelError> {
     let now = wispnet_registry::enrollment::now();
     let target = invitation_target(invitation, expected, config, now)?;
     if endpoint.id() != key.public() || !wispnet_core::enrollment::valid_name(name) {
@@ -247,17 +266,17 @@ pub async fn request_enrollment(
         return Err(TunnelError::Transport("pairing challenge mismatch"));
     }
     let signature = key.sign(&challenge.signing_bytes());
-    let bytes = rpc(
-        endpoint,
-        target,
-        &Request::Prove {
-            proof: pairing::Proof {
-                challenge,
-                signature,
-            },
-        },
-    )
-    .await?;
+    let proof = pairing::Proof {
+        challenge,
+        signature,
+    };
+    // The reverse bootstrap travels on the same identity-authenticated channel as
+    // the single-use proof. It is stored pending, and activated only by the owner.
+    let request = match bootstrap {
+        Some(bootstrap) => Request::ProveMutual { proof, bootstrap },
+        None => Request::Prove { proof },
+    };
+    let bytes = rpc(endpoint, target, &request).await?;
     let pending: pairing::Pending = serde_json::from_slice(&bytes)
         .map_err(|_| TunnelError::Transport("invalid pairing pending response"))?;
     if pending.host != expected

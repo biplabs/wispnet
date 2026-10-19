@@ -807,7 +807,11 @@ impl App {
                     format!("Device: {name}"),
                     format!("Full client ID: {peer}"),
                     format!("Invitation: {}", text(&v, "invitation")),
-                    "Choose services during approval. Existing grants are preserved.".into(),
+                    if v["mutual"].as_bool() == Some(true) {
+                        "Both machines will be paired. The requester grants you no new service access. Choose what it may access here.".into()
+                    } else {
+                        "Choose services during approval. Existing grants are preserved.".into()
+                    },
                 ];
                 let mut fields = vec![
                     Field {
@@ -1261,7 +1265,7 @@ impl App {
                             self.message = "Authenticated catalog refreshed".into();
                         }
                         Kind::Preview(document) => {
-                            let detail=vec![format!("Host: {}",clean(text(&value,"host_name"))),format!("Compare full host ID: {}",text(&value,"host")),format!("Relay: {}",clean(text(&value,"relay_url"))),"Compare this ID with the target computer before confirming. The target owner must approve this computer and grant services.".into()];
+                            let detail=vec![format!("Host: {}",clean(text(&value,"host_name"))),format!("Compare full host ID: {}",text(&value,"host")),format!("Relay: {}",clean(text(&value,"relay_url"))),"Compare this ID with the target computer before confirming. Both machines will be paired after approval. The target owner chooses services to grant; this computer grants no new service access. You can allow services later in service settings.".into()];
                             self.confirmation(
                                 "Request pairing with this host".into(),
                                 detail,
@@ -1277,7 +1281,7 @@ impl App {
                         Kind::Paired => {
                             self.names = self.api.names();
                             self.catalogs.remove(text(&value, "host"));
-                            self.message="Request sent. Approve this computer on the target host, then grant services.".into();
+                            self.message="Request sent. Choose allowed services on the target host when approving. This computer grants no new service access.".into();
                             self.last_poll = Instant::now() - Duration::from_secs(5);
                         }
                         Kind::Open => {

@@ -86,7 +86,7 @@ installation is not a transactional rollback of all binaries and service files.
 
 Keep the previous bundle before upgrading. Rollback means reinstalling a verified
 older bundle whose binary supports the current SQLite schema. Schema-5/6/7 binaries
-cannot open schema-8 service metadata and authority state. Never downgrade by deleting the
+cannot open newer schema-9 mutual-pairing state (which also retains schema-8 service metadata). Never downgrade by deleting the
 database or restoring an old grant snapshot: that could revive revoked access.
 Protected backup/recovery and stale-grant reconciliation are deferred in #19.
 Losing a host identity without a usable original backup requires a new identity

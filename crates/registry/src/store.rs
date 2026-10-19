@@ -83,7 +83,7 @@ impl Store {
                 CREATE TABLE services (id TEXT PRIMARY KEY, host TEXT NOT NULL REFERENCES devices(id));
                 CREATE TABLE grants (service TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE, device TEXT NOT NULL REFERENCES devices(id), PRIMARY KEY(service,device));
                 PRAGMA user_version=1;")?,
-            1..=8 => {},
+            1..=9 => {},
             _ => return Err(Error::UnsupportedSchema),
         }
         if version < 2 {
@@ -138,6 +138,17 @@ impl Store {
                 UPDATE host_services SET display_name=id;
                 UPDATE revision SET value=value+1 WHERE EXISTS(SELECT 1 FROM host_services);
                 PRAGMA user_version=8;",
+            )?;
+        }
+        if version < 9 {
+            tx.execute_batch(
+                "CREATE TABLE host_pairing_offers (
+                invitation TEXT PRIMARY KEY REFERENCES host_invitations(id) ON DELETE CASCADE,
+                bootstrap TEXT NOT NULL);
+                CREATE TABLE host_pairings (
+                peer TEXT PRIMARY KEY REFERENCES host_clients(id) ON DELETE CASCADE,
+                bootstrap TEXT NOT NULL);
+                PRAGMA user_version=9;",
             )?;
         }
         tx.commit()?;

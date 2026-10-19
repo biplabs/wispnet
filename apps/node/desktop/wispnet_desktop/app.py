@@ -1552,7 +1552,11 @@ class Window(QMainWindow):
         identity.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         dialog.setMinimumWidth(max(500, identity.fontMetrics().horizontalAdvance(peer) + 40))
         layout.addWidget(identity)
-        note = QLabel("Select the services this device may access. Existing grants are preserved.")
+        mutual = any(entry.get("invitation") == invitation and entry.get("mutual")
+                     for entry in self.snapshot.get("invitations", []))
+        note = QLabel(("Both machines will be paired. This device grants you no new service access. "
+                       if mutual else "")
+                      + "Select the services this device may access on this machine. Existing grants are preserved.")
         note.setWordWrap(True)
         layout.addWidget(note)
         choices = QListWidget()
@@ -1652,7 +1656,9 @@ class Window(QMainWindow):
                 self,
                 "Compare host ID",
                 "Compare this complete ID with the target computer before requesting access:\n"
-                + value["host"],
+                + value["host"]
+                + "\n\nBoth machines will be paired after approval. This machine grants no new service access; "
+                  "you can allow services later in service settings.",
             )
             == QMessageBox.StandardButton.Yes
         ):
@@ -1684,7 +1690,7 @@ class Window(QMainWindow):
                 json.dump(self.peer_names, output)
             os.replace(path, self.api.state / "desktop-peer-names.json")
             self._set_message(
-                "Request sent. Approve this node on the target host and grant services."
+                "Request sent. Choose allowed services on the target host when approving. This machine grants no new service access."
             )
         except OSError:
             self._set_message(
