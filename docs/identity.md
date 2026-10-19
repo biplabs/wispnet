@@ -5,9 +5,9 @@ an existing key: it never generates a replacement for missing or damaged state.
 First use is an explicit operation:
 
 ```sh
-cargo run -p wipsnet-cli -- identity-init --config "$HOME/.config/wipsnet/agent.toml"
-cargo run -p wipsnet-cli -- status --config "$HOME/.config/wipsnet/agent.toml"
-cargo run -p wipsnet-cli -- agent --config "$HOME/.config/wipsnet/agent.toml"
+cargo run -p wispnet-cli -- identity-init --config "$HOME/.config/wispnet/agent.toml"
+cargo run -p wispnet-cli -- status --config "$HOME/.config/wispnet/agent.toml"
+cargo run -p wispnet-cli -- agent --config "$HOME/.config/wispnet/agent.toml"
 ```
 
 Initialization returns an existing valid identity unchanged. Status prints the
@@ -18,8 +18,8 @@ pairing, approvals and service grants are implemented; see
 
 ## Linux storage
 
-The platform-neutral IdentityStore contract lives in wipsnet-core; Linux's
-FileIdentityStore lives in wipsnet-agent. The state directory must be owned by the
+The platform-neutral IdentityStore contract lives in wispnet-core; Linux's
+FileIdentityStore lives in wispnet-agent. The state directory must be owned by the
 current UID, mode 0700, and not a symlink. Parent directories must be trusted.
 Use a local filesystem supporting file locks, atomic file creation and fsync.
 
@@ -70,8 +70,8 @@ identity replacement additionally requires explicit migration/re-pairing; these
 key-only commands do not migrate a host registry. Copy its public ID from status:
 
 ```sh
-cargo run -p wipsnet-cli -- identity-reset --config "$HOME/.config/wipsnet/agent.toml" --expect-id PUBLIC_ID
-cargo run -p wipsnet-cli -- identity-init --config "$HOME/.config/wipsnet/agent.toml"
+cargo run -p wispnet-cli -- identity-reset --config "$HOME/.config/wispnet/agent.toml" --expect-id PUBLIC_ID
+cargo run -p wispnet-cli -- identity-init --config "$HOME/.config/wispnet/agent.toml"
 ```
 
 Reset deletes the key only if its ID matches. It neither revokes remote access

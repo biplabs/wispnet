@@ -49,7 +49,7 @@ class Handler(BaseHTTPRequestHandler):
                         "Set-Cookie",
                         "app=" + self.server.label + "; Domain=.localhost; Path=/",
                     ),
-                    ("Set-Cookie", "_wipsnet_session=forged; Path=/"),
+                    ("Set-Cookie", "_wispnet_session=forged; Path=/"),
                 ],
             )
         elif self.path == "/login":

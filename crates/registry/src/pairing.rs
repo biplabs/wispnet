@@ -6,7 +6,7 @@ use crate::{
 };
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::Serialize;
-use wipsnet_core::{
+use wispnet_core::{
     enrollment::{valid_code, valid_name},
     identity::EndpointId,
     pairing::{Challenge, Claim, Invitation, Pending, Proof, Purpose, Scope, VERSION},
@@ -35,7 +35,7 @@ impl Store {
         if !(30..=900).contains(&ttl) || now > i64::MAX as u64 - ttl {
             return Err(ControlError::Invalid);
         }
-        let relay = wipsnet_core::config::controller_origin(relay_url)
+        let relay = wispnet_core::config::controller_origin(relay_url)
             .map_err(|_| ControlError::Invalid)?
             .to_string();
         let tx = self

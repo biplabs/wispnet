@@ -13,7 +13,7 @@ is a protocol/device check, not a shipped Android application.
 
 ## Owner and device walkthrough
 
-First initialize the controller using `wipsnet registry-init` and configure its
+First initialize the controller using `wispnet registry-init` and configure its
 HTTPS proxy as described in [registry API](registry-api.md). Keep the owner token
 on the controller/owner workstation. A normal device never receives it.
 
@@ -42,7 +42,7 @@ on the controller/owner workstation. A normal device never receives it.
    must match that configured origin. Save the received JSON in a 0600 file:
 
    ```sh
-   target/debug/wipsnet enroll --config /absolute/path/device.toml \
+   target/debug/wispnet enroll --config /absolute/path/device.toml \
      --invitation /private/invitation.json
    ```
 
@@ -75,14 +75,14 @@ on the controller/owner workstation. A normal device never receives it.
    exact bound key/name. To refuse a request instead, submit
    `{"op":"reject","invitation":"INVITATION_ID"}` to the same owner tool.
 
-4. Rerun the same `wipsnet enroll` command on the device. After approval it signs
+4. Rerun the same `wispnet enroll` command on the device. After approval it signs
    a **new completion challenge** and receives its own credential, committed to
    `controller.credential_file` atomically as mode 0600. The containing directory
    must be current-user-owned and mode 0700. No owner distributes device tokens.
 
    ```sh
-   target/debug/wipsnet registry-directory --config /absolute/path/device.toml
-   target/debug/wipsnet agent --config /absolute/path/device.toml
+   target/debug/wispnet registry-directory --config /absolute/path/device.toml
+   target/debug/wispnet agent --config /absolute/path/device.toml
    ```
 
    Restart uses the stored identity/credential and does not repeat pairing. If
@@ -103,7 +103,7 @@ capability whose SHA-256 hash is stored on the controller. `expires_at` is UTC
 Unix seconds. Owner-selected TTL must be 30–900 seconds; the walkthrough uses
 600. A device name must be nonblank, at most 128 UTF-8 bytes, and contain no
 control characters. Core types/parser/canonical encoding are in
-`wipsnet_core::enrollment`, shared by native Linux/Android builds. Payloads never
+`wispnet_core::enrollment`, shared by native Linux/Android builds. Payloads never
 contain an existing installation's private key, owner credential or TLS root.
 
 Private HTTPS controllers may use an independently provisioned PEM trust root:
@@ -211,17 +211,17 @@ For the connected authorized aarch64 Android device, build with your Android NDK
 linker/CC/AR configuration and run:
 
 ```sh
-export WIPSNET_NDK="$HOME/Android/Sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin"
-export CC_aarch64_linux_android="$WIPSNET_NDK/aarch64-linux-android34-clang"
-export AR_aarch64_linux_android="$WIPSNET_NDK/llvm-ar"
+export WISPNET_NDK="$HOME/Android/Sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin"
+export CC_aarch64_linux_android="$WISPNET_NDK/aarch64-linux-android34-clang"
+export AR_aarch64_linux_android="$WISPNET_NDK/llvm-ar"
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CC_aarch64_linux_android"
-cargo build -p wipsnet-cli --target aarch64-linux-android --locked
+cargo build -p wispnet-cli --target aarch64-linux-android --locked
 python3 scripts/registry_smoke.py --android
 ```
 
 The optional harness currently expects NDK `27.2.12479018` beneath
 `~/Android/Sdk/ndk` for stripping the test binary. It creates a fresh private
-`/data/local/tmp/wipsnet-enrollment-*` directory, copies only the binary,
+`/data/local/tmp/wispnet-enrollment-*` directory, copies only the binary,
 invitation, config and public test certificate, and installs one temporary USB
 reverse mapping. Android generates its own identity key on-device, enrolls over
 HTTPS, then rereads its persistent credential without pairing again. The harness

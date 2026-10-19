@@ -1,7 +1,7 @@
 //! Local persistence boundary. Callers must authenticate before invoking mutations.
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use std::path::Path;
-use wipsnet_core::{identity::EndpointId, protocol::valid_service_id};
+use wispnet_core::{identity::EndpointId, protocol::valid_service_id};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
@@ -263,7 +263,7 @@ fn ids<P: rusqlite::Params>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wipsnet_core::identity::Identity;
+    use wispnet_core::identity::Identity;
     fn private_dir() -> tempfile::TempDir {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();

@@ -23,7 +23,7 @@ import time
 import uuid
 
 ROOT = Path(__file__).resolve().parent.parent
-BINARY = ROOT / "target/debug/wipsnet"
+BINARY = ROOT / "target/debug/wispnet"
 FIXTURE = ROOT / "target/debug/examples/relay_fixture"
 
 
@@ -68,9 +68,9 @@ def main():
     parser.add_argument("--lan-only", action="store_true", help="run only fresh-state LAN/handoff checks")
     parser.add_argument("--wifi-cycle", action="store_true", help="briefly disable/restore device Wi-Fi while one peer-watch endpoint runs")
     parser.add_argument("--serial", help="ADB serial; required if multiple devices are authorized")
-    parser.add_argument("--ndk", type=Path, default=Path(os.environ.get("WIPSNET_ANDROID_NDK", str(Path.home() / "Android/Sdk/ndk/27.2.12479018"))))
+    parser.add_argument("--ndk", type=Path, default=Path(os.environ.get("WISPNET_ANDROID_NDK", str(Path.home() / "Android/Sdk/ndk/27.2.12479018"))))
     args = parser.parse_args()
-    assert BINARY.is_file() and FIXTURE.is_file(), "build wipsnet and --example relay_fixture first"
+    assert BINARY.is_file() and FIXTURE.is_file(), "build wispnet and --example relay_fixture first"
     if args.lan_address:
         assert args.android, "--lan-address requires --android"
         lan_ip = ipaddress.IPv4Address(args.lan_address)
@@ -93,12 +93,12 @@ def main():
                            AR_aarch64_linux_android=str(tools / "llvm-ar"),
                            CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=str(compiler))
         # Never validate an Android artifact left over from an older source tree.
-        subprocess.run(["cargo", "build", "-p", "wipsnet-cli", "--target", "aarch64-linux-android", "--locked"],
+        subprocess.run(["cargo", "build", "-p", "wispnet-cli", "--target", "aarch64-linux-android", "--locked"],
                        cwd=ROOT, env=environment, check=True, timeout=600)
 
-    with tempfile.TemporaryDirectory(prefix="wipsnet-relay-smoke-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="wispnet-relay-smoke-") as temporary:
         root = Path(temporary)
-        android_root = "/data/local/tmp/wipsnet-relay-" + uuid.uuid4().hex
+        android_root = "/data/local/tmp/wispnet-relay-" + uuid.uuid4().hex
         mapping = None
         android_created = False
         running = fixture = None
@@ -175,7 +175,7 @@ def main():
             return run([BINARY, mode, "--config", path, *extra], **kwargs)
 
         def android_client(mode, path, *extra, **kwargs):
-            arguments = ["timeout", "12", android_root + "/wipsnet", mode, "--config", path, *extra]
+            arguments = ["timeout", "12", android_root + "/wispnet", mode, "--config", path, *extra]
             command = " ".join(shlex.quote(str(a)) for a in arguments)
             return run(["adb", "-s", serial, "shell", "-T", command], **kwargs)
 
@@ -214,18 +214,18 @@ def main():
             linux_id = identity(local("identity-init", linux_config))
             clients.append(("Linux", local_client, linux_config, linux_id))
             if args.android:
-                android_binary = ROOT / "target/aarch64-linux-apps/android/debug/wipsnet"
+                android_binary = ROOT / "target/aarch64-linux-apps/android/debug/wispnet"
                 assert android_binary.is_file(), "build the Android CLI before requesting --android"
                 strip = args.ndk / "toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
                 assert strip.is_file(), "set --ndk to the Android NDK directory"
                 tablet("mkdir", "-m", "700", android_root)
                 android_created = True
-                stripped = root / "android-wipsnet"
+                stripped = root / "android-wispnet"
                 shutil.copyfile(android_binary, stripped)
                 run([strip, stripped])
-                adb("push", stripped, android_root + "/wipsnet")
+                adb("push", stripped, android_root + "/wispnet")
                 adb("push", root / "relay.pem", android_root + "/relay.pem")
-                tablet("chmod", "700", android_root + "/wipsnet")
+                tablet("chmod", "700", android_root + "/wispnet")
                 tablet("chmod", "600", android_root + "/relay.pem")
                 device_config = config("android-client", 1, android_root + "/state", android_root + "/relay.pem")
                 adb("push", device_config, android_root + "/config.toml")
@@ -414,7 +414,7 @@ def main():
                 direct_service()
                 print("Android LAN: selected direct path and actual HTTP bytes with client relays disabled", flush=True)
                 if args.wifi_cycle:
-                    arguments = [android_root + "/wipsnet", "peer-watch", "--config", hybrid_path, "--peer", pins[0], "--address", address]
+                    arguments = [android_root + "/wispnet", "peer-watch", "--config", hybrid_path, "--peer", pins[0], "--address", address]
                     command = "echo $$; exec " + " ".join(shlex.quote(a) for a in arguments)
                     command = "timeout 180 sh -c " + shlex.quote(command)
                     watch = subprocess.Popen(["adb", "-s", serial, "shell", "-T", command], stdin=subprocess.DEVNULL,

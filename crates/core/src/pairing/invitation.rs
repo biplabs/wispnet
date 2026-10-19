@@ -144,6 +144,7 @@ impl Challenge {
     }
     /// Domain-separated canonical bytes; relay location does not confer trust.
     pub fn signing_bytes(&self) -> Vec<u8> {
+        // Frozen signing domain for compatibility with existing client proofs.
         let mut bytes = b"wipsnet/host-pairing/proof/1\0".to_vec();
         bytes.extend_from_slice(&self.version.to_be_bytes());
         bytes.extend_from_slice(self.host.as_bytes());

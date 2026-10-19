@@ -5,7 +5,7 @@ use crate::{
 };
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
-use wipsnet_core::{
+use wispnet_core::{
     config::controller_origin,
     enrollment::{Challenge, Claim, Invitation, Proof, Purpose, valid_code, valid_name},
     identity::EndpointId,

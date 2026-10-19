@@ -9,9 +9,9 @@ rust-version = "1.95"
 publish = false
 
 [workspace.dependencies]
-wipsnet-core = { path = "crates/core" }
-wipsnet-agent = { path = "crates/agent" }
-wipsnet-registry = { path = "crates/registry" }
+wispnet-core = { path = "crates/core" }
+wispnet-agent = { path = "crates/agent" }
+wispnet-registry = { path = "crates/registry" }
 serde = { version = "=1.0.229", features = ["derive"] }
 toml = "=1.1.8"
 tokio = { version = "=1.53.3", features = ["rt", "macros", "signal"] }

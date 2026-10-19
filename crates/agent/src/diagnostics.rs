@@ -3,7 +3,7 @@ use crate::{control, tunnel::TunnelError};
 use iroh::{Endpoint, EndpointAddr, Watcher, endpoint::Connection};
 use std::time::Duration;
 use tokio::time::{Instant, sleep};
-use wipsnet_core::identity::EndpointId;
+use wispnet_core::identity::EndpointId;
 
 struct Close(Connection);
 impl Drop for Close {

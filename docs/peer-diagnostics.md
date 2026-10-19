@@ -5,8 +5,8 @@ prints one JSON snapshot. `peer-watch` repeats that read-only check using one
 persistent identity lease and Iroh endpoint until SIGTERM or Ctrl-C.
 
 ```sh
-target/debug/wipsnet peer-probe --config /absolute/path/client.toml --peer PINNED_HOST_ID
-target/debug/wipsnet peer-watch --config /absolute/path/client.toml --peer PINNED_HOST_ID
+target/debug/wispnet peer-probe --config /absolute/path/client.toml --peer PINNED_HOST_ID
+target/debug/wispnet peer-watch --config /absolute/path/client.toml --peer PINNED_HOST_ID
 ```
 
 Both accept one optional `--address IP:UDP_PORT` hint after the peer ID. Without

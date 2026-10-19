@@ -31,8 +31,8 @@ impl Binding {
     }
     fn valid(&self) -> bool {
         self.port >= 1024
-            && wipsnet_core::protocol::valid_service_id(&self.service)
-            && wipsnet_core::enrollment::valid_code(&self.incarnation)
+            && wispnet_core::protocol::valid_service_id(&self.service)
+            && wispnet_core::enrollment::valid_code(&self.incarnation)
             && valid_hostname(&self.hostname)
             && self.aliases.len() <= 1
             && self
@@ -170,7 +170,7 @@ pub(super) fn load(state: &Path, owner: EndpointId) -> Result<Vec<Binding>, Stri
 pub(super) fn save(state: &Path, owner: EndpointId, routes: &[Binding]) -> Result<(), String> {
     root(state)?;
     let path = state.join("browser-routes.json");
-    let mut file = wipsnet_registry::control::credential_temp(&path).map_err(|_| error())?;
+    let mut file = wispnet_registry::control::credential_temp(&path).map_err(|_| error())?;
     file.as_file()
         .set_permissions(fs::Permissions::from_mode(0o600))
         .map_err(|_| error())?;
@@ -197,7 +197,7 @@ mod tests {
     use super::*;
     #[test]
     fn readable_names_are_bounded_and_resolve_slug_collisions() {
-        let owner = wipsnet_core::identity::SecretKey::generate().public();
+        let owner = wispnet_core::identity::SecretKey::generate().public();
         let mut saved = Vec::new();
         for n in 1..=16 {
             let name = readable_hostname(Some("J Strix"), owner, "llama", &saved);
@@ -239,7 +239,7 @@ mod tests {
     fn address_records_reject_corruption_duplicates_unsafe_permissions_and_symlinks() {
         let state = tempfile::tempdir().unwrap();
         fs::set_permissions(state.path(), fs::Permissions::from_mode(0o700)).unwrap();
-        let owner = wipsnet_core::identity::SecretKey::generate().public();
+        let owner = wispnet_core::identity::SecretKey::generate().public();
         let binding = Binding {
             peer: owner,
             service: "site".into(),

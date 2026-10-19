@@ -117,7 +117,7 @@ or this durable baseline; installed node/app browsing uses the shared client.
 
 ## Verification — 2026-10-17
 
-`cargo test -p wipsnet-client --test catalog_snapshots --locked` uses real pinned
+`cargo test -p wispnet-client --test catalog_snapshots --locked` uses real pinned
 Iroh endpoints in temporary private state. It exercises incomplete/missing flags,
 count mismatches, unknown fields/versions, stale/negative/oversized revisions,
 changed generation, foreign owner, conflicting same-version content, duplicate

@@ -10,14 +10,14 @@ import subprocess
 import tempfile
 import threading
 
-binary = Path("target/debug/wipsnet").resolve()
+binary = Path("target/debug/wispnet").resolve()
 
 def run(*args, ok=True, input=None):
     result = subprocess.run([binary, *args], input=input, capture_output=True, text=True, timeout=15)
     assert (result.returncode == 0) == ok, result.stderr
     return result
 
-with tempfile.TemporaryDirectory(prefix="wipsnet-hosts-") as temporary:
+with tempfile.TemporaryDirectory(prefix="wispnet-hosts-") as temporary:
     root = Path(temporary)
     def configuration(name, host=True):
         path = root / f"{name}.toml"

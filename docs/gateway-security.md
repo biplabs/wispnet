@@ -51,7 +51,7 @@ A response setting Secure, Partitioned, SameSite=None or `__Host-`, `__Secure-`,
 upstream headers are emitted**. Those flags/prefixes are never stripped to make
 a login appear to work. Ordinary application cookies retain their Path,
 HttpOnly and SameSite settings, lose Domain to become host-only, and cannot set
-or receive `_wipsnet_session`. This is a bounded compatibility decision, not a
+or receive `_wispnet_session`. This is a bounded compatibility decision, not a
 claim that arbitrary web apps work over HTTP.
 
 Service workers are unsupported: script requests with `Service-Worker` or
@@ -129,7 +129,7 @@ An interrupted application POST commits exactly once; a fresh Open does not
 replay it. Fixtures restore services/grants/pins/access settings; the relay PID
 is unchanged and the remote Qt/tray unit remains absent.
 
-Historical checks before persistent URLs: the seven `wipsnet-client` gateway unit tests also ran as a native executable on
+Historical checks before persistent URLs: the seven `wispnet-client` gateway unit tests also ran as a native executable on
 headless Ubuntu: strict request/response/cookie/redirect/WebSocket cases;
 single-use bootstrap and Stop; short **private test-only** expiry limits and
 forced exact port reuse by a different peer; 16-route/32-socket limits and a
@@ -145,7 +145,7 @@ Run the opt-in physical test only on those approved paired hosts:
 ```sh
 python3 scripts/test_physical_gateway_security.py
 python3 scripts/test_physical_service_recreation.py
-cargo test -p wipsnet-client --lib --locked
+cargo test -p wispnet-client --lib --locked
 ```
 
 The enabled `scripts/test.sh` pre-push suite also checks native tunnel SSE early

@@ -1,6 +1,6 @@
 //! Agent identity and authenticated service-host lifecycle.
 use std::future::Future;
-use wipsnet_core::config::Config;
+use wispnet_core::config::Config;
 pub mod catalogs;
 pub mod control;
 pub mod diagnostics;
@@ -14,13 +14,13 @@ pub async fn run(
     config: &Config,
     shutdown: impl Future<Output = ()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use wipsnet_core::identity::IdentityStore;
+    use wispnet_core::identity::IdentityStore;
     let store = identity::FileIdentityStore::new(&config.state_dir)?;
     let _lease = store.lease()?;
     let identity = store.load()?;
     if config.schema_version == 2 {
         let authority =
-            wipsnet_registry::host::Authority::open(&config.state_dir, identity.endpoint_id())?;
+            wispnet_registry::host::Authority::open(&config.state_dir, identity.endpoint_id())?;
         let host = tunnel::TunnelHost::bind_host(
             identity.secret_key(),
             config.transport.as_ref().ok_or("host transport required")?,
@@ -34,8 +34,8 @@ pub async fn run(
         return Ok(());
     }
     if let Some(controller) = &config.controller {
-        let secret = wipsnet_registry::control::read_token(&controller.credential_file)?;
-        let client = wipsnet_registry::client::Client::configured(controller, secret)?;
+        let secret = wispnet_registry::control::read_token(&controller.credential_file)?;
+        let client = wispnet_registry::client::Client::configured(controller, secret)?;
         let directory = client.directory(Some(identity.endpoint_id())).await?;
         tracing::info!(
             component = "agent",

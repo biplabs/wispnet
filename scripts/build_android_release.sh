@@ -5,13 +5,13 @@ check_args=()
 case "${1:-}" in
   '') ;;
   --signed)
-    for signing_var in WIPSNET_UPLOAD_KEYSTORE WIPSNET_UPLOAD_STORE_PASSWORD WIPSNET_UPLOAD_KEY_ALIAS WIPSNET_UPLOAD_KEY_PASSWORD; do
+    for signing_var in WISPNET_UPLOAD_KEYSTORE WISPNET_UPLOAD_STORE_PASSWORD WISPNET_UPLOAD_KEY_ALIAS WISPNET_UPLOAD_KEY_PASSWORD; do
       if [[ -z "${!signing_var:-}" ]]; then echo 'Upload signing requires all four documented environment variables.' >&2; exit 1; fi
     done
     check_args+=(--require-signed)
     ;;
   *) echo 'Usage: scripts/build_android_release.sh [--signed]' >&2; exit 1 ;;
 esac
-export WIPSNET_ANDROID_PROFILE=release WIPSNET_ANDROID_ARTIFACT=bundle
+export WISPNET_ANDROID_PROFILE=release WISPNET_ANDROID_ARTIFACT=bundle
 scripts/build_android.sh
-python3 scripts/check_android_release.py apps/android/app/build/outputs/bundle/release/app-release.aab --abi "${WIPSNET_ANDROID_ABI:-arm64-v8a}" "${check_args[@]}"
+python3 scripts/check_android_release.py apps/android/app/build/outputs/bundle/release/app-release.aab --abi "${WISPNET_ANDROID_ABI:-arm64-v8a}" "${check_args[@]}"

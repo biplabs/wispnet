@@ -56,7 +56,7 @@ async def main(llama_port, website_port, phone):
                     gateway.token = secrets.token_urlsafe(32)
                     gateway.token_expires = time.monotonic() + 60
                     entries.append(f'<p><a target="_blank" href="{html.escape(gateway.open_url)}">Open {html.escape(gateway.hostname.split("-")[0])}</a></p>')
-                return web.Response(text='<h1>Wipsnet USB browser experiment</h1><p>Open a service within 60 seconds. Reload this page for fresh links. On website and second, tap Run compatibility checks.</p>' + ''.join(entries),
+                return web.Response(text='<h1>Wispnet USB browser experiment</h1><p>Open a service within 60 seconds. Reload this page for fresh links. On website and second, tap Run compatibility checks.</p>' + ''.join(entries),
                     content_type="text/html", headers={"Cache-Control":"no-store", "Referrer-Policy":"no-referrer",
                     "Content-Security-Policy":"default-src 'none'; frame-ancestors 'none'"})
             if request.path == "/reports/" + handoff_nonce:

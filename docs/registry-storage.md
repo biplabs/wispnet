@@ -5,7 +5,7 @@
 > This guide preserves the earlier HTTPS-controller implementation/evidence; it
 > does not make that controller a master or a requirement of schema-2 host mode.
 
-`wipsnet_registry::store::Store` provides a local SQLite persistence boundary.
+`wispnet_registry::store::Store` provides a local SQLite persistence boundary.
 The `registry` CLI opens `registry.sqlite3` in the configured state directory,
 checks integrity, and logs the current revision before waiting for shutdown.
 The authenticated loopback API and HTTPS deployment are documented in
@@ -59,7 +59,7 @@ copy to a new restore location, then compares the complete restored snapshot.
 Run the storage tests with:
 
 ```sh
-cargo test -p wipsnet-registry --locked
+cargo test -p wispnet-registry --locked
 ```
 
 Tests cover recovery, transaction rollback after a foreign-key violation, stale

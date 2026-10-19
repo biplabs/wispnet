@@ -67,7 +67,7 @@ def check(path,abi='arm64-v8a',require_signed=False):
     if not native.get('enabled') or native.get('alignment')!='PAGE_ALIGNMENT_16K':raise ValueError('Bundle must request 16 KB native ZIP alignment')
     with zipfile.ZipFile(path) as archive:
         libraries=[name for name in archive.namelist() if name.endswith('.so')]
-        if libraries!=[f'base/lib/{abi}/libwipsnet_android.so']:raise ValueError('Unexpected native bundle contents')
+        if libraries!=[f'base/lib/{abi}/libwispnet_android.so']:raise ValueError('Unexpected native bundle contents')
         for name in libraries:check_elf(archive.read(name),abi)
         signed=any(name.startswith('META-INF/') and name.endswith(('.RSA','.EC','.DSA')) for name in archive.namelist())
     if require_signed and not signed:raise ValueError('Upload-signed bundle required; refusing unsigned artifact')

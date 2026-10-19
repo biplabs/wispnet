@@ -91,7 +91,7 @@ def stable(state):
 
 
 def restart(remote):
-    execute(remote, ["systemctl", "--user", "restart", "wipsnet-host.service"])
+    execute(remote, ["systemctl", "--user", "restart", "wispnet-host.service"])
     deadline = time.monotonic() + 15
     while True:
         try:
@@ -111,7 +111,7 @@ def main():
             "systemctl",
             "--user",
             "show",
-            "wipsnet-relay.service",
+            "wispnet-relay.service",
             "-p",
             "MainPID",
             "--value",
@@ -203,7 +203,7 @@ def main():
                 "systemctl",
                 "--user",
                 "show",
-                "wipsnet-relay.service",
+                "wispnet-relay.service",
                 "-p",
                 "MainPID",
                 "--value",

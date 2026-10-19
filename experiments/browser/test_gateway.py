@@ -26,7 +26,7 @@ class BrowserBoundaryTests(unittest.IsolatedAsyncioTestCase):
         await self.backend.cleanup()
 
     async def authorize(self):
-        async with self.client.post(self.url + "/_wipsnet/session", headers={
+        async with self.client.post(self.url + "/_wispnet/session", headers={
             **self.headers, "Authorization": "Bearer " + self.gateway.token,
         }) as response:
             self.assertEqual(response.status, 204)
@@ -39,7 +39,7 @@ class BrowserBoundaryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status, 401)
         token = self.gateway.token
         await self.authorize()
-        async with self.client.post(self.url + "/_wipsnet/session", headers={
+        async with self.client.post(self.url + "/_wispnet/session", headers={
             **self.headers, "Authorization": "Bearer " + token,
         }) as response:
             self.assertEqual(response.status, 403)
@@ -50,19 +50,19 @@ class BrowserBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.fixture.calls, 0)
 
     async def test_public_bootstrap_allows_external_top_navigation_but_not_embedding(self):
-        async with self.client.get(self.url + "/_wipsnet/start", headers={
+        async with self.client.get(self.url + "/_wispnet/start", headers={
             **self.headers, "Sec-Fetch-Site": "cross-site",
             "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document",
         }) as response:
             self.assertEqual(response.status, 200)
-        async with self.client.get(self.url + "/_wipsnet/start", headers={
+        async with self.client.get(self.url + "/_wispnet/start", headers={
             **self.headers, "Sec-Fetch-Site": "cross-site",
             "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "iframe",
         }) as response:
             self.assertEqual(response.status, 403)
         # The landing page itself never opens the backend or issues authority.
         self.assertEqual(self.fixture.calls, 0)
-        async with self.client.post(self.url + "/_wipsnet/session", headers=self.headers) as response:
+        async with self.client.post(self.url + "/_wispnet/session", headers=self.headers) as response:
             self.assertEqual(response.status, 403)
         self.assertEqual(self.fixture.calls, 0)
 
@@ -146,7 +146,7 @@ class BrowserBoundaryTests(unittest.IsolatedAsyncioTestCase):
             **self.headers, "Cookie": self.headers["Cookie"] + "; " + self.headers["Cookie"],
         }) as response:
             self.assertEqual(response.status, 401)
-        async with self.client.get(self.url + "/_wipsnet/arbitrary-upstream", headers=self.headers) as response:
+        async with self.client.get(self.url + "/_wispnet/arbitrary-upstream", headers=self.headers) as response:
             self.assertEqual(response.status, 404)
         self.assertEqual(self.fixture.calls, 0)
         with self.assertRaises(ValueError):

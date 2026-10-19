@@ -37,7 +37,7 @@ class ReleaseChecks(unittest.TestCase):
                 self.assertIn((domain,'.'),exclusions)
     def test_signed_build_fails_before_building_when_credentials_missing(self):
         env=os.environ.copy()
-        for name in ['WIPSNET_UPLOAD_KEYSTORE','WIPSNET_UPLOAD_STORE_PASSWORD','WIPSNET_UPLOAD_KEY_ALIAS','WIPSNET_UPLOAD_KEY_PASSWORD']:env.pop(name,None)
+        for name in ['WISPNET_UPLOAD_KEYSTORE','WISPNET_UPLOAD_STORE_PASSWORD','WISPNET_UPLOAD_KEY_ALIAS','WISPNET_UPLOAD_KEY_PASSWORD']:env.pop(name,None)
         result=subprocess.run([str(Path(__file__).resolve().parent/'build_android_release.sh'),'--signed'],env=env,capture_output=True,text=True,timeout=5)
         self.assertNotEqual(result.returncode,0);self.assertIn('requires all four',result.stderr)
 

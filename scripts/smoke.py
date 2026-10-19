@@ -9,8 +9,8 @@ import sqlite3
 import subprocess
 import tempfile
 
-binary = Path("target/debug/wipsnet").resolve()
-with tempfile.TemporaryDirectory(prefix="wipsnet-smoke-") as temporary:
+binary = Path("target/debug/wispnet").resolve()
+with tempfile.TemporaryDirectory(prefix="wispnet-smoke-") as temporary:
     root = Path(temporary)
     config = root / "config.toml"
     def write_config(state):

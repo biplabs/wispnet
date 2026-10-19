@@ -1,10 +1,10 @@
 //! Real Iroh handshakes with persisted keys. No public discovery or relay services.
 use iroh::{Endpoint, EndpointAddr, endpoint::presets};
 use std::{os::unix::fs::PermissionsExt, time::Duration};
-use wipsnet_agent::identity::FileIdentityStore;
-use wipsnet_core::identity::{Identity, IdentityStore};
+use wispnet_agent::identity::FileIdentityStore;
+use wispnet_core::identity::{Identity, IdentityStore};
 
-const ALPN: &[u8] = b"wipsnet/identity-test/1";
+const ALPN: &[u8] = b"wispnet/identity-test/1";
 
 async fn endpoint(identity: &Identity) -> Endpoint {
     Endpoint::builder(presets::Minimal)

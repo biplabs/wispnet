@@ -8,15 +8,15 @@ from urllib.parse import urlsplit
 from aiohttp import ClientSession, ClientTimeout, DummyCookieJar, WSMsgType, web
 from multidict import CIMultiDict
 
-COOKIE = "_wipsnet_session"
+COOKIE = "_wispnet_session"
 HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
        "te", "trailer", "transfer-encoding", "upgrade"}
-START = """<!doctype html><title>Wipsnet browser experiment</title>
+START = """<!doctype html><title>Wispnet browser experiment</title>
 <p id="status">Opening local service…</p>
 <script>
 const token = location.hash.slice(1);
 history.replaceState(null, '', location.pathname);
-fetch('/_wipsnet/session', {method:'POST',headers:{Authorization:'Bearer '+token}})
+fetch('/_wispnet/session', {method:'POST',headers:{Authorization:'Bearer '+token}})
 .then(r => {if(!r.ok) throw Error(); location.replace('/');})
 .catch(() => document.querySelector('#status').textContent = 'Access expired. Open a fresh link.');
 </script>"""
@@ -74,7 +74,7 @@ class Gateway:
 
     @property
     def open_url(self):
-        return f"{self.origin}/_wipsnet/start#{self.token}"
+        return f"{self.origin}/_wispnet/start#{self.token}"
 
     async def handle(self, request):
         # Check authority even for landing/bootstrap paths. No DNS trust or wildcard Host.
@@ -83,7 +83,7 @@ class Gateway:
             return web.Response(status=421, text="Unknown local authority")
         origin = request.headers.getall("Origin", [])
         site = request.headers.get("Sec-Fetch-Site")
-        if request.path == "/_wipsnet/start" and request.method == "GET":
+        if request.path == "/_wispnet/start" and request.method == "GET":
             top_navigation = (request.headers.get("Sec-Fetch-Mode") == "navigate"
                               and request.headers.get("Sec-Fetch-Dest") == "document")
             if site not in (None, "none", "same-origin") and not top_navigation:
@@ -95,7 +95,7 @@ class Gateway:
             return web.Response(status=403, text="Origin denied")
         if site not in (None, "none", "same-origin"):
             return web.Response(status=403, text="Cross-site request denied")
-        if request.path == "/_wipsnet/session":
+        if request.path == "/_wispnet/session":
             if (request.method != "POST" or origin != [self.origin] or not self.token
                     or time.monotonic() >= self.token_expires
                     or not secrets.compare_digest(request.headers.get("Authorization", ""), "Bearer " + self.token)):
@@ -106,14 +106,15 @@ class Gateway:
             # HTTP experiment only. Secure/__Host- requirements remain a release gate.
             response.set_cookie(COOKIE, self.credential, httponly=True, samesite="Strict", max_age=600, path="/")
             return response
-        if request.path.startswith("/_wipsnet/"):
+        # Retired bootstrap routes must never forward credentials to a backend.
+        if request.path.startswith(("/_wispnet/", "/_wipsnet/")):
             return web.Response(status=404)
         raw_cookies = request.headers.getall("Cookie", [])
         occurrences = [part.strip() for header in raw_cookies for part in header.split(";")
                        if part.strip().partition("=")[0] == COOKIE]
         if (len(occurrences) != 1 or not secrets.compare_digest(
                 occurrences[0], f"{COOKIE}={self.credential}") or time.monotonic() >= self.expires):
-            return web.Response(status=401, text="Open the service from Wipsnet")
+            return web.Response(status=401, text="Open the service from Wispnet")
         upgrade = request.headers.get("Upgrade", "").lower() == "websocket"
         if (request.method not in ("GET", "HEAD") or upgrade) and origin != [self.origin]:
             return web.Response(status=403, text="Same-origin caller required")

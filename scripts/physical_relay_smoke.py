@@ -4,7 +4,7 @@
 Only creates owned private temporary state. The local TLS relay is reached over
 an SSH reverse forward and USB reverse; no production relay or Android APK.
 With --relay-url, the existing relay is used directly without any forwarding.
-Opposite Wipsnet host processes stop; the underlying computers stay powered on.
+Opposite Wispnet host processes stop; the underlying computers stay powered on.
 """
 import argparse
 import json
@@ -63,10 +63,10 @@ def main():
     parser.add_argument("--ssh-host", required=True)
     parser.add_argument("--relay-url", help="existing HTTPS relay; skips all local relay and TCP forwarding fixtures")
     parser.add_argument("--relay-ca-file", type=Path, help="public certificate for an existing private-CA relay")
-    parser.add_argument("--restart-desktop-relay", action="store_true", help="restart only wipsnet-relay.service on the selected SSH host")
+    parser.add_argument("--restart-desktop-relay", action="store_true", help="restart only wispnet-relay.service on the selected SSH host")
     parser.add_argument("--require-external-tablet", action="store_true", help="require distinct verified tablet/home egress before and after the existing-relay scenario")
     parser.add_argument("--serial", help="authorized ADB serial; omit only when exactly one device is connected")
-    ndk_default = os.environ.get("WIPSNET_ANDROID_NDK", str(Path.home() / "Android/Sdk/ndk/27.2.12479018"))
+    ndk_default = os.environ.get("WISPNET_ANDROID_NDK", str(Path.home() / "Android/Sdk/ndk/27.2.12479018"))
     parser.add_argument("--ndk", type=Path, default=Path(ndk_default))
     args = parser.parse_args()
     assert not args.relay_ca_file or args.relay_url, "--relay-ca-file requires --relay-url"
@@ -88,11 +88,11 @@ def main():
     if args.require_external_tablet: external_preflight()
     assert args.ssh_host and not args.ssh_host.startswith("-") and all(c.isalnum() or c in ".-_@" for c in args.ssh_host)
     assert BINARY.is_file() and FIXTURE.is_file()
-    android_binary = ROOT / "target/aarch64-linux-apps/android/debug/wipsnet"
+    android_binary = ROOT / "target/aarch64-linux-apps/android/debug/wispnet"
     assert android_binary.is_file(), "build and validate the current Android CLI first"
     suffix = uuid.uuid4().hex
-    remote_root = "/tmp/wipsnet-physical-" + suffix
-    device_root = "/data/local/tmp/wipsnet-physical-" + suffix
+    remote_root = "/tmp/wispnet-physical-" + suffix
+    device_root = "/data/local/tmp/wispnet-physical-" + suffix
     remote_created = device_created = False
     fixture = forward = backend = agent = None
     local_backend = None
@@ -106,12 +106,12 @@ def main():
     def tablet(*arguments):
         return adb("shell", "-T", shlex.join([str(a) for a in arguments]))
     def client(mode, config, *extra, ok=True, input=None):
-        return run(["adb", "-s", args.serial, "shell", "-T", shlex.join(["timeout", "12", device_root + "/wipsnet", mode,
+        return run(["adb", "-s", args.serial, "shell", "-T", shlex.join(["timeout", "12", device_root + "/wispnet", mode,
             "--config", device_root + "/client.toml", *[str(a) for a in extra]])],ok=ok,input=input)
     def remote_write(path, text):
         python("import os,sys; p=sys.argv[1]; f=os.open(p,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600); os.write(f,sys.stdin.buffer.read());os.close(f)",path,input=text)
     def remote_cli(mode, config, *extra, **kwargs):
-        return remote(["timeout", "12", remote_root + "/wipsnet", mode, "--config", config, *extra],**kwargs)
+        return remote(["timeout", "12", remote_root + "/wispnet", mode, "--config", config, *extra],**kwargs)
     def local_cli(mode, config, *extra, **kwargs):
         return run([BINARY, mode, "--config", config, *extra],**kwargs)
     def mutate(call, config, request, path):
@@ -138,14 +138,14 @@ def main():
         if ok: assert "200 OK" in result.stdout and "physical-host-service" in result.stdout
     def start(call, config):
         if call is remote_cli:
-            command=[*SSH,args.ssh_host,shlex.join(["python3","-c",SUPERVISOR,remote_root+"/agent.pid",remote_root+"/wipsnet","agent","--config",str(config)])]
+            command=[*SSH,args.ssh_host,shlex.join(["python3","-c",SUPERVISOR,remote_root+"/agent.pid",remote_root+"/wispnet","agent","--config",str(config)])]
         else:
             command=["python3","-c",SUPERVISOR,str(root/"local-agent.pid"),str(BINARY),"agent","--config",str(config)]
         process=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
         try: assert event(process,process.stderr,"started")["mode"]=="independent_host"
         except BaseException: drain(process);raise
         return process
-    with tempfile.TemporaryDirectory(prefix="wipsnet-physical-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="wispnet-physical-") as temporary:
         root=Path(temporary)
         try:
             if args.relay_url:
@@ -157,12 +157,12 @@ def main():
             port=int(urlsplit(relay_url).port or 443)
             python("import os,sys;os.mkdir(sys.argv[1],0o700)",remote_root)
             remote_created=True
-            native=root/"wipsnet"
+            native=root/"wispnet"
             shutil.copyfile(BINARY,native)
             run(["strip","--strip-debug",native])
             run(["scp","-q","-o","BatchMode=yes","-o","StrictHostKeyChecking=yes",native,*([root/"relay.pem"] if (root/"relay.pem").exists() else []),args.ssh_host+":"+remote_root+"/"])
-            python("import os,sys;os.chmod(sys.argv[1]+'/wipsnet',0o700)",remote_root)
-            remote([remote_root+"/wipsnet","--help"])
+            python("import os,sys;os.chmod(sys.argv[1]+'/wispnet',0o700)",remote_root)
+            remote([remote_root+"/wispnet","--help"])
             if not args.relay_url:
                 forward=subprocess.Popen([*SSH,"-o","ExitOnForwardFailure=yes","-N","-R",f"127.0.0.1:{port}:127.0.0.1:{port}",args.ssh_host],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
                 deadline=time.monotonic()+10
@@ -173,12 +173,12 @@ def main():
                     time.sleep(.1)
             tablet("mkdir","-m","700",device_root)
             device_created=True
-            stripped=root/"android-wipsnet"
+            stripped=root/"android-wispnet"
             shutil.copyfile(android_binary,stripped)
             run([args.ndk/"toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip",stripped])
-            adb("push",stripped,device_root+"/wipsnet")
+            adb("push",stripped,device_root+"/wispnet")
             if (root/"relay.pem").exists(): adb("push",root/"relay.pem",device_root+"/relay.pem")
-            tablet("chmod","700",device_root+"/wipsnet")
+            tablet("chmod","700",device_root+"/wispnet")
             if (root/"relay.pem").exists(): tablet("chmod","600",device_root+"/relay.pem")
             def config(state,ca,schema):
                 return f"schema_version={schema}\ndevice_name='physical-fixture'\nstate_dir='{state}'\nlog_level='info'\n[transport]\nbind_addr='127.0.0.1:0'\nrelay_url='{relay_url}'\nrelay_only=true\n" + (f"relay_ca_file='{ca}'\n" if (root/"relay.pem").exists() else "")
@@ -242,8 +242,8 @@ def main():
                     # The live node process/identity lease must survive a relay restart.
                     pid_path=remote_root+"/agent.pid" if call is remote_cli else root/"local-agent.pid"
                     before_pid=python("import pathlib,sys;print(pathlib.Path(sys.argv[1]).read_text())",pid_path).stdout if call is remote_cli else Path(pid_path).read_text()
-                    remote(["systemctl","--user","restart","wipsnet-relay.service"])
-                    remote(["systemctl","--user","is-active","wipsnet-relay.service"])
+                    remote(["systemctl","--user","restart","wispnet-relay.service"])
+                    remote(["systemctl","--user","is-active","wispnet-relay.service"])
                     after_pid=python("import pathlib,sys;print(pathlib.Path(sys.argv[1]).read_text())",pid_path).stdout if call is remote_cli else Path(pid_path).read_text()
                     assert before_pid==after_pid and agent.poll() is None,"relay restart affected the node process"
                 assert available(pin)==before
@@ -269,7 +269,7 @@ def main():
                 response=client_call("tunnel",client_path,"--peer",pins[index],"--service","website",input="GET / HTTP/1.0\r\nHost: fixture\r\n\r\n")
                 assert "200 OK" in response.stdout and "physical-host-service" in response.stdout
                 drain(agent);agent=None
-                if args.restart_desktop_relay: remote(["systemctl","--user","is-active","wipsnet-relay.service"])
+                if args.restart_desktop_relay: remote(["systemctl","--user","is-active","wispnet-relay.service"])
                 print(f"{label} host: opposite physical Linux client catalog/HTTP passed; stopping node left relay active",flush=True)
             remote_cli("host-invitations",remote_config)
             mutate(remote_cli,remote_config,{"op":"revoke","expected_revision":4,"peer":peer},remote_root+"/request.json")
@@ -299,7 +299,7 @@ root=pathlib.Path(sys.argv[1]); pidfile=root/'agent.pid'
 if pidfile.exists():
  pid=int(pidfile.read_text()); proc=pathlib.Path('/proc')/str(pid)/'cmdline'
  def owned():
-  try: return (str(root/'wipsnet').encode() in proc.read_bytes().split(b'\\0'))
+  try: return (str(root/'wispnet').encode() in proc.read_bytes().split(b'\\0'))
   except FileNotFoundError: return False
  if owned():
   os.kill(pid,signal.SIGTERM)

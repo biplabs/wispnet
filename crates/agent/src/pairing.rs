@@ -8,7 +8,7 @@ use iroh::{
     endpoint::{Connection, RecvStream, SendStream},
 };
 use tokio::time::timeout;
-use wipsnet_core::{
+use wispnet_core::{
     identity::EndpointId,
     pairing::{self, Hello, Request},
 };
@@ -17,7 +17,7 @@ pub(crate) async fn serve_stream(
     mut send: SendStream,
     mut recv: RecvStream,
     peer: EndpointId,
-    authority: wipsnet_registry::host::Authority,
+    authority: wispnet_registry::host::Authority,
 ) {
     let result = timeout(HANDSHAKE_TIMEOUT, async {
         let bytes = zeroize::Zeroizing::new(read_frame(&mut recv, pairing::MAX_REQUEST).await?);
@@ -104,9 +104,9 @@ pub async fn hello_on(connection: &Connection, expected: EndpointId) -> Result<H
 /// Validate untrusted invitation data against the independently expected host and
 /// locally configured relay before binding/dialing. Never substitutes relay trust.
 pub fn invitation_target(
-    invitation: &wipsnet_core::pairing::Invitation,
+    invitation: &wispnet_core::pairing::Invitation,
     expected: EndpointId,
-    config: &wipsnet_core::config::TransportConfig,
+    config: &wispnet_core::config::TransportConfig,
     now: u64,
 ) -> Result<EndpointAddr, TunnelError> {
     let bootstrap = invitation
@@ -115,7 +115,7 @@ pub fn invitation_target(
     let relay = config
         .relay_url
         .as_deref()
-        .and_then(|url| wipsnet_core::config::controller_origin(url).ok())
+        .and_then(|url| wispnet_core::config::controller_origin(url).ok())
         .ok_or(TunnelError::Transport(
             "invitation requires a configured relay",
         ))?;
@@ -131,7 +131,7 @@ pub fn invitation_target(
 /// command arguments or diagnostics. Reject symlinks, hardlinks and special files.
 pub fn read_invitation(
     path: &std::path::Path,
-) -> Result<wipsnet_core::pairing::Invitation, TunnelError> {
+) -> Result<wispnet_core::pairing::Invitation, TunnelError> {
     use std::{
         io::Read,
         os::unix::fs::{MetadataExt, OpenOptionsExt},
@@ -218,13 +218,13 @@ pub async fn request_enrollment(
     endpoint: &Endpoint,
     expected: EndpointId,
     invitation: &pairing::Invitation,
-    config: &wipsnet_core::config::TransportConfig,
-    key: &wipsnet_core::identity::SecretKey,
+    config: &wispnet_core::config::TransportConfig,
+    key: &wispnet_core::identity::SecretKey,
     name: &str,
 ) -> Result<pairing::Pending, TunnelError> {
-    let now = wipsnet_registry::enrollment::now();
+    let now = wispnet_registry::enrollment::now();
     let target = invitation_target(invitation, expected, config, now)?;
-    if endpoint.id() != key.public() || !wipsnet_core::enrollment::valid_name(name) {
+    if endpoint.id() != key.public() || !wispnet_core::enrollment::valid_name(name) {
         return Err(TunnelError::Transport("invalid enrolling identity or name"));
     }
     let request = Request::Challenge {
@@ -242,7 +242,7 @@ pub async fn request_enrollment(
         key.public(),
         name,
         pairing::Purpose::Request,
-        wipsnet_registry::enrollment::now(),
+        wispnet_registry::enrollment::now(),
     ) {
         return Err(TunnelError::Transport("pairing challenge mismatch"));
     }
@@ -270,7 +270,7 @@ pub async fn request_enrollment(
 }
 
 /// Camera-free transport of the same target-bound contract. No URL is fetched.
-pub fn decode_invitation(bytes: &[u8]) -> Result<wipsnet_core::pairing::Invitation, TunnelError> {
+pub fn decode_invitation(bytes: &[u8]) -> Result<wispnet_core::pairing::Invitation, TunnelError> {
     use base64::Engine;
     let denied = || TunnelError::Transport("invalid host invitation document");
     if bytes.len() > 8192 {
@@ -287,7 +287,7 @@ pub fn decode_invitation(bytes: &[u8]) -> Result<wipsnet_core::pairing::Invitati
     serde_json::from_slice(&decoded).map_err(|_| denied())
 }
 pub fn encode_invitation(
-    invitation: &wipsnet_core::pairing::Invitation,
+    invitation: &wispnet_core::pairing::Invitation,
 ) -> Result<zeroize::Zeroizing<String>, serde_json::Error> {
     use base64::Engine;
     let bytes = zeroize::Zeroizing::new(serde_json::to_vec(invitation)?);
@@ -301,7 +301,7 @@ mod code_tests {
     use super::*;
     #[test]
     fn code_and_json_share_strict_target_contract_and_bounds() {
-        let text = serde_json::json!({"version":1,"host":wipsnet_core::identity::SecretKey::generate().public(),"relay_url":"https://relay.example","invitation":"1".repeat(64),"code":"2".repeat(64),"scope":"request_access","expires_at":200});
+        let text = serde_json::json!({"version":1,"host":wispnet_core::identity::SecretKey::generate().public(),"relay_url":"https://relay.example","invitation":"1".repeat(64),"code":"2".repeat(64),"scope":"request_access","expires_at":200});
         let json = serde_json::to_vec(&text).unwrap();
         let invitation = decode_invitation(&json).unwrap();
         let code = encode_invitation(&invitation).unwrap();
@@ -312,7 +312,7 @@ mod code_tests {
         assert!(decoded.bootstrap(decoded.host, 200).is_none());
         assert!(
             decoded
-                .bootstrap(wipsnet_core::identity::SecretKey::generate().public(), 100)
+                .bootstrap(wispnet_core::identity::SecretKey::generate().public(), 100)
                 .is_none()
         );
         for invalid in ["wispnet2:abc", "wispnet1:!!", &"x".repeat(8193)] {

@@ -1,6 +1,6 @@
 use std::os::unix::fs::PermissionsExt;
-use wipsnet_core::identity::Identity;
-use wipsnet_registry::{
+use wispnet_core::identity::Identity;
+use wispnet_registry::{
     control,
     host::{self, Mutation},
     store::Store,
@@ -13,7 +13,7 @@ fn directory() -> tempfile::TempDir {
 
 #[tokio::test]
 async fn complete_filtered_catalog_metadata_and_type_changes_are_host_local() {
-    use wipsnet_core::host::ServiceKind;
+    use wispnet_core::host::ServiceKind;
     let id = Identity::generate().endpoint_id();
     let client = Identity::generate().endpoint_id();
     let dir = directory();
@@ -150,7 +150,7 @@ fn service_incarnation_persists_on_edit_and_restart_but_not_recreation() {
     let migrated = store.host_snapshot(id).unwrap();
     assert_eq!(migrated.revision, 6);
     assert_eq!(migrated.host, id);
-    assert!(wipsnet_core::enrollment::valid_code(
+    assert!(wispnet_core::enrollment::valid_code(
         &migrated.services[0].incarnation
     ));
     let generation = migrated.services[0].incarnation.clone();

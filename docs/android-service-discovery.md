@@ -173,7 +173,7 @@ artifact and is not included in Wispnet's production APK or Play bundle.
 Run native gateway tests and build the current Android native library first:
 
 ```sh
-cargo test -p wipsnet-client --locked
+cargo test -p wispnet-client --locked
 scripts/build_android.sh
 cd apps/android
 JAVA_HOME=/opt/android-studio/jbr ./gradlew :app:assemblePeercheck \

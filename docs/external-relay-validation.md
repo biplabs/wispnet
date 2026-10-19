@@ -41,14 +41,14 @@ Build the Linux CLI, standalone relay and preflight example:
 
 ```sh
 cargo build --workspace --locked
-cargo build -p wipsnet-cli --example external_network_probe --locked
+cargo build -p wispnet-cli --example external_network_probe --locked
 ```
 
 With the existing Android NDK linker/CC/AR environment configured, build current
 Android artifacts (see the native relay validation instructions for NDK setup):
 
 ```sh
-cargo build -p wipsnet-cli --bin wipsnet --example external_network_probe \
+cargo build -p wispnet-cli --bin wispnet --example external_network_probe \
   --target aarch64-linux-android --locked
 ```
 

@@ -12,8 +12,8 @@ PROBE = r"""async function probe(other) {
  localStorage.setItem('isolation', location.host);
  const inspected=JSON.parse((await fetchText('/inspect'))[1]);
  check(!Object.keys(inspected).some(k=>k.toLowerCase().startsWith('x-forwarded-')),'forwarded');
- check(!JSON.stringify(inspected).includes('_wipsnet_session'),'credential leaked');
- check(!document.cookie.includes('_wipsnet_session'),'HttpOnly');
+ check(!JSON.stringify(inspected).includes('_wispnet_session'),'credential leaked');
+ check(!document.cookie.includes('_wispnet_session'),'HttpOnly');
  check((await fetch('/login')).status===200,'relative login');
  check((await fetch('/secure')).status===502,'secure cookie rejection');
  check((await fetch('/external')).status===502,'external redirect rejection');
@@ -62,7 +62,7 @@ def chromium(urls):
             "application cookies crossed origins"
         )
         assert all(
-            c["httpOnly"] for c in context.cookies() if c["name"] == "_wipsnet_session"
+            c["httpOnly"] for c in context.cookies() if c["name"] == "_wispnet_session"
         )
         print(
             "Chromium "
@@ -203,7 +203,7 @@ def firefox(urls):
                 and value["storage"] == results[i]["storage"]
             )
             assert any(
-                c["name"] == "_wipsnet_session" and c["httpOnly"]
+                c["name"] == "_wispnet_session" and c["httpOnly"]
                 for c in call("GET", path + "/cookie")
             )
         print(

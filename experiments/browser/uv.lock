@@ -603,7 +603,7 @@ wheels = [
 ]
 
 [[package]]
-name = "wipsnet-browser-spike"
+name = "wispnet-browser-spike"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

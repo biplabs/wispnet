@@ -14,11 +14,11 @@ production browser gateway remain unimplemented. See the
 
 | Crate | Responsibility |
 | --- | --- |
-| wipsnet-core | Platform-neutral configuration, service protocol and future policy types |
-| wipsnet-agent | Agent lifecycle, identity and Iroh tunnel; future browser gateway |
-| wipsnet-registry | Registry lifecycle and future authenticated API/persistence |
-| wipsnet-cli | Linux CLI, structured logging, and OS signals |
-| wipsnet-relay | Standalone packet relay, separate TLS configuration and lifecycle; no node authority |
+| wispnet-core | Platform-neutral configuration, service protocol and future policy types |
+| wispnet-agent | Agent lifecycle, identity and Iroh tunnel; future browser gateway |
+| wispnet-registry | Registry lifecycle and future authenticated API/persistence |
+| wispnet-cli | Linux CLI, structured logging, and OS signals |
+| wispnet-relay | Standalone packet relay, separate TLS configuration and lifecycle; no node authority |
 
 ## Build and verify
 
@@ -54,7 +54,7 @@ python3 scripts/smoke.py
 python3 scripts/tunnel_smoke.py
 cargo build --workspace --release --locked
 rustup target add aarch64-linux-android
-cargo check -p wipsnet-core --target aarch64-linux-android --locked
+cargo check -p wispnet-core --target aarch64-linux-android --locked
 ```
 
 The Android check type-checks the current shared core and dependencies. Rust
@@ -66,17 +66,17 @@ or background execution. Android integration and physical-device validation rema
 ## Run
 
 Copy config/node/example.toml to an absolute path and edit state_dir to a private
-absolute directory, for example /home/YOUR_USER/.local/state/wipsnet/agent.
+absolute directory, for example /home/YOUR_USER/.local/state/wispnet/agent.
 Use distinct config/state paths for agent and registry.
 
 ```sh
-mkdir -p "$HOME/.config/wipsnet"
-cp config/node/example.toml "$HOME/.config/wipsnet/agent.toml"
+mkdir -p "$HOME/.config/wispnet"
+cp config/node/example.toml "$HOME/.config/wispnet/agent.toml"
 # Edit state_dir before running.
-cargo run -p wipsnet-cli -- check --config "$HOME/.config/wipsnet/agent.toml"
-cargo run -p wipsnet-cli -- identity-init --config "$HOME/.config/wipsnet/agent.toml"
-cargo run -p wipsnet-cli -- status --config "$HOME/.config/wipsnet/agent.toml"
-cargo run -p wipsnet-cli -- agent --config "$HOME/.config/wipsnet/agent.toml"
+cargo run -p wispnet-cli -- check --config "$HOME/.config/wispnet/agent.toml"
+cargo run -p wispnet-cli -- identity-init --config "$HOME/.config/wispnet/agent.toml"
+cargo run -p wispnet-cli -- status --config "$HOME/.config/wispnet/agent.toml"
+cargo run -p wispnet-cli -- agent --config "$HOME/.config/wispnet/agent.toml"
 ```
 
 Ctrl-C or SIGTERM stops the process. Use registry instead of agent with its own

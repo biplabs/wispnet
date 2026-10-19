@@ -29,7 +29,7 @@ def main():
     def adb(*cmd,**kw):return run(['adb','-s',args.serial,*cmd],**kw)
     def command(h,cmd,**kw):return run([*SSH,'desktop.home',shlex.join(cmd)],**kw) if h['remote'] else run(cmd,**kw)
     def cli(h,op,*tail):return command(h,[h['binary'],op,'--config',h['config'],*map(str,tail)])
-    def node(h,action):command(h,['systemctl','--user',action,'wipsnet-host.service'])
+    def node(h,action):command(h,['systemctl','--user',action,'wispnet-host.service'])
     def status(h):return json.loads(cli(h,'host-status').stdout)
     def write(h,path,text):command(h,['python3','-c','import os,sys;f=os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600);os.write(f,sys.stdin.buffer.read());os.close(f)',str(path)],input=text)
     with tempfile.TemporaryDirectory(prefix='wispnet-peer-check-') as temp:

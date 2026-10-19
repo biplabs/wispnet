@@ -1,6 +1,7 @@
 //! Host-scoped control contract. Transport identity, never a caller field, is authority.
 use crate::identity::EndpointId;
 use serde::{Deserialize, Serialize};
+// Legacy wire spelling is frozen for compatibility with installed Wispnet clients.
 pub const ALPN: &[u8] = b"wipsnet/control/1";
 pub const MAX_REQUEST: usize = 4096;
 pub const MAX_RESPONSE: usize = 128 * 1024;

@@ -6,7 +6,7 @@ use iroh::{
 };
 use std::net::SocketAddr;
 use tokio::time::timeout;
-use wipsnet_core::{
+use wispnet_core::{
     host::{self, Catalog, Request},
     identity::EndpointId,
 };
@@ -53,7 +53,7 @@ pub(crate) async fn serve_stream(
     mut send: SendStream,
     mut recv: RecvStream,
     peer: EndpointId,
-    authority: wipsnet_registry::host::Authority,
+    authority: wispnet_registry::host::Authority,
     counts: crate::tunnel::ActiveCounts,
 ) {
     let outcome = timeout(HANDSHAKE_TIMEOUT, async {
@@ -64,10 +64,10 @@ pub(crate) async fn serve_stream(
             let reply = match authority.set_client_name(peer, name.clone()).await {
                 Ok(()) => serde_json::to_vec(&serde_json::json!({"name":name}))
                     .map_err(|_| TunnelError::Transport("invalid device name"))?,
-                Err(wipsnet_registry::control::ControlError::Forbidden) => {
+                Err(wispnet_registry::control::ControlError::Forbidden) => {
                     br#"{"error":"access_denied"}"#.to_vec()
                 }
-                Err(wipsnet_registry::control::ControlError::Invalid) => {
+                Err(wispnet_registry::control::ControlError::Invalid) => {
                     br#"{"error":"invalid_name"}"#.to_vec()
                 }
                 Err(_) => return Err(TunnelError::Transport("control unavailable")),
@@ -78,7 +78,7 @@ pub(crate) async fn serve_stream(
         }
         let catalog = match authority.catalog(peer).await {
             Ok(catalog) => catalog,
-            Err(wipsnet_registry::control::ControlError::Forbidden) => {
+            Err(wispnet_registry::control::ControlError::Forbidden) => {
                 write_frame(&mut send, br#"{"error":"access_denied"}"#).await?;
                 let _ = send.stopped().await;
                 return Ok(());
@@ -138,7 +138,7 @@ pub async fn catalog_on(
         write_frame(&mut send, &request).await?;
         let bytes = read_frame(&mut recv, host::MAX_RESPONSE).await?;
         if bytes == br#"{"error":"access_denied"}"# {
-            return Err(TunnelError::Status(wipsnet_core::protocol::Status::Denied));
+            return Err(TunnelError::Status(wispnet_core::protocol::Status::Denied));
         }
         let catalog: Catalog = serde_json::from_slice(&bytes)
             .map_err(|_| TunnelError::Transport("invalid catalog"))?;
@@ -150,9 +150,9 @@ pub async fn catalog_on(
     .await
     .map_err(|_| TunnelError::Transport("control request timeout"))?;
     if result.is_err()
-        && matches!(connection.close_reason(), Some(iroh::endpoint::ConnectionError::ApplicationClosed(ref close)) if close.error_code == (wipsnet_core::protocol::Status::Denied as u32).into())
+        && matches!(connection.close_reason(), Some(iroh::endpoint::ConnectionError::ApplicationClosed(ref close)) if close.error_code == (wispnet_core::protocol::Status::Denied as u32).into())
     {
-        return Err(TunnelError::Status(wipsnet_core::protocol::Status::Denied));
+        return Err(TunnelError::Status(wispnet_core::protocol::Status::Denied));
     }
     result
 }
@@ -163,7 +163,7 @@ pub async fn set_name_on(
     expected: EndpointId,
     name: &str,
 ) -> Result<(), TunnelError> {
-    if connection.remote_id() != expected || !wipsnet_core::enrollment::valid_name(name) {
+    if connection.remote_id() != expected || !wispnet_core::enrollment::valid_name(name) {
         return Err(TunnelError::Transport("invalid name or target identity"));
     }
     timeout(HANDSHAKE_TIMEOUT, async {

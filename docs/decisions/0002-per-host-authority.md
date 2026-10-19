@@ -34,7 +34,7 @@ A combined setup or revoke action is a set of independent target-host operations
 
 ## Connectivity and cloud state
 
-Known peers use their saved target EndpointId and one explicitly configured relay URL in v1, with optional direct hints. Pairing/control/catalog/service protocols share this addressing approach without a service-directory bootstrap cycle. The proposed relay hostname is `relay.wipsnet.app`; provisioning is a separate task.
+Known peers use their saved target EndpointId and one explicitly configured relay URL in v1, with optional direct hints. Pairing/control/catalog/service protocols share this addressing approach without a service-directory bootstrap cycle. The proposed relay hostname is `relay.wispnet.app`; provisioning is a separate task.
 
 The relay holds transient connections and forwards encrypted packets. It is not an application TLS terminator, service catalog, grant authority, enrollment database, or durable node-discovery server. Peer identities and payload authorization do not depend on the relay's opinion. No host private key or administrative credential belongs on it. Infrastructure TLS/DNS/admission configuration must be reproducible outside the disposable VM; metadata visibility and logging/resource limits are documented separately.
 

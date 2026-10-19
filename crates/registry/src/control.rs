@@ -8,7 +8,7 @@ use std::{
     net::SocketAddr,
     path::Path,
 };
-use wipsnet_core::{
+use wispnet_core::{
     identity::{EndpointId, SecretKey},
     protocol::valid_service_id,
 };
@@ -410,7 +410,7 @@ pub fn credential_temp(path: &Path) -> Result<tempfile::NamedTempFile, Error> {
     }
     tempfile::NamedTempFile::new_in(parent).map_err(|_| Error::Storage)
 }
-pub fn read_invitation(path: &Path) -> Result<wipsnet_core::enrollment::Invitation, Error> {
+pub fn read_invitation(path: &Path) -> Result<wispnet_core::enrollment::Invitation, Error> {
     if !path.is_absolute() {
         return Err(Error::InvalidInput);
     }
@@ -433,7 +433,7 @@ pub fn read_invitation(path: &Path) -> Result<wipsnet_core::enrollment::Invitati
     file.take(4097)
         .read_to_end(&mut bytes)
         .map_err(|_| Error::Storage)?;
-    let invitation: wipsnet_core::enrollment::Invitation =
+    let invitation: wispnet_core::enrollment::Invitation =
         serde_json::from_slice(&bytes).map_err(|_| Error::InvalidInput)?;
     if !invitation.valid() {
         return Err(Error::InvalidInput);

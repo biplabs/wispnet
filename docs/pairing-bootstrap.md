@@ -6,8 +6,8 @@ check the target's pairing protocol without a catalog, directory, peer IP or
 another host. Configure the explicit relay and initialize the client's own key:
 
 ```sh
-target/debug/wipsnet identity-init --config /absolute/path/client.toml
-target/debug/wipsnet peer-hello --config /absolute/path/client.toml --peer PINNED_HOST_ID
+target/debug/wispnet identity-init --config /absolute/path/client.toml
+target/debug/wispnet peer-hello --config /absolute/path/client.toml --peer PINNED_HOST_ID
 ```
 
 An optional `--address IP:UDP_PORT` supplies a direct hint. The saved target ID is
@@ -43,7 +43,7 @@ distinguishes optical phone scanning from tablet fixture coverage.
 
 ## Invitation contract and protected preflight
 
-`wipsnet_core::pairing::Invitation` is the shared Linux/Android contract for a
+`wispnet_core::pairing::Invitation` is the shared Linux/Android contract for a
 version-1 target-host ID, HTTPS relay origin, 64-character lowercase hex invitation
 ID/capability, `request_access` scope, expiry, and at most one direct socket hint.
 Invitations may have at most 15 minutes remaining; challenge proofs at most one
@@ -53,7 +53,7 @@ not accept an already expired challenge or change host-side nonce expiry. Unknow
 An invitation is never a global owner credential or an automatic service grant.
 
 ```sh
-target/debug/wipsnet pairing-check --config /absolute/path/client.toml --peer PINNED_HOST_ID --invitation /private/invitation.json
+target/debug/wispnet pairing-check --config /absolute/path/client.toml --peer PINNED_HOST_ID --invitation /private/invitation.json
 ```
 
 Preflight validates the expected pin, expiry and configured relay before creating
@@ -88,9 +88,9 @@ file in a current-user-owned mode-0700 directory; the command writes mode 0600
 and never prints its capability. The lifetime is five minutes.
 
 ```sh
-target/debug/wipsnet host-invite --config /absolute/path/host.toml --output /private/new-invitation.json
-target/debug/wipsnet pairing-request --config /absolute/path/client.toml --peer PINNED_HOST_ID --invitation /private/new-invitation.json
-target/debug/wipsnet host-invitations --config /absolute/path/host.toml
+target/debug/wispnet host-invite --config /absolute/path/host.toml --output /private/new-invitation.json
+target/debug/wispnet pairing-request --config /absolute/path/client.toml --peer PINNED_HOST_ID --invitation /private/new-invitation.json
+target/debug/wispnet host-invitations --config /absolute/path/host.toml
 ```
 
 Deliver only the invitation to the intended client through a trusted channel.

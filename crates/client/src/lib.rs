@@ -7,7 +7,7 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 use tokio::runtime::Runtime;
-use wipsnet_core::{
+use wispnet_core::{
     config::TransportConfig,
     identity::{EndpointId, SecretKey},
 };
@@ -29,8 +29,8 @@ pub struct Client {
     config: TransportConfig,
     state: PathBuf,
     pub gateway: gateway::Gateways,
-    pub(crate) local_authority: Option<wipsnet_registry::host::Authority>,
-    telemetry: Mutex<wipsnet_agent::tunnel::PeerTelemetry>,
+    pub(crate) local_authority: Option<wispnet_registry::host::Authority>,
+    telemetry: Mutex<wispnet_agent::tunnel::PeerTelemetry>,
 }
 fn token() -> String {
     SecretKey::generate()
@@ -56,7 +56,7 @@ impl Client {
         key: SecretKey,
         state: PathBuf,
         config: TransportConfig,
-        authority: wipsnet_registry::host::Authority,
+        authority: wispnet_registry::host::Authority,
     ) -> Arc<Self> {
         Arc::new(Self {
             endpoint,
@@ -76,7 +76,7 @@ impl Client {
         config
             .validate()
             .map_err(|_| "Invalid relay configuration")?;
-        let endpoint = wipsnet_agent::tunnel::bind_configured_client(&key, Some(&config))
+        let endpoint = wispnet_agent::tunnel::bind_configured_client(&key, Some(&config))
             .await
             .map_err(|e| e.to_string())?;
         Ok(Arc::new(Self {
@@ -90,8 +90,8 @@ impl Client {
         }))
     }
     pub fn record_telemetry(&self, peer: EndpointId, connection: &iroh::endpoint::Connection) {
-        let path = wipsnet_agent::diagnostics::selected_path(connection);
-        let rtt = wipsnet_agent::diagnostics::selected_rtt_ms(connection);
+        let path = wispnet_agent::diagnostics::selected_path(connection);
+        let rtt = wispnet_agent::diagnostics::selected_rtt_ms(connection);
         let mut map = self.telemetry.lock().unwrap_or_else(|e| e.into_inner());
         let key = peer.to_string();
         if map.len() >= 1024
@@ -102,7 +102,7 @@ impl Client {
         }
         map.insert(key, (path, rtt));
     }
-    pub fn telemetry_map(&self) -> wipsnet_agent::tunnel::PeerTelemetry {
+    pub fn telemetry_map(&self) -> wispnet_agent::tunnel::PeerTelemetry {
         self.telemetry
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -111,18 +111,18 @@ impl Client {
     pub async fn catalog(&self, host: EndpointId) -> Result<Value, String> {
         let state = self.state.clone();
         let epoch =
-            tokio::task::spawn_blocking(move || wipsnet_agent::catalogs::begin(&state, host))
+            tokio::task::spawn_blocking(move || wispnet_agent::catalogs::begin(&state, host))
                 .await
                 .map_err(|_| "Catalog baseline task failed")??;
         let target = self.target(host)?;
-        let connection = wipsnet_agent::control::connect_target(&self.endpoint, target)
+        let connection = wispnet_agent::control::connect_target(&self.endpoint, target)
             .await
             .map_err(|e| e.to_string())?;
-        let result = wipsnet_agent::control::catalog_on(&connection, host)
+        let result = wispnet_agent::control::catalog_on(&connection, host)
             .await
             .map_err(|e| e.to_string());
         if result.is_ok() {
-            wipsnet_agent::diagnostics::settle_path(&connection).await;
+            wispnet_agent::diagnostics::settle_path(&connection).await;
         }
         self.record_telemetry(host, &connection);
         connection.close(0u32.into(), b"catalog complete");
@@ -130,17 +130,17 @@ impl Client {
         let state = self.state.clone();
         let accepted = catalog.clone();
         tokio::task::spawn_blocking(move || {
-            wipsnet_agent::catalogs::accept(&state, host, &epoch, &accepted)
+            wispnet_agent::catalogs::accept(&state, host, &epoch, &accepted)
         })
         .await
         .map_err(|_| "Catalog baseline task failed")??;
         serde_json::to_value(catalog).map_err(|_| "Invalid catalog".into())
     }
     pub fn target(&self, host: EndpointId) -> Result<iroh::EndpointAddr, String> {
-        wipsnet_agent::tunnel::peer_target(
+        wispnet_agent::tunnel::peer_target(
             host,
             Some(&self.config),
-            wipsnet_agent::peers::load(&self.state, host)
+            wispnet_agent::peers::load(&self.state, host)
                 .map_err(|_| "Invalid saved host")?
                 .and_then(|p| p.direct_hint),
         )
@@ -150,11 +150,11 @@ impl Client {
         match argument(value, "op")? {
             "identity" => Ok(json!({"peer":self.endpoint.id().to_string()})),
             "preview_invitation" => {
-                let invitation = wipsnet_agent::pairing::decode_invitation(
+                let invitation = wispnet_agent::pairing::decode_invitation(
                     argument(value, "invitation")?.as_bytes(),
                 )
                 .map_err(|_| "Invalid invitation")?;
-                if !invitation.valid(wipsnet_registry::enrollment::now()) {
+                if !invitation.valid(wispnet_registry::enrollment::now()) {
                     return Err("Expired or invalid invitation".into());
                 }
                 Ok(
@@ -167,13 +167,13 @@ impl Client {
                 if text.len() > 8192 {
                     return Err("Invitation too large".into());
                 }
-                let invitation: wipsnet_core::pairing::Invitation =
-                    wipsnet_agent::pairing::decode_invitation(text.as_bytes())
+                let invitation: wispnet_core::pairing::Invitation =
+                    wispnet_agent::pairing::decode_invitation(text.as_bytes())
                         .map_err(|_| "Invalid invitation")?;
                 let bootstrap = invitation
-                    .bootstrap(host, wipsnet_registry::enrollment::now())
+                    .bootstrap(host, wispnet_registry::enrollment::now())
                     .ok_or("Expired invitation or wrong host pin")?;
-                let pending = wipsnet_agent::pairing::request_enrollment(
+                let pending = wispnet_agent::pairing::request_enrollment(
                     &self.endpoint,
                     host,
                     &invitation,
@@ -186,10 +186,10 @@ impl Client {
                 )
                 .await
                 .map_err(|e| e.to_string())?;
-                wipsnet_agent::peers::save(&self.state, &bootstrap)
+                wispnet_agent::peers::save(&self.state, &bootstrap)
                     .map_err(|_| "Cannot save host pin")?;
                 let state = self.state.clone();
-                tokio::task::spawn_blocking(move || wipsnet_agent::catalogs::reset(&state, host))
+                tokio::task::spawn_blocking(move || wispnet_agent::catalogs::reset(&state, host))
                     .await
                     .map_err(|_| "Cannot reset catalog baseline")??;
                 Ok(json!({"state":"pending_owner_approval","host":pending.host.to_string()}))
@@ -200,33 +200,33 @@ impl Client {
                     return Err("Cannot unpair this machine".into());
                 }
                 self.gateway.forget(self, host).await?;
-                wipsnet_agent::peers::remove(&self.state, host).map_err(|e| e.to_string())?;
+                wispnet_agent::peers::remove(&self.state, host).map_err(|e| e.to_string())?;
                 Ok(json!({"unpaired":host.to_string()}))
             }
             "set_name" => {
                 let host = peer(value)?;
                 let name = argument(value, "name")?;
-                if !wipsnet_core::enrollment::valid_name(name) {
+                if !wispnet_core::enrollment::valid_name(name) {
                     return Err("Invalid device name".into());
                 }
-                if wipsnet_agent::peers::load(&self.state, host)
+                if wispnet_agent::peers::load(&self.state, host)
                     .map_err(|_| "Invalid saved host")?
                     .is_none()
                 {
                     return Err("Pair with this host first".into());
                 }
                 let connection =
-                    wipsnet_agent::control::connect_target(&self.endpoint, self.target(host)?)
+                    wispnet_agent::control::connect_target(&self.endpoint, self.target(host)?)
                         .await
                         .map_err(|e| e.to_string())?;
-                let result = wipsnet_agent::control::set_name_on(&connection, host, name).await;
+                let result = wispnet_agent::control::set_name_on(&connection, host, name).await;
                 connection.close(0u32.into(), b"name update complete");
                 result.map_err(|e| e.to_string())?;
                 Ok(json!({"name":name}))
             }
             "catalog" => {
                 let host = peer(value)?;
-                if wipsnet_agent::peers::load(&self.state, host)
+                if wispnet_agent::peers::load(&self.state, host)
                     .map_err(|_| "Invalid saved host")?
                     .is_none()
                 {
@@ -235,7 +235,7 @@ impl Client {
                 self.catalog(host).await
             }
             "relay_status" => Ok(
-                json!({"relay":wipsnet_agent::diagnostics::relay_state(&self.endpoint,self.config.relay_url.is_some())}),
+                json!({"relay":wispnet_agent::diagnostics::relay_state(&self.endpoint,self.config.relay_url.is_some())}),
             ),
             "telemetry" => {
                 let peers: serde_json::Map<String, Value> = self
@@ -270,7 +270,7 @@ impl Client {
                 let host = peer(value)?;
                 let id = argument(value, "service")?;
                 let incarnation = argument(value, "incarnation")?;
-                if !wipsnet_core::enrollment::valid_code(incarnation) {
+                if !wispnet_core::enrollment::valid_code(incarnation) {
                     return Err("Refresh this service before opening".into());
                 }
                 if host == self.endpoint.id()
@@ -282,12 +282,12 @@ impl Client {
                     if !services.iter().any(|s| {
                         s.id == id
                             && s.incarnation == incarnation
-                            && s.kind == wipsnet_core::host::ServiceKind::Http
+                            && s.kind == wispnet_core::host::ServiceKind::Http
                     }) {
                         return Err("Service no longer permitted".into());
                     }
                 } else {
-                    if wipsnet_agent::peers::load(&self.state, host)
+                    if wispnet_agent::peers::load(&self.state, host)
                         .map_err(|_| "Invalid saved host")?
                         .is_none()
                     {
@@ -324,7 +324,7 @@ impl Client {
             }
             "app_revoke" => {
                 let grant = argument(value, "grant")?;
-                if !wipsnet_core::enrollment::valid_code(grant) {
+                if !wispnet_core::enrollment::valid_code(grant) {
                     return Err("Invalid app grant".into());
                 }
                 self.gateway.revoke_app(grant).await;

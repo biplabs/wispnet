@@ -447,6 +447,14 @@ class Window(QMainWindow):
         self.share_btn.clicked.connect(self.share)
         header_layout.addWidget(self.share_btn)
 
+        self.qr_btn = QPushButton("Pair with QR")
+        self.qr_btn.setProperty("variant", "secondary")
+        self.qr_btn.setFixedHeight(36)
+        self.qr_btn.setToolTip("Generate a five-minute QR invitation for this machine")
+        self.qr_btn.clicked.connect(self.generate_qr)
+        header_layout.addWidget(self.qr_btn)
+        self.qr_dialog = None
+
         self.link_btn = QPushButton("+  Pair")
         self.link_btn.setProperty("variant", "primary")
         self.link_btn.setFixedHeight(36)
@@ -707,6 +715,79 @@ class Window(QMainWindow):
             return
         self.busy = True
         self.submit(lambda: self.api.request(op="status"), self.updated)
+
+    def generate_qr(self):
+        if self.qr_dialog is not None:
+            self.qr_dialog.raise_()
+            self.qr_dialog.activateWindow()
+            return
+        self.qr_btn.setEnabled(False)
+        self.submit(lambda: self.api.request(op="invite_qr"), self.show_qr)
+
+    def show_qr(self, result, error):
+        self.qr_btn.setEnabled(True)
+        if error:
+            QMessageBox.warning(self, "Pairing QR unavailable", str(error))
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Pair with this machine")
+        layout = QVBoxLayout(dialog)
+        instruction = QLabel("In Wispnet on your phone, select Scan pairing QR.\n"
+                             "Then approve its request on this computer and grant services.")
+        layout.addWidget(instruction)
+        host = QLabel("Host ID: " + result["host"])
+        host.setTextFormat(Qt.TextFormat.PlainText)
+        host.setWordWrap(True)
+        layout.addWidget(host)
+        matrix = result["matrix"]
+        size = len(matrix)
+        scale = max(3, min(6, 480 // size))
+        image = QPixmap(size * scale, size * scale)
+        image.fill(QColor("white"))
+        painter = QPainter(image)
+        for y, row in enumerate(matrix):
+            for x, dark in enumerate(row):
+                if dark:
+                    painter.fillRect(x * scale, y * scale, scale, scale, QColor("black"))
+        painter.end()
+        qr = QLabel()
+        qr.setObjectName("pairingQrImage")
+        qr.setPixmap(image)
+        qr.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(qr)
+        countdown = QLabel()
+        layout.addWidget(countdown)
+        close = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        close.rejected.connect(dialog.reject)
+        layout.addWidget(close)
+        timer = QTimer(dialog)
+
+        def tick():
+            remaining = max(0, int(result["expires_at"] - time.time()))
+            used = self.snapshot and any(
+                i["invitation"] == result["invitation"] and i["state"] not in ("issued", "challenged")
+                for i in self.snapshot.get("invitations", [])
+            )
+            if remaining == 0 or used:
+                qr.clear()
+                countdown.setText("Request received — close this window to review it." if used
+                                  else "QR expired. Close and generate a new code.")
+                timer.stop()
+            else:
+                countdown.setText(f"Expires in {remaining // 60}:{remaining % 60:02d} · Keep this QR private")
+
+        def finished():
+            timer.stop()
+            qr.clear()
+            self.qr_dialog = None
+            dialog.deleteLater()
+
+        dialog.finished.connect(finished)
+        timer.timeout.connect(tick)
+        timer.start(1000)
+        self.qr_dialog = dialog
+        tick()
+        dialog.open()
 
     def updated(self, result, error):
         self.busy = False
@@ -2040,7 +2121,7 @@ def appearance(app):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--config", default=str(Path.home() / ".config/wipsnet-node/host.toml")
+        "--config", default=str(Path.home() / ".config/wispnet-node/host.toml")
     )
     parser.add_argument("--tray", action="store_true")
     args = parser.parse_args()

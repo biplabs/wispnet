@@ -5,7 +5,7 @@ use std::{
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
 };
-use wipsnet_core::{
+use wispnet_core::{
     config::TransportConfig,
     identity::{EndpointId, IdentityError},
     pairing::Bootstrap,

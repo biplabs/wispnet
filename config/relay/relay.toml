@@ -1,5 +1,5 @@
 # Copy to a private config file (mode 0600). This is the relay role only.
 listen = "0.0.0.0:8443"
-certificate = "/home/CHANGE_ME/.config/wipsnet-relay/fullchain.pem"
-private_key = "/home/CHANGE_ME/.config/wipsnet-relay/private-key.pem"
+certificate = "/home/CHANGE_ME/.config/wispnet-relay/fullchain.pem"
+private_key = "/home/CHANGE_ME/.config/wispnet-relay/private-key.pem"
 max_connections = 1024

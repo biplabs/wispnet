@@ -12,7 +12,7 @@ from relay_smoke import ROOT, BINARY, event, run, stop
 
 
 def main():
-    with tempfile.TemporaryDirectory(prefix='wipsnet-standalone-relay-') as temporary:
+    with tempfile.TemporaryDirectory(prefix='wispnet-standalone-relay-') as temporary:
         root=Path(temporary);key=root/'key.pem';certificate=root/'certificate.pem'
         run(['openssl','req','-x509','-newkey','ed25519','-nodes','-days','1',
              '-keyout',key,'-out',certificate,'-subj','/CN=127.0.0.1',
@@ -23,7 +23,7 @@ def main():
         config=root/'relay.toml'
         config.write_text(f"listen='127.0.0.1:{port}'\ncertificate='{certificate}'\nprivate_key='{key}'\nmax_connections=2\n")
         config.chmod(0o600)
-        command=[ROOT/'target/debug/wipsnet-relay','--config',config]
+        command=[ROOT/'target/debug/wispnet-relay','--config',config]
         relay=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
         try:
             started=event(relay,relay.stdout,'started');assert started['role']=='packet_relay'

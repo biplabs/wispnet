@@ -11,8 +11,8 @@ use tokio::{
     sync::Mutex,
     task::{JoinHandle, JoinSet},
 };
-use wipsnet_client::Client;
-use wipsnet_core::{host, identity::SecretKey, pairing::Bootstrap};
+use wispnet_client::Client;
+use wispnet_core::{host, identity::SecretKey, pairing::Bootstrap};
 
 #[derive(Clone)]
 struct Reply {
@@ -84,7 +84,7 @@ impl Fixture {
         };
     }
     async fn pin(&self, state: &std::path::Path) {
-        wipsnet_agent::peers::save(
+        wispnet_agent::peers::save(
             state,
             &Bootstrap {
                 version: 1,
@@ -257,11 +257,11 @@ async fn partial_stale_malformed_and_clock_changes_cannot_replace_a_complete_sna
     );
     faulty.set(&good).await;
     assert!(restarted.catalog(faulty.endpoint.id()).await.is_err());
-    let epoch = wipsnet_agent::catalogs::begin(state.path(), faulty.endpoint.id()).unwrap();
-    wipsnet_agent::catalogs::reset(state.path(), faulty.endpoint.id()).unwrap();
+    let epoch = wispnet_agent::catalogs::begin(state.path(), faulty.endpoint.id()).unwrap();
+    wispnet_agent::catalogs::reset(state.path(), faulty.endpoint.id()).unwrap();
     let old: host::Catalog = serde_json::from_value(good).unwrap();
     assert!(
-        wipsnet_agent::catalogs::accept(state.path(), faulty.endpoint.id(), &epoch, &old).is_err()
+        wispnet_agent::catalogs::accept(state.path(), faulty.endpoint.id(), &epoch, &old).is_err()
     );
     let mut recovered = faulty.snapshot(1);
     recovered["generation"] = json!("d".repeat(64));

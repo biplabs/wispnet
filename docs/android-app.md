@@ -4,7 +4,7 @@ The native Android app pairs independently with each hosting computer, displays 
 
 ## Build and install
 
-Requirements: Rust with `aarch64-linux-android`, Android SDK platform 36, NDK 27.2.12479018, Java 17+, and an authorized arm64 Android 14+ device. `scripts/build_android.sh` defaults to `$HOME/Android/Sdk` and Android Studio's JBR; override `ANDROID_HOME`, `JAVA_HOME`, or `WIPSNET_ANDROID_NDK` as needed. The checked-in Gradle wrapper pins its distribution checksum.
+Requirements: Rust with `aarch64-linux-android`, Android SDK platform 36, NDK 27.2.12479018, Java 17+, and an authorized arm64 Android 14+ device. `scripts/build_android.sh` defaults to `$HOME/Android/Sdk` and Android Studio's JBR; override `ANDROID_HOME`, `JAVA_HOME`, or `WISPNET_ANDROID_NDK` as needed. The checked-in Gradle wrapper pins its distribution checksum.
 
 ```sh
 scripts/build_android.sh
@@ -15,7 +15,7 @@ The APK currently targets API 36, builds for arm64 by default (optional x86_64 f
 
 ## Pair and browse
 
-1. Start a host agent on each computer. `scripts/install_app_hosts.py` installs independent `wipsnet-host.service` user units on this computer and `desktop.home`, preserving existing identities/configuration. Its node state is separate from the desktop relay state.
+1. Start a host agent on each computer. `scripts/install_app_hosts.py` installs independent `wispnet-host.service` user units on this computer and `desktop.home`, preserving existing identities/configuration. Its node state is separate from the desktop relay state.
 2. Issue a target-host invitation with the CLI's `host-invite` command. Verify that computer's public Endpoint ID independently.
 3. In Wispnet, enter the machine label and verified ID, and paste or import its invitation JSON. Request pairing. This proves the tablet identity; it does not grant access yet.
 4. On that computer, inspect `host-invitations`, approve the pending invitation using `host-mutate`, and grant the tablet identity access to the intended services. Repeat independently for the other computer.
@@ -129,7 +129,7 @@ The isolated API 35 x86_64 emulator check uses Android's documented `FGS_INTRODU
 
 ```sh
 # On a disposable, already-running API 35 x86_64 emulator:
-WIPSNET_ANDROID_ABI=x86_64 scripts/build_android.sh
+WISPNET_ANDROID_ABI=x86_64 scripts/build_android.sh
 cd apps/android
 ANDROID_HOME="$HOME/Android/Sdk" JAVA_HOME=/opt/android-studio/jbr ./gradlew --no-daemon \
   assemblePeercheck assemblePeercheckAndroidTest \
@@ -152,9 +152,9 @@ Observed on the physical Android 14 tablet (2026-10-16), on home Wi-Fi: expired 
 Camera-less devices use the same host-scoped protocol. On the target computer, create either the usual invitation JSON or a copyable code file:
 
 ```sh
-wipsnet host-invite --config /absolute/path/host.toml --output /private/invitation.json
+wispnet host-invite --config /absolute/path/host.toml --output /private/invitation.json
 # Alternative representation of the same contract; choose one command:
-wipsnet host-invite --config /absolute/path/host.toml --output /private/invitation.txt --format code
+wispnet host-invite --config /absolute/path/host.toml --output /private/invitation.txt --format code
 ```
 
 Send the file to the tablet and select **Import invitation file**, or use Android's **Share → Wispnet**. A text code can also be pasted into **Paste pairing code or invitation JSON**, then **Review pasted invitation**. Both representations fill in the complete host ID for review. Compare that ID with the target computer and select **I compared this host ID with the target computer**, enter a machine name, then **Request pairing**. Import and review do not send a pairing request or save a trusted pin. Editing the host ID clears confirmation. The target owner must still approve the pending request and grant services.

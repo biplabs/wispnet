@@ -22,7 +22,7 @@ spec = importlib.util.spec_from_file_location(
 )
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
-BINARY = ROOT / "target/debug/wipsnet"
+BINARY = ROOT / "target/debug/wispnet"
 
 
 class NodeIntegration(unittest.TestCase):

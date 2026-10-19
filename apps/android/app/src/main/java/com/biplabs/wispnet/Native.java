@@ -13,7 +13,7 @@ import javax.crypto.spec.GCMParameterSpec;
 import org.json.JSONObject;
 
 public final class Native {
- static { System.loadLibrary("wipsnet_android"); }
+ static { System.loadLibrary("wispnet_android"); }
  public static native String call(String request);
  static final class Failure extends Exception {final String code;Failure(String message,String value){super(message);code=value;}}
  static volatile boolean ready=false;

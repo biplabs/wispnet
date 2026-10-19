@@ -1,6 +1,6 @@
 //! Controller bootstrap uses a preconfigured HTTPS URL, never the service directory.
 use crate::control::Directory;
-use wipsnet_core::identity::EndpointId;
+use wispnet_core::identity::EndpointId;
 use zeroize::Zeroizing;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,7 +29,7 @@ pub struct Client {
 }
 impl Client {
     pub fn new(origin: &str, secret: Zeroizing<String>) -> Result<Self, Error> {
-        let origin = wipsnet_core::config::controller_origin(origin)
+        let origin = wispnet_core::config::controller_origin(origin)
             .map_err(|_| Error::InvalidController)?;
         if !crate::control::valid_token(&secret) {
             return Err(Error::InvalidController);
@@ -42,7 +42,7 @@ impl Client {
         })
     }
     pub fn configured(
-        config: &wipsnet_core::config::ControllerConfig,
+        config: &wispnet_core::config::ControllerConfig,
         secret: Zeroizing<String>,
     ) -> Result<Self, Error> {
         let mut client = Self::new(&config.origin, secret)?;
@@ -108,14 +108,14 @@ impl Client {
     }
     pub async fn enroll(
         &self,
-        invitation: &wipsnet_core::enrollment::Invitation,
+        invitation: &wispnet_core::enrollment::Invitation,
         name: &str,
-        key: &wipsnet_core::identity::SecretKey,
+        key: &wispnet_core::identity::SecretKey,
     ) -> Result<crate::enrollment::Outcome, Error> {
-        use wipsnet_core::enrollment::{Claim, Proof};
+        use wispnet_core::enrollment::{Claim, Proof};
         if !invitation.valid()
             || invitation.controller != self.origin.as_str()
-            || !wipsnet_core::enrollment::valid_name(name)
+            || !wispnet_core::enrollment::valid_name(name)
             || invitation.expires_at <= crate::enrollment::now()
         {
             return Err(Error::InvalidResponse);
@@ -136,15 +136,15 @@ impl Client {
         let challenge = outcome.challenge.take().ok_or(Error::InvalidResponse)?;
         if !matches!(
             (&*outcome.state, &challenge.purpose),
-            ("issued", wipsnet_core::enrollment::Purpose::Request)
-                | ("approved", wipsnet_core::enrollment::Purpose::Complete)
+            ("issued", wispnet_core::enrollment::Purpose::Request)
+                | ("approved", wispnet_core::enrollment::Purpose::Complete)
         ) || !challenge.matches(invitation, key.public(), name, crate::enrollment::now())
         {
             return Err(Error::InvalidResponse);
         }
         let completing = matches!(
             challenge.purpose,
-            wipsnet_core::enrollment::Purpose::Complete
+            wispnet_core::enrollment::Purpose::Complete
         );
         let signature = key.sign(&challenge.signing_bytes());
         let reply = self
@@ -200,7 +200,7 @@ impl Client {
         let directory: Directory =
             serde_json::from_slice(&bytes).map_err(|_| Error::InvalidResponse)?;
         if directory.device != expected_device
-            || !wipsnet_core::protocol::valid_service_id(&directory.mesh)
+            || !wispnet_core::protocol::valid_service_id(&directory.mesh)
             || directory.revision >= i64::MAX as u64
             || directory.devices.len() > 1024
             || directory.services.len() > 1024
@@ -213,7 +213,7 @@ impl Client {
             || directory
                 .services
                 .iter()
-                .any(|s| !wipsnet_core::protocol::valid_service_id(&s.id) || s.grants.len() > 1024)
+                .any(|s| !wispnet_core::protocol::valid_service_id(&s.id) || s.grants.len() > 1024)
         {
             return Err(Error::InvalidResponse);
         }
@@ -341,7 +341,7 @@ mod tests {
         assert!(matches!(
             client
                 .directory(Some(
-                    wipsnet_core::identity::Identity::generate().endpoint_id()
+                    wispnet_core::identity::Identity::generate().endpoint_id()
                 ))
                 .await,
             Err(Error::InvalidResponse)

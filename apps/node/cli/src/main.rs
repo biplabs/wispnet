@@ -1,26 +1,27 @@
 use std::{env, path::PathBuf, process::ExitCode};
 mod retry;
 use tracing_subscriber::prelude::*;
-use wipsnet_agent::{diagnostics, identity::FileIdentityStore, tunnel};
-use wipsnet_core::{
+use wispnet_agent::{diagnostics, identity::FileIdentityStore, tunnel};
+use wispnet_core::{
     config::Config,
     identity::{EndpointId, IdentityStore},
 };
 
-const USAGE: &str = "Wipsnet development CLI
-Usage: wipsnet <check|identity-init|status|agent|registry|registry-init|registry-backup|registry-directory> --config /absolute/path/config.toml
-Backup: wipsnet registry-backup --config /absolute/path/config.toml --output /absolute/path/new-backup.sqlite3
-Enroll: wipsnet enroll --config /absolute/path/device.toml --invitation /private/invitation.json
-Host: wipsnet <host-init|host-status> --config /absolute/path/host.toml
-Host invite: wipsnet host-invite --config /absolute/path/host.toml --output /private/new-invitation.json [--format code]
-Host invitations: wipsnet host-invitations --config /absolute/path/host.toml
-Host change: wipsnet host-mutate --config /absolute/path/host.toml --request /absolute/path/request.json
-Catalog: wipsnet host-catalog --config /absolute/path/client.toml --peer PUBLIC_ID [--address IP:UDP_PORT]
-Invitation request/check: wipsnet <pairing-request|pairing-check> --config /absolute/path/client.toml --peer PINNED_HOST_ID --invitation /private/invitation.json
-Pairing bootstrap: wipsnet peer-hello --config /absolute/path/client.toml --peer PINNED_HOST_ID [--address IP:UDP_PORT]
-Probe: wipsnet <peer-probe|peer-watch> --config /absolute/path/client.toml --peer PUBLIC_ID [--address IP:UDP_PORT]
-Reset: wipsnet identity-reset --config /absolute/path/config.toml --expect-id PUBLIC_ID
-Tunnel: wipsnet tunnel --config /absolute/path/config.toml --peer PUBLIC_ID [--address IP:UDP_PORT] --service SERVICE_ID
+const USAGE: &str = "Wispnet development CLI
+QR pairing: wispnet --qrcode [--config /absolute/path/host.toml]
+Usage: wispnet <check|identity-init|status|agent|registry|registry-init|registry-backup|registry-directory> --config /absolute/path/config.toml
+Backup: wispnet registry-backup --config /absolute/path/config.toml --output /absolute/path/new-backup.sqlite3
+Enroll: wispnet enroll --config /absolute/path/device.toml --invitation /private/invitation.json
+Host: wispnet <host-init|host-status> --config /absolute/path/host.toml
+Host invite: wispnet host-invite --config /absolute/path/host.toml --output /private/new-invitation.json [--format code]
+Host invitations: wispnet host-invitations --config /absolute/path/host.toml
+Host change: wispnet host-mutate --config /absolute/path/host.toml --request /absolute/path/request.json
+Catalog: wispnet host-catalog --config /absolute/path/client.toml --peer PUBLIC_ID [--address IP:UDP_PORT]
+Invitation request/check: wispnet <pairing-request|pairing-check> --config /absolute/path/client.toml --peer PINNED_HOST_ID --invitation /private/invitation.json
+Pairing bootstrap: wispnet peer-hello --config /absolute/path/client.toml --peer PINNED_HOST_ID [--address IP:UDP_PORT]
+Probe: wispnet <peer-probe|peer-watch> --config /absolute/path/client.toml --peer PUBLIC_ID [--address IP:UDP_PORT]
+Reset: wispnet identity-reset --config /absolute/path/config.toml --expect-id PUBLIC_ID
+Tunnel: wispnet tunnel --config /absolute/path/config.toml --peer PUBLIC_ID [--address IP:UDP_PORT] --service SERVICE_ID
 Tunnel mode relays raw stdin/stdout. It is not a browser gateway. Independent hosts use local invitation approval. See docs/pairing-bootstrap.md and docs/per-host-control.md.";
 
 fn main() -> ExitCode {
@@ -30,7 +31,7 @@ fn main() -> ExitCode {
     {
         Ok(runtime) => runtime,
         Err(_) => {
-            eprintln!("wipsnet: cannot start runtime");
+            eprintln!("wispnet: cannot start runtime");
             return ExitCode::FAILURE;
         }
     };
@@ -41,14 +42,23 @@ fn main() -> ExitCode {
     match outcome {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("wipsnet: {error}");
+            eprintln!("wispnet: {error}");
             ExitCode::FAILURE
         }
     }
 }
 
 async fn execute() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<_> = env::args_os().skip(1).collect();
+    let mut args: Vec<_> = env::args_os().skip(1).collect();
+    if args.first().is_some_and(|a| a == "--qrcode") && args.len() == 1 {
+        let home = env::var_os("HOME").ok_or("HOME is required; pass --config explicitly")?;
+        args.extend([
+            "--config".into(),
+            PathBuf::from(home)
+                .join(".config/wispnet-node/host.toml")
+                .into_os_string(),
+        ]);
+    }
     if args.len() == 1 && (args[0] == "--help" || args[0] == "-h") {
         println!("{USAGE}");
         return Ok(());
@@ -114,6 +124,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             | "registry-directory"
             | "enroll"
             | "host-init"
+            | "--qrcode"
             | "host-invite"
             | "host-invitations"
             | "host-status"
@@ -149,7 +160,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             .to_str()
             .ok_or("invalid service ID")?
             .to_owned();
-        wipsnet_core::protocol::request(&service).map_err(tunnel::TunnelError::Status)?;
+        wispnet_core::protocol::request(&service).map_err(tunnel::TunnelError::Status)?;
         Some((peer, address, service))
     } else {
         None
@@ -169,6 +180,26 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
     let config = Config::load(&PathBuf::from(&args[2]))?;
+    if mode == "--qrcode" {
+        use std::io::IsTerminal;
+        if !std::io::stdout().is_terminal() {
+            return Err("QR pairing requires a terminal; use ssh -t for remote pairing".into());
+        }
+        let value = wispnet_node::invitation::issue(&config)?;
+        let matrix: Vec<Vec<bool>> = serde_json::from_value(value["matrix"].clone())?;
+        if wispnet_node::invitation::terminal_columns().is_some_and(|cols| cols < matrix.len()) {
+            return Err(format!("Widen your terminal to at least {} columns (or reduce its font size), then run wispnet --qrcode again", matrix.len()).into());
+        }
+        println!(
+            "Scan in Wispnet → Scan pairing QR. Expires in five minutes.\nHost: {}",
+            value["host"].as_str().unwrap_or("")
+        );
+        print!("{}", wispnet_node::invitation::terminal(&matrix));
+        println!(
+            "Approve the incoming request on this host, then grant services. Keep this QR private."
+        );
+        return Ok(());
+    }
     if config.schema_version == 2
         && matches!(
             mode,
@@ -209,7 +240,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             identity_store.load()?
         };
         if mode == "host-init" {
-            wipsnet_registry::host::initialize(&config.state_dir, identity.endpoint_id())?;
+            wispnet_registry::host::initialize(&config.state_dir, identity.endpoint_id())?;
             println!(
                 "Independent host initialized\nEndpoint ID: {}",
                 identity.endpoint_id()
@@ -217,7 +248,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
         let (mut store, secret) =
-            wipsnet_registry::host::owner_store(&config.state_dir, identity.endpoint_id())?;
+            wispnet_registry::host::owner_store(&config.state_dir, identity.endpoint_id())?;
         if mode == "host-invite" {
             use std::io::Write;
             let path = PathBuf::from(&args[4]);
@@ -231,7 +262,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             {
                 return Err("invitation output must be a new absolute private file".into());
             }
-            let mut file = wipsnet_registry::control::credential_temp(&path)?;
+            let mut file = wispnet_registry::control::credential_temp(&path)?;
             let relay = config
                 .transport
                 .as_ref()
@@ -241,7 +272,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 identity.endpoint_id(),
                 &secret,
                 relay,
-                wipsnet_registry::enrollment::now(),
+                wispnet_registry::enrollment::now(),
                 300,
             )?;
             let machine = std::process::Command::new("hostname")
@@ -250,12 +281,12 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             let name = std::str::from_utf8(&machine.stdout)
                 .map_err(|_| "machine name is not UTF-8")?
                 .trim();
-            if !machine.status.success() || !wipsnet_core::enrollment::valid_name(name) {
+            if !machine.status.success() || !wispnet_core::enrollment::valid_name(name) {
                 return Err("machine name must be a valid display name".into());
             }
             invitation.host_name = Some(name.to_owned());
             let bytes = zeroize::Zeroizing::new(if args.len() == 7 {
-                wipsnet_agent::pairing::encode_invitation(&invitation)?
+                wispnet_agent::pairing::encode_invitation(&invitation)?
                     .as_bytes()
                     .to_vec()
             } else {
@@ -278,7 +309,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 serde_json::to_string_pretty(&store.pairing_list(
                     identity.endpoint_id(),
                     &secret,
-                    wipsnet_registry::enrollment::now()
+                    wispnet_registry::enrollment::now()
                 )?)?
             );
         }
@@ -314,25 +345,25 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             .ok_or("invalid peer")?
             .parse()
             .map_err(|_| "invalid peer")?;
-        let invitation = wipsnet_agent::pairing::read_invitation(&PathBuf::from(&args[6]))?;
-        let now = wipsnet_registry::enrollment::now();
+        let invitation = wispnet_agent::pairing::read_invitation(&PathBuf::from(&args[6]))?;
+        let now = wispnet_registry::enrollment::now();
         let transport = config
             .transport
             .as_ref()
             .ok_or("invitation requires transport configuration")?;
         let target =
-            wipsnet_agent::pairing::invitation_target(&invitation, expected, transport, now)?;
+            wispnet_agent::pairing::invitation_target(&invitation, expected, transport, now)?;
         let store = FileIdentityStore::new(&config.state_dir)?;
         let _lease = store.lease()?;
         let identity = store.load()?;
-        let _saved = wipsnet_agent::peers::load(&config.state_dir, expected)?;
+        let _saved = wispnet_agent::peers::load(&config.state_dir, expected)?;
         let bootstrap = invitation
             .bootstrap(expected, now)
             .ok_or("invalid host bootstrap")?;
         let endpoint =
             tunnel::bind_configured_client(identity.secret_key(), Some(transport)).await?;
         if mode == "pairing-request" {
-            let result = wipsnet_agent::pairing::request_enrollment(
+            let result = wispnet_agent::pairing::request_enrollment(
                 &endpoint,
                 expected,
                 &invitation,
@@ -343,7 +374,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             .await;
             endpoint.close().await;
             let pending = result?;
-            wipsnet_agent::peers::save(&config.state_dir, &bootstrap)?;
+            wispnet_agent::peers::save(&config.state_dir, &bootstrap)?;
             println!(
                 "{}",
                 serde_json::json!({"host":pending.host,"peer":pending.peer,
@@ -351,7 +382,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             );
             return Ok(());
         }
-        let result = wipsnet_agent::pairing::hello(&endpoint, target).await;
+        let result = wispnet_agent::pairing::hello(&endpoint, target).await;
         endpoint.close().await;
         let hello = result?;
         println!(
@@ -384,8 +415,8 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         let store = FileIdentityStore::new(&config.state_dir)?;
         let _lease = store.lease()?;
         let identity = store.load()?;
-        let saved = wipsnet_agent::peers::load(&config.state_dir, peer)?;
-        let transport = wipsnet_agent::peers::transport(config.transport.as_ref(), saved.as_ref());
+        let saved = wispnet_agent::peers::load(&config.state_dir, peer)?;
+        let transport = wispnet_agent::peers::transport(config.transport.as_ref(), saved.as_ref());
         let address = address.or_else(|| saved.as_ref().and_then(|p| p.direct_hint));
         let target = tunnel::peer_target(peer, transport.as_ref(), address)?;
         let endpoint =
@@ -439,15 +470,15 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         }
         let result = async {
             if mode == "peer-hello" {
-                let hello = wipsnet_agent::pairing::hello(&endpoint, target).await?;
+                let hello = wispnet_agent::pairing::hello(&endpoint, target).await?;
                 return serde_json::to_value(hello)
                     .map_err(|_| tunnel::TunnelError::Transport("invalid pairing response"));
             }
             if mode == "peer-probe" {
                 return diagnostics::probe(&endpoint, peer, target, relay_configured).await;
             }
-            let connection = wipsnet_agent::control::connect_target(&endpoint, target).await?;
-            let catalog = wipsnet_agent::control::catalog_on(&connection, peer).await?;
+            let connection = wispnet_agent::control::connect_target(&endpoint, target).await?;
+            let catalog = wispnet_agent::control::catalog_on(&connection, peer).await?;
             serde_json::to_value(catalog)
                 .map_err(|_| tunnel::TunnelError::Transport("invalid catalog"))
         }
@@ -466,14 +497,14 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         }
         config.prepare_state()?;
         let mut store =
-            wipsnet_registry::store::Store::open(&config.state_dir.join("registry.sqlite3"))?;
+            wispnet_registry::store::Store::open(&config.state_dir.join("registry.sqlite3"))?;
         if mode == "registry-init" {
             let mesh = &config
                 .registry
                 .as_ref()
                 .ok_or("registry-init requires a registry section")?
                 .mesh;
-            wipsnet_registry::control::initialize(
+            wispnet_registry::control::initialize(
                 &mut store,
                 &config.state_dir.join("owner.token"),
                 mesh,
@@ -493,8 +524,8 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             .controller
             .as_ref()
             .ok_or("controller section required")?;
-        let invitation = wipsnet_registry::control::read_invitation(&PathBuf::from(&args[4]))?;
-        if wipsnet_core::config::controller_origin(&controller.origin)?.as_str()
+        let invitation = wispnet_registry::control::read_invitation(&PathBuf::from(&args[4]))?;
+        if wispnet_core::config::controller_origin(&controller.origin)?.as_str()
             != invitation.controller
         {
             return Err("invitation controller differs from configured HTTPS origin".into());
@@ -508,15 +539,15 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             .try_exists()
             .map_err(|_| "cannot inspect device credential")?
         {
-            let secret = wipsnet_registry::control::read_token(&controller.credential_file)?;
-            let client = wipsnet_registry::client::Client::configured(controller, secret)?;
+            let secret = wispnet_registry::control::read_token(&controller.credential_file)?;
+            let client = wispnet_registry::client::Client::configured(controller, secret)?;
             client.directory(Some(identity.endpoint_id())).await?;
             println!("Already enrolled; existing identity and credential retained");
             return Ok(());
         }
         let mut temporary =
-            wipsnet_registry::control::credential_temp(&controller.credential_file)?;
-        let client = wipsnet_registry::client::Client::configured(
+            wispnet_registry::control::credential_temp(&controller.credential_file)?;
+        let client = wispnet_registry::client::Client::configured(
             controller,
             zeroize::Zeroizing::new(invitation.code.clone()),
         )?;
@@ -570,8 +601,8 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             .as_ref()
             .ok_or("controller section required")?;
         let identity = FileIdentityStore::new(&config.state_dir)?.load()?;
-        let secret = wipsnet_registry::control::read_token(&controller.credential_file)?;
-        let client = wipsnet_registry::client::Client::configured(controller, secret)?;
+        let secret = wispnet_registry::control::read_token(&controller.credential_file)?;
+        let client = wispnet_registry::client::Client::configured(controller, secret)?;
         let directory = client.directory(Some(identity.endpoint_id())).await?;
         println!(
             "Mesh: {}\nRevision: {}\nAuthorized services: {}",
@@ -612,10 +643,10 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
     }
     // Only explicit, fixed lifecycle fields are logged; never config, args or payloads.
     let level = match config.log_level {
-        wipsnet_core::config::LogLevel::Error => tracing::Level::ERROR,
-        wipsnet_core::config::LogLevel::Warn => tracing::Level::WARN,
-        wipsnet_core::config::LogLevel::Info => tracing::Level::INFO,
-        wipsnet_core::config::LogLevel::Debug => tracing::Level::DEBUG,
+        wispnet_core::config::LogLevel::Error => tracing::Level::ERROR,
+        wispnet_core::config::LogLevel::Warn => tracing::Level::WARN,
+        wispnet_core::config::LogLevel::Info => tracing::Level::INFO,
+        wispnet_core::config::LogLevel::Debug => tracing::Level::DEBUG,
     };
     // Keep third-party protocol traces out of normal diagnostics.
     tracing_subscriber::registry()
@@ -625,10 +656,10 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 .with_writer(std::io::stderr)
                 .with_filter(
                     tracing_subscriber::filter::Targets::new()
-                        .with_target("wipsnet_agent", level)
-                        .with_target("wipsnet_node", level)
-                        .with_target("wipsnet_cli", level)
-                        .with_target("wipsnet_registry", level),
+                        .with_target("wispnet_agent", level)
+                        .with_target("wispnet_node", level)
+                        .with_target("wispnet_cli", level)
+                        .with_target("wispnet_registry", level),
                 ),
         )
         .init();
@@ -640,16 +671,16 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         tokio::select! { _ = term.recv() => {}, _ = interrupt.recv() => {} }
     };
     match mode {
-        "agent" => wipsnet_node::run(&config, shutdown).await?,
-        "registry" => wipsnet_registry::run(&config, shutdown).await?,
+        "agent" => wispnet_node::run(&config, shutdown).await?,
+        "registry" => wispnet_registry::run(&config, shutdown).await?,
         "tunnel" => {
             let (peer, address, service) = target.ok_or("missing tunnel target")?;
             let store = FileIdentityStore::new(&config.state_dir)?;
             let _lease = store.lease()?;
             let identity = store.load()?;
-            let saved = wipsnet_agent::peers::load(&config.state_dir, peer)?;
+            let saved = wispnet_agent::peers::load(&config.state_dir, peer)?;
             let transport =
-                wipsnet_agent::peers::transport(config.transport.as_ref(), saved.as_ref());
+                wispnet_agent::peers::transport(config.transport.as_ref(), saved.as_ref());
             let address = address.or_else(|| saved.as_ref().and_then(|p| p.direct_hint));
             let endpoint =
                 tunnel::bind_configured_client(identity.secret_key(), transport.as_ref()).await?;
@@ -661,14 +692,14 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 .await?;
                 // An explicit CLI open resolves a fresh catalog. Browser/listing opens
                 // instead carry their already selected incarnation end to end.
-                let catalog = match wipsnet_agent::control::connect_target(
+                let catalog = match wispnet_agent::control::connect_target(
                     &endpoint,
                     tunnel::peer_target(peer, transport.as_ref(), address)?,
                 )
                 .await
                 {
                     Ok(control) => {
-                        let result = wipsnet_agent::control::catalog_on(&control, peer).await;
+                        let result = wispnet_agent::control::catalog_on(&control, peer).await;
                         control.close(0u32.into(), b"catalog complete");
                         result.ok()
                     }
@@ -676,7 +707,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 };
                 let stream = if let Some(catalog) = catalog {
                     let selected = catalog.services.iter().find(|s| s.id == service).ok_or(
-                        tunnel::TunnelError::Status(wipsnet_core::protocol::Status::UnknownService),
+                        tunnel::TunnelError::Status(wispnet_core::protocol::Status::UnknownService),
                     )?;
                     tunnel::open_service_bound(&connection, &service, &selected.incarnation).await?
                 } else {

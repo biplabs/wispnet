@@ -1,4 +1,5 @@
 //! Small, bounded open-service protocol. No caller identity or upstream is on the wire.
+// Legacy wire spelling is frozen for compatibility with installed Wispnet clients.
 pub const ALPN: &[u8] = b"wipsnet/service/1";
 pub const VERSION: u16 = 1;
 pub const MAX_FRAME: usize = 128;

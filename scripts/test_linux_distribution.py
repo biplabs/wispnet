@@ -21,7 +21,7 @@ class DistributionTests(unittest.TestCase):
         cls.archive = package(
             Path(
                 os.environ.get(
-                    "WIPSNET_PACKAGE_TEST_BINARY", ROOT / "target/debug/wipsnet"
+                    "WISPNET_PACKAGE_TEST_BINARY", ROOT / "target/debug/wispnet"
                 )
             ),
             Path(cls.workspace.name) / "bundle.tar.gz",
@@ -41,8 +41,8 @@ class DistributionTests(unittest.TestCase):
         self.home = self.root / "home"
         self.home.mkdir()
         self.env = dict(os.environ, HOME=str(self.home))
-        self.installed = self.home / ".local/libexec/wipsnet-node/wipsnet"
-        self.config = self.home / ".config/wipsnet-node/host.toml"
+        self.installed = self.home / ".local/libexec/wispnet-node/wispnet"
+        self.config = self.home / ".config/wispnet-node/host.toml"
         self.state = self.home / "state"
 
     def run_command(self, *args, ok=True):
@@ -170,6 +170,22 @@ class DistributionTests(unittest.TestCase):
         self.assertEqual(self.installed.read_bytes(), installed)
         self.assertEqual(self.status(), status)
 
+    def test_legacy_config_upgrade_preserves_identity_and_installs_named_command(self):
+        self.install()
+        self.initialize()
+        before = self.status()
+        legacy = self.home / ".config/wipsnet-node/host.toml"
+        legacy.parent.mkdir(parents=True, mode=0o700)
+        self.config.rename(legacy)
+        self.install()
+        self.assertEqual(self.status(), before)
+        self.assertEqual(self.config.read_bytes(), legacy.read_bytes())
+        self.assertEqual(self.config.stat().st_mode & 0o077, 0)
+        command = self.home / ".local/bin/wispnet"
+        self.assertIn("--qrcode", self.run_command(str(command), "--help").stdout)
+        result = self.run_command(str(command), "--qrcode", ok=False)
+        self.assertIn("requires a terminal", result.stderr)
+
     def test_sidecar_and_payload_exclude_private_state(self):
         expected = (
             self.archive.with_name(self.archive.name + ".sha256").read_text().split()[0]
@@ -179,7 +195,7 @@ class DistributionTests(unittest.TestCase):
         )
         manifest = json.loads((self.bundle / "manifest.json").read_text())
         self.assertEqual(manifest["platform"], "linux-x86_64")
-        self.assertIn("bin/wipsnet", manifest["sha256"])
+        self.assertIn("bin/wispnet", manifest["sha256"])
         for name, digest in manifest["sha256"].items():
             self.assertEqual(
                 hashlib.sha256((self.bundle / name).read_bytes()).hexdigest(), digest

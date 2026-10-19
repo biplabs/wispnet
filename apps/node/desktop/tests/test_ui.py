@@ -1,8 +1,9 @@
 import unittest
 import tempfile
+import time
 from pathlib import Path
 from unittest.mock import patch
-from PySide6.QtWidgets import QApplication, QMessageBox, QTabWidget, QPushButton
+from PySide6.QtWidgets import QApplication, QMessageBox, QTabWidget, QPushButton, QLabel
 from PySide6.QtCore import Qt
 from wispnet_desktop.app import Window, appearance
 
@@ -17,6 +18,26 @@ class DesktopChecks(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
         appearance(cls.app)
+
+    def test_pairing_qr_expiry_clears_image_and_close_allows_regeneration(self):
+        window = Window(API(), tray=False)
+        window.timer.stop()
+        result = {"host": "a" * 64, "invitation": "b" * 64,
+                  "expires_at": time.time() + 300, "matrix": [[False, True], [True, False]]}
+        window.show_qr(result, None)
+        dialog = window.qr_dialog
+        image = dialog.findChild(QLabel, "pairingQrImage")
+        self.assertFalse(image.pixmap().isNull())
+        # Changing the wall-clock expiry also exercises the dialog's timer path.
+        result["expires_at"] = 1
+        from PySide6.QtCore import QTimer
+        dialog.findChild(QTimer).timeout.emit()
+        self.assertTrue(image.pixmap().isNull())
+        self.assertTrue(any("QR expired" in label.text() for label in dialog.findChildren(QLabel)))
+        dialog.reject()
+        self.assertIsNone(window.qr_dialog)
+        self.assertTrue(window.qr_btn.isEnabled())
+        window.close()
 
     def test_identity_selection_and_failure_do_not_invent_connected_clients(self):
         window = Window(API(), tray=False)

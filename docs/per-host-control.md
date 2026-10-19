@@ -20,8 +20,8 @@ remote controller is required by this mode.
 
 ```sh
 cargo build --workspace --locked
-target/debug/wipsnet host-init --config /absolute/path/host.toml
-target/debug/wipsnet agent --config /absolute/path/host.toml
+target/debug/wispnet host-init --config /absolute/path/host.toml
+target/debug/wispnet agent --config /absolute/path/host.toml
 ```
 
 `schema_version = 2` selects independent host authority and requires a transport
@@ -66,8 +66,8 @@ local OS account/private state is the administration boundary; local filesystem
 compromise is not protected by an additional network password.
 
 ```sh
-target/debug/wipsnet host-status --config /absolute/path/host.toml
-target/debug/wipsnet host-mutate --config /absolute/path/host.toml \
+target/debug/wispnet host-status --config /absolute/path/host.toml
+target/debug/wispnet host-mutate --config /absolute/path/host.toml \
   --request /absolute/path/request.json
 ```
 
@@ -121,7 +121,7 @@ replacement and final release measurements remain #9/#14/#18.
 ## Catalog/control transport
 
 ```sh
-target/debug/wipsnet host-catalog --config /absolute/path/client.toml \
+target/debug/wispnet host-catalog --config /absolute/path/client.toml \
   --peer PINNED_HOST_ID --address 192.0.2.10:7779
 ```
 

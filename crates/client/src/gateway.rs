@@ -18,8 +18,8 @@ use tokio::{
 mod http;
 #[path = "gateway_store.rs"]
 mod store;
-const COOKIE: &str = "_wipsnet_session";
-const START: &str = r#"<!doctype html><meta name="referrer" content="no-referrer"><title>Wispnet</title><p id="status">Opening service…</p><script>const token=location.hash.slice(1);history.replaceState(null,'',location.pathname);fetch('/_wipsnet/session',{method:'POST',headers:{Authorization:'Bearer '+token}}).then(r=>{if(!r.ok)throw Error();location.replace('/')}).catch(()=>document.getElementById('status').textContent='Open this service again in Wispnet.');</script>"#;
+const COOKIE: &str = "_wispnet_session";
+const START: &str = r#"<!doctype html><meta name="referrer" content="no-referrer"><title>Wispnet</title><p id="status">Opening service…</p><script>const token=location.hash.slice(1);history.replaceState(null,'',location.pathname);fetch('/_wispnet/session',{method:'POST',headers:{Authorization:'Bearer '+token}}).then(r=>{if(!r.ok)throw Error();location.replace('/')}).catch(()=>document.getElementById('status').textContent='Open this service again in Wispnet.');</script>"#;
 struct Worker {
     binding: store::Binding,
     task: JoinHandle<()>,
@@ -92,7 +92,7 @@ impl Gateways {
             std::time::Instant::now() + Duration::from_secs(60),
         ));
         Ok(format!(
-            "http://{}/_wipsnet/start#{token}",
+            "http://{}/_wispnet/start#{token}",
             worker.binding.authority()
         ))
     }
@@ -103,7 +103,7 @@ impl Gateways {
         service: &str,
         grant: &str,
     ) -> Result<String, String> {
-        if !wipsnet_core::enrollment::valid_code(grant) {
+        if !wispnet_core::enrollment::valid_code(grant) {
             return Err("Invalid app grant".into());
         }
         let workers = self.workers.lock().await;
@@ -178,11 +178,11 @@ impl Gateways {
         incarnation: String,
         system_name: Option<&str>,
     ) -> Result<String, String> {
-        if system_name.is_some_and(|s| !wipsnet_core::enrollment::valid_name(s)) {
+        if system_name.is_some_and(|s| !wispnet_core::enrollment::valid_name(s)) {
             return Err("Invalid system display name".into());
         }
-        if !wipsnet_core::protocol::valid_service_id(&service)
-            || !wipsnet_core::enrollment::valid_code(&incarnation)
+        if !wispnet_core::protocol::valid_service_id(&service)
+            || !wispnet_core::enrollment::valid_code(&incarnation)
         {
             return Err("Invalid browser route".into());
         }
@@ -268,7 +268,7 @@ impl Gateways {
                     .find(|s| {
                         s.id == binding.service
                             && s.incarnation == binding.incarnation
-                            && s.kind == wipsnet_core::host::ServiceKind::Http
+                            && s.kind == wispnet_core::host::ServiceKind::Http
                     })
                     .map(|s| s.backend)
             } else {
@@ -468,7 +468,7 @@ impl Route {
         if length > 16 * 1024 * 1024 {
             return response(&mut socket, "413 Content Too Large", "", "").await;
         }
-        if request.path == "/_wipsnet/start" && request.method == "GET" {
+        if request.path == "/_wispnet/start" && request.method == "GET" {
             let navigation = request.one("sec-fetch-mode") == Some("navigate")
                 && request.one("sec-fetch-dest") == Some("document");
             if !request.same_origin(&origin) && !navigation {
@@ -476,7 +476,7 @@ impl Route {
             }
             return response(&mut socket,"200 OK",START,"Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'\r\n").await;
         }
-        if request.path == "/_wipsnet/session" {
+        if request.path == "/_wispnet/session" {
             let mut tokens = self.bootstraps.lock().await;
             tokens.retain(|(_, expires)| *expires > std::time::Instant::now());
             let index = tokens.iter().position(|(t, _)| {
@@ -523,7 +523,8 @@ impl Route {
             )
             .await;
         }
-        if request.path.starts_with("/_wipsnet/") {
+        // Retired bootstrap paths must never forward local credentials upstream.
+        if request.path.starts_with("/_wispnet/") || request.path.starts_with("/_wipsnet/") {
             return response(&mut socket, "404 Not Found", "", "").await;
         }
         if !request.values("service-worker").is_empty()
@@ -611,7 +612,7 @@ impl Route {
                     .find(|s| {
                         s.id == self.service
                             && s.incarnation == self.incarnation
-                            && s.kind == wipsnet_core::host::ServiceKind::Http
+                            && s.kind == wispnet_core::host::ServiceKind::Http
                             && Some(s.backend) == self.local_binding
                     })
                     .map(|s| s.backend),
@@ -640,7 +641,7 @@ impl Route {
             }
         } else {
             if !matches!(
-                wipsnet_agent::peers::load(&self.client.state, self.peer),
+                wispnet_agent::peers::load(&self.client.state, self.peer),
                 Ok(Some(_))
             ) {
                 return response(
@@ -652,7 +653,7 @@ impl Route {
                 .await;
             }
             let target = self.client.target(self.peer).map_err(|_| ())?;
-            _connection = match wipsnet_agent::tunnel::connect_target(&self.client.endpoint, target)
+            _connection = match wispnet_agent::tunnel::connect_target(&self.client.endpoint, target)
                 .await
             {
                 Ok(c) => Close(c),
@@ -660,7 +661,7 @@ impl Route {
                     return response(&mut socket, "502 Bad Gateway", "Host unavailable", "").await;
                 }
             };
-            match wipsnet_agent::tunnel::open_service_bound(
+            match wispnet_agent::tunnel::open_service_bound(
                 &_connection.0,
                 &self.service,
                 &self.incarnation,
@@ -768,7 +769,7 @@ impl Route {
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 let current =
                     tokio::time::timeout(Duration::from_secs(1), authority.services()).await;
-                if !matches!(current, Ok(Ok(ref services)) if services.iter().any(|s| s.id == self.service && s.incarnation == self.incarnation && s.kind == wipsnet_core::host::ServiceKind::Http && Some(s.backend) == binding))
+                if !matches!(current, Ok(Ok(ref services)) if services.iter().any(|s| s.id == self.service && s.incarnation == self.incarnation && s.kind == wispnet_core::host::ServiceKind::Http && Some(s.backend) == binding))
                 {
                     return;
                 }
@@ -815,7 +816,7 @@ mod tests {
     }
     async fn client(
         state: &std::path::Path,
-        key: wipsnet_core::identity::SecretKey,
+        key: wispnet_core::identity::SecretKey,
     ) -> Arc<Client> {
         Client::new(
             key,
@@ -829,9 +830,9 @@ mod tests {
     async fn readable_names_include_host_identity_and_survive_duplicate_system_names() {
         let state = tempfile::tempdir().unwrap();
         std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        let key = wipsnet_core::identity::SecretKey::generate();
+        let key = wispnet_core::identity::SecretKey::generate();
         let c = client(state.path(), key.clone()).await;
-        let peer = wipsnet_core::identity::SecretKey::generate().public();
+        let peer = wispnet_core::identity::SecretKey::generate().public();
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let binding = store::Binding {
             peer,
@@ -881,7 +882,7 @@ mod tests {
                 .starts_with("HTTP/1.1 421")
         );
         assert!(raw(&url, "GET", "/", NAV).await.starts_with("HTTP/1.1 303"));
-        let other_peer = wipsnet_core::identity::SecretKey::generate().public();
+        let other_peer = wispnet_core::identity::SecretKey::generate().public();
         let other = c
             .gateway
             .open_named(
@@ -942,13 +943,13 @@ mod tests {
     async fn unpair_removes_only_target_routes_and_pin() {
         let state = tempfile::tempdir().unwrap();
         std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        let c = client(state.path(), wipsnet_core::identity::SecretKey::generate()).await;
-        let peer = wipsnet_core::identity::SecretKey::generate().public();
-        let other = wipsnet_core::identity::SecretKey::generate().public();
+        let c = client(state.path(), wispnet_core::identity::SecretKey::generate()).await;
+        let peer = wispnet_core::identity::SecretKey::generate().public();
+        let other = wispnet_core::identity::SecretKey::generate().public();
         for host in [peer, other] {
-            wipsnet_agent::peers::save(
+            wispnet_agent::peers::save(
                 state.path(),
-                &wipsnet_core::pairing::Bootstrap {
+                &wispnet_core::pairing::Bootstrap {
                     version: 1,
                     host,
                     relay_url: "https://relay.example/".into(),
@@ -974,12 +975,12 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            wipsnet_agent::peers::load(state.path(), peer)
+            wispnet_agent::peers::load(state.path(), peer)
                 .unwrap()
                 .is_none()
         );
         assert!(
-            wipsnet_agent::peers::load(state.path(), other)
+            wispnet_agent::peers::load(state.path(), other)
                 .unwrap()
                 .is_some()
         );
@@ -1001,9 +1002,9 @@ mod tests {
     async fn stable_bookmarks_restore_ports_rotate_credentials_and_reject_cross_origin() {
         let state = tempfile::tempdir().unwrap();
         std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        let key = wipsnet_core::identity::SecretKey::generate();
+        let key = wispnet_core::identity::SecretKey::generate();
         let c = client(state.path(), key.clone()).await;
-        let peer = wipsnet_core::identity::SecretKey::generate().public();
+        let peer = wispnet_core::identity::SecretKey::generate().public();
         assert!(
             c.gateway
                 .open(c.clone(), peer, "website".into(), "a".repeat(64))
@@ -1026,14 +1027,19 @@ mod tests {
             launch.fragment().unwrap()
         );
         assert!(
-            raw(&url, "POST", "/_wipsnet/session", &exchange)
+            raw(&url, "POST", "/_wispnet/session", &exchange)
                 .await
                 .starts_with("HTTP/1.1 204")
         );
         assert!(
-            raw(&url, "POST", "/_wipsnet/session", &exchange)
+            raw(&url, "POST", "/_wispnet/session", &exchange)
                 .await
                 .starts_with("HTTP/1.1 403")
+        );
+        assert!(
+            raw(&url, "POST", "/_wipsnet/session", &exchange)
+                .await
+                .starts_with("HTTP/1.1 404")
         );
         assert!(url.ends_with('/') && !url.contains('#'));
         assert_eq!(
@@ -1107,7 +1113,7 @@ mod tests {
         assert!(raw(&url, "GET", "/", NAV).await.starts_with("HTTP/1.1 303"));
         c.gateway.stop().await;
         c.endpoint.close().await;
-        let different = client(state.path(), wipsnet_core::identity::SecretKey::generate()).await;
+        let different = client(state.path(), wispnet_core::identity::SecretKey::generate()).await;
         assert!(
             different
                 .command(&serde_json::json!({"op":"enable"}))
@@ -1118,10 +1124,10 @@ mod tests {
     }
     #[tokio::test]
     async fn network_recovery_reports_only_inflight_browser_requests() {
-        use wipsnet_registry::host::{self, Authority, Mutation};
+        use wispnet_registry::host::{self, Authority, Mutation};
         let state = tempfile::tempdir().unwrap();
         std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        let key = wipsnet_core::identity::SecretKey::generate();
+        let key = wispnet_core::identity::SecretKey::generate();
         let peer = key.public();
         host::initialize(state.path(), peer).unwrap();
         let backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1166,7 +1172,7 @@ mod tests {
         let service = authority.services().await.unwrap().remove(0);
         let config =
             serde_json::from_value(serde_json::json!({"bind_addr":"127.0.0.1:0"})).unwrap();
-        let endpoint = wipsnet_agent::tunnel::bind_configured_client(&key, Some(&config))
+        let endpoint = wispnet_agent::tunnel::bind_configured_client(&key, Some(&config))
             .await
             .unwrap();
         let c = Client::from_endpoint(
@@ -1240,10 +1246,10 @@ mod tests {
     }
     #[tokio::test]
     async fn persistent_route_checks_local_policy_on_every_request_and_survives_old_deadline() {
-        use wipsnet_registry::host::{self, Authority, Mutation};
+        use wispnet_registry::host::{self, Authority, Mutation};
         let state = tempfile::tempdir().unwrap();
         std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        let key = wipsnet_core::identity::SecretKey::generate();
+        let key = wispnet_core::identity::SecretKey::generate();
         let peer = key.public();
         host::initialize(state.path(), peer).unwrap();
         let backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1282,7 +1288,7 @@ mod tests {
         let service = authority.services().await.unwrap().remove(0);
         let config =
             serde_json::from_value(serde_json::json!({"bind_addr":"127.0.0.1:0"})).unwrap();
-        let endpoint = wipsnet_agent::tunnel::bind_configured_client(&key, Some(&config))
+        let endpoint = wispnet_agent::tunnel::bind_configured_client(&key, Some(&config))
             .await
             .unwrap();
         let c = Client::from_endpoint(
@@ -1336,10 +1342,10 @@ mod tests {
     }
     #[tokio::test]
     async fn native_app_credentials_are_scoped_rotate_expire_and_revoke() {
-        use wipsnet_registry::host::{self, Authority, Mutation};
+        use wispnet_registry::host::{self, Authority, Mutation};
         let state = tempfile::tempdir().unwrap();
         std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        let key = wipsnet_core::identity::SecretKey::generate();
+        let key = wispnet_core::identity::SecretKey::generate();
         let peer = key.public();
         host::initialize(state.path(), peer).unwrap();
         let backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1387,7 +1393,7 @@ mod tests {
         let service = authority.services().await.unwrap().remove(0);
         let config =
             serde_json::from_value(serde_json::json!({"bind_addr":"127.0.0.1:0"})).unwrap();
-        let endpoint = wipsnet_agent::tunnel::bind_configured_client(&key, Some(&config))
+        let endpoint = wispnet_agent::tunnel::bind_configured_client(&key, Some(&config))
             .await
             .unwrap();
         let c = Client::from_endpoint(
@@ -1482,14 +1488,14 @@ mod tests {
         let config =
             serde_json::from_value(serde_json::json!({"bind_addr":"127.0.0.1:0"})).unwrap();
         let client = Client::new(
-            wipsnet_core::identity::SecretKey::generate(),
+            wispnet_core::identity::SecretKey::generate(),
             state.path().into(),
             config,
         )
         .await
         .unwrap();
         client.gateway.enable();
-        let peer = wipsnet_core::identity::SecretKey::generate().public();
+        let peer = wispnet_core::identity::SecretKey::generate().public();
         let mut urls = Vec::new();
         for i in 0..16 {
             urls.push(
@@ -1569,6 +1575,6 @@ mod tests {
             http::clean_cookie("app=yes; Domain=.localhost; Path=/"),
             Ok(Some("app=yes; Path=/".into()))
         );
-        assert_eq!(http::clean_cookie("_wipsnet_session=bad; Path=/"), Ok(None));
+        assert_eq!(http::clean_cookie("_wispnet_session=bad; Path=/"), Ok(None));
     }
 }

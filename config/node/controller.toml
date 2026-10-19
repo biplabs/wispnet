@@ -1,13 +1,13 @@
 schema_version = 1
 device_name = "laptop"
-state_dir = "/home/CHANGE_ME/.local/state/wipsnet"
+state_dir = "/home/CHANGE_ME/.local/state/wispnet"
 log_level = "info"
 
 [controller]
-# Supplied out of band; never resolved through the Wipsnet service directory.
+# Supplied out of band; never resolved through the Wispnet service directory.
 origin = "https://controller.example.com"
-credential_file = "/home/CHANGE_ME/.local/state/wipsnet/device.token"
+credential_file = "/home/CHANGE_ME/.local/state/wispnet/device.token"
 
 # For a private HTTPS controller only: provision this trusted root independently.
 # Invitations never carry trust roots, and certificate/hostname checks stay on.
-# ca_certificate_file = "/home/CHANGE_ME/.local/state/wipsnet/controller-root.pem"
+# ca_certificate_file = "/home/CHANGE_ME/.local/state/wispnet/controller-root.pem"

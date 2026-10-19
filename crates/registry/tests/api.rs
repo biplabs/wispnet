@@ -6,11 +6,11 @@ use axum::{
 use serde_json::{Value, json};
 use std::os::unix::fs::PermissionsExt;
 use tower::ServiceExt;
-use wipsnet_core::{
+use wispnet_core::{
     enrollment::{Challenge, Proof},
     identity::Identity,
 };
-use wipsnet_registry::{api, control, store::Store};
+use wispnet_registry::{api, control, store::Store};
 
 fn fixture() -> (tempfile::TempDir, Router, String) {
     let dir = tempfile::tempdir().unwrap();

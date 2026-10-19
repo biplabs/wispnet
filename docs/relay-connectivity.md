@@ -37,8 +37,8 @@ verification is always enabled. The relay's certificate must match its hostname.
 No private keys or admission tokens belong in the relay URL.
 
 ```sh
-target/debug/wipsnet host-catalog --config /absolute/path/client.toml --peer PINNED_HOST_ID
-target/debug/wipsnet tunnel --config /absolute/path/client.toml --peer PINNED_HOST_ID --service llama
+target/debug/wispnet host-catalog --config /absolute/path/client.toml --peer PINNED_HOST_ID
+target/debug/wispnet tunnel --config /absolute/path/client.toml --peer PINNED_HOST_ID --service llama
 ```
 
 Both commands optionally accept `--address IP:UDP_PORT` immediately after the
@@ -129,12 +129,12 @@ On Linux with unprivileged user/network namespaces, `ip`, `nft` and `strace`:
 ```sh
 python3 scripts/relay_network_audit.py
 # Or include the audit in the normal tests and pre-push hook:
-WIPSNET_NETWORK_AUDIT=1 ./scripts/test.sh
-WIPSNET_NETWORK_AUDIT=1 git push origin main
+WISPNET_NETWORK_AUDIT=1 ./scripts/test.sh
+WISPNET_NETWORK_AUDIT=1 git push origin main
 ```
 
 For a locally unpacked strace binary, pass `--strace /absolute/path/strace`, or
-set `WIPSNET_STRACE` alongside `WIPSNET_NETWORK_AUDIT=1` for the hook. Missing
+set `WISPNET_STRACE` alongside `WISPNET_NETWORK_AUDIT=1` for the hook. Missing
 dependencies or unsupported namespaces fail an explicitly requested audit.
 The ordinary hook always runs the DNS/recovery and stale-hint Rust tests plus
 eight audit-parser regression tests; isolated firewall checks are opt-in because

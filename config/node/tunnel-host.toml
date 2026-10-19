@@ -1,7 +1,7 @@
 # Development host: set an absolute private state path and add the client public ID.
 schema_version = 1
 device_name = "development-host"
-state_dir = "/tmp/wipsnet-dev-host"
+state_dir = "/tmp/wispnet-dev-host"
 log_level = "info"
 
 [transport]

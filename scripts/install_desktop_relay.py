@@ -26,12 +26,26 @@ def main():
     assert all(c.isalnum() or c in '.-' for c in args.hostname) and '.' in args.hostname and not args.hostname.startswith('-')
     ipaddress.IPv4Address(args.lan_ip)
     def remote(*arguments,**kwargs): return run([*SSH,args.ssh_host,shlex.join([str(a) for a in arguments])],**kwargs)
-    subprocess.run(['cargo','build','-p','wipsnet-relay','--locked'],cwd=ROOT,check=True)
+    subprocess.run(['cargo','build','-p','wispnet-relay','--locked'],cwd=ROOT,check=True)
     home=remote('python3','-c','from pathlib import Path;print(Path.home())').stdout.strip()
     assert home.startswith('/') and '\n' not in home
-    base=home+'/.local/libexec/wipsnet-relay'
-    config=home+'/.config/wipsnet-relay'
-    tls=home+'/.local/share/wipsnet-relay'
+    base=home+'/.local/libexec/wispnet-relay'
+    config=home+'/.config/wispnet-relay'
+    tls=home+'/.local/share/wispnet-relay'
+    # Upgrade historical paths without discarding the relay's TLS/ACME state.
+    remote('python3','-c',"""import pathlib,subprocess
+h=pathlib.Path.home();unit=h/'.config/systemd/user/wipsnet-relay.service'
+pairs=[(h/p.replace('wispnet','wipsnet'),h/p) for p in ['.local/libexec/wispnet-relay','.config/wispnet-relay','.local/share/wispnet-relay']]
+for old,new in pairs:
+ if old.exists():
+  assert not old.is_symlink() and old.is_dir(),'unsafe legacy relay directory'
+  assert not new.exists(),'both legacy and current relay directories exist; reconcile before installing'
+if unit.exists():
+ subprocess.run(['systemctl','--user','disable','--now','wipsnet-relay.service'],check=True)
+ unit.unlink()
+for old,new in pairs:
+ if old.exists():old.rename(new)
+""")
     # Existing protected directories must retain ownership/mode and cannot be symlinks.
     remote('python3','-c',"""import os,pathlib,sys
 for item in sys.argv[1:]:
@@ -53,7 +67,7 @@ def openssl(*args): subprocess.run(['openssl',*args],check=True,stdout=subproces
 if not pathlib.Path(ca_key).exists():
  assert not pathlib.Path(ca).exists()
  openssl('req','-x509','-newkey','ed25519','-nodes','-days','365','-keyout',ca_key,'-out',ca,
-  '-subj','/CN=Wipsnet temporary relay CA','-addext','basicConstraints=critical,CA:TRUE',
+  '-subj','/CN=Wispnet temporary relay CA','-addext','basicConstraints=critical,CA:TRUE',
   '-addext','keyUsage=critical,keyCertSign,cRLSign')
 with tempfile.TemporaryDirectory(dir=pathlib.Path(key).parent) as tmp:
  csr=tmp+'/relay.csr';ext=tmp+'/extensions'
@@ -65,13 +79,13 @@ with tempfile.TemporaryDirectory(dir=pathlib.Path(key).parent) as tmp:
     if not args.acme:
         remote('openssl','x509','-in',certificate,'-noout','-checkhost',args.hostname)
         remote('openssl','x509','-in',certificate,'-noout','-checkend','86400')
-    with tempfile.TemporaryDirectory(prefix='wipsnet-relay-install-') as temporary:
-        root=Path(temporary);binary=root/'wipsnet-relay'
-        shutil.copyfile(ROOT/'target/debug/wipsnet-relay',binary);run(['strip','--strip-debug',binary])
-        run(['scp','-q','-o','BatchMode=yes','-o','StrictHostKeyChecking=yes',binary,args.ssh_host+':'+base+'/wipsnet-relay.next'])
+    with tempfile.TemporaryDirectory(prefix='wispnet-relay-install-') as temporary:
+        root=Path(temporary);binary=root/'wispnet-relay'
+        shutil.copyfile(ROOT/'target/debug/wispnet-relay',binary);run(['strip','--strip-debug',binary])
+        run(['scp','-q','-o','BatchMode=yes','-o','StrictHostKeyChecking=yes',binary,args.ssh_host+':'+base+'/wispnet-relay.next'])
     remote('python3','-c',"""import os,sys
 p=sys.argv[1];os.chmod(p+'.next',0o700);os.replace(p+'.next',p)
-""",base+'/wipsnet-relay')
+""",base+'/wispnet-relay')
     text=f"listen='0.0.0.0:8443'\ncertificate='{certificate}'\nprivate_key='{key}'\nmax_connections=64\n"
     if args.acme:
         text=f"listen='0.0.0.0:8443'\nmax_connections=64\nacme_hostname='{args.hostname}'\nacme_cache='{tls}/acme'\n"
@@ -80,16 +94,23 @@ p=sys.argv[1];f=os.open(p+'.next',os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
 with os.fdopen(f,'w') as out: out.write(sys.stdin.read())
 os.replace(p+'.next',p)
 """,config+'/relay.toml',input=text)
-    unit=remote('python3','-c',"from pathlib import Path;print(Path.home()/'.config/systemd/user/wipsnet-relay.service')").stdout.strip()
+    unit=remote('python3','-c',"from pathlib import Path;print(Path.home()/'.config/systemd/user/wispnet-relay.service')").stdout.strip()
     remote('python3','-c',"""import os,sys
 p=sys.argv[1];f=os.open(p+'.next',os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
 with os.fdopen(f,'w') as out: out.write(sys.stdin.read())
 os.replace(p+'.next',p)
-""",unit,input=(ROOT/'deploy/relay/wipsnet-relay.service').read_text())
+""",unit,input=(ROOT/'deploy/relay/wispnet-relay.service').read_text())
     remote('systemctl','--user','daemon-reload')
-    remote('systemctl','--user','enable','wipsnet-relay.service')
-    remote('systemctl','--user','restart','wipsnet-relay.service')
-    remote('systemctl','--user','is-active','wipsnet-relay.service')
+    remote('systemctl','--user','enable','wispnet-relay.service')
+    remote('systemctl','--user','restart','wispnet-relay.service')
+    remote('systemctl','--user','is-active','wispnet-relay.service')
+    remote('python3','-c',"""import os,pathlib,sys
+binary=pathlib.Path(sys.argv[1]);launcher=pathlib.Path.home()/'.local/bin/wispnet-relay'
+launcher.parent.mkdir(parents=True,exist_ok=True)
+temporary=launcher.with_name('wispnet-relay.installing');temporary.unlink(missing_ok=True)
+temporary.symlink_to(binary);os.replace(temporary,launcher)
+binary.with_name('wipsnet-relay').unlink(missing_ok=True)
+""",base+'/wispnet-relay')
     if not args.acme: remote('curl','--silent','--show-error','--fail','--cacert',ca,f'https://{args.lan_ip}:8443/ping')
     else: print('ACME started; verify the public HTTPS endpoint after issuance',flush=True)
     print('Standalone relay installed: TCP 8443; remote TLS key retained; no node state touched',flush=True)

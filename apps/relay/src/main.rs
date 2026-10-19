@@ -197,7 +197,7 @@ async fn main() {
     let result = if args.len() == 2 && args[0] == "--config" {
         serve(Path::new(&args[1])).await
     } else {
-        Err("usage: wipsnet-relay --config /absolute/relay.toml")
+        Err("usage: wispnet-relay --config /absolute/relay.toml")
     };
     if let Err(message) = result {
         eprintln!("{message}");

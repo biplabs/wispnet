@@ -1,7 +1,7 @@
 use std::time::Duration;
 use tokio::time::timeout;
-use wipsnet_agent::{pairing, tunnel};
-use wipsnet_core::identity::Identity;
+use wispnet_agent::{pairing, tunnel};
+use wispnet_core::identity::Identity;
 
 #[tokio::test]
 async fn hello_checks_transport_pin_before_request_and_rejects_false_responses() {
@@ -10,7 +10,7 @@ async fn hello_checks_transport_pin_before_request_and_rejects_false_responses()
     let wrong = Identity::generate();
     let server = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(server_key.secret_key().clone())
-        .alpns(vec![wipsnet_core::pairing::ALPN.to_vec()])
+        .alpns(vec![wispnet_core::pairing::ALPN.to_vec()])
         .bind_addr("127.0.0.1:0".parse::<std::net::SocketAddr>().unwrap())
         .unwrap()
         .bind()
@@ -20,7 +20,7 @@ async fn hello_checks_transport_pin_before_request_and_rejects_false_responses()
     let target =
         iroh::EndpointAddr::new(server_key.endpoint_id()).with_ip_addr(server.bound_sockets()[0]);
     let (outgoing, incoming) = tokio::join!(
-        client.connect(target.clone(), wipsnet_core::pairing::ALPN),
+        client.connect(target.clone(), wispnet_core::pairing::ALPN),
         async { server.accept().await.unwrap().await.unwrap() }
     );
     let outgoing = outgoing.unwrap();
@@ -69,7 +69,7 @@ async fn hello_checks_transport_pin_before_request_and_rejects_false_responses()
 #[test]
 fn invitation_files_and_targets_fail_closed_without_exposing_capabilities() {
     use std::os::unix::fs::{PermissionsExt, symlink};
-    use wipsnet_core::{config::TransportConfig, pairing::Invitation};
+    use wispnet_core::{config::TransportConfig, pairing::Invitation};
     let temporary = tempfile::tempdir().unwrap();
     let path = temporary.path().join("invite.json");
     let host = Identity::generate().endpoint_id();

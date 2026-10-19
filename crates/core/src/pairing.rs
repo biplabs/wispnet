@@ -5,6 +5,7 @@ mod invitation;
 pub use crate::enrollment::Signature;
 pub use invitation::{Bootstrap, Challenge, Invitation, Purpose, Scope};
 
+// Legacy wire spelling is frozen for compatibility with installed Wispnet clients.
 pub const ALPN: &[u8] = b"wipsnet/pairing/1";
 pub const VERSION: u16 = 1;
 pub const MAX_REQUEST: usize = 4096;

@@ -25,7 +25,7 @@ full power-off, cloud VM/disk replacement, or protected recovery test.
 
 `scripts/test.sh` and the enabled local pre-push hook run the native, Python,
 Qt-offscreen, gateway and relay fixture suites. `scripts/test_linux_distribution.py`
-checks an extracted bundle in a temporary home; set `WIPSNET_PACKAGE_TEST_BINARY`
+checks an extracted bundle in a temporary home; set `WISPNET_PACKAGE_TEST_BINARY`
 to an explicitly built release executable to exercise that binary. Build bundles
 with `scripts/package_linux.py`; inspect their manifest for source commit, dirty
 checkout flag, payload checksums and glibc requirement.

@@ -2517,6 +2517,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
+
+[[package]]
 name = "quick-xml"
 version = "0.42.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4330,7 +4336,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "wipsnet-agent"
+name = "wispnet-agent"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
@@ -4345,22 +4351,22 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
- "wipsnet-core",
- "wipsnet-registry",
+ "wispnet-core",
+ "wispnet-registry",
  "zeroize",
 ]
 
 [[package]]
-name = "wipsnet-android"
+name = "wispnet-android"
 version = "0.1.0"
 dependencies = [
  "jni 0.21.1",
- "wipsnet-client",
+ "wispnet-client",
  "zeroize",
 ]
 
 [[package]]
-name = "wipsnet-cli"
+name = "wispnet-cli"
 version = "0.1.0"
 dependencies = [
  "blake3",
@@ -4379,15 +4385,15 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "webpki-roots",
- "wipsnet-agent",
- "wipsnet-core",
- "wipsnet-node",
- "wipsnet-registry",
+ "wispnet-agent",
+ "wispnet-core",
+ "wispnet-node",
+ "wispnet-registry",
  "zeroize",
 ]
 
 [[package]]
-name = "wipsnet-client"
+name = "wispnet-client"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
@@ -4400,14 +4406,14 @@ dependencies = [
  "tempfile",
  "tokio",
  "url",
- "wipsnet-agent",
- "wipsnet-core",
- "wipsnet-registry",
+ "wispnet-agent",
+ "wispnet-core",
+ "wispnet-registry",
  "zeroize",
 ]
 
 [[package]]
-name = "wipsnet-core"
+name = "wispnet-core"
 version = "0.1.0"
 dependencies = [
  "iroh-base",
@@ -4419,22 +4425,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "wipsnet-node"
+name = "wispnet-node"
 version = "0.1.0"
 dependencies = [
  "iroh",
  "libc",
+ "qrcode",
  "serde_json",
  "tokio",
  "tracing",
- "wipsnet-agent",
- "wipsnet-client",
- "wipsnet-core",
- "wipsnet-registry",
+ "wispnet-agent",
+ "wispnet-client",
+ "wispnet-core",
+ "wispnet-registry",
 ]
 
 [[package]]
-name = "wipsnet-registry"
+name = "wispnet-registry"
 version = "0.1.0"
 dependencies = [
  "axum",
@@ -4450,12 +4457,12 @@ dependencies = [
  "tokio-rustls",
  "tower",
  "tracing",
- "wipsnet-core",
+ "wispnet-core",
  "zeroize",
 ]
 
 [[package]]
-name = "wipsnet-relay"
+name = "wispnet-relay"
 version = "0.1.0"
 dependencies = [
  "iroh-base",

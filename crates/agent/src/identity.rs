@@ -5,7 +5,7 @@ use std::{
     os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
 };
-use wipsnet_core::identity::{EndpointId, Identity, IdentityError, IdentityStore, SecretKey};
+use wispnet_core::identity::{EndpointId, Identity, IdentityError, IdentityStore, SecretKey};
 use zeroize::Zeroizing;
 
 const KEY_FILE: &str = "identity.key";

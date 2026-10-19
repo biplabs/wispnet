@@ -11,7 +11,7 @@ intended client's invitation are transferred.
 Run the full local hook suite with the current Android binary rebuilt first:
 
 ```sh
-WIPSNET_ANDROID_RELAY_TEST=1 WIPSNET_SSH_RELAY_HOST=SECOND_COMPUTER scripts/test.sh
+WISPNET_ANDROID_RELAY_TEST=1 WISPNET_SSH_RELAY_HOST=SECOND_COMPUTER scripts/test.sh
 ```
 
 Or after building/validating both native binaries and the relay fixture:
@@ -27,7 +27,7 @@ checking. The harness probes the copied CLI before initializing any host state;
 it fails on an incompatible runtime rather than installing dependencies.
 
 Each physical host runs its own loopback HTTP backend. With the other host's
-Wipsnet agent stopped, the tablet uses only the expected host ID and configured
+Wispnet agent stopped, the tablet uses only the expected host ID and configured
 TLS relay to exercise unapproved denial, invitation proof, pending denial, local
 owner approval, separate service grants, filtered catalog and actual HTTP bytes.
 Client invitation copies are removed after the proof acknowledgement. The tablet
@@ -40,7 +40,7 @@ its client is denied after restart while the other host still serves that client
 The fixture's loopback TLS relay is reached from the second computer through an
 owned SSH reverse forward and from the tablet through an owned USB reverse. Thus
 the primary computer remains powered on to provide the test relay and orchestration.
-The opposite host's **Wipsnet authority process** is stopped, not the whole computer.
+The opposite host's **Wispnet authority process** is stopped, not the whole computer.
 This proves no dependency on that host's registry/approval or backend. It does not
 prove availability after powering off the machine providing the test relay.
 Deployed disposable-relay validation belongs to #18; APK/QR/UI, real cellular and
@@ -61,6 +61,6 @@ Android application acceptance claim.
 
 An [existing desktop relay](desktop-relay.md) can now be selected with `--relay-url`
 and optional `--relay-ca-file`. That mode skips all local relay and SSH/USB
-forwarding fixtures. `--restart-desktop-relay` restarts only `wipsnet-relay.service`
+forwarding fixtures. `--restart-desktop-relay` restarts only `wispnet-relay.service`
 on the selected SSH host and verifies the active node process remains unchanged.
 Both modes also test fresh Linux clients in both cross-computer directions.

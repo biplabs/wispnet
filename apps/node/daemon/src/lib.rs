@@ -1,4 +1,5 @@
 //! Private local UI API sharing the host's existing identity lease and endpoint.
+pub mod invitation;
 use serde_json::{Value, json};
 use std::{
     future::Future,
@@ -11,19 +12,28 @@ use tokio::{
     net::{UnixListener, UnixStream},
     task::JoinSet,
 };
-use wipsnet_core::{config::Config, identity::IdentityStore};
+use wispnet_core::{config::Config, identity::IdentityStore};
 struct State {
     state_dir: PathBuf,
     device_name: String,
-    client: Arc<wipsnet_client::Client>,
-    authority: wipsnet_registry::host::Authority,
-    counts: wipsnet_agent::tunnel::ActiveCounts,
+    client: Arc<wispnet_client::Client>,
+    authority: wispnet_registry::host::Authority,
+    counts: wispnet_agent::tunnel::ActiveCounts,
     relay_configured: bool,
+    config: Config,
 }
 impl State {
     async fn request(&self, mut value: Value) -> Result<Value, String> {
         let op = value["op"].as_str().ok_or("Missing operation")?.to_owned();
         match op.as_str() {
+            "invite_qr" => {
+                let config = self.config.clone();
+                tokio::task::spawn_blocking(move || {
+                    invitation::issue(&config).map_err(|e| e.to_string())
+                })
+                .await
+                .map_err(|_| "Cannot generate pairing QR".to_owned())?
+            }
             "status" => {
                 let snapshot = self.authority.snapshot().await.map_err(|e| e.to_string())?;
                 let peers = self.counts.peers();
@@ -40,7 +50,7 @@ impl State {
                             continue;
                         };
                         let Ok(id) = id.parse() else { continue };
-                        if wipsnet_agent::peers::load(&self.state_dir, id)
+                        if wispnet_agent::peers::load(&self.state_dir, id)
                             .map_err(|e| e.to_string())?
                             .is_some()
                         {
@@ -63,7 +73,7 @@ impl State {
                     }
                 }
                 Ok(
-                    json!({"api_version":1,"host":snapshot,"host_name":host_name,"connected_peers":peers,"recent_peers":recent,"peer_telemetry":telemetry,"presence_timeout_seconds":wipsnet_agent::tunnel::PRESENCE_TIMEOUT.as_secs(),"transport_streams":self.counts.streams(),"invitations":invitations,"peer_pins":pins,"relay":wipsnet_agent::diagnostics::relay_state(&self.client.endpoint,self.relay_configured),"access_enabled":self.client.gateway.is_enabled()}),
+                    json!({"api_version":1,"host":snapshot,"host_name":host_name,"connected_peers":peers,"recent_peers":recent,"peer_telemetry":telemetry,"presence_timeout_seconds":wispnet_agent::tunnel::PRESENCE_TIMEOUT.as_secs(),"transport_streams":self.counts.streams(),"invitations":invitations,"peer_pins":pins,"relay":wispnet_agent::diagnostics::relay_state(&self.client.endpoint,self.relay_configured),"access_enabled":self.client.gateway.is_enabled()}),
                 )
             }
             "apply_operation" => {
@@ -82,11 +92,11 @@ impl State {
                 let operation_id = id.clone();
                 let outcome = tokio::task::spawn_blocking(move || {
                     let (mut store, secret) =
-                        wipsnet_registry::host::owner_store(&directory, host)?;
+                        wispnet_registry::host::owner_store(&directory, host)?;
                     store.host_apply_operation(host, &secret, &operation_id, action)
                 })
                 .await;
-                use wipsnet_registry::control::ControlError;
+                use wispnet_registry::control::ControlError;
                 let mut receipt = match outcome {
                     Ok(Ok(receipt)) => {
                         json!({"state":receipt.state,"revision":receipt.revision,"reason":receipt.reason})
@@ -132,7 +142,7 @@ impl State {
         let name = self.device_name.clone();
         tokio::task::spawn_blocking(move || {
             let (mut store, secret) =
-                wipsnet_registry::host::owner_store(&directory, host).map_err(|e| e.to_string())?;
+                wispnet_registry::host::owner_store(&directory, host).map_err(|e| e.to_string())?;
             let result = if let Some(operation) = operation {
                 let op =
                     serde_json::from_value(operation).map_err(|_| "Invalid owner operation")?;
@@ -144,7 +154,7 @@ impl State {
             } else {
                 json!(
                     store
-                        .pairing_list(host, &secret, wipsnet_registry::enrollment::now())
+                        .pairing_list(host, &secret, wispnet_registry::enrollment::now())
                         .map_err(|e| e.to_string())?
                 )
             };
@@ -201,21 +211,21 @@ pub async fn run(
     shutdown: impl Future<Output = ()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if config.schema_version != 2 {
-        return wipsnet_agent::run(config, shutdown).await;
+        return wispnet_agent::run(config, shutdown).await;
     }
-    let store = wipsnet_agent::identity::FileIdentityStore::new(&config.state_dir)?;
+    let store = wispnet_agent::identity::FileIdentityStore::new(&config.state_dir)?;
     let _lease = store.lease()?;
     let identity = store.load()?;
     let authority =
-        wipsnet_registry::host::Authority::open(&config.state_dir, identity.endpoint_id())?;
+        wispnet_registry::host::Authority::open(&config.state_dir, identity.endpoint_id())?;
     let transport = config.transport.as_ref().ok_or("Host transport required")?;
-    let host = wipsnet_agent::tunnel::TunnelHost::bind_host(
+    let host = wispnet_agent::tunnel::TunnelHost::bind_host(
         identity.secret_key(),
         transport,
         authority.clone(),
     )
     .await?;
-    let client = wipsnet_client::Client::from_endpoint(
+    let client = wispnet_client::Client::from_endpoint(
         host.endpoint().clone(),
         identity.secret_key().clone(),
         config.state_dir.clone(),
@@ -242,6 +252,7 @@ pub async fn run(
         authority,
         counts: host.counts(),
         relay_configured: transport.relay_url.is_some(),
+        config: config.clone(),
     });
     let mut tasks = JoinSet::new();
     tokio::pin!(shutdown);

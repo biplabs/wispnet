@@ -8,7 +8,7 @@ pub mod host;
 pub mod pairing;
 pub mod store;
 use std::future::Future;
-use wipsnet_core::config::Config;
+use wispnet_core::config::Config;
 
 /// Open and check persistent storage before announcing readiness.
 /// A configured API listener requires explicit owner bootstrap first.

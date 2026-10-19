@@ -7,7 +7,7 @@ use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use std::{path::Path, sync::Arc};
 use tokio::sync::Mutex;
-use wipsnet_core::{
+use wispnet_core::{
     config::ServiceConfig,
     enrollment::valid_name,
     host::{Catalog, Service, ServiceKind},
@@ -146,7 +146,7 @@ impl Store {
             [],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
-        if stored != host.to_string() || !wipsnet_core::enrollment::valid_code(&generation) {
+        if stored != host.to_string() || !wispnet_core::enrollment::valid_code(&generation) {
             return Err(ControlError::Forbidden);
         }
         let revision: i64 =
@@ -186,7 +186,7 @@ impl Store {
                     "tcp" => ServiceKind::Tcp,
                     _ => return Err(ControlError::Storage),
                 };
-                if !wipsnet_core::enrollment::valid_code(&incarnation) {
+                if !wispnet_core::enrollment::valid_code(&incarnation) {
                     return Err(ControlError::Storage);
                 }
                 let mut allow = Vec::new();
@@ -204,7 +204,7 @@ impl Store {
                     backend,
                     allow: allow.clone(),
                 };
-                wipsnet_core::config::validate_services(&[service])
+                wispnet_core::config::validate_services(&[service])
                     .map_err(|_| ControlError::Storage)?;
                 services.push(LocalService {
                     id,
@@ -294,7 +294,7 @@ pub(crate) fn apply_mutation(
             kind,
             ..
         } => {
-            wipsnet_core::config::validate_services(&[ServiceConfig {
+            wispnet_core::config::validate_services(&[ServiceConfig {
                 id: id.clone(),
                 backend,
                 allow: allow.clone(),

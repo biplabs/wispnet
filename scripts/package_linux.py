@@ -45,7 +45,7 @@ def package(binary, output):
         files = [
             "scripts/install_node_desktop.py",
             "scripts/node_request.py",
-            "deploy/node/wipsnet-host.service",
+            "deploy/node/wispnet-host.service",
             "deploy/node/wispnet-desktop.service",
             "config/node/host.toml",
             "docs/linux-distribution.md",
@@ -68,9 +68,9 @@ def package(binary, output):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / name, target)
         (tree / "bin").mkdir()
-        shutil.copy2(binary, tree / "bin/wipsnet")
+        shutil.copy2(binary, tree / "bin/wispnet")
         subprocess.run(
-            ["strip", "--strip-debug", str(tree / "bin/wipsnet")], check=True
+            ["strip", "--strip-debug", str(tree / "bin/wispnet")], check=True
         )
         hashes = {
             str(p.relative_to(tree)): hashlib.sha256(p.read_bytes()).hexdigest()
@@ -137,11 +137,11 @@ def main():
     args = parser.parse_args()
     if args.binary is None:
         subprocess.run(
-            ["cargo", "build", "--release", "--locked", "-p", "wipsnet-cli"],
+            ["cargo", "build", "--release", "--locked", "-p", "wispnet-cli"],
             cwd=ROOT,
             check=True,
         )
-    binary = (args.binary or ROOT / "target/release/wipsnet").resolve()
+    binary = (args.binary or ROOT / "target/release/wispnet").resolve()
     print(package(binary, args.output))
 
 

@@ -461,7 +461,7 @@ mod tests {
             Some("app=ok; Path=/; HttpOnly; SameSite=Lax".into())
         );
         assert_eq!(
-            clean_cookie("_wipsnet_session=forged; Domain=.localhost; Path=/").unwrap(),
+            clean_cookie("_wispnet_session=forged; Domain=.localhost; Path=/").unwrap(),
             None
         );
         for location in [

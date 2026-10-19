@@ -9,7 +9,7 @@ from wispnet_desktop.api import NodeAPI
 class NodeLifecycleChecks(unittest.TestCase):
     def api(self):
         api = NodeAPI.__new__(NodeAPI)
-        api.config = (Path.home() / ".config/wipsnet-node/host.toml").resolve()
+        api.config = (Path.home() / ".config/wispnet-node/host.toml").resolve()
         api.request = Mock(return_value={"api_version": 1})
         return api
 
@@ -19,13 +19,13 @@ class NodeLifecycleChecks(unittest.TestCase):
             self.assertIsNone(api.set_online(False))
             api.request.assert_not_called()
             self.assertEqual(run.call_args.args[0], [
-                "systemctl", "--user", "stop", "wipsnet-host.service",
+                "systemctl", "--user", "stop", "wispnet-host.service",
             ])
             api.request.side_effect = [OSError("starting"), {"api_version": 1}]
             with patch("time.sleep"):
                 self.assertEqual(api.set_online(True), {"api_version": 1})
             self.assertEqual(run.call_args.args[0], [
-                "systemctl", "--user", "start", "wipsnet-host.service",
+                "systemctl", "--user", "start", "wispnet-host.service",
             ])
             self.assertEqual(api.request.call_count, 2)
 

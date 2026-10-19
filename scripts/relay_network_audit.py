@@ -87,9 +87,9 @@ def main():
         ["cargo", "test", "--workspace", "--locked", "--no-run", "--message-format=json"],
         cwd=root, check=True, text=True, stdout=subprocess.PIPE,
     )
-    wanted = {"wipsnet_agent": "tunnel::relay_tests", "host_control": "", "relay_cli": "", "pairing": ""}
+    wanted = {"wispnet_agent": "tunnel::relay_tests", "host_control": "", "relay_cli": "", "pairing": ""}
     sources = {
-        "wipsnet_agent": root / "crates/agent/src/lib.rs",
+        "wispnet_agent": root / "crates/agent/src/lib.rs",
         "host_control": root / "crates/agent/tests/host_control.rs",
         "relay_cli": root / "apps/node/cli/tests/relay_cli.rs",
         "pairing": root / "crates/agent/tests/pairing.rs",
@@ -108,7 +108,7 @@ def main():
     # permitted; a syscall trace also detects attempts that the firewall rejects.
     setup = """ip link set lo up
 nft -f - <<'RULES'
-table inet wipsnet_test {
+table inet wispnet_test {
     chain output {
         type filter hook output priority 0; policy drop;
         oifname "lo" ip daddr 127.0.0.0/8 accept
@@ -116,25 +116,25 @@ table inet wipsnet_test {
     }
 }
 RULES
-if [ "$WIPSNET_AUDIT_DROP_UDP" = 1 ]; then
-    nft insert rule inet wipsnet_test output meta l4proto udp counter drop
+if [ "$WISPNET_AUDIT_DROP_UDP" = 1 ]; then
+    nft insert rule inet wispnet_test output meta l4proto udp counter drop
 fi
 "$@"
-nft -j list ruleset > "$WIPSNET_AUDIT_FIREWALL_REPORT"
+nft -j list ruleset > "$WISPNET_AUDIT_FIREWALL_REPORT"
 """
-    with tempfile.TemporaryDirectory(prefix="wipsnet-network-audit-") as directory:
+    with tempfile.TemporaryDirectory(prefix="wispnet-network-audit-") as directory:
         jobs = [(name, executable, wanted[name], False) for name, executable in binaries.items()]
         jobs.append(("udp_blocked", binaries["host_control"], "udp_enabled_hosts_fall_back_to_relay_with_stale_hint", True))
         for name, executable, test_filter, drop_udp in jobs:
             trace = Path(directory) / f"{name}.trace"
             command = ["unshare", "--user", "--map-root-user", "--net", "sh", "-eu", "-c", setup,
-                       "wipsnet-isolated-test", str(Path(args.strace).resolve()),
+                       "wispnet-isolated-test", str(Path(args.strace).resolve()),
                        "-f", "-qq", "-yy", "-s", "0", "-e", "trace=network", "-o", str(trace),
                        executable]
             if test_filter:
                 command.append(test_filter)
             report = Path(directory) / f"{name}.firewall.json"
-            environment = dict(os.environ, WIPSNET_AUDIT_DROP_UDP=str(int(drop_udp)), WIPSNET_AUDIT_FIREWALL_REPORT=str(report))
+            environment = dict(os.environ, WISPNET_AUDIT_DROP_UDP=str(int(drop_udp)), WISPNET_AUDIT_FIREWALL_REPORT=str(report))
             subprocess.run(command, cwd=root, env=environment, check=True, timeout=90)
             if drop_udp:
                 rules = json.loads(report.read_text())["nftables"]

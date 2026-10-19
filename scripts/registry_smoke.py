@@ -23,8 +23,8 @@ import uuid
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--android", action="store_true")
 args = parser.parse_args()
-binary = Path("target/debug/wipsnet").resolve()
-android_binary = Path("target/aarch64-linux-apps/android/debug/wipsnet").resolve()
+binary = Path("target/debug/wispnet").resolve()
+android_binary = Path("target/aarch64-linux-apps/android/debug/wispnet").resolve()
 
 def run(command, **kwargs):
     result = subprocess.run(command, capture_output=True, text=True, timeout=30, **kwargs)
@@ -53,7 +53,7 @@ def stop(process):
     assert not stdout
     assert [json.loads(line)["fields"]["event"] for line in stderr.splitlines()] == ["stopped"]
 
-with tempfile.TemporaryDirectory(prefix="wipsnet-registry-") as temporary:
+with tempfile.TemporaryDirectory(prefix="wispnet-registry-") as temporary:
     root = Path(temporary)
     state = root / "state"
     config = root / "registry.toml"
@@ -107,7 +107,7 @@ with tempfile.TemporaryDirectory(prefix="wipsnet-registry-") as temporary:
     thread = threading.Thread(target=proxy.serve_forever, daemon=True)
     thread.start()
     trusted = ssl.create_default_context(cafile=certificate)
-    android_root = "/data/local/tmp/wipsnet-enrollment-" + uuid.uuid4().hex
+    android_root = "/data/local/tmp/wispnet-enrollment-" + uuid.uuid4().hex
     reversed_port = False
     process = None
 
@@ -153,7 +153,7 @@ with tempfile.TemporaryDirectory(prefix="wipsnet-registry-") as temporary:
             run(["adb", "-d", "push", invitation_file, f"{android_root}/invitation.json"])
             adb_shell("chmod", "600", f"{android_root}/invitation.json")
             def device_command(mode):
-                arguments = [f"{android_root}/wipsnet", mode, "--config", f"{android_root}/config.toml"]
+                arguments = [f"{android_root}/wispnet", mode, "--config", f"{android_root}/config.toml"]
                 if mode == "enroll":
                     arguments += ["--invitation", f"{android_root}/invitation.json"]
                 return adb_shell(*arguments)
@@ -182,7 +182,7 @@ with tempfile.TemporaryDirectory(prefix="wipsnet-registry-") as temporary:
             # Native Android shell CLI, not the Android companion UI/Keystore (#12).
             assert adb_shell("stat", "-c", "%a", f"{path_state}/device.token").strip() == "600"
             # Exercise cross-process lease/reset protection on the actual OS.
-            remote_agent = f"echo $$; exec {shlex.quote(android_root + '/wipsnet')} agent --config {shlex.quote(android_root + '/config.toml')}"
+            remote_agent = f"echo $$; exec {shlex.quote(android_root + '/wispnet')} agent --config {shlex.quote(android_root + '/config.toml')}"
             agent = subprocess.Popen(["adb", "-d", "shell", remote_agent], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             remote_pid = None
             try:
@@ -194,7 +194,7 @@ with tempfile.TemporaryDirectory(prefix="wipsnet-registry-") as temporary:
                 started = agent.stderr.readline()
                 assert json.loads(boot)["fields"]["event"] == "registry_bootstrap", boot
                 assert json.loads(started)["fields"]["event"] == "started", started
-                reset_args = [android_root + "/wipsnet", "identity-reset", "--config", android_root + "/config.toml", "--expect-id", identity]
+                reset_args = [android_root + "/wispnet", "identity-reset", "--config", android_root + "/config.toml", "--expect-id", identity]
                 refused = subprocess.run(["adb", "-d", "shell", " ".join(shlex.quote(a) for a in reset_args)], capture_output=True, text=True, timeout=10)
                 assert refused.returncode != 0 and "in use" in refused.stderr
                 adb_shell("kill", "-TERM", remote_pid)
@@ -245,14 +245,14 @@ with tempfile.TemporaryDirectory(prefix="wipsnet-registry-") as temporary:
             mappings = run(["adb", "-d", "reverse", "--list"])
             assert f"tcp:{tls_port} " not in mappings
             adb_shell("mkdir", "-m", "700", android_root)
-            stripped = root / "android-wipsnet"
+            stripped = root / "android-wispnet"
             shutil.copyfile(android_binary, stripped)
             strip = Path.home() / "Android/Sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
             run([strip, stripped])
-            run(["adb", "-d", "push", stripped, f"{android_root}/wipsnet"])
+            run(["adb", "-d", "push", stripped, f"{android_root}/wispnet"])
             run(["adb", "-d", "push", certificate, f"{android_root}/root.pem"])
             adb_shell("chmod", "644", f"{android_root}/root.pem")
-            adb_shell("chmod", "700", f"{android_root}/wipsnet")
+            adb_shell("chmod", "700", f"{android_root}/wispnet")
             run(["adb", "-d", "reverse", f"tcp:{tls_port}", f"tcp:{tls_port}"])
             reversed_port = True
             enroll_device(android=True)

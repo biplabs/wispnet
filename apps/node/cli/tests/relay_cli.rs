@@ -3,11 +3,11 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     time::timeout,
 };
-use wipsnet_core::{config::TransportConfig, identity::Identity};
-use wipsnet_registry::host::{self, Authority, Mutation};
+use wispnet_core::{config::TransportConfig, identity::Identity};
+use wispnet_registry::host::{self, Authority, Mutation};
 
 async fn command(config: &Path, args: &[&str], input: &[u8]) -> String {
-    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_wipsnet"))
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_wispnet"))
         .arg(args[0])
         .arg("--config")
         .arg(config)
@@ -113,7 +113,7 @@ async fn native_catalog_and_service_need_no_peer_address() {
         max_streams: 8,
         max_streams_per_connection: 4,
     };
-    let host = wipsnet_agent::tunnel::TunnelHost::bind_host(
+    let host = wispnet_agent::tunnel::TunnelHost::bind_host(
         identity.secret_key(),
         &cfg,
         Authority::open(&host_state, identity.endpoint_id()).unwrap(),
@@ -130,7 +130,7 @@ async fn native_catalog_and_service_need_no_peer_address() {
     let invitation_path = tmp.path().join("invitation.json");
     let invitation = serde_json::json!({"version": 1, "host": pin, "relay_url": cfg.relay_url,
         "invitation": "a".repeat(64), "code": "b".repeat(64), "scope": "request_access",
-        "expires_at": wipsnet_registry::enrollment::now() + 120});
+        "expires_at": wispnet_registry::enrollment::now() + 120});
     std::fs::write(&invitation_path, serde_json::to_vec(&invitation).unwrap()).unwrap();
     std::fs::set_permissions(&invitation_path, std::fs::Permissions::from_mode(0o600)).unwrap();
     let checked = command(
@@ -157,7 +157,7 @@ async fn native_catalog_and_service_need_no_peer_address() {
             identity.endpoint_id(),
             &owner,
             cfg.relay_url.as_deref().unwrap(),
-            wipsnet_registry::enrollment::now(),
+            wispnet_registry::enrollment::now(),
             300,
         )
         .unwrap();
@@ -246,7 +246,7 @@ async fn native_catalog_and_service_need_no_peer_address() {
     assert_eq!(probe["generation"], catalog["generation"]);
     assert_eq!(probe["service_count"], 1);
     assert_eq!(probe["client"], peer.to_string());
-    let mut watcher = tokio::process::Command::new(env!("CARGO_BIN_EXE_wipsnet"))
+    let mut watcher = tokio::process::Command::new(env!("CARGO_BIN_EXE_wispnet"))
         .args(["peer-watch", "--config"])
         .arg(&client_config)
         .args(["--peer", &pin])
@@ -427,7 +427,7 @@ async fn native_direct_probe_reports_path_without_backend_or_relay() {
         max_streams: 8,
         max_streams_per_connection: 4,
     };
-    let host = wipsnet_agent::tunnel::TunnelHost::bind_host(
+    let host = wispnet_agent::tunnel::TunnelHost::bind_host(
         key.secret_key(),
         &config,
         Authority::open(&state, key.endpoint_id()).unwrap(),
@@ -437,19 +437,19 @@ async fn native_direct_probe_reports_path_without_backend_or_relay() {
     let pin = key.endpoint_id().to_string();
     let address = host.endpoint().bound_sockets()[0].to_string();
     let outsider = Identity::generate();
-    let endpoint = wipsnet_agent::tunnel::bind_client(outsider.secret_key())
+    let endpoint = wispnet_agent::tunnel::bind_client(outsider.secret_key())
         .await
         .unwrap();
     let target =
-        wipsnet_agent::tunnel::peer_target(key.endpoint_id(), None, Some(address.parse().unwrap()))
+        wispnet_agent::tunnel::peer_target(key.endpoint_id(), None, Some(address.parse().unwrap()))
             .unwrap();
     let mismatch =
-        wipsnet_agent::diagnostics::probe(&endpoint, outsider.endpoint_id(), target, false)
+        wispnet_agent::diagnostics::probe(&endpoint, outsider.endpoint_id(), target, false)
             .await
             .unwrap_err();
     assert_eq!(
         mismatch,
-        wipsnet_agent::tunnel::TunnelError::Transport("diagnostic target identity mismatch")
+        wispnet_agent::tunnel::TunnelError::Transport("diagnostic target identity mismatch")
     );
     endpoint.close().await;
     let result = command(

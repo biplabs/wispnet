@@ -15,15 +15,15 @@ Build with cargo build --workspace --locked. Prepare a host config from
 config/node/tunnel-host.toml and a client config from config/node/example.toml. Set different
 absolute state directories and config paths; initialize each independently:
 
-    target/debug/wipsnet identity-init --config /absolute/host.toml
-    target/debug/wipsnet identity-init --config /absolute/client.toml
+    target/debug/wispnet identity-init --config /absolute/host.toml
+    target/debug/wispnet identity-init --config /absolute/client.toml
 
 Copy the client's public Endpoint ID into the host service's allow list. Do not
 copy its private key. Keep the host's public ID for the client's --peer argument.
 Start your backend on the host's configured loopback port, then:
 
-    target/debug/wipsnet check --config /absolute/host.toml
-    target/debug/wipsnet agent --config /absolute/host.toml
+    target/debug/wispnet check --config /absolute/host.toml
+    target/debug/wispnet agent --config /absolute/host.toml
 
 The agent's started JSON event on stderr reports its public endpoint_id and actual
 bind_addr (useful with UDP port 0). Supply the actual UDP address and host public ID:
@@ -33,7 +33,7 @@ Host: website\r
 Connection: close\r
 \r
 ' |
-      target/debug/wipsnet tunnel --config /absolute/client.toml --peer HOST_PUBLIC_ID --address 127.0.0.1:7779 --service website
+      target/debug/wispnet tunnel --config /absolute/client.toml --peer HOST_PUBLIC_ID --address 127.0.0.1:7779 --service website
 
 stdout is the raw application response; diagnostics go to stderr. The raw client
 does not add HTTP authentication, retry requests, resolve names, or open listeners

@@ -58,6 +58,7 @@ pub struct Challenge {
 impl Challenge {
     /// Domain-separated, length-delimited canonical bytes. No secret key on wire.
     pub fn signing_bytes(&self) -> Vec<u8> {
+        // Frozen signing domain for compatibility with existing client proofs.
         let mut bytes = b"wipsnet/enrollment/proof/1\0".to_vec();
         bytes.extend_from_slice(&self.version.to_be_bytes());
         for field in [

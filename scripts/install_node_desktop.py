@@ -25,7 +25,7 @@ parser.add_argument(
 )
 args = parser.parse_args()
 ROOT = Path(__file__).resolve().parents[1]
-node_source = ROOT / "bin/wipsnet"
+node_source = ROOT / "bin/wispnet"
 if node_source.exists():
     # Distribution checks happen before changing any installed file or service.
     manifest = json.loads((ROOT / "manifest.json").read_text())
@@ -39,26 +39,48 @@ if node_source.exists():
         ):
             raise SystemExit(f"Bundle checksum mismatch: {name}")
 else:
-    node_source = ROOT / "target/debug/wipsnet"
+    node_source = ROOT / "target/debug/wispnet"
 if sys.version_info < (3, 11):
     raise SystemExit("Python 3.11 or newer is required")
 subprocess.run([str(node_source), "--help"], check=True, stdout=subprocess.DEVNULL)
 home = Path.home()
+# Upgrade the misspelled installation without moving or recreating identity/state.
+# The copied configuration deliberately retains its original state_dir.
+legacy_config = home / ".config/wipsnet-node/host.toml"
+config = home / ".config/wispnet-node/host.toml"
+if legacy_config.exists() and not config.exists():
+    config.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    config.parent.chmod(0o700)
+    with config.open("x") as destination_config:
+        config.chmod(0o600)
+        destination_config.write(legacy_config.read_text())
+    for helper in ["admin-targets.json"]:
+        legacy_helper = legacy_config.parent / helper
+        if legacy_helper.exists():
+            target_helper = config.parent / helper
+            with target_helper.open("x") as output_helper:
+                target_helper.chmod(0o600)
+                output_helper.write(legacy_helper.read_text())
 units = home / ".config/systemd/user"
 units.mkdir(parents=True, exist_ok=True)
-node_unit = units / "wipsnet-host.service"
-if not node_unit.exists():
-    shutil.copy2(ROOT / "deploy/node/wipsnet-host.service", node_unit)
-node_binary = home / ".local/libexec/wipsnet-node/wipsnet"
+node_unit = units / "wispnet-host.service"
+shutil.copy2(ROOT / "deploy/node/wispnet-host.service", node_unit)
+node_binary = home / ".local/libexec/wispnet-node/wispnet"
 node_binary.parent.mkdir(parents=True, exist_ok=True)
 node_changed = not node_binary.exists() or not filecmp.cmp(
     node_source, node_binary, shallow=False
 )
 if node_changed:
-    node_temporary = node_binary.with_name("wipsnet.installing")
+    node_temporary = node_binary.with_name("wispnet.installing")
     shutil.copy2(node_source, node_temporary)
     node_temporary.chmod(0o755)
     os.replace(node_temporary, node_binary)
+cli_launcher = home / ".local/bin/wispnet"
+cli_launcher.parent.mkdir(parents=True, exist_ok=True)
+cli_temporary = cli_launcher.with_name("wispnet.installing")
+cli_temporary.unlink(missing_ok=True)
+cli_temporary.symlink_to(node_binary)
+os.replace(cli_temporary, cli_launcher)
 # The headless command shares the existing node API and needs only Python stdlib.
 api_package = node_binary.parent / "wispnet_desktop"
 api_package.mkdir(exist_ok=True)
@@ -74,19 +96,35 @@ node_launcher.write_text(
 )
 node_launcher.chmod(0o755)
 if not args.no_start:
+    legacy_unit = units / "wipsnet-host.service"
+    if legacy_unit.exists():
+        subprocess.run(["systemctl", "--user", "disable", "--now", "wipsnet-host.service"], check=True)
+        legacy_unit.unlink()
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
     subprocess.run(
-        ["systemctl", "--user", "enable", "wipsnet-host.service"], check=True
+        ["systemctl", "--user", "enable", "wispnet-host.service"], check=True
     )
 if not args.no_start and (
     node_changed
     or subprocess.run(
-        ["systemctl", "--user", "is-active", "--quiet", "wipsnet-host.service"]
+        ["systemctl", "--user", "is-active", "--quiet", "wispnet-host.service"]
     ).returncode
 ):
     subprocess.run(
-        ["systemctl", "--user", "restart", "wipsnet-host.service"], check=True
+        ["systemctl", "--user", "restart", "wispnet-host.service"], check=True
     )
+if not args.no_start:
+    deadline = time.monotonic() + 10
+    while True:
+        ready = subprocess.run([str(node_launcher)], stdout=subprocess.DEVNULL,
+                               stderr=subprocess.PIPE, timeout=30)
+        if ready.returncode == 0:
+            break
+        if time.monotonic() >= deadline:
+            raise RuntimeError("Installed node did not become ready; inspect wispnet-host.service")
+        time.sleep(0.1)
+    # Remove only the obsolete executable after the replacement answers IPC.
+    (home / ".local/libexec/wipsnet-node/wipsnet").unlink(missing_ok=True)
 # Do not pull in Qt or start a display-dependent service on a headless host.
 graphical = (
     not args.headless

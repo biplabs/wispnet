@@ -22,7 +22,7 @@ application files. It never copies a host config, private key, registry, token,
 virtualenv or catalog cache. `manifest.json` records the source commit, whether
 the checkout had changes, required glibc version and each payload SHA-256.
 The archive normalizes ownership and timestamps; `SOURCE_DATE_EPOCH` can override
-the commit timestamp. `--binary /absolute/prebuilt/wipsnet` explicitly packages
+the commit timestamp. `--binary /absolute/prebuilt/wispnet` explicitly packages
 an existing native executable instead of building; its provenance must be
 established separately. A checksum detects corruption; obtain the archive and
 checksum from a trusted release source. It is not a signed release attestation.
@@ -43,23 +43,23 @@ overlaying an earlier extraction. Stage the node without enabling or starting it
 
 ```sh
 python3 scripts/install_node_desktop.py --headless --no-start
-mkdir -p ~/.config/wipsnet-node
-chmod 700 ~/.config/wipsnet-node
-cp -n config/node/host.toml ~/.config/wipsnet-node/host.toml
-chmod 600 ~/.config/wipsnet-node/host.toml
+mkdir -p ~/.config/wispnet-node
+chmod 700 ~/.config/wispnet-node
+cp -n config/node/host.toml ~/.config/wispnet-node/host.toml
+chmod 600 ~/.config/wispnet-node/host.toml
 ```
 
 Edit that config: set a unique device name, an absolute state directory such as
-`/home/YOU/.local/state/wipsnet-node`, and the intended bind/relay settings.
+`/home/YOU/.local/state/wispnet-node`, and the intended bind/relay settings.
 For the operated public relay, set `relay_url = "https://relay.wispnet.app"`
 inside `[transport]`; a direct-only loopback example cannot reach remote hosts.
 Use `bind_addr = "0.0.0.0:60303"` for ordinary IPv4 direct access plus relay.
 Do not copy another computer's state, identity or owner token.
 
 ```sh
-~/.local/libexec/wipsnet-node/wipsnet host-init --config ~/.config/wipsnet-node/host.toml
+~/.local/libexec/wispnet-node/wispnet host-init --config ~/.config/wispnet-node/host.toml
 python3 scripts/install_node_desktop.py --headless
-systemctl --user is-active wipsnet-host.service
+systemctl --user is-active wispnet-host.service
 wispnet-node
 ```
 
@@ -97,10 +97,10 @@ To remove program files while retaining private state:
 
 ```sh
 systemctl --user disable --now wispnet-desktop.service  # graphical installs only
-systemctl --user disable --now wipsnet-host.service
-rm -f ~/.config/systemd/user/wispnet-desktop.service ~/.config/systemd/user/wipsnet-host.service
+systemctl --user disable --now wispnet-host.service
+rm -f ~/.config/systemd/user/wispnet-desktop.service ~/.config/systemd/user/wispnet-host.service
 rm -f ~/.local/bin/wispnet-desktop ~/.local/bin/wispnet-node ~/.local/share/applications/wispnet.desktop
-rm -rf ~/.local/libexec/wispnet-desktop ~/.local/libexec/wipsnet-node
+rm -rf ~/.local/libexec/wispnet-desktop ~/.local/libexec/wispnet-node
 systemctl --user daemon-reload
 ```
 

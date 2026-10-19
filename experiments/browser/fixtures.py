@@ -2,7 +2,7 @@
 import asyncio
 from aiohttp import WSMsgType, web
 
-PAGE = """<!doctype html><title>Wipsnet compatibility website</title>
+PAGE = """<!doctype html><title>Wispnet compatibility website</title>
 <link rel="stylesheet" href="/style.css">
 <h1>Compatibility website</h1>
 <button id="run">Run compatibility checks</button><pre id="results">Ready</pre>

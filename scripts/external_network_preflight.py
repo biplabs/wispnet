@@ -19,13 +19,13 @@ def main():
     parser.add_argument('--serial',required=True)
     args=parser.parse_args()
     local=json.loads(run([ROOT/'target/debug/examples/external_network_probe'],timeout=20).stdout)
-    remote='/data/local/tmp/wipsnet-external-preflight-'+uuid.uuid4().hex
+    remote='/data/local/tmp/wispnet-external-preflight-'+uuid.uuid4().hex
     def adb(*command):return run(['adb','-s',args.serial,*command],timeout=25)
     def tablet(*command):return adb('shell','-T',shlex.join(command))
     created=False
     try:
         tablet('mkdir','-m','700',remote);created=True
-        with tempfile.TemporaryDirectory(prefix='wipsnet-external-probe-') as temporary:
+        with tempfile.TemporaryDirectory(prefix='wispnet-external-probe-') as temporary:
             binary=Path(temporary)/'probe';shutil.copyfile(ROOT/'target/aarch64-linux-apps/android/debug/examples/external_network_probe',binary)
             run([Path.home()/'Android/Sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip',binary])
             adb('push',binary,remote+'/probe')

@@ -29,8 +29,8 @@ def main():
         return subprocess.run(command, check=True, text=True, capture_output=True, timeout=60, **kw)
     def adb(*command, **kw):
         return run(['adb', '-s', args.serial, *command], **kw)
-    binary = Path.home() / '.local/libexec/wipsnet-node/wipsnet'
-    config = Path.home() / '.config/wipsnet-node/host.toml'
+    binary = Path.home() / '.local/libexec/wispnet-node/wispnet'
+    config = Path.home() / '.config/wispnet-node/host.toml'
     def cli(op, *tail):
         text = run([str(binary), op, '--config', str(config), *map(str, tail)]).stdout.strip()
         return json.loads(text) if text and op != 'host-mutate' else None

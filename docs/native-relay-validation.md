@@ -10,7 +10,7 @@ The device creates its own private identity; no host key or owner token is copie
 
 ```sh
 cargo build --workspace --locked
-cargo build -p wipsnet-cli --example relay_fixture --locked
+cargo build -p wispnet-cli --example relay_fixture --locked
 python3 scripts/relay_smoke.py
 ```
 
@@ -24,11 +24,11 @@ Stopping the fixture discards that TLS key. Nothing is provisioned on the cloud.
 For the authorized Android device, use an installed NDK:
 
 ```sh
-export WIPSNET_NDK="$HOME/Android/Sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin"
-export CC_aarch64_linux_android="$WIPSNET_NDK/aarch64-linux-android34-clang"
-export AR_aarch64_linux_android="$WIPSNET_NDK/llvm-ar"
+export WISPNET_NDK="$HOME/Android/Sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin"
+export CC_aarch64_linux_android="$WISPNET_NDK/aarch64-linux-android34-clang"
+export AR_aarch64_linux_android="$WISPNET_NDK/llvm-ar"
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CC_aarch64_linux_android"
-cargo build -p wipsnet-cli --target aarch64-linux-android --locked
+cargo build -p wispnet-cli --target aarch64-linux-android --locked
 python3 scripts/relay_smoke.py --android
 # When multiple authorized devices exist:
 python3 scripts/relay_smoke.py --android --serial DEVICE_SERIAL
@@ -37,7 +37,7 @@ python3 scripts/relay_smoke.py --android --serial DEVICE_SERIAL
 Use `--ndk /absolute/path/to/ndk` when the strip tool is elsewhere. The default
 path matches the NDK example above. The harness refuses an ambiguous/unauthorized
 device and uses ADB `reverse --no-rebind` so it cannot replace an existing mapping.
-Only a uniquely named `/data/local/tmp/wipsnet-relay-*` directory and its own
+Only a uniquely named `/data/local/tmp/wispnet-relay-*` directory and its own
 mapping are removed afterward. Remote CLI processes also have a 12-second
 on-device timeout. The default run changes no browser, Wi-Fi, cellular or display settings.
 Wi-Fi interruption is separately opt-in with `--wifi-cycle`; cleanup restores
@@ -45,13 +45,13 @@ Wi-Fi and waits for its IPv4 connection.
 
 Android mode builds the native CLI from current source with that NDK before
 copying it to the device, so an older artifact cannot silently pass the hook.
-Set `WIPSNET_ANDROID_NDK` to use a different NDK path in the hook.
+Set `WISPNET_ANDROID_NDK` to use a different NDK path in the hook.
 
 To include hardware checks in the pre-push hook:
 
 ```sh
-WIPSNET_ANDROID_RELAY_TEST=1 ./scripts/test.sh
-WIPSNET_ANDROID_RELAY_TEST=1 git push origin main
+WISPNET_ANDROID_RELAY_TEST=1 ./scripts/test.sh
+WISPNET_ANDROID_RELAY_TEST=1 git push origin main
 ```
 
 The default hook requires no attached device and runs the Linux version. An
@@ -87,9 +87,9 @@ Wi-Fi reconnection itself has a separate 45-second fixture bound. No user key,
 pin, grant, or authority generation/revision is replaced. A selected direct path
 can coexist with an unavailable relay; diagnostics report these separately.
 
-To include this case in the hook, set `WIPSNET_ANDROID_RELAY_TEST=1`,
-`WIPSNET_ANDROID_LAN_ADDRESS=HOST_LAN_IP`, `WIPSNET_ANDROID_LAN_PORT=60303`, and
-`WIPSNET_ANDROID_WIFI_CYCLE=1`. A requested LAN/Wi-Fi case without Android mode
+To include this case in the hook, set `WISPNET_ANDROID_RELAY_TEST=1`,
+`WISPNET_ANDROID_LAN_ADDRESS=HOST_LAN_IP`, `WISPNET_ANDROID_LAN_PORT=60303`, and
+`WISPNET_ANDROID_WIFI_CYCLE=1`. A requested LAN/Wi-Fi case without Android mode
 fails rather than being silently skipped. The default hook does not cycle Wi-Fi.
 
 ## What the harness verifies
@@ -137,6 +137,6 @@ not closed by this harness.
 The optional [physical two-host harness](physical-relay-validation.md) extends the
 native checks to a second SSH-accessible Linux computer. Both physical hosts have
 their own keys, authority state and local backend, and the tablet connects with
-the opposite host's agent stopped. Enable it with `WIPSNET_SSH_RELAY_HOST` alongside
-`WIPSNET_ANDROID_RELAY_TEST=1`. Its documented SSH/USB relay forwarding keeps the
+the opposite host's agent stopped. Enable it with `WISPNET_SSH_RELAY_HOST` alongside
+`WISPNET_ANDROID_RELAY_TEST=1`. Its documented SSH/USB relay forwarding keeps the
 orchestration computer powered on; it is not a cloud deployment or APK test.

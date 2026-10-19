@@ -1,6 +1,6 @@
 use std::os::unix::fs::PermissionsExt;
-use wipsnet_core::identity::Identity;
-use wipsnet_registry::{combined::Action, control, host, store::Store};
+use wispnet_core::identity::Identity;
+use wispnet_registry::{combined::Action, control, host, store::Store};
 
 #[test]
 fn receipts_survive_reopen_and_cannot_replay_approval_after_revocation() {

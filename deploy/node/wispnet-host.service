@@ -3,7 +3,7 @@ Description=Wispnet host node (independent of relay role)
 After=network-online.target
 Wants=network-online.target
 [Service]
-ExecStart=%h/.local/libexec/wipsnet-node/wipsnet agent --config %h/.config/wipsnet-node/host.toml
+ExecStart=%h/.local/libexec/wispnet-node/wispnet agent --config %h/.config/wispnet-node/host.toml
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true

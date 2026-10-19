@@ -1,9 +1,9 @@
 use std::os::unix::fs::PermissionsExt;
-use wipsnet_core::{
+use wispnet_core::{
     identity::Identity,
     pairing::{Claim, Proof},
 };
-use wipsnet_registry::{
+use wispnet_registry::{
     control::{self, ControlError},
     host::{self, Mutation},
     store::Store,
@@ -19,7 +19,7 @@ fn target_local_proofs_are_single_use_and_owner_approval_is_separate() {
     let host = host_key.endpoint_id();
     host::initialize(directory.path(), host).unwrap();
     let (mut store, owner) = host::owner_store(directory.path(), host).unwrap();
-    let now = wipsnet_registry::enrollment::now();
+    let now = wispnet_registry::enrollment::now();
     assert!(
         store
             .pairing_invite(host, &control::token(), "https://relay.example", now, 300)
@@ -52,7 +52,7 @@ fn target_local_proofs_are_single_use_and_owner_approval_is_separate() {
         &invitation,
         device.endpoint_id(),
         "tablet",
-        wipsnet_core::pairing::Purpose::Request,
+        wispnet_core::pairing::Purpose::Request,
         now
     ));
     assert!(
@@ -183,7 +183,7 @@ fn attempts_expiry_rejection_and_capacity_are_durable_and_bounded() {
     let device = Identity::generate();
     host::initialize(directory.path(), host).unwrap();
     let (mut store, owner) = host::owner_store(directory.path(), host).unwrap();
-    let now = wipsnet_registry::enrollment::now();
+    let now = wispnet_registry::enrollment::now();
     let invitation = store
         .pairing_invite(host, &owner, "https://relay.example", now, 300)
         .unwrap();
@@ -285,7 +285,7 @@ fn revocation_cancels_unfinished_requests_and_expired_proofs_cannot_be_approved(
     let device = Identity::generate();
     host::initialize(directory.path(), host).unwrap();
     let (mut store, owner) = host::owner_store(directory.path(), host).unwrap();
-    let now = wipsnet_registry::enrollment::now();
+    let now = wispnet_registry::enrollment::now();
     store
         .host_mutate(
             host,

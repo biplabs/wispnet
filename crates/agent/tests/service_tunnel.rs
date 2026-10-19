@@ -13,8 +13,8 @@ use tokio::{
     net::{TcpListener, TcpStream},
     task::{JoinHandle, JoinSet},
 };
-use wipsnet_agent::tunnel::{self, TunnelError, TunnelHost};
-use wipsnet_core::{
+use wispnet_agent::tunnel::{self, TunnelError, TunnelHost};
+use wispnet_core::{
     config::{ServiceConfig, TransportConfig},
     identity::SecretKey,
     protocol::{self, Status},

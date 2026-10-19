@@ -11,7 +11,7 @@ import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-binary = Path("target/debug/wipsnet").resolve()
+binary = Path("target/debug/wispnet").resolve()
 accepted = threading.Event()
 post_count = 0
 class Backend(ThreadingHTTPServer):
@@ -49,7 +49,7 @@ worker = threading.Thread(target=server.serve_forever, daemon=True)
 worker.start()
 processes = []
 try:
-    with tempfile.TemporaryDirectory(prefix="wipsnet-tunnel-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="wispnet-tunnel-") as temporary:
         root = Path(temporary)
         def config(name):
             path = root / f"{name}.toml"

@@ -67,11 +67,11 @@ class NodeAPI:
         import subprocess
         import time
 
-        expected = (Path.home() / ".config/wipsnet-node/host.toml").resolve()
+        expected = (Path.home() / ".config/wispnet-node/host.toml").resolve()
         if self.config != expected:
             raise ValueError("Online control requires the installed node configuration")
         result = subprocess.run(
-            ["systemctl", "--user", "start" if online else "stop", "wipsnet-host.service"],
+            ["systemctl", "--user", "start" if online else "stop", "wispnet-host.service"],
             capture_output=True, text=True, timeout=30, check=False,
         )
         if result.returncode:

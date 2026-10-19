@@ -59,9 +59,9 @@ Android NDK/target (see the Android build procedure in the native validation
 notes):
 
 ```sh
-cargo build -p wipsnet-cli --example sites_relay_probe --locked
+cargo build -p wispnet-cli --example sites_relay_probe --locked
 # With the NDK linker/CC/AR variables configured:
-cargo build -p wipsnet-cli --example sites_relay_probe --target aarch64-linux-android --locked
+cargo build -p wispnet-cli --example sites_relay_probe --target aarch64-linux-android --locked
 python3 scripts/sites_relay_smoke.py --ssh-host desktop.home --serial AUTHORIZED_SERIAL \
   --url https://wispnet-relay-compatibility.chirpy-tiger-6433.chatgpt.site
 ```

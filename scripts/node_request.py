@@ -12,7 +12,7 @@ from wispnet_desktop.api import NodeAPI, NodeRejected
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--config", type=Path, default=Path.home() / ".config/wipsnet-node/host.toml"
+        "--config", type=Path, default=Path.home() / ".config/wispnet-node/host.toml"
     )
     parser.add_argument(
         "--response",

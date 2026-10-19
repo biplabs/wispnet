@@ -1,6 +1,6 @@
 [Unit]
 Description=Wispnet desktop and tray
-After=graphical-session.target wipsnet-host.service
+After=graphical-session.target wispnet-host.service
 PartOf=graphical-session.target
 [Service]
 ExecStart=%h/.local/bin/wispnet-desktop --tray

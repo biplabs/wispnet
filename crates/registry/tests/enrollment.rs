@@ -1,9 +1,9 @@
 use std::os::unix::fs::PermissionsExt;
-use wipsnet_core::{
+use wispnet_core::{
     enrollment::{Challenge, Claim, Invitation, Proof},
     identity::Identity,
 };
-use wipsnet_registry::{
+use wispnet_registry::{
     control::{self, ControlError, Mutation, Principal},
     enrollment::Admin,
     store::Store,

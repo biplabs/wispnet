@@ -1,7 +1,7 @@
 # Independent per-host authority (ADR 0002). No HTTPS controller preflight.
 schema_version = 2
 device_name = "my-host"
-state_dir = "/home/CHANGE_ME/.local/state/wipsnet-host"
+state_dir = "/home/CHANGE_ME/.local/state/wispnet-host"
 log_level = "info"
 
 [transport]

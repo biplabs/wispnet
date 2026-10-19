@@ -1,6 +1,6 @@
 use std::os::unix::fs::{PermissionsExt, symlink};
-use wipsnet_agent::peers;
-use wipsnet_core::{identity::Identity, pairing::Bootstrap};
+use wispnet_agent::peers;
+use wispnet_core::{identity::Identity, pairing::Bootstrap};
 fn record() -> Bootstrap {
     Bootstrap {
         version: 1,

@@ -17,8 +17,8 @@ devices; devices can only publish addresses for their assigned services.
 
    ```sh
    cargo build --workspace --locked
-   target/debug/wipsnet registry-init --config /absolute/path/registry.toml
-   target/debug/wipsnet registry --config /absolute/path/registry.toml
+   target/debug/wispnet registry-init --config /absolute/path/registry.toml
+   target/debug/wispnet registry --config /absolute/path/registry.toml
    ```
 
    Initialization generates a random 256-bit owner bearer credential in
@@ -139,8 +139,8 @@ The owner tool rejects HTTP, redirects and occupied invitation output paths.
 Directory metadata is private; run it in a trusted terminal.
 
 ```sh
-target/debug/wipsnet registry-directory --config /absolute/path/device.toml
-target/debug/wipsnet agent --config /absolute/path/device.toml
+target/debug/wispnet registry-directory --config /absolute/path/device.toml
+target/debug/wispnet agent --config /absolute/path/device.toml
 ```
 
 Both fetch and verify a directory scoped to the persistent local endpoint ID.
@@ -162,7 +162,7 @@ resurrect revoked credentials if the backup predates revocation: reconcile and
 revoke them before reconnecting the public proxy.
 
 ```sh
-target/debug/wipsnet registry-backup --config /absolute/path/registry.toml \
+target/debug/wispnet registry-backup --config /absolute/path/registry.toml \
   --output /private/backups/new-registry.sqlite3
 ./scripts/test.sh
 ```

@@ -247,7 +247,7 @@ async fn enrollment_challenge(State(app): State<App>, request: Request) -> Respo
     let Some(secret) = bearer(&request) else {
         return fail(StatusCode::UNAUTHORIZED, "unauthorized");
     };
-    let claim = match json::<wipsnet_core::enrollment::Claim>(request).await {
+    let claim = match json::<wispnet_core::enrollment::Claim>(request).await {
         Ok(value) => value,
         Err(e) => return e,
     };
@@ -263,7 +263,7 @@ async fn enrollment_proof(State(app): State<App>, request: Request) -> Response 
     let Some(secret) = bearer(&request) else {
         return fail(StatusCode::UNAUTHORIZED, "unauthorized");
     };
-    let proof = match json::<wipsnet_core::enrollment::Proof>(request).await {
+    let proof = match json::<wispnet_core::enrollment::Proof>(request).await {
         Ok(value) => value,
         Err(e) => return e,
     };

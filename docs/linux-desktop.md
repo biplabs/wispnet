@@ -8,7 +8,7 @@ For installation without a checkout or Rust toolchain, use the
 [Linux distribution bundle](linux-distribution.md). Files-only staging keeps
 first-time initialization explicit and supports headless hosts.
 
-For an already initialized schema-2 node using `~/.config/wipsnet-node/host.toml`:
+For an already initialized schema-2 node using `~/.config/wispnet-node/host.toml`:
 
 ```sh
 cargo build --workspace --locked
@@ -18,9 +18,9 @@ wispnet-desktop
 
 On a graphical host, requires `uv`, an active `graphical-session.target` and Qt's platform dependencies (provided by the target CachyOS/KDE installation). [Qt system-tray support](https://doc.qt.io/qtforpython-6/PySide6/QtWidgets/QSystemTrayIcon.html) provides the KDE StatusNotifier integration. Pinned PySide6 Essentials 6.10.2 is installed into its own user-local virtual environment. The installer atomically updates the development node executable, preserves existing host configuration/identity/grants, restarts the node when its binary changes, installs a desktop launcher and enables the graphical-session tray service. Peer-friendly names are private display metadata saved separately from the durable cryptographic pins. A node restart interrupts current connections; callers explicitly reopen services. Initialization is deliberately separate; the installer does not recreate missing host authority.
 
-Installed GUI files: `~/.local/libexec/wispnet-desktop`, launcher `~/.local/bin/wispnet-desktop`, app entry `~/.local/share/applications/wispnet.desktop`, session service `wispnet-desktop.service`. Existing node service remains `wipsnet-host.service`. Quit the existing desktop first, then run `wispnet-desktop --config /absolute/host.toml` for an alternate existing node. Closing the window hides it to the tray. Quit desktop exits the UI while the node and its active access setting remain running. Relaunching opens the existing window rather than starting another tray process.
+Installed GUI files: `~/.local/libexec/wispnet-desktop`, launcher `~/.local/bin/wispnet-desktop`, app entry `~/.local/share/applications/wispnet.desktop`, session service `wispnet-desktop.service`. Existing node service remains `wispnet-host.service`. Quit the existing desktop first, then run `wispnet-desktop --config /absolute/host.toml` for an alternate existing node. Closing the window hides it to the tray. Quit desktop exits the UI while the node and its active access setting remain running. Relaunching opens the existing window rather than starting another tray process.
 
-The header’s **Go offline** button stops `wipsnet-host.service`, closing the node endpoint, peer connections and local browser routes. The desktop stays running; **Go online** starts the same node and waits for its local API. Identity and grants persist, and the independent relay service is untouched. This lifecycle control uses the installed default node configuration; alternate-config desktops do not control the default service. Browser access has no separate UI switch or success message.
+The header’s **Go offline** button stops `wispnet-host.service`, closing the node endpoint, peer connections and local browser routes. The desktop stays running; **Go online** starts the same node and waits for its local API. Identity and grants persist, and the independent relay service is untouched. This lifecycle control uses the installed default node configuration; alternate-config desktops do not control the default service. Browser access has no separate UI switch or success message.
 
 ## Headless hosts
 
@@ -28,10 +28,10 @@ The same installer automatically selects node-only mode when `graphical-session.
 
 ```sh
 python3 scripts/install_node_desktop.py --headless
-~/.local/libexec/wipsnet-node/wipsnet host-status --config ~/.config/wipsnet-node/host.toml
+~/.local/libexec/wispnet-node/wispnet host-status --config ~/.config/wispnet-node/host.toml
 # Query the running node without a second identity lease:
 printf '%s\n' '{"op":"catalog","host":"PINNED_HOST_ID"}' | ~/.local/bin/wispnet-node
-systemctl --user status wipsnet-host.service
+systemctl --user status wispnet-host.service
 ```
 
 This mode installs/enables the node and preserves its existing configuration, identity and grants. It skips Qt, the desktop launcher and tray service; it does not require a display server or a graphical login. The dependency-free `~/.local/bin/wispnet-node` command reads one bounded JSON request from stdin (an empty request returns status) and talks to the running node's owner-only socket. It verifies socket permissions and OS peer credentials. Pairing capabilities and other request material stay out of process arguments. Use operations such as `catalog`, `pair`, `mutate`, `enable`, `open` and `stop` from headless automation; `open` returns a protected browser bootstrap URL for the caller. Treat that URL as a short-lived secret. This reuses the daemon identity/endpoint; the older standalone `host-catalog`/`pairing-request` transport probes require a separate identity lease and are not the live-node management interface. Run the graphical mode later only if a desktop session is actually wanted. For unattended boot, the user service manager must run without a login (for example, an already enabled user linger setting); the installer does not change that host policy.
@@ -67,7 +67,7 @@ Browser access returned to its original disabled setting on both nodes; temporar
 
 The **Combined operations** tab adds or revokes a specified client independently on selected hosts and shows one **applied**, **pending** or **rejected** row per host. Adding a client does not grant services automatically. Current service grants and local approvals remain owned by each host. This is an optional owner workflow, not a required controller or delegated mesh-wide administration.
 
-The local host uses its existing private node socket. Other hosts require an explicitly configured, already trusted SSH owner connection; service pairing alone never supplies administrative rights. Store the selected owner routes in the private (mode 0600) `~/.config/wipsnet-node/admin-targets.json`, for example:
+The local host uses its existing private node socket. Other hosts require an explicitly configured, already trusted SSH owner connection; service pairing alone never supplies administrative rights. Store the selected owner routes in the private (mode 0600) `~/.config/wispnet-node/admin-targets.json`, for example:
 
 ```json
 [
@@ -106,3 +106,31 @@ Each host stores the operation ID, immutable action hash and acknowledgement ato
 Limits are 32 selected hosts, four concurrent attempts, 128 local operation journals and 10,000 retained target receipts. Receipt replay protection is not automatically evicted; hitting its limit rejects new operations. Completed local journals can be archived explicitly without changing host permissions or deleting target receipts. Host recovery must preserve receipts along with authority; stale-backup recovery remains #19 work. Older binaries that support only schema 5/6/7 cannot open schema 8; the new installer preserves identities/configuration rather than resetting authority.
 
 Observed on both physical computers on 2026-10-17: combined approval applied at both hosts; revocation with headless desktop.home stopped showed local applied / remote pending, while its offline registry still contained the client. Pending status survived a local node restart and completed after the remote node restarted, without repeating the local mutation. Already-revoked and wrong-host actions produced explicit rejection. A deliberately discarded real applied reply remained pending; after remote restart and a later revocation, retry returned its earlier applied revision without restoring access or advancing the current revision. The headless CLI also performed a target-local combined operation and reported its rejection. The installed GUI displayed actual applied/pending/rejected journals, including a pending host, and its rendered table was inspected. Tests used a temporary client without service grants; fixture approvals were removed, phone/tablet grants and backend bindings were preserved, and original browser settings were restored.
+## Generate a pairing QR
+
+After installing, run `wispnet --qrcode` in a terminal, or
+`ssh -t desktop.home 'wispnet --qrcode'` for a headless computer.
+An alternate configuration can be selected with `--config /absolute/path/host.toml`.
+The terminal must be wide enough for the QR; the command reports the required
+width if it would wrap. Reduce the font size or widen the window and retry.
+
+In the desktop app, select **Pair with QR** in the local machine header. The
+dialog shows the host ID and a five-minute countdown, and removes the image on
+expiry or when the invitation is used. Close the dialog to review incoming
+requests. Generating the QR runs in the background; an offline node reports an
+error and can be started with **Go online**.
+
+On Android, select **Scan pairing QR**. Scanning submits a request; the target
+owner still approves that request and grants individual services. Keep the QR
+private: it contains a short-lived, single-use enrollment capability. No image
+or invitation file is written by these two actions.
+
+## Naming compatibility
+
+The product, executables, crates and user services are named **Wispnet** /
+`wispnet`. The installer upgrades the historical misspelled node configuration
+path and service name while retaining the configured state directory, identity,
+owner credentials and grants. The relay installer similarly preserves TLS/ACME
+state while upgrading its paths and service. Old `wipsnet/...` wire protocol IDs
+and signing-domain bytes remain frozen so installed clients can still connect;
+those strings are compatibility identifiers, not product names.

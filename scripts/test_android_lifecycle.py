@@ -71,7 +71,7 @@ def main():
         host_command(record,['python3','-c',"import os,sys;f=os.open(sys.argv[1],os.O_WRONLY|os.O_TRUNC|os.O_NOFOLLOW);os.write(f,sys.stdin.buffer.read());os.close(f)",record['config']],input=content)
     original_configs=[]
 
-    def relay(action):return run([*SSH,'desktop.home','systemctl --user '+action+' wipsnet-relay.service'])
+    def relay(action):return run([*SSH,'desktop.home','systemctl --user '+action+' wispnet-relay.service'])
     def ack():adb('shell','run-as','app.wispnet.android','touch','files/lifecycle-continue')
     def awake():adb('shell','input','keyevent','224');adb('shell','wm','dismiss-keyguard');adb('shell','input','swipe','600','1400','600','300','300')
     marker=Path('/tmp/wispnet-network-switch-ready');marker.unlink(missing_ok=True)
@@ -104,7 +104,7 @@ def main():
                     updated,count=re.subn(r'(?m)^relay_only\s*=\s*false\s*$', 'relay_only=true',content)
                     assert count==1,'Expected explicit normal transport config'
                     original_configs.append((record,content));write_config(record,updated)
-                    host_command(record,['systemctl','--user','restart','wipsnet-host.service'])
+                    host_command(record,['systemctl','--user','restart','wispnet-host.service'])
                 print('Both host agents use relay-only transports; direct IP transports disabled',flush=True)
             mutate({'op':'service','id':fixture,'backend':f'127.0.0.1:{server.server_port}','allow':[tablet]});registered=True
             adb('shell','am','force-stop','app.wispnet.android');awake();adb('shell','settings','put','system','screen_off_timeout','1800000')
@@ -167,7 +167,7 @@ def main():
             if registered:cleanup(lambda:mutate({'op':'remove','id':fixture}))
             for record,content in reversed(original_configs):
                 cleanup(lambda record=record,content=content:write_config(record,content))
-                cleanup(lambda record=record:host_command(record,['systemctl','--user','restart','wipsnet-host.service']))
+                cleanup(lambda record=record:host_command(record,['systemctl','--user','restart','wispnet-host.service']))
             cleanup(lambda:adb('shell','run-as','app.wispnet.android','rm','-f','files/lifecycle-continue','files/lifecycle-evidence.json',ok=None))
             marker.unlink(missing_ok=True);cleanup(awake)
             if cleanup_errors:raise RuntimeError('Lifecycle cleanup failed; inspect device and host state') from cleanup_errors[0]

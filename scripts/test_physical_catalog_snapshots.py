@@ -19,7 +19,7 @@ from test_physical_service_recreation import (
 
 def baseline(remote, host):
     code = """import json,pathlib,sys,tomllib
-config=pathlib.Path.home()/'.config/wipsnet-node/host.toml'
+config=pathlib.Path.home()/'.config/wispnet-node/host.toml'
 state=pathlib.Path(tomllib.loads(config.read_text())['state_dir'])
 print((state/'catalog-baselines'/(sys.argv[1]+'.json')).read_text())
 """
@@ -36,7 +36,7 @@ def main():
             "systemctl",
             "--user",
             "show",
-            "wipsnet-relay.service",
+            "wispnet-relay.service",
             "-p",
             "MainPID",
             "--value",
@@ -124,7 +124,7 @@ def main():
                 "systemctl",
                 "--user",
                 "show",
-                "wipsnet-relay.service",
+                "wispnet-relay.service",
                 "-p",
                 "MainPID",
                 "--value",

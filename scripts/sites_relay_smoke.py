@@ -30,8 +30,8 @@ def main():
     assert token and '\n' not in token and '\r' not in token
     url = 'wss://' + args.url.removeprefix('https://') + ('/relay-durable' if args.durable else '/relay')
     suffix = uuid.uuid4().hex
-    remote = '/tmp/wipsnet-sites-' + suffix
-    device = '/data/local/tmp/wipsnet-sites-' + suffix
+    remote = '/tmp/wispnet-sites-' + suffix
+    device = '/data/local/tmp/wispnet-sites-' + suffix
     binary = ROOT / 'target/debug/examples/sites_relay_probe'
     android = ROOT / 'target/aarch64-linux-apps/android/debug/examples/sites_relay_probe'
     assert binary.is_file() and android.is_file()
@@ -47,7 +47,7 @@ def main():
     try:
         run(ssh('mkdir','-m','700',remote));created_remote=True
         run(tablet('mkdir','-m','700',device));created_tablet=True
-        with tempfile.TemporaryDirectory(prefix='wipsnet-sites-copy-') as tmp:
+        with tempfile.TemporaryDirectory(prefix='wispnet-sites-copy-') as tmp:
             import shutil
             native = Path(tmp)/'probe';shutil.copyfile(binary,native)
             run(['strip','--strip-debug',native])

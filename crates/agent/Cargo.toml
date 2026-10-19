@@ -1,5 +1,5 @@
 [package]
-name = "wipsnet-agent"
+name = "wispnet-agent"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,8 +7,8 @@ publish.workspace = true
 
 [dependencies]
 base64 = "=0.22.1"
-wipsnet-core.workspace = true
-wipsnet-registry.workspace = true
+wispnet-core.workspace = true
+wispnet-registry.workspace = true
 tracing.workspace = true
 zeroize.workspace = true
 tempfile.workspace = true

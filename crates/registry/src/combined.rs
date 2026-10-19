@@ -6,7 +6,7 @@ use crate::{
 };
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
-use wipsnet_core::identity::EndpointId;
+use wispnet_core::identity::EndpointId;
 
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]

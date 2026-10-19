@@ -6,7 +6,7 @@ use std::{
 };
 
 /// Configuration is intentionally not Debug: future credentials must not leak.
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub schema_version: u16,
@@ -327,7 +327,7 @@ mod tests {
     fn valid() -> String {
         "schema_version = 1
 device_name = 'laptop'
-state_dir = '/tmp/wipsnet-test'
+state_dir = '/tmp/wispnet-test'
 log_level = 'info'"
             .into()
     }
@@ -336,9 +336,9 @@ log_level = 'info'"
         assert!(Config::parse(&valid()).is_ok());
         for text in [
             valid().replace("= 1", "= 2"),
-            valid().replace("/tmp/wipsnet-test", "relative"),
-            valid().replace("/tmp/wipsnet-test", "/"),
-            valid().replace("/tmp/wipsnet-test", "/tmp/../secret"),
+            valid().replace("/tmp/wispnet-test", "relative"),
+            valid().replace("/tmp/wispnet-test", "/"),
+            valid().replace("/tmp/wispnet-test", "/tmp/../secret"),
             valid().replace("laptop", ""),
             valid().replace("'info'", "'trace'"),
             format!(

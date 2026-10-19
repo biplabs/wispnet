@@ -1,11 +1,11 @@
 use std::os::unix::fs::PermissionsExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use wipsnet_agent::{control, tunnel};
-use wipsnet_core::{
+use wispnet_agent::{control, tunnel};
+use wispnet_core::{
     config::TransportConfig,
     identity::{EndpointId, Identity},
 };
-use wipsnet_registry::host::{self, Authority, Mutation};
+use wispnet_registry::host::{self, Authority, Mutation};
 fn dir() -> tempfile::TempDir {
     let d = tempfile::tempdir().unwrap();
     std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -283,7 +283,7 @@ async fn symmetric_hosts_share_protocol_endpoint_and_isolate_local_authority() {
     assert!(matches!(
         control::catalog_on(&bc, b.endpoint_id()).await,
         Err(tunnel::TunnelError::Status(
-            wipsnet_core::protocol::Status::Denied
+            wispnet_core::protocol::Status::Denied
         ))
     ));
     let mut byte = [0];
@@ -506,11 +506,11 @@ async fn explicit_tls_relay_without_udp_pins_identity_enforces_grants_and_recove
     timeout(Duration::from_secs(10), stranger.online())
         .await
         .unwrap();
-    let hello = wipsnet_agent::pairing::hello(&stranger, target.clone())
+    let hello = wispnet_agent::pairing::hello(&stranger, target.clone())
         .await
         .unwrap();
     assert_eq!(hello.host, key.endpoint_id());
-    assert_eq!(hello.version, wipsnet_core::pairing::VERSION);
+    assert_eq!(hello.version, wispnet_core::pairing::VERSION);
     if let Ok(denied) = control::connect_target(&stranger, target.clone()).await {
         assert!(
             control::catalog_on(&denied, key.endpoint_id())
@@ -524,11 +524,11 @@ async fn explicit_tls_relay_without_udp_pins_identity_enforces_grants_and_recove
             key.endpoint_id(),
             &owner,
             cfg.relay_url.as_deref().unwrap(),
-            wipsnet_registry::enrollment::now(),
+            wispnet_registry::enrollment::now(),
             300,
         )
         .unwrap();
-    let pending = wipsnet_agent::pairing::request_enrollment(
+    let pending = wispnet_agent::pairing::request_enrollment(
         &stranger,
         key.endpoint_id(),
         &invitation,
@@ -586,7 +586,7 @@ async fn explicit_tls_relay_without_udp_pins_identity_enforces_grants_and_recove
         )
         .unwrap();
     assert!(
-        wipsnet_agent::pairing::request_enrollment(
+        wispnet_agent::pairing::request_enrollment(
             &stranger,
             key.endpoint_id(),
             &invitation,
@@ -712,7 +712,7 @@ async fn public_pairing_hello_is_bounded_strict_and_never_approves_a_client() {
     let client = tunnel::bind_client(client_key.secret_key()).await.unwrap();
     let target =
         iroh::EndpointAddr::new(key.endpoint_id()).with_ip_addr(host.endpoint().bound_sockets()[0]);
-    let hello = wipsnet_agent::pairing::hello(&client, target.clone())
+    let hello = wispnet_agent::pairing::hello(&client, target.clone())
         .await
         .unwrap();
     assert_eq!(hello.host, key.endpoint_id());
@@ -721,10 +721,10 @@ async fn public_pairing_hello_is_bounded_strict_and_never_approves_a_client() {
         br#"{"op":"hello","owner":"forged"}"#.as_slice(),
         br#"{"op":"approve"}"#,
         br#"{"op":"hello"}trailing"#,
-        &[b'x'; wipsnet_core::pairing::MAX_REQUEST + 1],
+        &[b'x'; wispnet_core::pairing::MAX_REQUEST + 1],
     ] {
         let connection = client
-            .connect(target.clone(), wipsnet_core::pairing::ALPN)
+            .connect(target.clone(), wispnet_core::pairing::ALPN)
             .await
             .unwrap();
         let (mut send, mut recv) = connection.open_bi().await.unwrap();
@@ -743,7 +743,7 @@ async fn public_pairing_hello_is_bounded_strict_and_never_approves_a_client() {
     }
     // A stalled pre-approval RPC cannot occupy a connection indefinitely.
     let stalled = client
-        .connect(target.clone(), wipsnet_core::pairing::ALPN)
+        .connect(target.clone(), wispnet_core::pairing::ALPN)
         .await
         .unwrap();
     timeout(Duration::from_secs(7), stalled.closed())
@@ -883,7 +883,7 @@ async fn udp_enabled_hosts_fall_back_to_relay_with_stale_hint() {
             Some("127.0.0.9:9".parse().unwrap()),
         )
         .unwrap();
-        let hello = wipsnet_agent::pairing::hello(&client, target.clone())
+        let hello = wispnet_agent::pairing::hello(&client, target.clone())
             .await
             .unwrap();
         assert_eq!(hello.host, key.endpoint_id());
@@ -899,7 +899,7 @@ async fn udp_enabled_hosts_fall_back_to_relay_with_stale_hint() {
             1
         );
         let connection = tunnel::connect_target(&client, target).await.unwrap();
-        if std::env::var("WIPSNET_AUDIT_DROP_UDP").as_deref() == Ok("1") {
+        if std::env::var("WISPNET_AUDIT_DROP_UDP").as_deref() == Ok("1") {
             assert!(
                 connection
                     .paths()
@@ -953,7 +953,7 @@ async fn catalog_rejects_mismatched_pin_before_sending_a_stream() {
     let unrelated = Identity::generate();
     let server = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(server_key.secret_key().clone())
-        .alpns(vec![wipsnet_core::host::ALPN.to_vec()])
+        .alpns(vec![wispnet_core::host::ALPN.to_vec()])
         .bind_addr("127.0.0.1:0".parse::<std::net::SocketAddr>().unwrap())
         .unwrap()
         .bind()

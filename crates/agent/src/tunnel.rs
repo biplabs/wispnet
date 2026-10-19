@@ -22,7 +22,7 @@ use tokio::{
     task::{JoinHandle, JoinSet},
     time::timeout,
 };
-use wipsnet_core::{
+use wispnet_core::{
     config::{ServiceConfig, TransportConfig, validate_services},
     identity::{EndpointId, SecretKey},
     protocol::{self, Status},
@@ -181,18 +181,18 @@ fn quic_config(streams: usize) -> QuicTransportConfig {
 #[derive(Clone)]
 enum Services {
     Static(Arc<Vec<ServiceConfig>>),
-    Host(wipsnet_registry::host::Authority),
+    Host(wispnet_registry::host::Authority),
 }
 impl Services {
-    async fn load(&self) -> Result<Vec<wipsnet_registry::host::LocalService>, Status> {
+    async fn load(&self) -> Result<Vec<wispnet_registry::host::LocalService>, Status> {
         match self {
             Self::Static(services) => Ok(services
                 .iter()
-                .map(|s| wipsnet_registry::host::LocalService {
+                .map(|s| wispnet_registry::host::LocalService {
                     id: s.id.clone(),
                     incarnation: String::new(),
                     display_name: s.id.clone(),
-                    kind: wipsnet_core::host::ServiceKind::Tcp,
+                    kind: wispnet_core::host::ServiceKind::Tcp,
                     backend: s.backend,
                     allow: s.allow.clone(),
                 })
@@ -235,7 +235,7 @@ impl TunnelHost {
     pub async fn bind_host(
         secret: &SecretKey,
         config: &TransportConfig,
-        authority: wipsnet_registry::host::Authority,
+        authority: wispnet_registry::host::Authority,
     ) -> Result<Self, TunnelError> {
         config
             .validate()
@@ -259,8 +259,8 @@ impl TunnelHost {
     ) -> Result<Self, TunnelError> {
         let mut alpns = vec![protocol::ALPN.to_vec()];
         if matches!(services, Services::Host(_)) {
-            alpns.push(wipsnet_core::host::ALPN.to_vec());
-            alpns.push(wipsnet_core::pairing::ALPN.to_vec());
+            alpns.push(wispnet_core::host::ALPN.to_vec());
+            alpns.push(wispnet_core::pairing::ALPN.to_vec());
         }
         let mut builder = builder.clear_ip_transports();
         if !config.relay_only {
@@ -348,7 +348,7 @@ async fn serve(
                     let Ok(Ok(connection)) = timeout(HANDSHAKE_TIMEOUT, incoming).await else { return };
                     // Only the completed transport handshake establishes peer authority.
                     let peer = connection.remote_id();
-                    if connection.alpn() == wipsnet_core::pairing::ALPN {
+                    if connection.alpn() == wispnet_core::pairing::ALPN {
                         // Public bootstrap has no access to authority. One RPC,
                         // bounded idle/read time, and the same global budgets.
                         let _close = CloseConnection(connection.clone());
@@ -382,7 +382,7 @@ async fn serve_connection(
     max: usize,
     counts: ActiveCounts,
 ) {
-    let connection_control = connection.alpn() == wipsnet_core::host::ALPN;
+    let connection_control = connection.alpn() == wispnet_core::host::ALPN;
     let _close = CloseConnection(connection.clone());
     counts.record_telemetry(peer, &connection);
     let mut tasks = JoinSet::new();

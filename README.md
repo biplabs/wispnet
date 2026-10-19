@@ -1,10 +1,10 @@
-# Wipsnet
+# Wispnet
 
 **Your services. Any device. Wherever you are.**
 
-Project domain: **`wipsnet.app`** · [v1 roadmap](https://github.com/biplabs/wispnet/issues/1) · [Implementation issues](https://github.com/biplabs/wispnet/issues)
+Project domain: **`wispnet.app`** · [v1 roadmap](https://github.com/biplabs/wispnet/issues/1) · [Implementation issues](https://github.com/biplabs/wispnet/issues)
 
-Wipsnet brings your self-hosted services into one directory and makes them accessible from your computers and phone, without tracking machine IP addresses or manually forwarding each service through your home router.
+Wispnet brings your self-hosted services into one directory and makes them accessible from your computers and phone, without tracking machine IP addresses or manually forwarding each service through your home router.
 
 > **Every host owns its services and permissions. There is no master node. The cloud is disposable.** Machine 1 is authoritative for Machine 1; Machine 2 is authoritative for Machine 2. Devices assemble trusted service information into a shared directory view. The cloud supplies only a transient connection relay, not a registry or authorization database.
 
@@ -23,7 +23,7 @@ Wipsnet brings your self-hosted services into one directory and makes them acces
 
 [Linux desktop/tray setup](docs/linux-desktop.md). Installed service names, state paths and Android package ID stay unchanged by the source reorganization.
 
-## Why Wipsnet?
+## Why Wispnet?
 
 You run a website on one computer and a `llama.cpp` server on another. Both should appear in one place and work from either computer or your phone, whether you are at home, at a coffee shop, or using cellular data.
 
@@ -33,7 +33,7 @@ You run a website on one computer and a `llama.cpp` server on another. Both shou
 | Llama UI and API | Machine 2 | Either computer or the phone, when authorized by Machine 2 |
 | Another local web application | Either computer | The clients its hosting machine permits |
 
-The initial target is two Linux computers and an Android phone, with one installed Wipsnet application per device. Each Linux installation can host and access services. **An installable Android app that both lists and opens services in the normal browser is mandatory for v1.** Android initially accesses services rather than hosting them.
+The initial target is two Linux computers and an Android phone, with one installed Wispnet application per device. Each Linux installation can host and access services. **An installable Android app that both lists and opens services in the normal browser is mandatory for v1.** Android initially accesses services rather than hosting them.
 
 ## The intended experience
 
@@ -41,7 +41,7 @@ The initial target is two Linux computers and an Android phone, with one install
 2. Pair a client with each host it should access through an explicitly approved, key-bound invitation. A combined setup UI can organize these approvals without making one machine everyone's authority.
 3. Register a service locally on its hosting computer. That host controls its name, backend binding, visibility, and access grants.
 4. Each device fetches permitted listings from its trusted hosts and combines them into one local directory. Offline hosts do not block updates from online hosts.
-5. Select a service to open its normal web UI, or obtain a protected local API endpoint. Wipsnet connects to the actual hosting device.
+5. Select a service to open its normal web UI, or obtain a protected local API endpoint. Wispnet connects to the actual hosting device.
 
 Registration is explicit, not automatic exposure of every listening process. A service still requires its own host and backend to be running.
 
@@ -54,7 +54,7 @@ Registration is explicit, not automatic exposure of every listening process. A s
 | **Machine 1** | Its identity, local services/backends, client approvals, service grants, and revocations for its services | Permitted service listings and trusted identities from other hosts |
 | **Machine 2** | Its identity, local services/backends, client approvals, service grants, and revocations for its services | Permitted service listings and trusted identities from other hosts |
 | **Android phone** | Its own identity, trusted peer pins, and local browser/API sessions | Permitted service listings from both machines |
-| **Cloud relay** | No Wipsnet service or authorization decisions | Transient live-connection and encrypted-packet routing state only |
+| **Cloud relay** | No Wispnet service or authorization decisions | Transient live-connection and encrypted-packet routing state only |
 
 Every hosting agent has a local registry and policy store. A client-facing directory is an **aggregated view**, not a third authoritative database. Copies of listings never confer permission to use or administer a host, and do not contain other devices' private keys or owner credentials.
 
@@ -113,7 +113,7 @@ A local service can use a local fast path, with the same policy and browser-boun
 
 Catalog freshness, local browser-session lifetime, and any explicitly expiring host-issued grant are separate concepts. An unrelated host's outage must not expire access. A trusted known host can be contacted directly to refresh missing/expired listing metadata before opening a service; malformed records and unknown identities fail closed.
 
-This removes a **mesh-wide registry/authorization single point of failure**, not every dependency. Each service still depends on its own hosting computer and backend; Wipsnet does not replicate application execution or wake sleeping computers. v1 has one relay, so relay-dependent connections and some new connections can be interrupted by its outage. Multi-relay resilience is future work, not a v1 availability guarantee.
+This removes a **mesh-wide registry/authorization single point of failure**, not every dependency. Each service still depends on its own hosting computer and backend; Wispnet does not replicate application execution or wake sleeping computers. v1 has one relay, so relay-dependent connections and some new connections can be interrupted by its outage. Multi-relay resilience is future work, not a v1 availability guarantee.
 
 ## Pairing and revocation without a master
 
@@ -141,9 +141,9 @@ Use the same addressing mechanism for pairing, catalog synchronization, and serv
 
 ## Cloud is purely transient and disposable
 
-**The cloud VM and its entire disk must be replaceable without restoring a Wipsnet database, losing any host's service registrations or permissions, or re-pairing devices.**
+**The cloud VM and its entire disk must be replaceable without restoring a Wispnet database, losing any host's service registrations or permissions, or re-pairing devices.**
 
-The cloud runs only the connection relay and necessary infrastructure. It must not store a Wipsnet service catalog, enrollment/approval database, permission history, revocations, host/owner private credentials, or durable node-discovery records. Registry and service content remain encrypted between the actual endpoints; the relay does not become an application gateway.
+The cloud runs only the connection relay and necessary infrastructure. It must not store a Wispnet service catalog, enrollment/approval database, permission history, revocations, host/owner private credentials, or durable node-discovery records. Registry and service content remain encrypted between the actual endpoints; the relay does not become an application gateway.
 
 The required recovery test is to destroy the isolated test relay and disk, rebuild it from a reproducible recipe, and let agents reconnect. Test both the same IP and a different IP behind the same hostname. Each host retains its own registrations, identity, grants, and revocations; no cloud application database or central-master recovery is involved.
 
@@ -165,7 +165,7 @@ Bind gateways only to loopback, authenticate browser/API sessions, validate exac
 
 Production cookie-prefix/Secure-cookie, HTTPS, hostname reuse, redirect/login, service-worker, streaming, and Android handoff decisions remain release requirements in [#10](https://github.com/biplabs/wispnet/issues/10). A directory entry or authenticated device connection is not proof of the human user's intent. Backend applications may still require their own authentication.
 
-`wipsnet.app` names the project; it does not require public service subdomains, a cloud application proxy, or public HTTPS controllers at home. Browser HTTPS and relay TLS are separate from host registry transport.
+`wispnet.app` names the project; it does not require public service subdomains, a cloud application proxy, or public HTTPS controllers at home. Browser HTTPS and relay TLS are separate from host registry transport.
 
 ## v1 roadmap
 

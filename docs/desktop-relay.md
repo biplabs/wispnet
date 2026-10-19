@@ -1,6 +1,6 @@
 # Temporary desktop relay, independent of the node role
 
-`desktop.home` temporarily hosts the standalone `wipsnet-relay` binary. It is a
+`desktop.home` temporarily hosts the standalone `wispnet-relay` binary. It is a
 separate process/systemd unit, not the desktop node's registry or transport
 endpoint. The pinned Iroh 1.3.0 server authenticates relay clients and forwards
 end-to-end encrypted packets. Relay admission never approves an application
@@ -10,14 +10,14 @@ client, grants service access, or owns a node identity.
 
 | Item | Desktop path |
 | --- | --- |
-| Relay executable | `~/.local/libexec/wipsnet-relay/wipsnet-relay` |
-| Relay-only configuration | `~/.config/wipsnet-relay/relay.toml` |
-| Public CA certificate (client trust) | `~/.local/share/wipsnet-relay/relay-ca.pem` |
-| Server TLS certificate | `~/.local/share/wipsnet-relay/relay-cert.pem` |
-| CA private key (desktop only) | `~/.local/share/wipsnet-relay/relay-ca-key.pem` |
-| Private-CA server TLS key (retained fallback) | `~/.local/share/wipsnet-relay/relay-key.pem` |
-| Automatic public TLS account/certificate cache | `~/.local/share/wipsnet-relay/acme/` |
-| User service | `~/.config/systemd/user/wipsnet-relay.service` |
+| Relay executable | `~/.local/libexec/wispnet-relay/wispnet-relay` |
+| Relay-only configuration | `~/.config/wispnet-relay/relay.toml` |
+| Public CA certificate (client trust) | `~/.local/share/wispnet-relay/relay-ca.pem` |
+| Server TLS certificate | `~/.local/share/wispnet-relay/relay-cert.pem` |
+| CA private key (desktop only) | `~/.local/share/wispnet-relay/relay-ca-key.pem` |
+| Private-CA server TLS key (retained fallback) | `~/.local/share/wispnet-relay/relay-key.pem` |
+| Automatic public TLS account/certificate cache | `~/.local/share/wispnet-relay/acme/` |
+| User service | `~/.config/systemd/user/wispnet-relay.service` |
 
 The protected relay directories contain no `host.sqlite3`, owner token, node
 secret key, service configuration or pairing capabilities. Relay TLS/account keys
@@ -36,10 +36,10 @@ python3 scripts/install_desktop_relay.py --acme --ssh-host desktop.home \
 ```
 
 The installer builds the locked source locally, copies a stripped Linux binary,
-and enables only `wipsnet-relay.service` in the SSH user's systemd account. Desktop
+and enables only `wispnet-relay.service` in the SSH user's systemd account. Desktop
 has user lingering enabled, so this service can run independently of login. No
 sudo is needed. Existing Caddy/WispShell services and node state are untouched.
-The source unit is `deploy/relay/wipsnet-relay.service`; systemd applies a 256 MiB
+The source unit is `deploy/relay/wispnet-relay.service`; systemd applies a 256 MiB
 memory limit, restart-on-failure and filesystem hardening. Only the protected
 ACME cache is writable inside the home directory; the relay and node configuration
 remain read-only to the service sandbox. Relay admission is
@@ -50,7 +50,7 @@ fixed role/event labels and the listening address.
 
 ## Network and client configuration
 
-The actual DNS name is **relay.wispnet.app**, not the earlier `wipsnet.app` typo.
+The actual DNS name is **relay.wispnet.app**.
 At installation it resolved to `162.156.47.159`. Reserve desktop's LAN address
 `192.168.1.26` and forward **external TCP 443 → 192.168.1.26 TCP 8443**.
 The relay listens on `0.0.0.0:8443`; auxiliary HTTP is loopback-only, and relay
@@ -115,10 +115,10 @@ limitation. Whole-machine-off independence requires relocating that relay first.
 Inspect/restart/remove only the relay role:
 
 ```sh
-ssh desktop.home systemctl --user status wipsnet-relay.service
-ssh desktop.home systemctl --user restart wipsnet-relay.service
+ssh desktop.home systemctl --user status wispnet-relay.service
+ssh desktop.home systemctl --user restart wispnet-relay.service
 # When relocating/removing the temporary relay:
-ssh desktop.home systemctl --user disable --now wipsnet-relay.service
+ssh desktop.home systemctl --user disable --now wispnet-relay.service
 ```
 
 Do not stop the node to administer the relay, or stop the relay as part of node

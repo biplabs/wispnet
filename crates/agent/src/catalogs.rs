@@ -8,12 +8,12 @@ use std::{
     },
     path::{Path, PathBuf},
 };
-use wipsnet_core::{
+use wispnet_core::{
     host::Catalog,
     identity::{EndpointId, SecretKey},
 };
 
-const LIMIT: usize = wipsnet_core::host::MAX_RESPONSE + 4096;
+const LIMIT: usize = wispnet_core::host::MAX_RESPONSE + 4096;
 const FAILURE: &str = "Catalog baseline unavailable or corrupt";
 
 fn protected(file: &fs::File) -> Result<(), String> {
@@ -97,7 +97,7 @@ fn read(path: &Path, host: EndpointId) -> Result<Option<(String, Option<Catalog>
     }
     let epoch = v["epoch"]
         .as_str()
-        .filter(|e| wipsnet_core::enrollment::valid_code(e))
+        .filter(|e| wispnet_core::enrollment::valid_code(e))
         .ok_or(FAILURE)?
         .to_owned();
     let catalog = if v["catalog"].is_null() {

@@ -7,8 +7,8 @@ use std::{
     os::unix::fs::PermissionsExt,
     sync::Mutex,
 };
-use wipsnet_core::identity::Identity;
-use wipsnet_registry::host::{self, Authority, Mutation};
+use wispnet_core::identity::Identity;
+use wispnet_registry::host::{self, Authority, Mutation};
 
 struct DnsFixture {
     address: SocketAddr,
