@@ -17,6 +17,8 @@ public class MainActivity extends Activity {
  final ExecutorService work=Executors.newFixedThreadPool(4);
  final java.util.ArrayList<Runnable> ageUpdates=new java.util.ArrayList<>();
  LinearLayout root,list;TextView status,identity,network,deviceHeading,relayLabel;
+ int noticeVersion=0;boolean noticeLeaving=false;
+ final Runnable dismissNotice=()->dismissNotice();
  long relayCheckedAt=0;boolean relayBusy=false;
  final Handler lifecycle=new Handler(Looper.getMainLooper());
  final Runnable updateAccess=new Runnable(){public void run(){syncSpace();for(Runnable age:ageUpdates)age.run();lifecycle.postDelayed(this,200);}};EditText label,host,invitation;Button access;
@@ -41,7 +43,7 @@ public class MainActivity extends Activity {
   getWindow().getAttributes().layoutInDisplayCutoutMode=WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
   getWindow().setDecorFitsSystemWindows(false);
   root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);screen=new FrameLayout(this);screen.setBackgroundColor(0xff070b14);stars=new StarJump(this);screen.addView(stars,new FrameLayout.LayoutParams(-1,-1));View statusScrim=new View(this);statusScrim.setBackgroundColor(0x66070b14);screen.addView(statusScrim,new FrameLayout.LayoutParams(-1,0,Gravity.TOP));screen.addView(root,new FrameLayout.LayoutParams(-1,-1));setContentView(screen);configureSystemBars();
-  getWindow().setDecorFitsSystemWindows(false);root.setOnApplyWindowInsetsListener((view,insets)->{android.graphics.Insets bars=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout()|WindowInsets.Type.ime());view.setPadding(dp(20)+bars.left,bars.top,dp(20)+bars.right,bars.bottom);int top=insets.getInsets(WindowInsets.Type.statusBars()|WindowInsets.Type.displayCutout()).top;ViewGroup.LayoutParams shade=statusScrim.getLayoutParams();if(shade.height!=top){shade.height=top;statusScrim.setLayoutParams(shade);}return insets;});
+  getWindow().setDecorFitsSystemWindows(false);root.setOnApplyWindowInsetsListener((view,insets)->{android.graphics.Insets bars=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout()|WindowInsets.Type.ime());view.setPadding(dp(20)+bars.left,bars.top,dp(20)+bars.right,bars.bottom);if(status!=null){FrameLayout.LayoutParams notice=(FrameLayout.LayoutParams)status.getLayoutParams();notice.setMargins(dp(20)+bars.left,0,dp(20)+bars.right,dp(20)+bars.bottom);status.setLayoutParams(notice);}int top=insets.getInsets(WindowInsets.Type.statusBars()|WindowInsets.Type.displayCutout()).top;ViewGroup.LayoutParams shade=statusScrim.getLayoutParams();if(shade.height!=top){shade.height=top;statusScrim.setLayoutParams(shade);}return insets;});
   header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL|Gravity.LEFT);root.addView(header,new LinearLayout.LayoutParams(-1,dp(64)));
   if(!managesHosts()){
    LinearLayout deviceHeader=new LinearLayout(this);deviceHeader.setOrientation(LinearLayout.VERTICAL);deviceHeader.setPadding(0,dp(12),0,dp(4));
@@ -51,7 +53,7 @@ public class MainActivity extends Activity {
   }
   machinesPill=button(managesHosts()?header:new LinearLayout(this),managesHosts()?"‹":"Manage",()->{if(managesHosts())finish();else showPairing(pairingScroll.getVisibility()!=View.VISIBLE);});machinesPill.setContentDescription(managesHosts()?"Back to space":"Manage paired machines");machinesPill.setBackground(card(0xd8101c34,0xff2b4373,21));machinesPill.setPadding(dp(managesHosts()?0:16),0,dp(managesHosts()?0:16),0);machinesPill.setTextSize(managesHosts()?18:14);LinearLayout.LayoutParams mlp=new LinearLayout.LayoutParams(managesHosts()?dp(44):-2,dp(42));mlp.rightMargin=dp(12);machinesPill.setLayoutParams(mlp);
   if(managesHosts()){ImageView logo=new ImageView(this);logo.setImageResource(R.drawable.ic_wispnet_logo);LinearLayout.LayoutParams ilp=new LinearLayout.LayoutParams(dp(34),dp(34));ilp.rightMargin=dp(12);header.addView(logo,ilp);TextView ht=new TextView(this);ht.setText("Wispnet · Hosts");ht.setTextColor(0xffedf2ff);ht.setTextSize(19);ht.setTypeface(null,android.graphics.Typeface.BOLD);header.addView(ht,new LinearLayout.LayoutParams(0,-2,1));}
-  status=new TextView(this);status.setTextColor(0xffb8d4ff);status.setTextSize(14);status.setBackground(card(0xeb101d36,0xff2d4a7c,14));status.setPadding(dp(16),dp(12),dp(16),dp(12));LinearLayout.LayoutParams slp=new LinearLayout.LayoutParams(-1,-2);slp.bottomMargin=dp(10);status.setVisibility(View.GONE);root.addView(status,slp);
+  status=new TextView(this);status.setTextColor(0xffb8d4ff);status.setTextSize(14);status.setBackground(card(0xeb101d36,0xff2d4a7c,14));status.setPadding(dp(16),dp(12),dp(16),dp(12));FrameLayout.LayoutParams slp=new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);slp.setMargins(dp(20),0,dp(20),dp(20));status.setElevation(dp(12));status.setVisibility(View.GONE);screen.addView(status,slp);
   network=new TextView(this);identity=new TextView(this);identity.setTextColor(0xff8fa3c4);identity.setTextSize(12);identity.setTypeface(android.graphics.Typeface.MONOSPACE);identity.setBackground(card(0xff0d1526,0xff1e2d4a,14));identity.setPadding(dp(16),dp(12),dp(16),dp(12));identity.setTextIsSelectable(true);
   space=new FrameLayout(this);root.addView(space,new LinearLayout.LayoutParams(-1,0,1));
   servicesScroll=new ScrollView(this);list=new LinearLayout(this);list.setOrientation(LinearLayout.VERTICAL);list.setPadding(0,dp(12),0,dp(24));servicesScroll.addView(list);space.addView(servicesScroll,new FrameLayout.LayoutParams(-1,-1));servicesScroll.setVisibility(View.GONE);
@@ -143,7 +145,7 @@ public class MainActivity extends Activity {
   syncRelay();
   if(access==null)return;boolean active=AccessService.enabled;
   if(!active&&openingService)resetServiceLaunch();
-  if(active&&enterRequested&&!jumping){starting=false;enterRequested=false;jumping=true;status.setVisibility(View.GONE);caption.setVisibility(View.GONE);root.animate().alpha(0).setDuration(120);access.setEnabled(false);stars.jump(()->{jumping=false;root.animate().alpha(1).setDuration(200);if(AccessService.enabled){spaceShown=true;dockToggle(true);servicesScroll.setVisibility(View.VISIBLE);refresh();holoReveal();}access.setEnabled(true);});}
+  if(active&&enterRequested&&!jumping){starting=false;enterRequested=false;jumping=true;hideNotice();caption.setVisibility(View.GONE);root.animate().alpha(0).setDuration(120);access.setEnabled(false);stars.jump(()->{jumping=false;root.animate().alpha(1).setDuration(200);if(AccessService.enabled){spaceShown=true;dockToggle(true);servicesScroll.setVisibility(View.VISIBLE);refresh();holoReveal();}access.setEnabled(true);});}
   else if(active&&!jumping&&!spaceShown){spaceShown=true;dockToggle(true);servicesScroll.setVisibility(View.VISIBLE);}
   else if(!active&&(spaceShown||jumping)){boolean wasShown=spaceShown;stars.cancel();if(wasShown)stars.dropOut();root.animate().cancel();root.setAlpha(1);jumping=false;spaceShown=false;servicesScroll.setVisibility(View.GONE);dockToggle(false);access.setEnabled(true);}
   if(starting&&SystemClock.elapsedRealtime()-startAt>15000){starting=false;enterRequested=false;dockToggle(false);access.setEnabled(true);stopService(new Intent(this,AccessService.class));show("Access could not start. Try again.");}
@@ -153,12 +155,41 @@ public class MainActivity extends Activity {
   network.setText(current);
   if(active&&!current.equals(lastNetwork)){
    if(current.equals("Network available")){
-    if(status.getText().toString().equals(lastNetwork)){status.setText("");status.setVisibility(View.GONE);}
+    if(status.getText().toString().equals(lastNetwork)){status.setText("");hideNotice();}
    }else show(current);
   }
   lastNetwork=current;
  }
- void show(String value){runOnUiThread(()->{status.setText(value);status.setVisibility(View.VISIBLE);status.announceForAccessibility(value);if(pairingScroll.getVisibility()==View.VISIBLE)pairingScroll.post(()->pairingScroll.smoothScrollTo(0,0));});}
+ void hideNotice(){
+  noticeVersion++;noticeLeaving=false;lifecycle.removeCallbacks(dismissNotice);
+  status.animate().cancel();status.animate().withEndAction(null);status.setVisibility(View.GONE);
+ }
+ void dismissNotice(){
+  if(status.getVisibility()!=View.VISIBLE)return;
+  int version=noticeVersion;noticeLeaving=true;
+  status.animate().cancel();
+  status.animate().translationY(status.getHeight()+((FrameLayout.LayoutParams)status.getLayoutParams()).bottomMargin).alpha(0)
+   .setDuration(android.animation.ValueAnimator.areAnimatorsEnabled()?220:0)
+   .setInterpolator(new android.view.animation.AccelerateInterpolator()).withEndAction(()->{if(version==noticeVersion)hideNotice();}).start();
+ }
+ void show(String value){runOnUiThread(()->{
+  boolean entering=status.getVisibility()!=View.VISIBLE;
+  int version=++noticeVersion;lifecycle.removeCallbacks(dismissNotice);
+  status.animate().cancel();status.animate().withEndAction(null);
+  boolean returning=noticeLeaving;noticeLeaving=false;
+  status.setText(value);status.setVisibility(View.VISIBLE);status.announceForAccessibility(value);
+  if(entering){status.setAlpha(0);status.setTranslationY(dp(64));}
+  if(entering||returning)status.post(()->{
+   if(version!=noticeVersion||status.getVisibility()!=View.VISIBLE)return;
+   if(entering)status.setTranslationY(status.getHeight()+((FrameLayout.LayoutParams)status.getLayoutParams()).bottomMargin);
+   status.animate().translationY(0).alpha(1).setDuration(android.animation.ValueAnimator.areAnimatorsEnabled()?220:0)
+    .setInterpolator(new android.view.animation.DecelerateInterpolator()).start();
+  });
+  else{status.setAlpha(1);status.setTranslationY(0);}
+  android.view.accessibility.AccessibilityManager accessibility=(android.view.accessibility.AccessibilityManager)getSystemService(ACCESSIBILITY_SERVICE);
+  int timeout=accessibility.getRecommendedTimeoutMillis(4000,android.view.accessibility.AccessibilityManager.FLAG_CONTENT_TEXT);
+  lifecycle.postDelayed(dismissNotice,timeout);
+ });}
  void pair(){final String expected=host.getText().toString().trim(),document=invitation.getText().toString(),name=label.getText().toString().trim();
   if(!hostVerified.isChecked()){show("Compare the full host ID with the target computer, then confirm it before requesting pairing.");return;}
   if(expected.isEmpty()||document.isEmpty()||name.isEmpty()){show("Enter machine name, verified host ID and invitation");return;}
@@ -250,7 +281,7 @@ public class MainActivity extends Activity {
   if(!openingService||!serviceJumpDone||pendingServiceUrl==null)return;
   String url=pendingServiceUrl;resetServiceLaunch();
   if(!AccessService.enabled){show("Start browser access first");return;}
-  status.setVisibility(View.GONE);
+  hideNotice();
   Intent browser=new Intent(Intent.ACTION_VIEW,Uri.parse(url));browser.addCategory(Intent.CATEGORY_BROWSABLE);
   try{startActivity(browser);}catch(ActivityNotFoundException missing){show("Install a browser to open this service.");}
  }
@@ -278,7 +309,7 @@ public class MainActivity extends Activity {
   try{com.journeyapps.barcodescanner.ScanOptions options=new com.journeyapps.barcodescanner.ScanOptions().setCaptureActivity(PairingCaptureActivity.class).setDesiredBarcodeFormats(com.journeyapps.barcodescanner.ScanOptions.QR_CODE).setBeepEnabled(false).setBarcodeImageEnabled(false).setTimeout(60000).setPrompt("Scan your computer’s Wispnet QR to pair.");startActivityForResult(options.createScanIntent(this),2);}catch(RuntimeException unavailable){show("Camera unavailable. Import a QR image or invitation file, or paste a pairing code.");}
  }
  void readQrImage(Uri uri){
-  invitation.setText("");hostVerified.setChecked(false);status.setText("Reading QR image…");
+  invitation.setText("");hostVerified.setChecked(false);show("Reading QR image…");
   work.execute(()->{try{if(uri==null||!"content".equals(uri.getScheme()))throw new IOException();try(InputStream input=getContentResolver().openInputStream(uri)){String document=PairingQr.decode(input);runOnUiThread(()->reviewInvitation(document));}}catch(Exception invalid){show("Cannot read pairing QR image. Import an invitation file or paste its pairing code instead.");}});
  }
  void reviewInvitation(String document){
@@ -288,7 +319,7 @@ public class MainActivity extends Activity {
  }
  void importInvitation(InputStream in)throws IOException{byte[] bytes=in.readNBytes(8193);if(bytes.length>8192)throw new IOException();String document=new String(bytes,java.nio.charset.StandardCharsets.UTF_8);runOnUiThread(()->reviewInvitation(document));}
  void readInvitation(Uri uri){
-  invitation.setText("");hostVerified.setChecked(false);status.setText("Reading invitation file…");
+  invitation.setText("");hostVerified.setChecked(false);show("Reading invitation file…");
   work.execute(()->{try{if(uri==null||!"content".equals(uri.getScheme()))throw new IOException();try(InputStream in=getContentResolver().openInputStream(uri)){importInvitation(in);}}catch(Exception e){show("Cannot read bounded invitation file. Paste its pairing code instead.");}});
  }
  void receiveInvitation(Intent intent){
@@ -304,5 +335,5 @@ public class MainActivity extends Activity {
  public void onWindowFocusChanged(boolean focused){super.onWindowFocusChanged(focused);if(focused)configureSystemBars();}
  protected void onResume(){super.onResume();configureSystemBars();if(store!=null&&!managesHosts()&&!jumping&&!starting)dockToggle(AccessService.enabled);lifecycle.post(updateAccess);syncSpace();}
  protected void onPause(){if(openingService)resetServiceLaunch();lifecycle.removeCallbacks(updateAccess);super.onPause();}
- protected void onDestroy(){root.animate().cancel();stars.cancel();access.animate().cancel();work.shutdown();super.onDestroy();}
+ protected void onDestroy(){hideNotice();root.animate().cancel();stars.cancel();access.animate().cancel();work.shutdown();super.onDestroy();}
 }

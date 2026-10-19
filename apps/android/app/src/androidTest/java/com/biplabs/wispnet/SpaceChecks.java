@@ -61,8 +61,16 @@ final class SpaceChecks {
    t.activity.show("Unrelated operation failed");
    t.activity.updateNetworkFeedback("Network available",true);
    if(!t.activity.status.getText().toString().equals("Unrelated operation failed")||t.activity.status.getVisibility()!=View.VISIBLE)throw new AssertionError("Recovery erased unrelated feedback");
-   t.activity.status.setText("");t.activity.status.setVisibility(View.GONE);
+   t.activity.hideNotice();
+   t.activity.show("First notification");
   });
+  Thread.sleep(2500);
+  t.runOnMainSync(()->t.activity.show("Updated notification"));
+  Thread.sleep(2000);
+  t.runOnMainSync(()->{
+   if(t.activity.status.getVisibility()!=View.VISIBLE||!t.activity.status.getText().toString().equals("Updated notification"))throw new AssertionError("New notification inherited old dismissal timer");
+  });
+  t.await(()->t.activity.status.getVisibility()==View.GONE,"Notification did not dismiss automatically");
  }
  static void buttonLayout(AppTestRunner t)throws Exception {
   final Bitmap[] bitmap={null};
