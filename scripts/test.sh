@@ -9,6 +9,10 @@ if [ -n "${WISPNET_SSH_RELAY_HOST:-}" ] && [ "${WISPNET_ANDROID_RELAY_TEST:-0}" 
     echo "Physical SSH/tablet checks require WISPNET_ANDROID_RELAY_TEST=1 to rebuild the current Android CLI." >&2
     exit 1
 fi
+# Darwin's per-user temporary path can exceed the Unix-domain socket limit.
+if [ "$(uname -s)" = Darwin ]; then
+    export TMPDIR=/tmp
+fi
 node --test experiments/relay-compatibility/test/*.test.js
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -24,7 +28,14 @@ python3 scripts/host_smoke.py
 python3 scripts/test_node_desktop.py
 python3 scripts/test_mutual_deletion.py
 uv run --with pyte==0.8.2 --with zxing-cpp==2.3.0 --with pillow==11.3.0 python scripts/test_tui.py
-python3 -m unittest discover -s scripts -p test_linux_distribution.py
+if [ "$(uname -s)" = Linux ]; then
+    python3 -m unittest discover -s scripts -p test_linux_distribution.py
+fi
+if [ "$(uname -s)" = Darwin ]; then
+    scripts/test_macos_swift.sh
+    swift build --package-path apps/macos -c release
+    python3 scripts/test_macos.py
+fi
 QT_QPA_PLATFORM=offscreen uv run --project apps/node/desktop --locked python -m unittest discover -s apps/node/desktop/tests
 python3 -m unittest discover -s scripts -p test_android_release.py
 python3 -m unittest discover -s scripts -p test_android_publish.py

@@ -49,19 +49,29 @@ impl Api {
         stream
             .set_write_timeout(Some(Duration::from_secs(5)))
             .map_err(|e| e.to_string())?;
-        let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
-        let mut size = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-        if unsafe {
-            libc::getsockopt(
-                stream.as_raw_fd(),
-                libc::SOL_SOCKET,
-                libc::SO_PEERCRED,
-                (&mut cred as *mut libc::ucred).cast(),
-                &mut size,
-            )
-        } != 0
-            || cred.uid != uid
-        {
+        #[cfg(target_os = "macos")]
+        let owner_matches = {
+            let mut peer_uid: libc::uid_t = 0;
+            let mut peer_gid: libc::gid_t = 0;
+            (unsafe { libc::getpeereid(stream.as_raw_fd(), &mut peer_uid, &mut peer_gid) }) == 0
+                && peer_uid == uid
+        };
+        #[cfg(not(target_os = "macos"))]
+        let owner_matches = {
+            let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
+            let mut size = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+            (unsafe {
+                libc::getsockopt(
+                    stream.as_raw_fd(),
+                    libc::SOL_SOCKET,
+                    libc::SO_PEERCRED,
+                    (&mut cred as *mut libc::ucred).cast(),
+                    &mut size,
+                )
+            }) == 0
+                && cred.uid == uid
+        };
+        if !owner_matches {
             return Err("Unexpected local node owner".into());
         }
         let mut data = serde_json::to_vec(&value).map_err(|_| "Invalid node request")?;
@@ -103,6 +113,40 @@ impl Api {
                 "Online control is available only for the installed host configuration".into(),
             );
         }
+        #[cfg(target_os = "macos")]
+        {
+            let domain = format!("gui/{}", unsafe { libc::geteuid() });
+            let service = format!("{domain}/app.wispnet.node");
+            let loaded = command(
+                Command::new("launchctl").args(["print", &service]),
+                None,
+                10,
+            )
+            .is_ok();
+            if online && loaded {
+                command(
+                    Command::new("launchctl").args(["kickstart", &service]),
+                    None,
+                    35,
+                )?;
+            } else if online {
+                let plist = home()?.join("Library/LaunchAgents/app.wispnet.node.plist");
+                command(
+                    Command::new("launchctl")
+                        .args(["bootstrap", &domain])
+                        .arg(plist),
+                    None,
+                    35,
+                )?;
+            } else if loaded {
+                command(
+                    Command::new("launchctl").args(["bootout", &service]),
+                    None,
+                    35,
+                )?;
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
         command(
             Command::new("systemctl").args([
                 "--user",

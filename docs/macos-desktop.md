@@ -1,0 +1,86 @@
+# Native macOS app
+
+Wispnet for macOS uses SwiftUI and AppKit, with an always-available menu bar icon.
+It shares the Rust node and protocols with Linux and Android; Qt and Python are
+not part of the installed Mac app. Requires macOS 13 or newer. Build on the Mac
+architecture you intend to run; this checkout has been built on Apple Silicon.
+
+## Build and install
+
+Install Xcode Command Line Tools, the pinned Rust toolchain (via rustup), and
+Python 3.11 or newer for the installer. From this checkout:
+
+```sh
+scripts/install-hooks.sh
+python3 scripts/install_macos.py --init
+```
+
+`--init` explicitly creates an independent identity only when no host configuration
+exists. It configures `https://relay.wispnet.app` and an ephemeral UDP port.
+On upgrades omit `--init`; existing configuration, authority, grants and pins
+are preserved. Missing authority in an existing installation is an error, never
+an instruction to generate a replacement identity. `--no-start` installs files
+without starting/restarting jobs; `--skip-build` reuses local build products.
+Quit the app before upgrading if it was opened manually.
+
+The installer creates `~/Applications/Wispnet.app`, the node executable under
+`~/.local/libexec/wispnet-node/`, and the `~/.local/bin/wispnet` terminal command.
+Configuration is `~/.config/wispnet-node/host.toml`; default private state is
+`~/.local/state/wispnet-node`. It installs two per-user launch agents:
+
+- `app.wispnet.node`: the independent node, started at graphical login.
+- `app.wispnet.desktop`: the native app, started quietly in the menu bar at login.
+
+Logs are in `~/Library/Logs/Wispnet/`. Open Wispnet from Finder, Spotlight or the
+menu bar. Closing the window hides it and removes the Dock icon; the menu bar
+icon remains. Reopening the app reveals its existing window. **Quit Wispnet**
+exits the UI while the node keeps running. **Go offline** unloads the node job
+and closes its connections and browser routes. **Go online** starts that same
+node again; neither action changes identity or service permissions. Login starts
+the node again, just as the enabled Linux user service starts at login.
+
+## Services and pairing
+
+**Services** shows local services and independently refreshed catalogs from paired
+machines. Each peer reports its own failure; unavailable peers do not block other
+catalogs. Only a successful live refresh enables its HTTP services. Opening one
+rechecks authority through the shared node and opens the protected local URL in
+your default browser. TCP services use the existing terminal tunnel commands.
+There is no persistent display-catalog cache in the Mac app; the Rust node still
+persists its authenticated catalog high-water evidence.
+
+**My services** shares or edits a loopback backend and its selected allowed
+devices. Changes carry the revision captured when the editor opens, so conflicting
+owner edits are rejected. Editing replaces the complete selected allowlist.
+**Devices** lists approved clients and their live/recent activity. The menu bar
+reports active devices, approvals, pending requests and relay state.
+
+**Pair this machine** shows a five-minute pairing code and its matching QR.
+**Copy pairing code** lets you use it on another computer; code and QR disappear
+on expiry or receipt of a request. **Pair a machine** accepts a visible multiline
+pairing code, shows the full target identity for comparison, and requests its
+owner's approval. Invalid or expired codes keep a visible error in the dialog.
+Paired hosts awaiting their owner's decision show **Awaiting approval**. **Pairing requests** approves a specific proved request and selected
+service grants together. Mutual machine pairing grants no access to the other
+machine's services automatically. Device revocation and forgetting a paired host
+remain separate owner decisions. The native app does not yet expose the Linux
+combined SSH owner-operations workflow or drag-to-reorder layout.
+
+IPC uses an owner-only Unix socket plus `getpeereid` to authenticate the local
+node. Pairing material stays out of process arguments and logs. Browser handoff
+accepts only the node's token-free `http://*.localhost:PORT/` URL and uses
+`NSWorkspace` to launch the browser. No second identity lease or public management
+listener is introduced.
+
+## Validation
+
+Run `scripts/test.sh` with Node.js, Python 3.11+, uv, Rust, Swift and OpenSSL 3 on
+PATH. macOS runs shared Rust/protocol/browser tests, native Swift tests for IPC
+permissions/protocol limits and browser URL validation, and the real two-node
+integration contract through the native executable's IPC implementation. Linux
+bundle packaging tests run on Linux, where that distribution is supported.
+The pre-push hook runs this same local suite.
+
+This is a development app signed locally with an ad-hoc signature. App Store
+signing, notarization, universal binaries, and an independent download installer
+are outside this implementation.

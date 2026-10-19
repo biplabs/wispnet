@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import socket
 import stat
+import sys
 import tomllib
 
 
@@ -38,9 +39,18 @@ class NodeAPI:
             # Verify the endpoint's OS user as well as the socket's metadata.
             import struct
 
-            _, uid, _ = struct.unpack(
-                "3i", connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
-            )
+            if sys.platform == "darwin":
+                import ctypes
+
+                uid_value, gid_value = ctypes.c_uint(), ctypes.c_uint()
+                libc = ctypes.CDLL(None, use_errno=True)
+                if libc.getpeereid(connection.fileno(), ctypes.byref(uid_value), ctypes.byref(gid_value)) != 0:
+                    raise ValueError("Cannot verify node socket owner")
+                uid = uid_value.value
+            else:
+                _, uid, _ = struct.unpack(
+                    "3i", connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
+                )
             if uid != os.getuid():
                 raise ValueError("Unexpected node socket owner")
             connection.sendall(payload)

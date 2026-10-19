@@ -12,7 +12,7 @@ use wispnet_registry::host::{self, Authority, Mutation};
 
 struct DnsFixture {
     address: SocketAddr,
-    last_octet: Arc<std::sync::atomic::AtomicU8>,
+    replacement: Arc<std::sync::atomic::AtomicBool>,
     questions: Arc<Mutex<Vec<String>>>,
     worker: JoinHandle<()>,
 }
@@ -20,9 +20,9 @@ impl DnsFixture {
     async fn start() -> Self {
         let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let address = socket.local_addr().unwrap();
-        let last_octet = Arc::new(std::sync::atomic::AtomicU8::new(1));
+        let replacement = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let questions = Arc::new(Mutex::new(Vec::new()));
-        let octet = last_octet.clone();
+        let replaced = replacement.clone();
         let log = questions.clone();
         let worker = tokio::spawn(async move {
             let mut buffer = [0; 4096];
@@ -44,35 +44,30 @@ impl DnsFixture {
                 log.lock().unwrap().push(name.clone());
                 assert_eq!(name, "relay.test", "unexpected node discovery DNS query");
                 let mut response = packet[..2].to_vec();
-                response.extend_from_slice(&[0x81, 0x80, 0, 1, 0, u8::from(kind == 1), 0, 0, 0, 0]);
+                let ipv6 = replaced.load(Ordering::SeqCst);
+                let answers = (!ipv6 && kind == 1) || (ipv6 && kind == 28);
+                response.extend_from_slice(&[0x81, 0x80, 0, 1, 0, u8::from(answers), 0, 0, 0, 0]);
                 response.extend_from_slice(&packet[12..cursor + 4]);
-                if kind == 1 {
-                    // One-second TTL: the real resolver must expire its cache.
-                    response.extend_from_slice(&[
-                        0xc0,
-                        0x0c,
-                        0,
-                        1,
-                        0,
-                        1,
-                        0,
-                        0,
-                        0,
-                        1,
-                        0,
-                        4,
-                        127,
-                        0,
-                        0,
-                        octet.load(Ordering::SeqCst),
-                    ]);
+                if answers {
+                    // Switch loopback IP families without privileged interface
+                    // aliases: macOS does not bind arbitrary 127/8 addresses.
+                    // One-second TTL still exercises ordinary cache expiry.
+                    let address = if ipv6 {
+                        std::net::Ipv6Addr::LOCALHOST.octets().to_vec()
+                    } else {
+                        Ipv4Addr::LOCALHOST.octets().to_vec()
+                    };
+                    response.extend_from_slice(&[0xc0, 0x0c]);
+                    response.extend_from_slice(&kind.to_be_bytes());
+                    response.extend_from_slice(&[0, 1, 0, 0, 0, 1, 0, address.len() as u8]);
+                    response.extend_from_slice(&address);
                 }
                 socket.send_to(&response, source).await.unwrap();
             }
         });
         Self {
             address,
-            last_octet,
+            replacement,
             questions,
             worker,
         }
@@ -210,8 +205,12 @@ async fn relay_dns_ip_replacement_recovers_without_endpoint_or_policy_reset() {
     .await
     .unwrap();
     original.shutdown().await.unwrap();
-    let changed = relay(&cert, SocketAddr::from(([127, 0, 0, 2], port))).await;
-    dns.last_octet.store(2, Ordering::SeqCst);
+    let changed = relay(
+        &cert,
+        SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port)),
+    )
+    .await;
+    dns.replacement.store(true, Ordering::SeqCst);
     // Do not reset endpoints, resolver caches, or peer pins. Recovery must use
     // ordinary TTL expiry plus Iroh's independent outbound reconnect/backoff.
     timeout(Duration::from_secs(30), async {

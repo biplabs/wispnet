@@ -154,10 +154,16 @@ fn perform(api: &Api, task: Task) -> Result<Value, String> {
             {
                 return Err("Invalid local browser handoff".into());
             }
-            if std::env::var_os("DISPLAY").is_some()
+            if cfg!(target_os = "macos")
+                || std::env::var_os("DISPLAY").is_some()
                 || std::env::var_os("WAYLAND_DISPLAY").is_some()
             {
-                api::command(std::process::Command::new("xdg-open").arg(url), None, 10)?;
+                let opener = if cfg!(target_os = "macos") {
+                    "open"
+                } else {
+                    "xdg-open"
+                };
+                api::command(std::process::Command::new(opener).arg(url), None, 10)?;
             }
             Ok(result)
         }

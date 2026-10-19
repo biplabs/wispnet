@@ -39,21 +39,28 @@ with tempfile.TemporaryDirectory(prefix="wispnet-smoke-") as temporary:
                 assert state.stat().st_mode & 0o777 == 0o700
                 # The foundation intentionally owns no listeners; future networking
                 # must extend this test to assert listener cleanup.
-                sockets = []
-                for fd in Path(f"/proc/{process.pid}/fd").iterdir():
-                    try:
-                        target = os.readlink(fd)
-                        if target.startswith("socket:"):
-                            sockets.append(target)
-                    except FileNotFoundError:
-                        pass
-                # Tokio uses Unix socket pairs internally for signal delivery.
-                internet_inodes = set()
-                for protocol in ("tcp", "tcp6", "udp", "udp6"):
-                    table = Path(f"/proc/{process.pid}/net/{protocol}")
-                    if table.exists():
-                        internet_inodes.update(line.split()[9] for line in table.read_text().splitlines()[1:])
-                assert not any(s[8:-1] in internet_inodes for s in sockets), sockets
+                if os.uname().sysname == "Darwin":
+                    listeners = subprocess.run(
+                        ["/usr/sbin/lsof", "-nP", "-a", "-p", str(process.pid), "-i"],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    assert listeners.returncode == 1 and not listeners.stdout, listeners.stdout + listeners.stderr
+                else:
+                    sockets = []
+                    for fd in Path(f"/proc/{process.pid}/fd").iterdir():
+                        try:
+                            target = os.readlink(fd)
+                            if target.startswith("socket:"):
+                                sockets.append(target)
+                        except FileNotFoundError:
+                            pass
+                    # Tokio uses Unix socket pairs internally for signal delivery.
+                    internet_inodes = set()
+                    for protocol in ("tcp", "tcp6", "udp", "udp6"):
+                        table = Path(f"/proc/{process.pid}/net/{protocol}")
+                        if table.exists():
+                            internet_inodes.update(line.split()[9] for line in table.read_text().splitlines()[1:])
+                    assert not any(s[8:-1] in internet_inodes for s in sockets), sockets
                 if mode == "agent":
                     status = subprocess.run([binary, "status", "--config", config], capture_output=True, text=True, timeout=5)
                     assert status.returncode == 0 and status.stdout == public_status

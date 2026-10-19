@@ -11,3 +11,7 @@ keystore.properties
 
 # Generated release/source identifier for packaged desktop clients.
 apps/node/desktop/wispnet_desktop/build_info.py
+
+# Native macOS build products.
+/apps/macos/.build/
+/apps/macos/.swiftpm/
