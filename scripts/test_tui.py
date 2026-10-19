@@ -48,6 +48,14 @@ class Terminal:
         fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack('HHHH', height, width, 0, 0))
         self.screen.resize(height, width)
         os.kill(self.pid, signal.SIGWINCH)
+        if hasattr(self, 'exited'):
+            # Wait for the application's redraw at the new bottom row before
+            # sending another key; resizing the emulator alone is not an ack.
+            deadline = time.monotonic() + 12
+            while not re.search(r'v[0-9]+\.[0-9]+\.', self.screen.display[-1]):
+                self.read()
+                if time.monotonic() >= deadline:
+                    raise AssertionError(f'Terminal resize was not redrawn at {width}x{height}')
 
     def read(self, seconds=.08):
         deadline = time.monotonic() + seconds

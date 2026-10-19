@@ -25,15 +25,15 @@ final class AutoPairChecks {
    });
    if(!t.activity.status.getText().toString().contains("valid Wispnet pairing code"))throw new Exception("Raw JSON accepted by pairing UI");
    if((t.activity.invitation.getInputType()&android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE)==0)throw new Exception("Pairing field is not multiline");
-   t.runOnMainSync(()->t.activity.reviewInvitation(code.substring(0,30)+"\n"+code.substring(30)));
-   t.await(()->t.activity.status.getText().toString().contains("Pairing code ready"),"Code preview unavailable");
+   t.runOnMainSync(()->t.activity.invitation.setText("wispnet1:invalid"));t.click("Pair");
+   t.await(()->!t.activity.checkingPairing&&t.activity.pairingFeedback.getText().toString().contains("invalid"),"Invalid code did not leave a visible error");
+   t.runOnMainSync(()->t.activity.hideNotice());
+   if(!"wispnet1:invalid".equals(t.activity.invitation.getText().toString())||t.activity.pairingFeedback.getVisibility()!=android.view.View.VISIBLE)throw new Exception("Failed pairing cleared its code or hid feedback");
+   if(new HostStore(t.getTargetContext()).all().has(target))throw new Exception("Invalid code saved trust");
+   t.runOnMainSync(()->t.activity.invitation.setText(code.substring(0,30)+"\n"+code.substring(30)));
    if(t.activity.invitation.getTransformationMethod() instanceof android.text.method.PasswordTransformationMethod)throw new Exception("Pairing code was masked");
-   if(new HostStore(t.getTargetContext()).all().has(target)||t.activity.host.getKeyListener()!=null||t.find(t.activity.root,"Import invitation file")!=null)throw new Exception("Preview trusted target or retained editable ID/file import");
-   t.runOnMainSync(()->{t.activity.invitation.setText("wispnet1:invalid");t.activity.pair();});
-   if(!t.activity.status.getText().toString().contains("Review the pairing code first"))throw new Exception("Edited code reused target preview");
-   t.runOnMainSync(()->t.activity.reviewInvitation(code));
-   t.await(()->t.activity.status.getText().toString().contains("Pairing code ready"),"Fresh preview unavailable");
-   t.click("Request pairing");
+   t.click("Pair");
+
   }else t.runOnMainSync(()->{t.activity.label.setText("");t.activity.onActivityResult(2,Activity.RESULT_OK,new Intent().putExtra("SCAN_RESULT",code));});
   // A UI-thread round trip must work while network pairing is in progress.
   t.runOnMainSync(()->{});

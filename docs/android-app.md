@@ -156,11 +156,13 @@ the target computer with **Pair this machine → Copy pairing code**, or run:
 ssh desktop.home '~/.local/bin/wispnet --pairing-code'
 ```
 
-Paste it into Android's **Pairing Code** tab and select **Pair**,
-then **Request pairing**. Android Share to Wispnet accepts the same text code.
-The preview shows the machine name and read-only host ID. There is no manual
-host-ID checkbox; the code pins the cryptographic target identity. Editing the
-code invalidates the preview. Review alone does not save trust or send a request.
+Paste it into Android's **Pairing Code** tab and select **Pair**. The request is
+submitted directly after code validation. Failures retain the entered code and
+show an inline message until you edit or retry. Android Share to Wispnet accepts
+the same text code. Shared codes and imported QR images show a target preview
+before **Request pairing**. The machine name and host ID are read-only; there is
+no host-ID comparison checkbox. Opening that preview does not save trust or send
+a request. Editing its code invalidates the preview.
 The target owner must approve the pending request and choose allowed services.
 
 Codes start with `wispnet1:` and encode the full expiring, single-use invitation.

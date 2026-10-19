@@ -31,7 +31,7 @@ final class PeerChecks {
     if(!target.equals(t.activity.host.getText().toString())||store.all().has(target))throw new Exception("QR image implied verified pin or trust");
     t.runOnMainSync(()->t.activity.onActivityResult(2,android.app.Activity.RESULT_OK,new android.content.Intent().putExtra("SCAN_RESULT","https://untrusted.invalid/invitation")));
     t.await(()->t.activity.status.getText().toString().contains("Cannot read pairing code"),"QR URL was accepted");
-    if(store.all().has(target)||t.activity.invitation.getText().length()!=0)throw new Exception("Invalid QR retained capability or trusted host");
+    if(store.all().has(target)||!decoded.equals(t.activity.invitation.getText().toString()))throw new Exception("Invalid QR erased the entered code or trusted a host");
     new File(t.getTargetContext().getFilesDir(),"peer-invitation.png").delete();
 
     android.content.Intent share=new android.content.Intent(android.content.Intent.ACTION_SEND).setClass(t.getTargetContext(),MainActivity.class).setType("text/plain").putExtra(android.content.Intent.EXTRA_TEXT,code).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK|android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP);
