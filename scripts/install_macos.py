@@ -29,6 +29,20 @@ def write_plist(path, value):
     os.replace(temporary, path)
 
 
+def bootstrap(domain, plist):
+    # launchd may briefly reject bootstrap while the previous job is unloading.
+    # Retry the same job for a bounded interval, preserving its diagnostic.
+    deadline = time.monotonic() + 10
+    while True:
+        result = subprocess.run(["launchctl", "bootstrap", domain, str(plist)],
+                                capture_output=True, text=True, timeout=30)
+        if result.returncode == 0:
+            return
+        if time.monotonic() >= deadline:
+            raise RuntimeError(result.stderr.strip() or f"Could not start {plist.name}")
+        time.sleep(0.2)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--init", action="store_true", help="Explicitly initialize a new Mac identity if no configuration exists")
@@ -136,7 +150,7 @@ def main():
     domain = f"gui/{os.getuid()}"
     for label in [DESKTOP_LABEL, LABEL]:
         subprocess.run(["launchctl", "bootout", domain + "/" + label], capture_output=True)
-    run("launchctl", "bootstrap", domain, agents / f"{LABEL}.plist")
+    bootstrap(domain, agents / f"{LABEL}.plist")
     deadline = time.monotonic() + 15
     while True:
         result = subprocess.run([str(executable), "--request", str(state / "node.sock")],
@@ -146,7 +160,7 @@ def main():
         if time.monotonic() >= deadline:
             raise RuntimeError(f"Installed node did not become ready; inspect {logs / 'node.log'}")
         time.sleep(0.1)
-    run("launchctl", "bootstrap", domain, agents / f"{DESKTOP_LABEL}.plist")
+    bootstrap(domain, agents / f"{DESKTOP_LABEL}.plist")
     run("open", app)
     print(f"Installed and opened {app}. Menu bar and node start at login. Identity and grants preserved.")
 
