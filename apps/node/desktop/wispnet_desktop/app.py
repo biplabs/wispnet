@@ -13,6 +13,8 @@ from wispnet_desktop.catalog_cache import CatalogCache, valid_catalog
 from wispnet_desktop.combined import Combined, validate_plan
 from PySide6.QtCore import (
     QObject,
+    QPoint,
+    QSettings,
     QPointF,
     QRunnable,
     QThreadPool,
@@ -357,9 +359,114 @@ def trash_icon():
     return QIcon(pixmap)
 
 
+class ReorderHandle(QLabel):
+    """Move cards inside this window without a platform drag/clipboard loop."""
+
+    def __init__(self, window, group, key, parent):
+        super().__init__("⠿", parent)
+        self.window, self.group, self.key = window, group, key
+        self.setToolTip("Drag to rearrange")
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.setMinimumWidth(24)
+        self.start = None
+        self.preview = None
+        self.target = None
+        self.outline = None
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.start = event.position().toPoint()
+
+    def begin_drag(self):
+        self.window.reordering = True
+        self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        # A real card image includes its title, status and service labels.
+        pixmap = self.parentWidget().grab()
+        pixmap = pixmap.scaled(380, 240, Qt.AspectRatioMode.KeepAspectRatio,
+                               Qt.TransformationMode.SmoothTransformation)
+        self.preview = QLabel(self.window, Qt.WindowType.ToolTip | Qt.WindowType.WindowTransparentForInput)
+        self.preview.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.preview.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.preview.setPixmap(pixmap)
+        self.preview.setStyleSheet("background: #111e38; border: 2px solid #65ceff; padding: 4px;")
+        self.preview.adjustSize()
+
+    def move_drag(self, position):
+        self.preview.move(position + QPoint(18, 18))
+        self.preview.show()
+        target = None
+        for handle in self.window.findChildren(ReorderHandle):
+            card = handle.parentWidget()
+            if (handle is not self and handle.group == self.group and card.isVisible()
+                    and card.rect().contains(card.mapFromGlobal(position))):
+                target = handle
+                break
+        if target is self.target:
+            return
+        if self.outline:
+            self.outline.deleteLater()
+            self.outline = None
+        self.target = target
+        if target:
+            card = target.parentWidget()
+            self.outline = QFrame(card)
+            self.outline.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            self.outline.setStyleSheet("background: transparent; border: 2px solid #65ceff; border-radius: 10px;")
+            self.outline.setGeometry(card.rect())
+            self.outline.show()
+            self.outline.raise_()
+
+    def mouseMoveEvent(self, event):
+        if self.start is None or not event.buttons() & Qt.MouseButton.LeftButton:
+            return
+        if not self.preview:
+            if (event.position().toPoint() - self.start).manhattanLength() < QApplication.startDragDistance():
+                return
+            self.begin_drag()
+        self.move_drag(event.globalPosition().toPoint())
+
+    def finish_drag(self, commit=False):
+        if self.preview is None:
+            self.start = None
+            return
+        if commit and self.target:
+            order = list(self.window.order_visible.get(self.group, []))
+            if self.key in order and self.target.key in order:
+                destination = order.index(self.target.key)
+                order.remove(self.key)
+                order.insert(destination, self.key)
+                self.window.order_settings.setValue(self.group, order)
+        self.preview.close()
+        self.preview.deleteLater()
+        self.preview = None
+        if self.outline:
+            self.outline.deleteLater()
+            self.outline = None
+        self.target = None
+        self.start = None
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.window.reordering = False
+        QTimer.singleShot(0, self.window.finish_reorder)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.finish_drag(commit=True)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            self.finish_drag()
+        else:
+            super().keyPressEvent(event)
+
+
 class Window(QMainWindow):
     def __init__(self, api, tray=True):
         super().__init__()
+        self.order_settings = QSettings("wispnet", "desktop-order")
+        self.order_visible = {}
+        self.reordering = False
+        self.deferred_update = None
         self.api = api
         self.snapshot = None
         self.catalogs = {}
@@ -790,6 +897,9 @@ class Window(QMainWindow):
         dialog.open()
 
     def updated(self, result, error):
+        if self.reordering:
+            self.deferred_update = (result, error)
+            return
         self.busy = False
         self.draw_operations()
         self.online = error is None
@@ -865,7 +975,7 @@ class Window(QMainWindow):
             ],
         )
         self._clear_layout(self.local_cards_layout)
-        host_services = result["host"]["services"]
+        host_services = self.ordered("services/local", result["host"]["services"], lambda service: service["id"])
         if host_services:
             for idx, s in enumerate(host_services):
                 tile = QFrame()
@@ -873,6 +983,7 @@ class Window(QMainWindow):
                 tile_layout = QHBoxLayout(tile)
                 tile_layout.setContentsMargins(12, 8, 10, 8)
                 tile_layout.setSpacing(8)
+                tile_layout.addWidget(ReorderHandle(self, "services/local", s["id"], tile))
                 left_col = QVBoxLayout()
                 left_col.setContentsMargins(0, 0, 0, 0)
                 left_col.setSpacing(2)
@@ -883,7 +994,7 @@ class Window(QMainWindow):
                 open_btn.setObjectName("sectorServiceCard")
                 open_btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 open_btn.clicked.connect(
-                    lambda _=False, r=idx: self._open_local_card(r)
+                    lambda _=False, sid=s["id"]: self._open_local_card(next(i for i, service in enumerate(self.snapshot["host"]["services"]) if service["id"] == sid))
                 )
                 left_col.addWidget(open_btn)
                 meta_row = QHBoxLayout()
@@ -1064,7 +1175,32 @@ class Window(QMainWindow):
             parts.append(f"{rtt}ms")
         return " · ".join(parts)
 
+    def ordered(self, group, values, key=lambda value: value):
+        saved = self.order_settings.value(group, [])
+        if not isinstance(saved, list):
+            saved = []
+        ranks = {value: index for index, value in enumerate(saved)}
+        result = sorted(values, key=lambda value: ranks.get(key(value), len(ranks)))
+        self.order_visible[group] = [key(value) for value in result]
+        return result
+
+    def refresh_order(self):
+        if self.snapshot:
+            self.updated(self.snapshot, None)
+
+    def finish_reorder(self):
+        if self.deferred_update is not None:
+            result, error = self.deferred_update
+            self.deferred_update = None
+            self.updated(result, error)
+        else:
+            self.refresh_order()
+            if not self.snapshot:
+                self.draw_peers()
+
     def draw_peers(self):
+        if self.reordering:
+            return
         rows = []
         self.peer_routes = []
         self._clear_layout(self.peer_cards_layout)
@@ -1077,9 +1213,11 @@ class Window(QMainWindow):
             self.snapshot["host"].get("services", []) if self.snapshot else []
         )
 
+        machine_order = self.ordered("machines", list(dict.fromkeys([*pins, *client_by_peer])))
+        pins = [peer for peer in machine_order if peer in pins]
         for peer in pins:
             data = self.catalogs.get(peer, {})
-            services = data.get("catalog", {}).get("services", [])
+            services = self.ordered("services/" + peer, data.get("catalog", {}).get("services", []), lambda service: service["id"])
             state = data.get("state", "Refreshing")
             host_label = (
                 self.peer_names.get(peer)
@@ -1100,6 +1238,7 @@ class Window(QMainWindow):
                 else f"◌ {state.upper()}"
             )
             sector_frame = QFrame()
+            sector_frame.setProperty("orderKey", peer)
             sector_frame.setObjectName("peerSectorCard")
             sec_layout = QVBoxLayout(sector_frame)
             sec_layout.setContentsMargins(16, 14, 16, 14)
@@ -1109,6 +1248,7 @@ class Window(QMainWindow):
             sec_head = QLabel(title if state == "Available" else f"{title}   {status_badge}")
             sec_head.setTextFormat(Qt.TextFormat.PlainText)
             sec_head.setObjectName("peerSectorHeader")
+            head_row.addWidget(ReorderHandle(self, "machines", peer, sector_frame))
             head_row.addWidget(sec_head, 0 if state == "Available" else 1)
             if state == "Available":
                 dot = QLabel()
@@ -1159,7 +1299,12 @@ class Window(QMainWindow):
                     s_btn.clicked.connect(
                         lambda _=False, r=route_idx: self._open_peer_card(r)
                     )
-                    grid.addWidget(s_btn, idx // 2, idx % 2)
+                    wrapper = QWidget()
+                    service_layout = QHBoxLayout(wrapper)
+                    service_layout.setContentsMargins(0, 0, 0, 0)
+                    service_layout.addWidget(ReorderHandle(self, "services/" + peer, service["id"], wrapper))
+                    service_layout.addWidget(s_btn, 1)
+                    grid.addWidget(wrapper, idx // 2, idx % 2)
             if services:
                 sec_layout.addLayout(grid)
             else:
@@ -1194,6 +1339,7 @@ class Window(QMainWindow):
                 if c_peer in s.get("allow", [])
             ]
             sector_frame = QFrame()
+            sector_frame.setProperty("orderKey", c_peer)
             sector_frame.setObjectName("peerSectorCard")
             sec_layout = QVBoxLayout(sector_frame)
             sec_layout.setContentsMargins(16, 12, 16, 12)
@@ -1202,6 +1348,7 @@ class Window(QMainWindow):
             sec_head = QLabel(f"◈  {c_name.upper()} · {c_peer[:8]}   ·")
             sec_head.setTextFormat(Qt.TextFormat.PlainText)
             sec_head.setObjectName("peerSectorHeader")
+            head_row.addWidget(ReorderHandle(self, "machines", c_peer, sector_frame))
             head_row.addWidget(sec_head)
             idle = c_peer not in connected and c_peer not in recent
             dot = QLabel()
@@ -1233,6 +1380,14 @@ class Window(QMainWindow):
             info_lbl.setObjectName("sectorSubtitle")
             sec_layout.addWidget(info_lbl)
             self.peer_cards_layout.addWidget(sector_frame)
+
+        cards = {}
+        while self.peer_cards_layout.count():
+            widget = self.peer_cards_layout.takeAt(0).widget()
+            cards[widget.property("orderKey")] = widget
+        for peer in machine_order:
+            if peer in cards:
+                self.peer_cards_layout.addWidget(cards[peer])
 
         if not pins and not client_only:
             empty_frame = QFrame()

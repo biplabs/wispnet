@@ -226,6 +226,27 @@ public class MainActivity extends Activity {
   String tel=peerTelemetry.get(peer);String info=tel!=null?statusText+" · "+tel:statusText;
   new AlertDialog.Builder(this).setTitle(name).setMessage("Host ID\n"+peer+"\n\n"+info).setPositiveButton("Refresh",(dialog,which)->refresh()).setNeutralButton("Remove",(dialog,which)->new AlertDialog.Builder(this).setTitle("Remove "+name+"?").setMessage("Remove this machine and close its access here? It will learn about removal when it next contacts this phone. You can pair again later.").setPositiveButton("Remove",(d2,w2)->removeHost(peer)).setNegativeButton("Cancel",null).show()).setNegativeButton("Done",null).show();
  }
+ java.util.List<String> ordered(String group,java.util.List<String> ids){
+  java.util.ArrayList<String> result=new java.util.ArrayList<>();
+  try{JSONArray saved=new JSONArray(getSharedPreferences("card-order",0).getString(group,"[]"));for(int i=0;i<saved.length();i++){String id=saved.getString(i);if(ids.contains(id)&&!result.contains(id))result.add(id);}}catch(JSONException ignored){}
+  for(String id:ids)if(!result.contains(id))result.add(id);return result;
+ }
+ void reorderable(View source,View target,String group,String id,java.util.List<String> ids){
+  source.setOnLongClickListener(v->{v.startDragAndDrop(ClipData.newPlainText("Rearrange",id),new View.DragShadowBuilder(target),new String[]{group,id},0);return true;});
+  target.setOnDragListener((v,event)->{
+   Object local=event.getLocalState();if(!(local instanceof String[]))return false;String[] drag=(String[])local;
+   if(drag.length!=2||!group.equals(drag[0])||id.equals(drag[1]))return false;
+   switch(event.getAction()){
+    case DragEvent.ACTION_DRAG_STARTED:return true;
+    case DragEvent.ACTION_DRAG_ENTERED:v.setAlpha(.65f);return true;
+    case DragEvent.ACTION_DRAG_EXITED:case DragEvent.ACTION_DRAG_ENDED:v.setAlpha(1);return true;
+    case DragEvent.ACTION_DROP:
+     v.setAlpha(1);java.util.ArrayList<String> order=new java.util.ArrayList<>(ids);int destination=order.indexOf(id);if(!order.remove(drag[1])||destination<0)return false;order.add(destination,drag[1]);
+     getSharedPreferences("card-order",0).edit().putString(group,new JSONArray(order).toString()).apply();v.post(this::render);return true;
+    default:return true;
+   }
+  });
+ }
  void render(){
   list.removeAllViews();ageUpdates.clear();machinesList.removeAllViews();
   LinearLayout heading=new LinearLayout(this);heading.setGravity(Gravity.CENTER_VERTICAL);LinearLayout.LayoutParams hlp=new LinearLayout.LayoutParams(-1,-2);hlp.bottomMargin=dp(12);list.addView(heading,hlp);
@@ -242,7 +263,8 @@ public class MainActivity extends Activity {
    if(!hasRecords){((SpaceToggle)access).beacons=new int[0];access.invalidate();addMachineBox.setVisibility(View.VISIBLE);text(list,"Pair a machine to get started",16);return;}
    if(host.getText().length()==0){addMachineBox.setVisibility(View.GONE);addMachineBtn.setText("+ Pair another machine");}
    boolean anyAvailable=false,anyPending=false;int[] beacons=new int[records.length()];int bIdx=0;
-   for(java.util.Iterator<String> keys=records.keys();keys.hasNext();){String peer=keys.next();JSONObject record=records.getJSONObject(peer);String name=record.getString("name"),state=record.optString("state"),statusText=record.optString("status");JSONObject catalog=record.optJSONObject("catalog");
+   java.util.ArrayList<String> rawPeers=new java.util.ArrayList<>();records.keys().forEachRemaining(rawPeers::add);java.util.List<String> peerOrder=ordered("machines",rawPeers);
+   for(String peer:peerOrder){JSONObject record=records.getJSONObject(peer);String name=record.getString("name"),state=record.optString("state"),statusText=record.optString("status");JSONObject catalog=record.optJSONObject("catalog");
     String tel=peerTelemetry.get(peer);
     String cardSub="available".equals(state)&&tel!=null?statusText+" · "+tel:statusText;
     int stateColor="available".equals(state)?0xff7be0b8:"approval_pending".equals(state)?0xfff0b85c:"host_denied".equals(state)?0xffff9aa8:0xff8fa3c4;
@@ -255,8 +277,11 @@ public class MainActivity extends Activity {
     LinearLayout sectorHead=new LinearLayout(this);sectorHead.setGravity(Gravity.CENTER_VERTICAL);sectorHead.setPadding(dp(4),0,dp(4),dp(10));sectorHead.setOnClickListener(v->showHostDialog(name,peer,statusText));sector.addView(sectorHead,new LinearLayout.LayoutParams(-1,-2));
     TextView sName=new TextView(this);sName.setText("◈  "+name.toUpperCase()+" · "+peer.substring(0,8));sName.setTextColor(0xffedf4ff);sName.setTextSize(14);sName.setLetterSpacing(0.08f);sName.setTypeface(null,android.graphics.Typeface.BOLD);sectorHead.addView(sName,new LinearLayout.LayoutParams(0,-2,1));
     TextView sBadge=new TextView(this);sBadge.setText("available".equals(state)?("ONLINE"+(tel!=null?" · "+tel:"")):"approval_pending".equals(state)?"AWAITING APPROVAL":"host_denied".equals(state)?"ACCESS DENIED":"OFFLINE");sBadge.setTextColor("available".equals(state)?0xffedf4ff:stateColor);sBadge.setCompoundDrawablesWithIntrinsicBounds(new StatusDot(this,"available".equals(state)?0xff65ceff:"approval_pending".equals(state)?0xffe9b65c:"host_denied".equals(state)?0xffff9aa8:0xff7a8da8),null,null,null);sBadge.setCompoundDrawablePadding(dp(6));sBadge.setTextSize(11);sBadge.setLetterSpacing(0.06f);sBadge.setTypeface(null,android.graphics.Typeface.BOLD);sectorHead.addView(sBadge,new LinearLayout.LayoutParams(-2,-2));
+    reorderable(machine,machine,"machines",peer,peerOrder);reorderable(sectorHead,sector,"machines",peer,peerOrder);
     if(catalog==null){text(sector,name+" · "+("approval_pending".equals(state)?"Awaiting approval":"Unavailable"),14);continue;}
     JSONArray services=catalog.getJSONArray("services");if(services.length()==0)text(sector,name+" · No shared services",14);
+    java.util.ArrayList<String> serviceIds=new java.util.ArrayList<>();java.util.HashMap<String,JSONObject> serviceById=new java.util.HashMap<>();for(int n=0;n<services.length();n++){JSONObject item=services.getJSONObject(n);serviceIds.add(item.getString("id"));serviceById.put(item.getString("id"),item);}
+    java.util.List<String> serviceOrder=ordered("services/"+peer,serviceIds);JSONArray sortedServices=new JSONArray();for(String id:serviceOrder)sortedServices.put(serviceById.get(id));services=sortedServices;
     int serviceColumns=getResources().getConfiguration().screenWidthDp>=600?2:1;
     LinearLayout gridRow=null;
     for(int i=0;i<services.length();i++){String service=services.getJSONObject(i).getString("id");String incarnation=services.getJSONObject(i).optString("incarnation","");String display=services.getJSONObject(i).getString("display_name");String kind=services.getJSONObject(i).getString("kind");
@@ -273,7 +298,8 @@ public class MainActivity extends Activity {
      ImageButton gear=new ImageButton(this);gear.setImageResource(R.drawable.ic_service_settings);gear.setPadding(dp(12),dp(12),dp(12),dp(12));gear.setBackground(card(0x00111e38,0x00283b60,12));gear.setContentDescription("Permissions for "+display+" on "+name);gear.setTag("Configure "+name+" / "+service);
      gear.setOnClickListener(v->ServicePermissions.show(this,peer,service,display));tile.addView(gear,new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.END|Gravity.CENTER_VERTICAL));
      row.setEnabled(allowed);row.setAlpha(allowed?1:.45f);row.setContentDescription(display+", "+name+", "+statusText);
-     row.setOnLongClickListener(v->{new AlertDialog.Builder(this).setTitle(name).setMessage(cardSub+"\n\nHost ID\n"+peer+"\n\nDirectory age: "+Math.max(0,(System.currentTimeMillis()-record.optLong("fetched"))/1000)+" seconds").setPositiveButton("Done",null).show();return true;});
+     reorderable(tile,tile,"services/"+peer,service,serviceOrder);
+     reorderable(row,tile,"services/"+peer,service,serviceOrder);
     }
    }
    ((SpaceToggle)access).beacons=beacons;access.invalidate();
