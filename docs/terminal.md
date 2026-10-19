@@ -91,8 +91,7 @@ authenticated **removed** response. Pending approval, no granted services, an
 unknown status, generic access denial and timeouts do not delete a pairing.
 
 There is no outgoing deletion queue or background delivery worker. If either
-machine is offline, the record stays until their next successful contact. Both
-nodes need this update for automatic cleanup; older clients may keep stale entries.
+machine is offline, the record stays until their next successful contact. Both nodes need this update for automatic cleanup. Updated Android apps support the same behavior; older clients may keep stale entries.
 A delayed response cannot remove a newer pairing. Revoking an individual service
 grant is independent and does not unpair the machines.
 

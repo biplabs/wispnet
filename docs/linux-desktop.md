@@ -170,7 +170,12 @@ so a delayed response cannot delete a newer pairing. Existing saved file pins
 are indexed without adding clients or widening grants. Local removal markers
 prevent those pins reappearing after a restart.
 
-Both desktop/headless nodes need this update. Older phone clients that do not
-implement the status check may retain stale entries. SQLite schema 10 stores
+Both desktop/headless nodes need this update. Updated Android clients implement the same check in both directions. Older phone clients that do not implement it may retain stale entries. SQLite schema 10 stores
 session IDs and local removal state; older binaries must not be used against the
 upgraded state. Individual service grants remain independently controlled.
+
+Refreshing the GUI/TUI device directory also checks authenticated pairing status
+for legacy client-only phones, without creating saved host pins or granting any
+services. These probes are demand-driven, bounded to four concurrent attempts,
+and rate limited to one per device every 30 seconds. Offline and older devices
+remain listed. An updated Android app answers while its process is reachable.

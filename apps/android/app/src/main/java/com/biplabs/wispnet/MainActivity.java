@@ -219,9 +219,12 @@ public class MainActivity extends Activity {
  void refresh(){
   try{JSONObject hosts=store.all();for(java.util.Iterator<String> keys=hosts.keys();keys.hasNext();){String peer=keys.next();if(!refreshing.add(peer))continue;work.execute(()->{try{Native.ensure(this);JSONObject snapshot=Native.request(new JSONObject().put("op","catalog").put("host",peer));store.catalog(peer,snapshot);syncTelemetry();DeviceProfile.syncHost(this,peer);}catch(Exception e){try{store.failed(peer,e);}catch(Exception ignored){}}refreshing.remove(peer);runOnUiThread(this::render);});}render();}catch(Exception e){show("Cannot read saved hosts");}
  }
+ void removeHost(String peer){
+  work.execute(()->{try{store.remove(peer);boolean empty=store.all().length()==0;runOnUiThread(()->{if(empty&&AccessService.enabled)stopService(new Intent(this,AccessService.class));render();show("Machine removed; it will learn on its next contact");});}catch(Exception failure){show("Cannot complete removal: "+failure.getMessage());}});
+ }
  void showHostDialog(String name,String peer,String statusText){
   String tel=peerTelemetry.get(peer);String info=tel!=null?statusText+" · "+tel:statusText;
-  new AlertDialog.Builder(this).setTitle(name).setMessage("Host ID\n"+peer+"\n\n"+info).setPositiveButton("Refresh",(dialog,which)->refresh()).setNeutralButton("Remove",(dialog,which)->new AlertDialog.Builder(this).setTitle("Remove "+name+"?").setMessage("Remove this host from your device? You can pair with it again later.").setPositiveButton("Remove",(d2,w2)->{try{store.remove(peer);if(store.all().length()==0&&AccessService.enabled)stopService(new Intent(this,AccessService.class));render();}catch(Exception e){show("Cannot remove host");}}).setNegativeButton("Cancel",null).show()).setNegativeButton("Done",null).show();
+  new AlertDialog.Builder(this).setTitle(name).setMessage("Host ID\n"+peer+"\n\n"+info).setPositiveButton("Refresh",(dialog,which)->refresh()).setNeutralButton("Remove",(dialog,which)->new AlertDialog.Builder(this).setTitle("Remove "+name+"?").setMessage("Remove this machine and close its access here? It will learn about removal when it next contacts this phone. You can pair again later.").setPositiveButton("Remove",(d2,w2)->removeHost(peer)).setNegativeButton("Cancel",null).show()).setNegativeButton("Done",null).show();
  }
  void render(){
   list.removeAllViews();ageUpdates.clear();machinesList.removeAllViews();

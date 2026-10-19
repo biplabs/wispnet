@@ -31,6 +31,9 @@ pub struct Client {
     pub gateway: gateway::Gateways,
     pub(crate) local_authority: Option<wispnet_registry::host::Authority>,
     telemetry: Mutex<wispnet_agent::tunnel::PeerTelemetry>,
+    _host: Option<wispnet_agent::tunnel::TunnelHost>,
+    client_checks: Mutex<std::collections::BTreeMap<String, std::time::Instant>>,
+    check_slots: Arc<tokio::sync::Semaphore>,
 }
 fn token() -> String {
     SecretKey::generate()
@@ -66,6 +69,9 @@ impl Client {
             gateway: gateway::Gateways::default(),
             local_authority: Some(authority),
             telemetry: Mutex::new(std::collections::BTreeMap::new()),
+            _host: None,
+            client_checks: Mutex::new(std::collections::BTreeMap::new()),
+            check_slots: Arc::new(tokio::sync::Semaphore::new(4)),
         })
     }
     pub async fn new(
@@ -87,7 +93,88 @@ impl Client {
             gateway: gateway::Gateways::default(),
             local_authority: None,
             telemetry: Mutex::new(std::collections::BTreeMap::new()),
+            _host: None,
+            client_checks: Mutex::new(std::collections::BTreeMap::new()),
+            check_slots: Arc::new(tokio::sync::Semaphore::new(4)),
         }))
+    }
+    /// Android shares its existing protected identity with a status/catalog endpoint.
+    /// It has no registered services and grants no services to paired hosts.
+    pub async fn new_peer(
+        key: SecretKey,
+        state: PathBuf,
+        config: TransportConfig,
+    ) -> Result<Arc<Self>, String> {
+        let directory = state.clone();
+        let own = key.public();
+        let authority = tokio::task::spawn_blocking(move || {
+            wispnet_registry::host::initialize(&directory, own).map_err(|e| e.to_string())?;
+            if let Ok(entries) = std::fs::read_dir(directory.join("peer-pins")) {
+                let (mut store, owner) = wispnet_registry::host::owner_store(&directory, own)
+                    .map_err(|e| e.to_string())?;
+                for entry in entries.take(129) {
+                    let entry = entry.map_err(|_| "Cannot inspect saved hosts")?;
+                    let name = entry.file_name();
+                    let Some(peer) = name
+                        .to_str()
+                        .and_then(|s| s.strip_suffix(".json"))
+                        .and_then(|s| s.parse().ok())
+                    else {
+                        continue;
+                    };
+                    if wispnet_agent::peers::load(&directory, peer)
+                        .map_err(|e| e.to_string())?
+                        .is_some()
+                    {
+                        store
+                            .index_legacy_pin(own, &owner, peer)
+                            .map_err(|e| e.to_string())?;
+                    }
+                }
+            }
+            wispnet_registry::host::Authority::open(&directory, own).map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|_| "Cannot prepare pairing state")??;
+        let host = wispnet_agent::tunnel::TunnelHost::bind_host(&key, &config, authority.clone())
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(Arc::new(Self {
+            endpoint: host.endpoint().clone(),
+            key,
+            config,
+            state,
+            gateway: gateway::Gateways::default(),
+            local_authority: Some(authority),
+            telemetry: Mutex::new(std::collections::BTreeMap::new()),
+            _host: Some(host),
+            client_checks: Mutex::new(std::collections::BTreeMap::new()),
+            check_slots: Arc::new(tokio::sync::Semaphore::new(4)),
+        }))
+    }
+    /// Contact client-only legacy devices while their directory is being refreshed.
+    /// No queue, no daemon timer, and at most four probes plus one attempt per 30s.
+    pub fn refresh_client_pairings(self: &Arc<Self>, peers: Vec<EndpointId>) {
+        let now = std::time::Instant::now();
+        let mut checks = self.client_checks.lock().unwrap_or_else(|e| e.into_inner());
+        checks.retain(|peer, _| peers.iter().any(|p| p.to_string() == *peer));
+        for peer in peers {
+            if checks
+                .get(&peer.to_string())
+                .is_some_and(|last| now.duration_since(*last) < std::time::Duration::from_secs(30))
+            {
+                continue;
+            }
+            let Ok(permit) = self.check_slots.clone().try_acquire_owned() else {
+                break;
+            };
+            checks.insert(peer.to_string(), now);
+            let client = self.clone();
+            tokio::spawn(async move {
+                let _permit = permit;
+                let _ = client.check_pairing(peer).await;
+            });
+        }
     }
     pub fn record_telemetry(&self, peer: EndpointId, connection: &iroh::endpoint::Connection) {
         let path = wispnet_agent::diagnostics::selected_path(connection);
@@ -211,6 +298,20 @@ impl Client {
     pub async fn command(self: &Arc<Self>, value: &Value) -> Result<Value, String> {
         match argument(value, "op")? {
             "identity" => Ok(json!({"peer":self.endpoint.id().to_string()})),
+            "pairing_state" => {
+                let host = peer(value)?;
+                let paired = self.saved_host(host).await?.is_some();
+                let removed = if let Some(authority) = &self.local_authority {
+                    !paired
+                        && authority
+                            .pairing_blocked(host)
+                            .await
+                            .map_err(|e| e.to_string())?
+                } else {
+                    false
+                };
+                Ok(json!({"paired":paired,"removed":removed}))
+            }
             "preview_invitation" => {
                 let invitation = wispnet_agent::pairing::decode_invitation(
                     argument(value, "invitation")?.as_bytes(),
@@ -480,7 +581,7 @@ pub fn call(text: &str) -> String {
             let config:TransportConfig=serde_json::from_value(json!({"bind_addr":"0.0.0.0:0","relay_url":argument(&value,"relay")?,"relay_only":false})).map_err(|_|"Invalid relay")?;
             let mut client = CLIENT.lock().map_err(|_| "Native state unavailable")?;
             if client.is_none() {
-                *client = Some(runtime().block_on(Client::new(key, state, config))?);
+                *client = Some(runtime().block_on(Client::new_peer(key, state, config))?);
             }
             return Ok(
                 json!({"ready":true,"peer":client.as_ref().expect("initialized").endpoint.id().to_string()}),
@@ -498,6 +599,7 @@ pub fn call(text: &str) -> String {
         Err(error) => {
             let code = match error.as_str() {
                 "access denied" => "host_denied",
+                "Pairing removed by remote machine" => "pairing_removed",
                 "catalog host or schema mismatch"
                 | "invalid catalog"
                 | "control frame truncated"

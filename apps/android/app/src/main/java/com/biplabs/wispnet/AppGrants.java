@@ -29,6 +29,13 @@ final class AppGrants {
  }
  static String key(String identity,String host,String service,String incarnation)throws Exception{return hash(identity+":"+host+":"+service+":"+incarnation);}
  void approve(String id,JSONObject grant)throws Exception{synchronized(LOCK){JSONObject all=all();all.put(id,grant);save(all);}}
+ void revokeHost(String host)throws Exception{synchronized(LOCK){
+  JSONObject grants=all();java.util.ArrayList<String> removed=new java.util.ArrayList<>();
+  for(java.util.Iterator<String> keys=grants.keys();keys.hasNext();){String id=keys.next();if(host.equals(grants.getJSONObject(id).optString("host_id")))removed.add(id);}
+  for(String id:removed)grants.remove(id);save(grants);
+  if(Native.ready)for(String id:removed)try{Native.request(new JSONObject().put("op","app_revoke").put("grant",id));}
+  catch(Exception failure){context.stopService(new Intent(context,AccessService.class));throw failure;}
+ }}
  void revoke(String id)throws Exception{synchronized(LOCK){
   // Persist denial before touching native state, so a retry cannot renew a grant.
   JSONObject all=all();all.remove(id);save(all);

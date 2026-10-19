@@ -5,12 +5,24 @@ final class HostStore {
  // Activities can overlap during recreation while their catalog workers finish.
  private static final Object LOCK=new Object();
  final SharedPreferences prefs;
- HostStore(Context context){prefs=context.getSharedPreferences("hosts",Context.MODE_PRIVATE);}
+ private final Context context;
+ HostStore(Context context){this.context=context.getApplicationContext();prefs=context.getSharedPreferences("hosts",Context.MODE_PRIVATE);}
  JSONObject all()throws JSONException{synchronized(LOCK){return new JSONObject(prefs.getString("records","{}"));}}
  void save(JSONObject records)throws Exception{synchronized(LOCK){if(records.length()>128||!prefs.edit().putString("records",records.toString()).commit())throw new Exception("Cannot save host directory");}}
  void paired(String host,String name)throws Exception{synchronized(LOCK){JSONObject records=all();records.put(host,new JSONObject().put("name",name).put("state","approval_pending").put("status","Pending approval on this host"));save(records);}}
  void nameSynced(String host,String name)throws Exception{synchronized(LOCK){JSONObject records=all();if(!records.has(host))return;records.getJSONObject(host).put("synced_name",name);save(records);}}
- void remove(String host)throws Exception{synchronized(LOCK){JSONObject records=all();records.remove(host);save(records);}}
+ void remove(String host)throws Exception{
+  Native.ensure(context);Native.request(new JSONObject().put("op","unpair").put("host",host));
+  synchronized(LOCK){if(Native.request(new JSONObject().put("op","pairing_state").put("host",host)).getBoolean("paired"))throw new Exception("Pairing changed; review this machine again");removeSaved(host);}
+ }
+ private void removeSaved(String host)throws Exception{
+  new AppGrants(context).revokeHost(host);JSONObject records=all();records.remove(host);save(records);
+ }
+ void reconcile()throws Exception{synchronized(LOCK){
+  JSONObject records=all();java.util.ArrayList<String> removed=new java.util.ArrayList<>();
+  for(java.util.Iterator<String> keys=records.keys();keys.hasNext();){String host=keys.next();if(Native.request(new JSONObject().put("op","pairing_state").put("host",host)).optBoolean("removed"))removed.add(host);}
+  for(String host:removed)removeSaved(host);
+ }}
  static void validate(String host,JSONObject c)throws Exception{
   if(c.length()!=7||!Integer.valueOf(1).equals(c.get("version"))||!Boolean.TRUE.equals(c.get("complete"))||!host.equals(c.getString("host"))||!c.getString("generation").matches("[0-9a-f]{64}"))throw new Exception("Invalid or incomplete catalog");
   Object rev=c.get("revision"),count=c.get("service_count");
@@ -36,6 +48,9 @@ final class HostStore {
  void failed(String host,Exception failure)throws Exception{synchronized(LOCK){
   JSONObject records=all();if(!records.has(host))return;JSONObject record=records.getJSONObject(host);
   String code=failure instanceof Native.Failure?((Native.Failure)failure).code:"operation_failed";
+  // Consult durable native removal state, including after an interrupted callback.
+  // A concurrent fresh pairing clears that state and must retain its Java record.
+  if(Native.ready)try{if(Native.request(new JSONObject().put("op","pairing_state").put("host",host)).optBoolean("removed")){removeSaved(host);return;}}catch(Exception unavailable){}
   if("host_denied".equals(code)){
    boolean pending="approval_pending".equals(record.optString("state"))||record.optString("status").startsWith("Pending approval");
    record.put("state",pending?"approval_pending":"host_denied").put("status",pending?"Pending approval on this host":"Access denied by this host. Request pairing again.");

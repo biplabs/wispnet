@@ -112,7 +112,7 @@ struct Reply {
 }
 fn perform(api: &Api, task: Task) -> Result<Value, String> {
     match task {
-        Task::Status => api.request(json!({"op":"status"})),
+        Task::Status => api.request(json!({"op":"status","refresh_clients":true})),
         Task::Request(v) => api.request(v),
         Task::Online(v) => api.online(v),
         Task::Remove { peer, revision } => {

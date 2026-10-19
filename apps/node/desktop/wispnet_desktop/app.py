@@ -714,7 +714,7 @@ class Window(QMainWindow):
         if self.busy or self.node_transition:
             return
         self.busy = True
-        self.submit(lambda: self.api.request(op="status"), self.updated)
+        self.submit(lambda: self.api.request(op="status", refresh_clients=True), self.updated)
 
     def generate_qr(self):
         if self.qr_dialog is not None:

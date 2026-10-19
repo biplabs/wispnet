@@ -60,7 +60,7 @@ public final class ServiceDiscoveryService extends Service {
     send(reply,request,"ok",result);
    }
   }catch(SecurityException denied){send(reply,request,"caller_rejected",null);}
-  catch(Native.Failure failure){String status="host_denied".equals(failure.code)?"host_denied":"service_unavailable";send(reply,request,status,null);}
+  catch(Native.Failure failure){try{new HostStore(this).failed(host,failure);}catch(Exception ignored){}String status="pairing_removed".equals(failure.code)?"host_not_paired":"host_denied".equals(failure.code)?"host_denied":"service_unavailable";send(reply,request,status,null);}
   catch(Exception failure){send(reply,request,"service_unavailable",null);}
  }
  static void send(Messenger reply,String request,String status,Bundle result){

@@ -66,6 +66,16 @@ impl State {
                         pins.push(id);
                     }
                 }
+                if value["refresh_clients"] == true {
+                    self.client.refresh_client_pairings(
+                        snapshot
+                            .clients
+                            .iter()
+                            .filter(|c| !pins.contains(&c.peer.to_string()))
+                            .map(|c| c.peer)
+                            .collect(),
+                    );
+                }
                 let (invitations, host_name) = self.owner(None).await?;
                 let mut telemetry = serde_json::Map::new();
                 for (peer, (path, rtt_ms)) in self.client.telemetry_map() {

@@ -232,3 +232,37 @@ The [Android service discovery API](android-service-discovery.md) resolves a ful
 host ID and service ID to an authenticated local endpoint without manual port
 configuration. Access requires per-app user approval and the host's existing
 phone/service grants. A separate example app and physical Binder tests are included.
+
+## Pairing removal in both directions
+
+The app now shares its protected Android identity with a native pairing-status
+endpoint. No private key is copied out of the Keystore envelope. Existing saved
+pins are indexed without adding host service grants or changing the phone identity.
+New QR pairings register both endpoints, with no phone services granted by default.
+
+Removing a machine in Android first revokes its native pairing and browser routes,
+then clears its Android card and app-access consents. A desktop learns removal on
+its next catalog refresh. For older client-only phone entries, refreshing the
+GUI/TUI device directory probes the phone's authenticated pairing status, with four
+concurrent probes at most and a 30-second per-device cooldown. There is no deletion
+queue or always-running delivery task. The phone must be reachable with its app
+process running; Android can defer or stop background execution.
+
+When a desktop removes the phone, Android's next catalog refresh or Open learns
+that authenticated removal, clears the native pin and card, and revokes app access
+for that host. Startup also reconciles an interrupted cleanup. Pending approval,
+an empty catalog, a generic denial, and transport failures retain the saved pairing.
+Fresh pairings cannot be erased by an old callback. Other hosts and their app
+permissions remain independent.
+
+Physical checks use only the separate peercheck app and temporary Linux nodes:
+
+```sh
+JAVA_HOME=/opt/android-studio/jbr apps/android/gradlew -p apps/android --no-daemon :app:assemblePeercheck :app:assemblePeercheckAndroidTest -PwispnetTestBuildType=peercheck
+# Install the peercheck app and matching test APK, then:
+python3 scripts/test_android_removal.py --serial DEVICE_SERIAL
+```
+
+The checks cover both removal directions, pending approval, empty catalogs,
+timeouts, stale callbacks, per-host consent cleanup, cold restart, and migration
+of an older client-only phone entry. They do not clear the main app's data.
