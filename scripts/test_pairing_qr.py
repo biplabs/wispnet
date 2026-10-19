@@ -85,6 +85,12 @@ class NativeQrTests(unittest.TestCase):
 
                 document = decode(matrix)
                 self.assertEqual(document['invitation'], result['invitation'])
+                code_document = json.loads(base64.urlsafe_b64decode(result['code'][9:] + '=' * (-len(result['code'][9:]) % 4)))
+                self.assertEqual(code_document, document)
+                emitted = subprocess.run([binary, '--pairing-code', '--config', config], check=True, capture_output=True, text=True).stdout.strip()
+                self.assertTrue(emitted.startswith('wispnet1:'))
+                preview = api.request(op='preview_invitation', invitation=emitted)
+                self.assertEqual(preview['host'], before['host'])
                 master, slave = pty.openpty()
                 try:
                     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 100, 200, 0, 0))

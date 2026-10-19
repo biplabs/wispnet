@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
 import select
 import signal
 import socket
@@ -215,16 +216,17 @@ class TerminalManagement(unittest.TestCase):
         self.changed(bapi, lambda s: s['host']['clients'] == [])
         term.expect('0 clients')
 
-        # Import, review, and explicitly request pairing to the other native endpoint.
+        # Paste a code, review, and explicitly request pairing to the other native endpoint.
         fresh = self.root / 'remote-invitation.json'
         subprocess.run([BINARY, 'host-invite', '--config', a, '--output', fresh], capture_output=True, check=True)
         document = json.loads(fresh.read_text())
         document['direct_hint'] = f'127.0.0.1:{porta}'
         fresh.write_text(json.dumps(document))
         term.send('6')
-        term.send(b'\x1b[B\r')
-        term.expect('Import invitation')
-        term.send(str(fresh))
+        term.send(b'\r')
+        term.expect('Paste pairing code')
+        code = 'wispnet1:' + base64.urlsafe_b64encode(json.dumps(document).encode()).decode().rstrip('=')
+        term.send(code)
         term.send(b'\t\r')
         term.expect('Request pairing with this host')
         self.assertIn(pa, term.text)
@@ -240,8 +242,25 @@ class TerminalManagement(unittest.TestCase):
         self.changed(bapi, lambda s: pa not in s['peer_pins'])
         term.expect('Saved')
 
+        # Generate and copy inside the TUI, including on a terminal too small for QR.
+        term.send('2')
+        term.expect('Pairing code · c: copy')
+        term.expect('wispnet1:')
+        term.send('c')
+        copies = re.findall(rb'\x1b]52;c;([A-Za-z0-9+/=]+)\x1b\\', bytes(term.raw))
+        self.assertTrue(copies, 'TUI did not emit a complete clipboard command')
+        copied = base64.b64decode(copies[-1]).decode()
+        self.assertEqual(bapi.request(op='preview_invitation', invitation=copied)['host'], pb)
+        term.resize(80, 24)
+        term.expect('wispnet1:')
+        term.send('c')
+        copies = re.findall(rb'\x1b]52;c;([A-Za-z0-9+/=]+)\x1b\\', bytes(term.raw))
+        self.assertEqual(base64.b64decode(copies[-1]).decode(), copied)
+        term.resize(140, 75)
+
         # Native TUI QR is independently decoded from the terminal's actual styled cells.
         term.send('g')
+        term.expect('In Wispnet on your phone')
         term.expect('Expires in')
         rows = []
         pixels = {' ': (False, False), '▀': (True, False), '▄': (False, True), '█': (True, True)}

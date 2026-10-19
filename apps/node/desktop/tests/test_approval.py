@@ -141,6 +141,24 @@ class ApprovalChecks(unittest.TestCase):
                 document = json.loads(invitation.read_text())
                 document['direct_hint'] = f'127.0.0.1:{portb}'
                 aapi.request(op='pair',host=pb,invitation=json.dumps(document))
+                with self.assertRaisesRegex(ValueError, "awaiting approval"):
+                    aapi.request(op='catalog',host=pb)
+                # Pending status comes from durable host state, including after restart.
+                processes[-1].terminate()
+                processes[-1].wait(timeout=10)
+                process = subprocess.Popen([binary,'agent','--config',b],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+                processes.append(process)
+                deadline = time.monotonic()+10
+                while True:
+                    try:
+                        bapi.request(op='status')
+                        break
+                    except (OSError,ValueError):
+                        self.assertIsNone(process.poll())
+                        self.assertLess(time.monotonic(),deadline)
+                        time.sleep(.02)
+                with self.assertRaisesRegex(ValueError, "awaiting approval"):
+                    aapi.request(op='catalog',host=pb)
                 window = Window(bapi,tray=False)
                 window.timer.stop()
                 window.pool.waitForDone()

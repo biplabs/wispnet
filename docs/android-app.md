@@ -17,7 +17,7 @@ The APK currently targets API 36, builds for arm64 by default (optional x86_64 f
 
 1. Start a host agent on each computer. `scripts/install_app_hosts.py` installs independent `wispnet-host.service` user units on this computer and `desktop.home`, preserving existing identities/configuration. Its node state is separate from the desktop relay state.
 2. Issue a target-host invitation with the CLI's `host-invite` command. Verify that computer's public Endpoint ID independently.
-3. In Wispnet, enter the machine label and verified ID, and paste or import its invitation JSON. Request pairing. This proves the tablet identity; it does not grant access yet.
+3. In Wispnet, paste its pairing code, review the target machine, and request pairing. This proves the tablet identity; it does not grant access yet.
 4. On that computer, inspect `host-invitations`, approve the pending invitation using `host-mutate`, and grant the tablet identity access to the intended services. Repeat independently for the other computer.
 5. Refresh hosts, select **Start browser access**, then select a service's **Open** button. Its owning host is shown even when both publish `website`.
 6. **Stop browser access**, including the notification action, closes the app's gateway listeners and active connections.
@@ -50,7 +50,7 @@ Foreground access uses Android's `dataSync` service type and notification. It is
 
 The HTTP loopback gateway is a development implementation: isolated random localhost origins, origin/authority checks, HttpOnly session cookies, bounded uploads, and cross-origin redirect rejection. Secure-cookie/prefix behavior, service workers, arbitrary login flows, full HTTP compatibility, and the stricter release security work remain under #10. Streaming responses and WebSocket upgrades are implemented; a physical controlled WebSocket upgrade/echo is covered by the lifecycle harness. Chunked request uploads and Expect requests are currently rejected.
 
-QR scanning and saved QR image import use the same invitation review flow. The camera-free path also supports a pasted pairing code or JSON, invitation file import, and Android Share to Wispnet. All paths require host-ID comparison and independent target approval. Physical app checks now cover hotspot/home Wi-Fi transitions, relay service restart, screen-off/Doze recovery, fresh pairing with the other node stopped, and active-stream revocation. Independently verified cellular egress for this app run, full relay replacement, broader OEM battery restrictions and longer-duration lifecycle acceptance remain under #12. Transport-only #13 checks do not establish these app-level results.
+QR scanning and saved QR image import use the same invitation review flow. The camera-free path supports a pasted pairing code and Android text Share to Wispnet. All paths validate the encoded target identity and require independent target approval. Physical app checks now cover hotspot/home Wi-Fi transitions, relay service restart, screen-off/Doze recovery, fresh pairing with the other node stopped, and active-stream revocation. Independently verified cellular egress for this app run, full relay replacement, broader OEM battery restrictions and longer-duration lifecycle acceptance remain under #12. Transport-only #13 checks do not establish these app-level results.
 
 ## Lifecycle and network recovery checks
 
@@ -149,30 +149,31 @@ Observed on the physical Android 14 tablet (2026-10-16), on home Wi-Fi: expired 
 
 ## Pairing without a camera
 
-Camera-less devices use the same host-scoped protocol. On the target computer, create either the usual invitation JSON or a copyable code file:
+Camera-less devices use the same host-scoped protocol. Generate a pairing code on
+the target computer with **Pair this machine → Copy pairing code**, or run:
 
 ```sh
-wispnet host-invite --config /absolute/path/host.toml --output /private/invitation.json
-# Alternative representation of the same contract; choose one command:
-wispnet host-invite --config /absolute/path/host.toml --output /private/invitation.txt --format code
+ssh desktop.home '~/.local/bin/wispnet --pairing-code'
 ```
 
-Send the file to the tablet and select **Import invitation file**, or use Android's **Share → Wispnet**. A text code can also be pasted into **Paste pairing code or invitation JSON**, then **Review pasted invitation**. Both representations fill in the complete host ID for review. Compare that ID with the target computer and select **I compared this host ID with the target computer**, enter a machine name, then **Request pairing**. Import and review do not send a pairing request or save a trusted pin. Editing the host ID clears confirmation. The target owner must still approve the pending request and grant services.
+Paste it into Android's **Pairing Code** tab and select **Pair**,
+then **Request pairing**. Android Share to Wispnet accepts the same text code.
+The preview shows the machine name and read-only host ID. There is no manual
+host-ID checkbox; the code pins the cryptographic target identity. Editing the
+code invalidates the preview. Review alone does not save trust or send a request.
+The target owner must approve the pending request and choose allowed services.
 
-The `wispnet1:` code is a copyable encoding of the full versioned invitation, not a short numeric lookup code or a new authority. It contains the expiring single-use capability, so share it only with the intended device; the host command writes a new private file and does not print the capability. Linux reads either representation from its protected invitation file. Native Android uses the same strict decoder and performs expiry, target-pin and proof checks. Imports are bounded to 8 KiB; Android accepts file-picker content URIs or explicitly shared text/content, without fetching invitation URLs. Camera-free paths do not need camera permission or a scanner app. The optional built-in scanner requests camera access only when selected.
-
-Observed on the camera-less physical tablet (2026-10-16): shared-text pairing codes reached the real Android `ACTION_SEND` receiver; invitation JSON exercised the same bounded file-reader/review path used by the picker. Review filled the expected host ID without saving trust, left confirmation unchecked, and an unconfirmed Request did not consume the invitation or request enrollment. After confirmation, both fresh pairing orderings passed with the other node stopped, followed by cold browser access, host-local grant withdrawal/revocation, and rejected/expired invitation recovery. File-picker selection itself was not automated in this run. The normal app retained its original identity/pairings.
-
+Codes start with `wispnet1:` and encode the full expiring, single-use invitation.
+QR images carry the same code. Share codes only with the intended device. Input
+is limited to 8 KiB and never fetches invitation URLs. Invitation-file import and
+JSON sharing have been removed from the user interface. Internal automation may
+still use the legacy invitation document format.
 
 ## QR pairing, with and without a camera
 
-On a computer with `uv`, render a previously issued private invitation JSON/code file to a new private PNG:
-
-```sh
-uv run scripts/pairing_qr.py --input /private/invitation.json --output /private/invitation.png
-```
-
-The renderer pins `qrcode==8.2`, accepts a protected owner-only input file, rejects expired invitations, refuses overwrite, and writes a mode-0600 PNG without printing its capability. Show that image on the host screen for scanning or transfer it privately to the tablet. The QR carries the same complete `wispnet1:` invitation as the copyable code; it does not carry an owner token or grant services.
+On the target computer, choose **Pair this machine** to show the QR and copyable
+pairing code, or run `wispnet --qrcode`. The QR carries the same complete
+`wispnet1:` code and grants no service access by itself.
 
 Select **Scan pairing QR** on a device with a usable camera, or **Import QR image** on a camera-less device. Image import uses Android's file picker and a local decoder. Missing/unavailable cameras, denied camera permission, cancellation and the scanner's one-minute timeout lead back to the camera-free choices. Paste, file import and QR image import remain visible regardless of camera hardware or permission. Camera hardware is optional in the merged APK manifest, so it does not exclude camera-less devices. Neither importing nor scanning requests pairing automatically: compare the host ID and explicitly request pairing as above.
 
@@ -200,7 +201,7 @@ adb -s emulator-5584 shell am instrument -w -e mode scanner-launch app.wispnet.a
 
 A successful **Scan pairing QR** result now validates the bounded, expiring Wispnet invitation and immediately submits its target-pinned pairing request. No machine-name entry, comparison checkbox or separate Request tap is required for this explicit scan action. If the name field is empty, the app uses `Host ` plus the first eight host-ID characters. The full host ID remains visible. Scanning an arbitrary URL or malformed/expired invitation fails without fetching it or saving a host.
 
-This supersedes the manual-review instruction for live camera scans above. Pasted codes, shared invitation files and QR-image imports still use manual review. A scan submits a request, not an approval or service grant: the target owner must approve that phone and grant services independently. A scanned code from an unintended source requests that source's host, so scan only the intended computer's QR.
+This supersedes the manual-review instruction for live camera scans above. Pasted codes and QR-image imports show a target preview before Request pairing; no host-ID comparison checkbox is required. A scan submits a request, not an approval or service grant: the target owner must approve that phone and grant services independently. A scanned code from an unintended source requests that source's host, so scan only the intended computer's QR.
 
 Pairing progress/errors scroll into view and are announced for accessibility. Network work runs off the main thread, duplicate in-flight requests are blocked, and failures ask for an explicit fresh scan rather than automatically replaying the request. `qr-auto-pair` instrumentation exercises invalid scanner results, automatic request with an empty name and unchecked comparison, main-thread responsiveness and pending-owner state using an actual host invitation placed in the isolated test app's private `files/peer-invitation.json`.
 

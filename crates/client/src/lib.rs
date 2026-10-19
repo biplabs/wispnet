@@ -598,6 +598,7 @@ pub fn call(text: &str) -> String {
         Ok(value) => json!({"ok":true,"result":value}).to_string(),
         Err(error) => {
             let code = match error.as_str() {
+                "awaiting approval" => "approval_pending",
                 "access denied" => "host_denied",
                 "Pairing removed by remote machine" => "pairing_removed",
                 "catalog host or schema mismatch"

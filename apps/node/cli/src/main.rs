@@ -10,16 +10,14 @@ use wispnet_core::{
 
 const USAGE: &str = "Wispnet development CLI
 Interactive management: wispnet [--config /absolute/path/host.toml]
+Pairing code: wispnet --pairing-code [--config /absolute/path/host.toml]
 QR pairing: wispnet --qrcode [--config /absolute/path/host.toml]
 Usage: wispnet <check|identity-init|status|agent|registry|registry-init|registry-backup|registry-directory> --config /absolute/path/config.toml
 Backup: wispnet registry-backup --config /absolute/path/config.toml --output /absolute/path/new-backup.sqlite3
-Enroll: wispnet enroll --config /absolute/path/device.toml --invitation /private/invitation.json
 Host: wispnet <host-init|host-status> --config /absolute/path/host.toml
-Host invite: wispnet host-invite --config /absolute/path/host.toml --output /private/new-invitation.json [--format code]
 Host invitations: wispnet host-invitations --config /absolute/path/host.toml
 Host change: wispnet host-mutate --config /absolute/path/host.toml --request /absolute/path/request.json
 Catalog: wispnet host-catalog --config /absolute/path/client.toml --peer PUBLIC_ID [--address IP:UDP_PORT]
-Invitation request/check: wispnet <pairing-request|pairing-check> --config /absolute/path/client.toml --peer PINNED_HOST_ID --invitation /private/invitation.json
 Pairing bootstrap: wispnet peer-hello --config /absolute/path/client.toml --peer PINNED_HOST_ID [--address IP:UDP_PORT]
 Probe: wispnet <peer-probe|peer-watch> --config /absolute/path/client.toml --peer PUBLIC_ID [--address IP:UDP_PORT]
 Reset: wispnet identity-reset --config /absolute/path/config.toml --expect-id PUBLIC_ID
@@ -65,7 +63,11 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         };
         return tui::run(path);
     }
-    if args.first().is_some_and(|a| a == "--qrcode") && args.len() == 1 {
+    if args
+        .first()
+        .is_some_and(|a| a == "--qrcode" || a == "--pairing-code")
+        && args.len() == 1
+    {
         let home = env::var_os("HOME").ok_or("HOME is required; pass --config explicitly")?;
         args.extend([
             "--config".into(),
@@ -140,6 +142,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
             | "enroll"
             | "host-init"
             | "--qrcode"
+            | "--pairing-code"
             | "host-invite"
             | "host-invitations"
             | "host-status"
@@ -195,6 +198,11 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
     let config = Config::load(&PathBuf::from(&args[2]))?;
+    if mode == "--pairing-code" {
+        let value = wispnet_node::invitation::issue(&config)?;
+        println!("{}", value["code"].as_str().ok_or("Missing pairing code")?);
+        return Ok(());
+    }
     if mode == "--qrcode" {
         use std::io::IsTerminal;
         if !std::io::stdout().is_terminal() {

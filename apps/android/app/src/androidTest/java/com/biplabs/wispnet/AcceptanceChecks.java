@@ -7,7 +7,7 @@ import org.json.*;
 /** Remaining device acceptance; secrets stay inside the test app's sandbox. */
 final class AcceptanceChecks {
  static void pairUi(AppTestRunner t,String target,String name,String document)throws Exception{
-  t.resume();t.runOnMainSync(()->{t.activity.label.setText(name);t.activity.host.setText(target);t.activity.invitation.setText(document);});t.click("Request pairing");
+  t.resume();t.runOnMainSync(()->t.activity.reviewInvitation("wispnet1:"+android.util.Base64.encodeToString(document.getBytes(java.nio.charset.StandardCharsets.UTF_8),android.util.Base64.URL_SAFE|android.util.Base64.NO_PADDING|android.util.Base64.NO_WRAP)));t.await(()->t.activity.status.getText().toString().contains("Pairing code ready"),"Pairing code review failed");t.runOnMainSync(()->t.activity.label.setText(name));t.click("Request pairing");
  }
  static void run(AppTestRunner t)throws Exception{
   t.resume();Native.ensure(t.getTargetContext());String target=t.args.getString("host_a"),other=t.args.getString("host_b"),name=t.args.getString("name"),mode=t.args.getString("mode");

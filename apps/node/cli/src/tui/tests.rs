@@ -65,7 +65,7 @@ fn service_form_explicit_grants_and_revision_survive_concurrent_refresh() {
     assert_eq!(v["operation"]["expected_revision"], 7);
 }
 #[test]
-fn cancellation_offline_state_and_private_paste_never_send_a_mutation() {
+fn cancellation_offline_state_and_visible_code_paste_never_send_a_mutation() {
     let (mut app, rx, _) = fixture();
     app.action(Action::Machine("b".repeat(64)));
     app.key(KeyCode::Enter.into()); // Remove confirmation.
@@ -74,7 +74,7 @@ fn cancellation_offline_state_and_private_paste_never_send_a_mutation() {
     app.online = false;
     app.send(app.mutate(json!({"op":"revoke","peer":"b".repeat(64),"expected_revision":7})));
     assert!(rx.try_recv().is_err());
-    app.action(Action::PairInput(false));
+    app.action(Action::PairInput);
     app.paste("wispnet1:private-code");
     assert!(!app.key(KeyCode::Char('q').into()));
     let mut terminal = Terminal::new(TestBackend::new(90, 25)).unwrap();
@@ -86,8 +86,7 @@ fn cancellation_offline_state_and_private_paste_never_send_a_mutation() {
         .iter()
         .map(|c| c.symbol())
         .collect::<String>();
-    assert!(!screen.contains("private-code"));
-    assert!(screen.contains("private invitation"));
+    assert!(screen.contains("wispnet1:private-code"));
     assert!(rx.try_recv().is_err());
 }
 #[test]
@@ -203,5 +202,73 @@ fn release_version_stays_at_bottom_right_including_small_terminals() {
             .map(|x| terminal.backend().buffer()[(x, height - 1)].symbol())
             .collect();
         assert!(line.ends_with(concat!("v", env!("WISPNET_VERSION"))));
+    }
+}
+
+#[test]
+fn pairing_code_generation_is_available_and_expired_codes_cannot_be_copied() {
+    let (mut app, rx, _) = fixture();
+    assert!(
+        app.entries()
+            .iter()
+            .any(|entry| entry.label == "Generate pairing code")
+    );
+    app.navigate(Page::Qr);
+    assert!(app.show_code);
+    assert!(matches!(rx.try_recv().unwrap().kind, Kind::Qr));
+    let code = format!("wispnet1:{}", "a".repeat(700));
+    app.qr = Some(json!({"code":code,"expires_at":now()+300}));
+    assert_eq!(app.active_pairing_code(), Some(code.as_str()));
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let text = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect::<String>();
+    assert!(text.contains("wispnet1:"));
+    assert!(text.contains("copy complete code"));
+    app.qr.as_mut().unwrap()["expires_at"] = json!(1);
+    assert!(app.active_pairing_code().is_none());
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let text = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect::<String>();
+    assert!(!text.contains("wispnet1:"));
+}
+
+#[test]
+fn pairing_text_box_wraps_long_codes_and_normalizes_line_breaks() {
+    let (mut app, rx, _) = fixture();
+    app.action(Action::PairInput);
+    let code = format!("wispnet1:{}tail", "ABCDEFGH".repeat(32));
+    app.paste(&format!("{}\n{}", &code[..30], &code[30..]));
+    let mut terminal = Terminal::new(TestBackend::new(90, 25)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let lines: Vec<String> = terminal
+        .backend()
+        .buffer()
+        .content()
+        .chunks(90)
+        .map(|row| row.iter().map(|cell| cell.symbol()).collect())
+        .collect();
+    let first = lines
+        .iter()
+        .position(|line| line.contains("wispnet1:"))
+        .unwrap();
+    let last = lines.iter().position(|line| line.contains("tail")).unwrap();
+    assert!(last > first);
+    app.key(KeyCode::Tab.into());
+    app.key(KeyCode::Enter.into());
+    let work = rx.try_recv().unwrap();
+    match work.task {
+        Task::Request(value) => assert_eq!(value["invitation"], code),
+        _ => panic!("Expected pairing preview"),
     }
 }

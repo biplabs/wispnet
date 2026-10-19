@@ -152,6 +152,10 @@ pub async fn catalog_on(
     if result.is_err()
         && matches!(connection.close_reason(), Some(iroh::endpoint::ConnectionError::ApplicationClosed(ref close)) if close.error_code == (wispnet_core::protocol::Status::Denied as u32).into())
     {
+        if matches!(connection.close_reason(), Some(iroh::endpoint::ConnectionError::ApplicationClosed(ref close)) if close.reason.as_ref() == b"awaiting approval")
+        {
+            return Err(TunnelError::Transport("awaiting approval"));
+        }
         return Err(TunnelError::Status(wispnet_core::protocol::Status::Denied));
     }
     result

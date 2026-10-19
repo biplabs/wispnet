@@ -23,7 +23,7 @@ public class MainActivity extends Activity {
  final Handler lifecycle=new Handler(Looper.getMainLooper());
  final Runnable updateAccess=new Runnable(){public void run(){syncSpace();for(Runnable age:ageUpdates)age.run();lifecycle.postDelayed(this,200);}};TextView label;EditText host,invitation;Button access;
  LinearLayout pairingForm,header,machinesList,reviewBox,addMachineBox;FrameLayout space,screen;ScrollView pairingScroll,servicesScroll;StarJump stars;TextView caption,sheetTitle;Button machinesPill,addMachineBtn;boolean spaceShown=false,enterRequested=false,jumping=false,starting=false;long startAt;String lastNetwork="",devicePeer="";
- CheckBox hostVerified;
+ String reviewedCode="";int reviewVersion=0;
  HostStore store;Runnable closeServicePermissions;
  boolean pairingBusy=false,addingMachine=false;
  boolean openingService=false,serviceJumpDone=false;int serviceLaunch=0;String pendingServiceUrl;
@@ -35,7 +35,7 @@ public class MainActivity extends Activity {
   }catch(Exception ignored){}
  }
  void text(LinearLayout parent,String value,int size){TextView t=new TextView(this);t.setText(value);t.setTextColor(size>=20?0xffedf2ff:0xff94a6c4);t.setTextSize(size);t.setTypeface(null,size>=20?android.graphics.Typeface.BOLD:android.graphics.Typeface.NORMAL);t.setPadding(0,dp(size>=20?18:8),0,dp(8));parent.addView(t);}
- Button button(LinearLayout parent,String title,Runnable action){boolean primary=java.util.List.of("Scan with camera","Scan pairing QR","Import QR image","Review pasted invitation","Request pairing").contains(title);Button b=new Button(this);b.setText(title);b.setTextColor(0xffedf2ff);b.setAllCaps(false);b.setTextSize(15);b.setPadding(dp(18),dp(12),dp(18),dp(12));b.setBackground(card(primary?0xff1f3666:0xff142038,primary?0xff4b73c2:0xff283b60,14));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.bottomMargin=dp(10);parent.addView(b,lp);b.setOnClickListener(v->action.run());return b;}
+ Button button(LinearLayout parent,String title,Runnable action){boolean primary=java.util.List.of("Scan with camera","Scan pairing QR","Import QR image","Pair","Request pairing").contains(title);Button b=new Button(this);b.setText(title);b.setTextColor(0xffedf2ff);b.setAllCaps(false);b.setTextSize(15);b.setPadding(dp(18),dp(12),dp(18),dp(12));b.setBackground(card(primary?0xff1f3666:0xff142038,primary?0xff4b73c2:0xff283b60,14));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.bottomMargin=dp(10);parent.addView(b,lp);b.setOnClickListener(v->action.run());return b;}
  EditText field(LinearLayout parent,String hint,int type){EditText e=new EditText(this);e.setHint(hint);e.setInputType(type);e.setTextColor(0xffedf2ff);e.setHintTextColor(0xff6e82a3);e.setTextSize(15);e.setBackground(card(0xff0d1526,0xff25385c,14));e.setPadding(dp(16),dp(14),dp(16),dp(14));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.bottomMargin=dp(10);parent.addView(e,lp);return e;}
  CharSequence styledCardText(String top,String bottom,int bottomColor){android.text.SpannableStringBuilder sb=new android.text.SpannableStringBuilder(top+"\n"+bottom);sb.setSpan(new android.text.style.StyleSpan(android.graphics.Typeface.BOLD),0,top.length(),android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);for(char ch:new char[]{'↗','✦'}){int idx=top.indexOf(ch);if(idx>=0)sb.setSpan(new android.text.style.ForegroundColorSpan(0xff65ceff),idx,idx+1,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);}int start=top.length()+1,end=sb.length();sb.setSpan(new android.text.style.RelativeSizeSpan(0.78f),start,end,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);sb.setSpan(new android.text.style.ForegroundColorSpan(bottomColor),start,end,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);return sb;}
  public void onCreate(Bundle state){
@@ -78,14 +78,13 @@ public class MainActivity extends Activity {
   for(int i=0;i<2;i++){final int idx=i;Button tb=new Button(this);tb.setText(tabNames[i]);tb.setAllCaps(false);tb.setTextSize(13);tb.setPadding(0,dp(10),0,dp(10));tb.setMinHeight(0);tb.setMinimumHeight(0);tb.setOnClickListener(v->selectTab.accept(idx));tabBar.addView(tb,new LinearLayout.LayoutParams(0,-2,1));tabs[i]=tb;panels[i].setOrientation(LinearLayout.VERTICAL);addMachineBox.addView(panels[i]);}
   Button scanBtn=button(qrTab,"Scan with camera",this::scanPairingQr);scanBtn.setTag("Scan pairing QR");
   Button photoBtn=button(qrTab,"Import from photos",()->{Intent pick=new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(pick,3);});photoBtn.setTag("Import QR image");
-  text(codeTab,"Paste a pairing code or import an invitation file.",14);invitation=field(codeTab,"Pairing code",InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD|InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
-  button(codeTab,"Review pasted invitation",()->reviewInvitation(invitation.getText().toString()));
-  button(codeTab,"Import invitation file",()->{Intent pick=new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(pick,1);});
+  text(codeTab,"Paste the pairing code from your computer.",14);invitation=field(codeTab,"Pairing code",InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE|InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);invitation.setMinLines(4);invitation.setMaxLines(6);invitation.setGravity(Gravity.TOP|Gravity.START);invitation.setHorizontallyScrolling(false);
+  Button pairCode=button(codeTab,"Pair",()->reviewInvitation(invitation.getText().toString()));pairCode.setEnabled(false);pairCode.setAlpha(0.4f);
   selectTab.accept(0);
   reviewBox=new LinearLayout(this);reviewBox.setOrientation(LinearLayout.VERTICAL);reviewBox.setBackground(card(0xff101a30,0xff283b60,16));reviewBox.setPadding(dp(16),dp(8),dp(16),dp(12));LinearLayout.LayoutParams rblp=new LinearLayout.LayoutParams(-1,-2);rblp.topMargin=dp(6);rblp.bottomMargin=dp(10);reviewBox.setVisibility(View.GONE);addMachineBox.addView(reviewBox,rblp);
-  text(reviewBox,"Verify target machine",15);label=new TextView(this);label.setTextColor(0xffedf2ff);label.setTextSize(16);label.setPadding(0,dp(8),0,dp(8));reviewBox.addView(label);host=field(reviewBox,"Host ID",InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
-  hostVerified=new CheckBox(this);hostVerified.setTextColor(0xffc5d2e8);hostVerified.setPadding(dp(8),dp(10),dp(8),dp(10));hostVerified.setText("I compared this host ID with the target computer");LinearLayout.LayoutParams cvlp=new LinearLayout.LayoutParams(-1,-2);cvlp.bottomMargin=dp(8);reviewBox.addView(hostVerified,cvlp);
-  host.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){} public void onTextChanged(CharSequence s,int start,int before,int count){hostVerified.setChecked(false);if(s.length()>0){addingMachine=true;updatePairingMode(true);reviewBox.setVisibility(View.VISIBLE);}else reviewBox.setVisibility(View.GONE);} public void afterTextChanged(android.text.Editable s){}});
+  text(reviewBox,"Pair with this machine",15);label=new TextView(this);label.setTextColor(0xffedf2ff);label.setTextSize(16);label.setPadding(0,dp(8),0,dp(8));reviewBox.addView(label);host=field(reviewBox,"Host ID",InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+  host.setKeyListener(null);host.setTextIsSelectable(true);
+  invitation.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){} public void onTextChanged(CharSequence s,int start,int before,int count){reviewVersion++;reviewedCode="";reviewBox.setVisibility(View.GONE);boolean enabled=!s.toString().trim().isEmpty();pairCode.setEnabled(enabled);pairCode.setAlpha(enabled?1f:0.4f);} public void afterTextChanged(android.text.Editable s){}});
   button(reviewBox,"Request pairing",this::pair);
   LinearLayout.LayoutParams idlp=new LinearLayout.LayoutParams(-1,-2);idlp.topMargin=dp(8);addMachineBox.addView(identity,idlp);
   dockToggle(AccessService.enabled);showPairing(managesHosts());spaceShown=AccessService.enabled;servicesScroll.setVisibility(spaceShown?View.VISIBLE:View.GONE);
@@ -200,20 +199,21 @@ public class MainActivity extends Activity {
   lifecycle.postDelayed(dismissNotice,timeout);
  });}
  void pair(){final String expected=host.getText().toString().trim(),document=invitation.getText().toString(),name=label.getText().toString().trim();
-  if(!hostVerified.isChecked()){show("Compare the full host ID with the target computer, then confirm it before requesting pairing.");return;}
-  if(expected.isEmpty()||document.isEmpty()||name.isEmpty()){show("Import an invitation and verify the host ID");return;}
+  if(expected.isEmpty()||document.isEmpty()||name.isEmpty()||!document.equals(reviewedCode)){show("Review the pairing code first");return;}
   requestPairing(expected,document,name);
  }
  void requestPairing(String expected,String document,String name){
   if(pairingBusy){show("A pairing request is already in progress. Please wait.");return;}
   pairingBusy=true;invitation.setText("");show("Requesting pairing from "+name+"… This may take up to a minute.");
-  work.execute(()->{try{Native.ensure(this);Native.request(new JSONObject().put("op","pair").put("name",DeviceProfile.name(this)).put("host",expected).put("invitation",document));store.paired(expected,name);show("Pending owner approval · "+name);runOnUiThread(()->{if(managesHosts())finish();else{showPairing(false);render();}});}catch(Exception e){if(e instanceof Native.Failure&&"invitation_denied".equals(((Native.Failure)e).code))show("This host did not accept the invitation. Ask its owner for a new invitation.");else show("Pairing failed: "+e.getMessage()+". Scan a fresh invitation to try again.");}finally{runOnUiThread(()->pairingBusy=false);}});
+  work.execute(()->{try{Native.ensure(this);Native.request(new JSONObject().put("op","pair").put("name",DeviceProfile.name(this)).put("host",expected).put("invitation",document));store.paired(expected,name);show("Pending owner approval · "+name);runOnUiThread(()->{if(managesHosts())finish();else{showPairing(false);render();}});}catch(Exception e){if(e instanceof Native.Failure&&"invitation_denied".equals(((Native.Failure)e).code))show("This host did not accept the invitation. Ask its owner for a new pairing code.");else show("Pairing failed: "+e.getMessage()+". Use a fresh pairing code to try again.");}finally{runOnUiThread(()->pairingBusy=false);}});
  }
- void pairScannedQr(String document){
+ void pairScannedQr(String raw){
+  final String document=raw.replaceAll("\\s+","");
   if(pairingBusy){show("A pairing request is already in progress. Please wait.");return;}
-  if(document.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>8192){show("Invitation is too large. Ask for a new QR code.");return;}
-  invitation.setText("");hostVerified.setChecked(false);show("Checking scanned invitation…");
-  work.execute(()->{try{Native.ensure(this);JSONObject preview=Native.request(new JSONObject().put("op","preview_invitation").put("invitation",document));String target=preview.getString("host");runOnUiThread(()->{host.setText(target);String name=preview.optString("host_name","").trim();if(name.isEmpty())name="Host "+target.substring(0,8);label.setText(name);requestPairing(target,document,name);});}catch(Exception e){show("Cannot import invitation: "+e.getMessage());}});
+  invitation.setText("");final int version=reviewVersion;
+  if(document.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>8192||!document.startsWith("wispnet1:")){show("Cannot read pairing code: scan a Wispnet QR code");return;}
+  show("Checking pairing code…");
+  work.execute(()->{try{Native.ensure(this);JSONObject preview=Native.request(new JSONObject().put("op","preview_invitation").put("invitation",document));String target=preview.getString("host");runOnUiThread(()->{if(version!=reviewVersion)return;host.setText(target);String name=preview.optString("host_name","").trim();if(name.isEmpty())name="Host "+target.substring(0,8);label.setText(name);requestPairing(target,document,name);});}catch(Exception e){show("Cannot read pairing code: "+e.getMessage());}});
  }
 
  void renameDevice(){
@@ -342,32 +342,28 @@ public class MainActivity extends Activity {
   }});
  }
  void scanPairingQr(){
-  if(!getPackageManager().hasSystemFeature(android.content.pm.PackageManager.FEATURE_CAMERA_ANY)){show("No camera available. Import a QR image or invitation file, or paste a pairing code.");return;}
-  try{com.journeyapps.barcodescanner.ScanOptions options=new com.journeyapps.barcodescanner.ScanOptions().setCaptureActivity(PairingCaptureActivity.class).setDesiredBarcodeFormats(com.journeyapps.barcodescanner.ScanOptions.QR_CODE).setBeepEnabled(false).setBarcodeImageEnabled(false).setTimeout(60000).setPrompt("Scan your computer’s Wispnet QR to pair.");startActivityForResult(options.createScanIntent(this),2);}catch(RuntimeException unavailable){show("Camera unavailable. Import a QR image or invitation file, or paste a pairing code.");}
+  if(!getPackageManager().hasSystemFeature(android.content.pm.PackageManager.FEATURE_CAMERA_ANY)){show("No camera available. Import a QR image or paste a pairing code.");return;}
+  try{com.journeyapps.barcodescanner.ScanOptions options=new com.journeyapps.barcodescanner.ScanOptions().setCaptureActivity(PairingCaptureActivity.class).setDesiredBarcodeFormats(com.journeyapps.barcodescanner.ScanOptions.QR_CODE).setBeepEnabled(false).setBarcodeImageEnabled(false).setTimeout(60000).setPrompt("Scan your computer’s Wispnet QR to pair.");startActivityForResult(options.createScanIntent(this),2);}catch(RuntimeException unavailable){show("Camera unavailable. Import a QR image or paste a pairing code.");}
  }
  void readQrImage(Uri uri){
-  invitation.setText("");hostVerified.setChecked(false);show("Reading QR image…");
-  work.execute(()->{try{if(uri==null||!"content".equals(uri.getScheme()))throw new IOException();try(InputStream input=getContentResolver().openInputStream(uri)){String document=PairingQr.decode(input);runOnUiThread(()->reviewInvitation(document));}}catch(Exception invalid){show("Cannot read pairing QR image. Import an invitation file or paste its pairing code instead.");}});
+  invitation.setText("");show("Reading QR image…");
+  work.execute(()->{try{if(uri==null||!"content".equals(uri.getScheme()))throw new IOException();try(InputStream input=getContentResolver().openInputStream(uri)){String document=PairingQr.decode(input);runOnUiThread(()->reviewInvitation(document));}}catch(Exception invalid){show("Cannot read pairing QR image. Paste the pairing code instead.");}});
  }
- void reviewInvitation(String document){
-  if(document.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>8192){invitation.setText("");show("Invitation is too large. Ask for a new invitation file.");return;}
-  hostVerified.setChecked(false);invitation.setText("");show("Reviewing invitation…");
-  work.execute(()->{try{Native.ensure(this);JSONObject preview=Native.request(new JSONObject().put("op","preview_invitation").put("invitation",document));runOnUiThread(()->{host.setText(preview.optString("host"));String machine=preview.optString("host_name","").trim();label.setText(machine.isEmpty()?"Host "+preview.optString("host").substring(0,8):machine);invitation.setText(document);show("Invitation ready for review. Compare the full host ID on the target computer. Importing does not request pairing or grant access.");});}catch(Exception e){show("Cannot import invitation: "+e.getMessage());}});
- }
- void importInvitation(InputStream in)throws IOException{byte[] bytes=in.readNBytes(8193);if(bytes.length>8192)throw new IOException();String document=new String(bytes,java.nio.charset.StandardCharsets.UTF_8);runOnUiThread(()->reviewInvitation(document));}
- void readInvitation(Uri uri){
-  invitation.setText("");hostVerified.setChecked(false);show("Reading invitation file…");
-  work.execute(()->{try{if(uri==null||!"content".equals(uri.getScheme()))throw new IOException();try(InputStream in=getContentResolver().openInputStream(uri)){importInvitation(in);}}catch(Exception e){show("Cannot read bounded invitation file. Paste its pairing code instead.");}});
+ void reviewInvitation(String raw){
+  final String document=raw.replaceAll("\\s+","");
+  invitation.setText("");final int version=reviewVersion;
+  if(document.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>8192||!document.startsWith("wispnet1:")){show("Enter a valid Wispnet pairing code");return;}
+  show("Checking pairing code…");
+  work.execute(()->{try{Native.ensure(this);JSONObject preview=Native.request(new JSONObject().put("op","preview_invitation").put("invitation",document));runOnUiThread(()->{if(version!=reviewVersion)return;host.setText(preview.optString("host"));String machine=preview.optString("host_name","").trim();label.setText(machine.isEmpty()?"Host "+preview.optString("host").substring(0,8):machine);invitation.setText(document);reviewedCode=document;addingMachine=true;updatePairingMode(true);reviewBox.setVisibility(View.VISIBLE);show("Pairing code ready. Request pairing, then approve it on your computer.");});}catch(Exception e){if(version==reviewVersion)show("Cannot read pairing code: "+e.getMessage());}});
  }
  void receiveInvitation(Intent intent){
   if(!Intent.ACTION_SEND.equals(intent.getAction()))return;
-  try{Uri uri=intent.getParcelableExtra(Intent.EXTRA_STREAM,Uri.class);if(uri!=null){readInvitation(uri);}
-   else{String document=intent.getStringExtra(Intent.EXTRA_TEXT);if(document==null)throw new IOException();reviewInvitation(document);}
-  }catch(Exception invalid){show("Cannot read invitation. Paste a pairing code or import its file instead.");}
+  String document=intent.getStringExtra(Intent.EXTRA_TEXT);
+  if(document==null||intent.hasExtra(Intent.EXTRA_STREAM))show("Share or paste a pairing code instead.");else reviewInvitation(document);
   intent.removeExtra(Intent.EXTRA_STREAM);intent.removeExtra(Intent.EXTRA_TEXT);
  }
  protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);receiveInvitation(intent);}
- protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(request==1&&result==RESULT_OK&&data!=null)readInvitation(data.getData());else if(request==3&&result==RESULT_OK&&data!=null)readQrImage(data.getData());else if(request==2){if(result==RESULT_OK&&data!=null){String document=data.getStringExtra("SCAN_RESULT");if(document!=null)pairScannedQr(document);else show("No pairing QR found. Import a file or paste a pairing code.");}else show("Scan cancelled or camera unavailable. Import a QR image or invitation file, or paste a pairing code.");}}
+ protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(request==3&&result==RESULT_OK&&data!=null)readQrImage(data.getData());else if(request==2){if(result==RESULT_OK&&data!=null){String document=data.getStringExtra("SCAN_RESULT");if(document!=null)pairScannedQr(document);else show("No pairing QR found. Import a QR image or paste a pairing code.");}else show("Scan cancelled or camera unavailable. Import a QR image or paste a pairing code.");}}
  String getVersionName(){try{return getPackageManager().getPackageInfo(getPackageName(),0).versionName;}catch(android.content.pm.PackageManager.NameNotFoundException e){throw new IllegalStateException(e);}}
  void configureSystemBars(){getWindow().setStatusBarColor(android.graphics.Color.TRANSPARENT);getWindow().setStatusBarContrastEnforced(false);WindowInsetsController controller=getWindow().getInsetsController();if(controller!=null){controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);controller.setSystemBarsAppearance(0,WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS);controller.show(WindowInsets.Type.statusBars());controller.hide(WindowInsets.Type.navigationBars());}}
  public void onWindowFocusChanged(boolean focused){super.onWindowFocusChanged(focused);if(focused)configureSystemBars();}

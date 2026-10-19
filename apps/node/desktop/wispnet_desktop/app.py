@@ -35,6 +35,7 @@ from PySide6.QtGui import (
     QPen,
     QPixmap,
     QFont,
+    QTextOption,
     QRadialGradient,
     QLinearGradient,
 )
@@ -55,11 +56,11 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QLineEdit,
+    QPlainTextEdit,
     QComboBox,
     QFormLayout,
     QListWidget,
     QListWidgetItem,
-    QFileDialog,
     QFrame,
     QScrollArea,
 )
@@ -555,10 +556,10 @@ class Window(QMainWindow):
         self.share_btn.clicked.connect(self.share)
         header_layout.addWidget(self.share_btn)
 
-        self.qr_btn = QPushButton("Pair with QR")
+        self.qr_btn = QPushButton("Pair this machine")
         self.qr_btn.setProperty("variant", "secondary")
         self.qr_btn.setFixedHeight(36)
-        self.qr_btn.setToolTip("Generate a five-minute QR invitation for this machine")
+        self.qr_btn.setToolTip("Generate a five-minute pairing code and QR for this machine")
         self.qr_btn.clicked.connect(self.generate_qr)
         header_layout.addWidget(self.qr_btn)
         self.qr_dialog = None
@@ -846,8 +847,8 @@ class Window(QMainWindow):
         dialog = QDialog(self)
         dialog.setWindowTitle("Pair with this machine")
         layout = QVBoxLayout(dialog)
-        instruction = QLabel("In Wispnet on your phone, select Scan pairing QR.\n"
-                             "Then review its request and choose allowed services on this computer.")
+        instruction = QLabel("Scan this QR on your phone or copy the pairing code to another computer.\n"
+                             "Then approve the request and choose allowed services here.")
         layout.addWidget(instruction)
         host = QLabel("Host ID: " + result["host"])
         host.setTextFormat(Qt.TextFormat.PlainText)
@@ -869,6 +870,19 @@ class Window(QMainWindow):
         qr.setPixmap(image)
         qr.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(qr)
+        pairing_code = QPlainTextEdit(result["code"])
+        pairing_code.setWordWrapMode(QTextOption.WrapMode.WrapAnywhere)
+        pairing_code.setFixedHeight(112)
+        pairing_code.setObjectName("pairingCode")
+        pairing_code.setReadOnly(True)
+        layout.addWidget(pairing_code)
+        copy = QPushButton("Copy pairing code")
+        copy.setObjectName("copyPairingCode")
+        def copy_code():
+            if copy.isEnabled():
+                QApplication.clipboard().setText(pairing_code.toPlainText())
+        copy.clicked.connect(copy_code)
+        layout.addWidget(copy)
         countdown = QLabel()
         layout.addWidget(countdown)
         close = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
@@ -884,6 +898,8 @@ class Window(QMainWindow):
             )
             if remaining == 0 or used:
                 qr.clear()
+                pairing_code.clear()
+                copy.setEnabled(False)
                 countdown.setText("Request received — close this window to review it." if used
                                   else "QR expired. Close and generate a new code.")
                 timer.stop()
@@ -893,6 +909,7 @@ class Window(QMainWindow):
         def finished():
             timer.stop()
             qr.clear()
+            pairing_code.clear()
             self.qr_dialog = None
             dialog.deleteLater()
 
@@ -1133,7 +1150,9 @@ class Window(QMainWindow):
         previous = self.catalogs.get(peer, {})
         if error:
             previous["state"] = (
-                "Denied"
+                "Awaiting approval"
+                if "awaiting approval" in error.lower()
+                else "Denied"
                 if "denied" in error.lower()
                 else "Catalog rejected; refresh or verify this host"
                 if "catalog" in error.lower()
@@ -1759,41 +1778,33 @@ class Window(QMainWindow):
         dialog.setMinimumWidth(420)
         form = QFormLayout(dialog)
         hint = QLabel(
-            "Paste the pairing code from the remote machine or import an invitation file."
+            "Paste the pairing code from the remote machine."
         )
         hint.setObjectName("sectorSubtitle")
         hint.setWordWrap(True)
         form.addRow(hint)
-        code = QLineEdit()
-        code.setPlaceholderText("Paste pairing code or JSON…")
-        code.setEchoMode(QLineEdit.EchoMode.Password)
+        code = QPlainTextEdit()
+        code.setWordWrapMode(QTextOption.WrapMode.WrapAnywhere)
+        code.setTabChangesFocus(True)
+        code.setFixedHeight(144)
+        code.setPlaceholderText("Paste pairing code…")
         form.addRow("Pairing code", code)
-        load = QPushButton("Import invitation file…")
-        load.setProperty("variant", "secondary")
-        form.addRow(load)
-
-        def read():
-            path, _ = QFileDialog.getOpenFileName(dialog, "Invitation file")
-            if path:
-                try:
-                    with open(path, "rb") as source:
-                        data = source.read(8193)
-                    if len(data) > 8192:
-                        raise ValueError("Invitation too large")
-                    code.setText(data.decode())
-                except Exception as error:
-                    self._set_message(str(error))
-
-        load.clicked.connect(read)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
+        pair_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        pair_button.setText("Pair")
+        pair_button.setEnabled(False)
+        code.textChanged.connect(lambda: pair_button.setEnabled(bool(code.toPlainText().strip())))
         form.addRow(buttons)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         if dialog.exec():
-            document = code.text()
+            document = "".join(code.toPlainText().split())
             code.clear()
+            if not document.startswith("wispnet1:") or len(document.encode()) > 8192:
+                self._set_message("Enter a valid Wispnet pairing code")
+                return
             self.submit(
                 lambda: self.api.request(op="preview_invitation", invitation=document),
                 lambda value, error: self.confirm_pair(document, value, error),
@@ -1826,7 +1837,7 @@ class Window(QMainWindow):
             self._set_message(error)
             return
         peer = preview["host"]
-        self.catalogs.pop(peer, None)
+        self.catalogs[peer] = {"state": "Awaiting approval"}
         # Explicit target re-pairing permits a new catalog generation baseline.
         try:
             self.catalog_cache.remove(peer)
@@ -2299,7 +2310,7 @@ def appearance(app):
             border-bottom: 1px solid #243659;
             font-weight: 600;
         }
-        QLineEdit,
+        QLineEdit, QPlainTextEdit,
         QComboBox, QListWidget {
             background: #0d1526;
             color: #edf2ff;
@@ -2307,7 +2318,7 @@ def appearance(app):
             border: 1px solid #25385c;
             border-radius: 10px;
         }
-        QLineEdit:focus, QListWidget:focus {
+        QLineEdit:focus, QPlainTextEdit:focus, QListWidget:focus {
             border: 1px solid #65ceff;
         }
         QMenu {

@@ -2,6 +2,7 @@
 mod api;
 use api::Api;
 use crossterm::{
+    clipboard::CopyToClipboard,
     event::{
         self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
         Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
@@ -30,7 +31,7 @@ use std::{
 
 const PAGES: [&str; 8] = [
     "Overview",
-    "Pair with QR",
+    "Pair this machine",
     "Pending approvals",
     "Machines & devices",
     "Local services",
@@ -187,12 +188,13 @@ fn worker(api: Api) -> (mpsc::Sender<Work>, mpsc::Receiver<Reply>) {
 #[derive(Clone)]
 enum Action {
     Nav(Page),
+    Code,
     Qr,
     Pending(Value),
     Machine(String),
     Service(Value),
     Remote(String, Value),
-    PairInput(bool),
+    PairInput,
     Form(Form),
     Confirm {
         title: String,
@@ -260,9 +262,7 @@ enum FormKind {
         existing: Option<String>,
         revision: u64,
     },
-    Pair {
-        file: bool,
-    },
+    Pair,
     Owner {
         approve: bool,
     },
@@ -309,6 +309,8 @@ struct App {
     catalogs: HashMap<String, Value>,
     catalog_errors: HashMap<String, String>,
     qr: Option<Value>,
+    show_code: bool,
+    code_scroll: u16,
     operations: Vec<Value>,
     modal: Option<Modal>,
     message: String,
@@ -367,6 +369,8 @@ impl App {
             catalogs: HashMap::new(),
             catalog_errors: HashMap::new(),
             qr: None,
+            show_code: false,
+            code_scroll: 0,
             operations: vec![],
             modal: None,
             message: "Connecting to local node…".into(),
@@ -459,7 +463,7 @@ impl App {
         self.list_state = ListState::default();
         self.menu_focus = false;
         if page == Page::Qr {
-            self.action(Action::Qr);
+            self.action(Action::Code);
         }
         if page == Page::Owners {
             self.send(Work {
@@ -471,6 +475,7 @@ impl App {
     fn entries(&self) -> Vec<Entry> {
         match self.page {
             Page::Home => vec![
+                entry("code", "Generate pairing code", Action::Code),
                 entry("qr", "Generate pairing QR", Action::Qr),
                 entry(
                     "pending",
@@ -564,7 +569,7 @@ impl App {
                 }
                 peers.into_iter().map(|(peer,client)|{
                     let status=self.status();let telemetry=&status["peer_telemetry"][&peer];
-                    let activity=if !self.online{"Node offline".to_string()}else if status["connected_peers"][&peer].as_u64().unwrap_or(0)>0{"Connected".into()}else if let Some(age)=status["recent_peers"][&peer].as_u64(){format!("Seen {age}s ago")}else{"Idle".into()};
+                    let activity=if self.catalog_errors.get(&peer).is_some_and(|e| e=="awaiting approval"){"Awaiting approval".to_string()}else if !self.online{"Node offline".to_string()}else if status["connected_peers"][&peer].as_u64().unwrap_or(0)>0{"Connected".into()}else if let Some(age)=status["recent_peers"][&peer].as_u64(){format!("Seen {age}s ago")}else{"Idle".into()};
                     let path=if telemetry.is_object(){format!(" · {} · {}ms",text(telemetry,"path").to_uppercase(),telemetry["rtt_ms"])}else{String::new()};
                     let mut row=entry(&peer,format!("{} · {} · {activity}{path}",self.name(&peer),short(&peer)),Action::Machine(peer.clone()));
                     row.detail=vec![format!("Machine ID: {peer}"),format!("Approved client here: {}",if client{"yes"}else{"no"}),"Remove revokes this node's grants and forgets its pin/routes; remote permissions are managed there.".into()];
@@ -606,18 +611,7 @@ impl App {
                 }));
                 rows
             }
-            Page::Pair => vec![
-                entry(
-                    "paste",
-                    "Paste a pairing code / invitation JSON",
-                    Action::PairInput(false),
-                ),
-                entry(
-                    "file",
-                    "Import a private invitation file",
-                    Action::PairInput(true),
-                ),
-            ],
+            Page::Pair => vec![entry("paste", "Paste a pairing code", Action::PairInput)],
             Page::Owners => {
                 let mut rows = vec![
                     entry(
@@ -737,7 +731,10 @@ impl App {
     fn action(&mut self, action: Action) {
         match action {
             Action::Nav(page) => self.navigate(page),
-            Action::Qr => {
+            Action::Code | Action::Qr => {
+                self.show_code = matches!(action, Action::Code);
+                self.code_scroll = 0;
+                self.qr = None;
                 self.page = Page::Qr;
                 self.menu = 1;
                 self.send(Work {
@@ -762,24 +759,12 @@ impl App {
                 })
             }
             Action::Form(form) => self.modal = Some(Modal::Form(form)),
-            Action::PairInput(file) => {
+            Action::PairInput => {
+                self.code_scroll = 0;
                 self.modal = Some(Modal::Form(Form {
-                    title: if file {
-                        "Import invitation"
-                    } else {
-                        "Paste invitation"
-                    }
-                    .into(),
-                    kind: FormKind::Pair { file },
-                    fields: vec![Field::text(
-                        if file {
-                            "Absolute private file path"
-                        } else {
-                            "Pairing code or invitation JSON"
-                        },
-                        "",
-                        8192,
-                    )],
+                    title: "Paste pairing code".into(),
+                    kind: FormKind::Pair,
+                    fields: vec![Field::text("Pairing code", "", 8192)],
                     selected: 0,
                 }))
             }
@@ -1107,19 +1092,10 @@ impl App {
                 ];
                 self.confirmation(if replace{"Replace existing service"}else{"Save service and grants"}.into(),detail,self.mutate(json!({"op":"service","id":id,"backend":backend,"display_name":name,"kind":choices[index],"allow":allow,"expected_revision":revision})));
             }
-            FormKind::Pair { file } => {
-                let value = form.fields[0].value.trim();
-                let document = if file {
-                    let path = PathBuf::from(value);
-                    if !path.is_absolute() {
-                        return Err("Use an absolute invitation file path".into());
-                    }
-                    api::read_private(&path, 8192)?
-                } else {
-                    value.into()
-                };
-                if document.is_empty() || document.len() > 8192 {
-                    return Err("Enter an invitation of at most 8192 bytes".into());
+            FormKind::Pair => {
+                let document: String = form.fields[0].value.split_whitespace().collect();
+                if !document.starts_with("wispnet1:") || document.len() > 8192 {
+                    return Err("Enter a Wispnet pairing code of at most 8192 bytes".into());
                 }
                 self.modal = None;
                 self.send(Work {
@@ -1193,7 +1169,12 @@ impl App {
                     // Do not replay a mutation or silently substitute a newer revision.
                     if !matches!(reply.kind, Kind::Status) {
                         self.modal = Some(Modal::Info {
-                            title: "Operation not completed".into(),
+                            title: if error == "awaiting approval" {
+                                "Awaiting approval"
+                            } else {
+                                "Operation not completed"
+                            }
+                            .into(),
                             lines: vec![
                                 clean(&error),
                                 "Refresh and review the current state before trying again.".into(),
@@ -1203,88 +1184,88 @@ impl App {
                         self.last_poll = Instant::now() - Duration::from_secs(5);
                     }
                 }
-                Ok(value) => {
-                    match reply.kind {
-                        Kind::Status => {
-                            self.snapshot = Some(value);
-                            self.online = true;
-                            self.names = self.api.names();
-                            if self.message.starts_with("Working")
-                                || self.message.starts_with("Connecting")
-                            {
-                                self.message = "Ready".into();
-                            }
-                        }
-                        Kind::Saved => {
-                            self.message = "Saved. Refreshing node state…".into();
-                            self.last_poll = Instant::now() - Duration::from_secs(5);
-                        }
-                        Kind::Qr => {
-                            self.qr = Some(value);
-                            self.page = Page::Qr;
-                            self.menu = 1;
-                            self.menu_focus = false;
-                            self.message="Scan with Wispnet on your phone. Requests will appear automatically.".into();
-                        }
-                        Kind::Catalog(peer) => {
-                            self.catalog_errors.remove(&peer);
-                            self.catalogs.insert(peer.clone(), value.clone());
-                            let services = array(&value["services"]);
-                            let entries = services
-                                .iter()
-                                .map(|s| {
-                                    entry(
-                                        text(s, "id"),
-                                        format!(
-                                            "{} · {}",
-                                            clean(text(s, "display_name")),
-                                            text(s, "kind")
-                                        ),
-                                        Action::Remote(peer.clone(), s.clone()),
-                                    )
-                                })
-                                .collect();
-                            self.choice("Remote services",vec![self.name(&peer),format!("Full host ID: {peer}"),if services.is_empty(){"No services granted here, or request still awaits approval on the target host.".into()}else{"These are the services this host currently permits you to access.".into()}],entries);
-                            self.message = "Authenticated catalog refreshed".into();
-                        }
-                        Kind::Preview(document) => {
-                            let detail=vec![format!("Host: {}",clean(text(&value,"host_name"))),format!("Compare full host ID: {}",text(&value,"host")),format!("Relay: {}",clean(text(&value,"relay_url"))),"Compare this ID with the target computer before confirming. Both machines will be paired after approval. The target owner chooses services to grant; this computer grants no new service access. You can allow services later in service settings.".into()];
-                            self.confirmation(
-                                "Request pairing with this host".into(),
-                                detail,
-                                Work {
-                                    kind: Kind::Paired,
-                                    task: Task::Pair {
-                                        preview: value,
-                                        document,
-                                    },
-                                },
-                            );
-                        }
-                        Kind::Paired => {
-                            self.names = self.api.names();
-                            self.catalogs.remove(text(&value, "host"));
-                            self.message="Request sent. Choose allowed services on the target host when approving. This computer grants no new service access.".into();
-                            self.last_poll = Instant::now() - Duration::from_secs(5);
-                        }
-                        Kind::Open => {
-                            self.modal=Some(Modal::Info{title:"Browser service".into(),lines:vec![text(&value,"url").into(),"This URL belongs to this computer. Over SSH, use a browser on this computer or forward its local gateway port; it is not a public URL.".into(),"On a graphical session the browser opens automatically. TCP services use the native tunnel command.".into()],scroll:0});
-                            self.message = "Browser route ready".into();
-                            self.last_poll = Instant::now() - Duration::from_secs(5);
-                        }
-                        Kind::Owners => {
-                            self.operations = array(&value);
-                            self.message = "Owner journals loaded".into();
-                        }
-                        Kind::OwnerSaved => {
-                            self.operations.retain(|v| v["id"] != value["id"]);
-                            self.operations.push(value.clone());
-                            self.action(Action::OwnerDetail(value));
-                            self.message = "Review each host's acknowledgement".into();
-                            self.last_poll = Instant::now() - Duration::from_secs(5);
+                Ok(value) => match reply.kind {
+                    Kind::Status => {
+                        self.snapshot = Some(value);
+                        self.online = true;
+                        self.names = self.api.names();
+                        if self.message.starts_with("Working")
+                            || self.message.starts_with("Connecting")
+                        {
+                            self.message = "Ready".into();
                         }
                     }
-                }
+                    Kind::Saved => {
+                        self.message = "Saved. Refreshing node state…".into();
+                        self.last_poll = Instant::now() - Duration::from_secs(5);
+                    }
+                    Kind::Qr => {
+                        self.qr = Some(value);
+                        self.page = Page::Qr;
+                        self.menu = 1;
+                        self.menu_focus = false;
+                        self.message="Copy the code to another computer or scan its QR on your phone. Requests appear automatically.".into();
+                    }
+                    Kind::Catalog(peer) => {
+                        self.catalog_errors.remove(&peer);
+                        self.catalogs.insert(peer.clone(), value.clone());
+                        let services = array(&value["services"]);
+                        let entries = services
+                            .iter()
+                            .map(|s| {
+                                entry(
+                                    text(s, "id"),
+                                    format!(
+                                        "{} · {}",
+                                        clean(text(s, "display_name")),
+                                        text(s, "kind")
+                                    ),
+                                    Action::Remote(peer.clone(), s.clone()),
+                                )
+                            })
+                            .collect();
+                        self.choice("Remote services",vec![self.name(&peer),format!("Full host ID: {peer}"),if services.is_empty(){"No services granted here, or request still awaits approval on the target host.".into()}else{"These are the services this host currently permits you to access.".into()}],entries);
+                        self.message = "Authenticated catalog refreshed".into();
+                    }
+                    Kind::Preview(document) => {
+                        let detail=vec![format!("Host: {}",clean(text(&value,"host_name"))),format!("Compare full host ID: {}",text(&value,"host")),format!("Relay: {}",clean(text(&value,"relay_url"))),"Compare this ID with the target computer before confirming. Both machines will be paired after approval. The target owner chooses services to grant; this computer grants no new service access. You can allow services later in service settings.".into()];
+                        self.confirmation(
+                            "Request pairing with this host".into(),
+                            detail,
+                            Work {
+                                kind: Kind::Paired,
+                                task: Task::Pair {
+                                    preview: value,
+                                    document,
+                                },
+                            },
+                        );
+                    }
+                    Kind::Paired => {
+                        self.catalog_errors
+                            .insert(text(&value, "host").into(), "awaiting approval".into());
+                        self.names = self.api.names();
+                        self.catalogs.remove(text(&value, "host"));
+                        self.message="Request sent. Choose allowed services on the target host when approving. This computer grants no new service access.".into();
+                        self.last_poll = Instant::now() - Duration::from_secs(5);
+                    }
+                    Kind::Open => {
+                        self.modal=Some(Modal::Info{title:"Browser service".into(),lines:vec![text(&value,"url").into(),"This URL belongs to this computer. Over SSH, use a browser on this computer or forward its local gateway port; it is not a public URL.".into(),"On a graphical session the browser opens automatically. TCP services use the native tunnel command.".into()],scroll:0});
+                        self.message = "Browser route ready".into();
+                        self.last_poll = Instant::now() - Duration::from_secs(5);
+                    }
+                    Kind::Owners => {
+                        self.operations = array(&value);
+                        self.message = "Owner journals loaded".into();
+                    }
+                    Kind::OwnerSaved => {
+                        self.operations.retain(|v| v["id"] != value["id"]);
+                        self.operations.push(value.clone());
+                        self.action(Action::OwnerDetail(value));
+                        self.message = "Review each host's acknowledgement".into();
+                        self.last_poll = Instant::now() - Duration::from_secs(5);
+                    }
+                },
             }
             if let Some(id) = old_id {
                 if let Some(index) = self.entries().iter().position(|e| e.id == id) {
@@ -1319,10 +1300,10 @@ impl App {
                     && !matches!(text(v, "state"), "issued" | "challenged")
             }) {
                 self.qr = None;
-                self.message = "Invitation is no longer active. Press g for a new QR.".into();
+                self.message = "Invitation is no longer active. Press n for a new code.".into();
             } else if qr["expires_at"].as_u64().unwrap_or(0) <= now() {
                 self.qr = None;
-                self.message = "QR expired. Press g to generate another.".into();
+                self.message = "Pairing code expired. Press n to generate another.".into();
             }
         }
         if !self.busy && self.last_poll.elapsed() >= Duration::from_secs(3) {
@@ -1377,6 +1358,12 @@ impl App {
                 Modal::Form(form) => {
                     let count = form.fields.len() + 1;
                     match key.code {
+                        KeyCode::PageUp if matches!(form.kind, FormKind::Pair) => {
+                            self.code_scroll = self.code_scroll.saturating_add(5)
+                        }
+                        KeyCode::PageDown if matches!(form.kind, FormKind::Pair) => {
+                            self.code_scroll = self.code_scroll.saturating_sub(5)
+                        }
                         KeyCode::Down | KeyCode::Tab => form.selected = (form.selected + 1) % count,
                         KeyCode::Up | KeyCode::BackTab => {
                             form.selected = (form.selected + count - 1) % count
@@ -1458,6 +1445,34 @@ impl App {
                 self.last_poll = Instant::now() - Duration::from_secs(5);
             }
             KeyCode::Char('g') => self.action(Action::Qr),
+            KeyCode::Char('n') => self.action(Action::Code),
+            KeyCode::Char('c') if self.page == Page::Qr => {
+                if let Some(code) = self.active_pairing_code() {
+                    self.message =
+                        match execute!(io::stdout(), CopyToClipboard::to_clipboard_from(code)) {
+                            Ok(()) => {
+                                "Copy requested. Allow clipboard access if your terminal asks."
+                                    .into()
+                            }
+                            Err(_) => {
+                                "Cannot copy pairing code. Check terminal clipboard access.".into()
+                            }
+                        };
+                } else {
+                    self.message =
+                        "Pairing code expired or unavailable. Press n for a new code.".into();
+                }
+            }
+            KeyCode::Down | KeyCode::PageDown if self.page == Page::Qr && self.show_code => {
+                self.code_scroll = self
+                    .code_scroll
+                    .saturating_add(if key.code == KeyCode::PageDown { 5 } else { 1 });
+            }
+            KeyCode::Up | KeyCode::PageUp if self.page == Page::Qr && self.show_code => {
+                self.code_scroll = self
+                    .code_scroll
+                    .saturating_sub(if key.code == KeyCode::PageUp { 5 } else { 1 });
+            }
             KeyCode::Char('p') => self.navigate(Page::Pending),
             KeyCode::Char(c @ '1'..='8') => self.navigate(Page::at(c as usize - '1' as usize)),
             KeyCode::Down | KeyCode::Char('j') => {
@@ -1727,12 +1742,56 @@ impl App {
                 content[1],
             );
         }
-        frame.render_widget(Paragraph::new(vec![Line::raw(clean(&self.message)),Line::styled("Tab: switch pane · ↑↓/Enter: select · g: QR · p: pending · r: refresh · Esc: back · q: quit",Style::default().fg(Color::Cyan))]).wrap(Wrap{trim:false}),parts[2]);
+        frame.render_widget(Paragraph::new(vec![Line::raw(clean(&self.message)),Line::styled("Tab: switch pane · ↑↓/Enter: select · n: pairing code · g: QR · p: pending · r: refresh · Esc: back · q: quit",Style::default().fg(Color::Cyan))]).wrap(Wrap{trim:false}),parts[2]);
         if self.modal.is_some() {
             self.draw_modal(frame, area);
         }
     }
+    fn active_pairing_code(&self) -> Option<&str> {
+        self.qr
+            .as_ref()
+            .filter(|value| value["expires_at"].as_u64().unwrap_or(0) > now())
+            .and_then(|value| value["code"].as_str())
+    }
+    fn draw_pairing_code(&self, frame: &mut Frame, area: Rect) {
+        let block = Block::bordered().title(" Pairing code · c: copy · n: new code · g: QR ");
+        let inside = block.inner(area);
+        frame.render_widget(block, area);
+        let Some(code) = self.active_pairing_code() else {
+            frame.render_widget(
+                Paragraph::new(if self.busy {
+                    "Generating pairing code…"
+                } else {
+                    "Press n to generate a five-minute pairing code."
+                }),
+                inside,
+            );
+            return;
+        };
+        let parts = Layout::vertical([
+            Constraint::Length(3),
+            Constraint::Min(1),
+            Constraint::Length(2),
+        ])
+        .split(inside);
+        frame.render_widget(Paragraph::new(format!("Paste this code into Pair remote host on the other computer.\nExpires in {} seconds · keep this code private",self.qr.as_ref().unwrap()["expires_at"].as_u64().unwrap_or(0).saturating_sub(now()))).wrap(Wrap { trim: false }),parts[0]);
+        let lines = code.len().div_ceil(usize::from(parts[1].width.max(1)));
+        let scroll = self
+            .code_scroll
+            .min(lines.saturating_sub(usize::from(parts[1].height)) as u16);
+        frame.render_widget(
+            Paragraph::new(code)
+                .wrap(Wrap { trim: false })
+                .scroll((scroll, 0)),
+            parts[1],
+        );
+        frame.render_widget(Paragraph::new("c: copy complete code · ↑↓/PgUp/PgDn: scroll\nApprove the incoming request and choose allowed services here.").wrap(Wrap { trim: false }),parts[2]);
+    }
     fn draw_qr(&self, frame: &mut Frame, area: Rect) {
+        if self.show_code {
+            self.draw_pairing_code(frame, area);
+            return;
+        }
         let block = Block::bordered().title(" Pair with this computer · g: new QR · Esc: back ");
         let inside = block.inner(area);
         frame.render_widget(block, area);
@@ -1882,6 +1941,50 @@ impl App {
                 }
             }
             Modal::Form(form) => {
+                if matches!(form.kind, FormKind::Pair) {
+                    let parts =
+                        Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).split(inner);
+                    let code_box = Block::bordered().title(" Pairing code ").border_style(
+                        Style::default().fg(if form.selected == 0 {
+                            Color::Cyan
+                        } else {
+                            Color::DarkGray
+                        }),
+                    );
+                    let content = code_box.inner(parts[0]);
+                    let value = clean(&form.fields[0].value);
+                    let lines = value.len().div_ceil(usize::from(content.width.max(1)));
+                    let bottom = lines.saturating_sub(usize::from(content.height));
+                    let scroll = bottom.saturating_sub(usize::from(self.code_scroll));
+                    frame.render_widget(
+                        Paragraph::new(value)
+                            .wrap(Wrap { trim: false })
+                            .scroll((scroll as u16, 0))
+                            .block(code_box),
+                        parts[0],
+                    );
+                    frame.render_widget(
+                        Paragraph::new(vec![
+                            Line::styled(
+                                "[ Review and save ]",
+                                Style::default().fg(if form.selected == 1 {
+                                    Color::Cyan
+                                } else {
+                                    Color::Green
+                                }),
+                            ),
+                            Line::raw("Tab: review button · Enter: next/review · Ctrl+U: clear"),
+                            Line::raw("PgUp/PgDn: scroll · Paste the complete pairing code"),
+                        ]),
+                        parts[1],
+                    );
+                    self.hits.push((parts[0], Hit::Field(0)));
+                    self.hits.push((
+                        Rect::new(parts[1].x, parts[1].y, parts[1].width, 1),
+                        Hit::Field(1),
+                    ));
+                    return;
+                }
                 let mut items: Vec<ListItem> = form
                     .fields
                     .iter()
@@ -1890,15 +1993,7 @@ impl App {
                         let value = match &f.kind {
                             FieldKind::ReadOnly => clean(&f.value),
                             FieldKind::Granted => "[x] Already granted (preserved)".into(),
-                            FieldKind::Text(_) => {
-                                if matches!(form.kind, FormKind::Pair { file: false })
-                                    && !f.value.is_empty()
-                                {
-                                    format!("[private invitation: {} bytes]", f.value.len())
-                                } else {
-                                    clean(&f.value)
-                                }
-                            }
+                            FieldKind::Text(_) => clean(&f.value),
                             FieldKind::Check(v) => if *v { "[x]" } else { "[ ]" }.into(),
                             FieldKind::Choice(choices, index) => {
                                 format!("{}  (←/→ to change)", choices[*index])

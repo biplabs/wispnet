@@ -30,13 +30,20 @@ A normal local TUI session needs neither Python nor SSH.
 - In forms, Tab/arrow keys change fields, Space toggles device/target checkboxes,
   and left/right arrows choose a protocol. Enter on **Review and save** opens a
   separate confirmation. Ctrl+U clears the current text field. Bracketed paste
-  is supported; pasted invitation capabilities are masked in the form.
+  is supported; pairing codes remain visible in the form.
 - Review dialogs support PageUp/PageDown for long details. Exit, errors and
   SIGTERM restore the cursor, raw-mode flags, mouse capture and alternate screen.
 
 ## Pair and approve
 
-Select **Pair with QR**, or press `g`. The full host ID, QR and five-minute
+Choose **Generate pairing code** on Overview, select **Pair this machine**
+(or press `2`), or press `n`. The code and five-minute countdown appear. Press
+`c` to copy the complete code using your terminal clipboard, including over SSH
+when the terminal permits clipboard access. Use arrow keys or PageUp/PageDown to
+scroll on small terminals. Paste the code into **Pair remote host** on the other
+computer. The standalone `wispnet --pairing-code` command is also available.
+
+For a phone, choose **Generate pairing QR** on Overview, or press `g`. The full host ID, QR and five-minute
 countdown appear. Enlarge the terminal or reduce its font size if necessary;
 the app refuses to wrap or clip a QR. QR contrast stays black on white even if
 `NO_COLOR` is set. No capability is saved to terminal history or a file by the TUI;
@@ -61,7 +68,7 @@ HTTP/TCP, edits their loopback backend, and removes a service. Replacing an exis
 service ID explicitly warns that the backend and full access list will be replaced.
 
 To pair this computer to a remote host, use **Pair remote host** and paste its
-pairing code or import its bounded mode-0600 invitation file. Compare the full
+pairing code. Compare the full
 host ID in the preview before confirming the request. Its owner must approve
 this computer and select which services to grant there. Between two desktop/headless
 nodes, one request pairs both machines: the target also saves the scanning

@@ -200,6 +200,12 @@ impl Services {
             Self::Host(host) => host.services().await.map_err(|_| Status::Denied),
         }
     }
+    async fn pending(&self, peer: EndpointId) -> bool {
+        match self {
+            Self::Static(_) => false,
+            Self::Host(host) => host.pairing_pending(peer).await.unwrap_or(false),
+        }
+    }
     async fn approved(&self, peer: EndpointId) -> bool {
         match self {
             Self::Static(services) => services.iter().any(|s| s.allow.contains(&peer)),
@@ -361,7 +367,12 @@ async fn serve(
                         return;
                     }
                     if !timeout(HANDSHAKE_TIMEOUT,services.approved(peer)).await.unwrap_or(false) {
-                        connection.close((Status::Denied as u32).into(), b"access denied");
+                        let reason: &[u8] = if timeout(HANDSHAKE_TIMEOUT, services.pending(peer)).await.unwrap_or(false) {
+                            b"awaiting approval"
+                        } else {
+                            b"access denied"
+                        };
+                        connection.close((Status::Denied as u32).into(), reason);
                         return;
                     }
                     let _peer = PeerGuard::new(counts.clone(), peer);

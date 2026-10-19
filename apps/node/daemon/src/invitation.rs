@@ -38,7 +38,7 @@ pub fn issue(config: &Config) -> Result<serde_json::Value, Box<dyn std::error::E
         }
     }
     Ok(serde_json::json!({"host":invitation.host,"host_name":name,
-        "invitation":invitation.invitation,"expires_at":invitation.expires_at,"matrix":matrix}))
+        "invitation":invitation.invitation,"expires_at":invitation.expires_at,"code":code.as_str(),"matrix":matrix}))
 }
 
 pub fn terminal(matrix: &[Vec<bool>]) -> String {

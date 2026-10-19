@@ -51,9 +51,10 @@ final class HostStore {
   // Consult durable native removal state, including after an interrupted callback.
   // A concurrent fresh pairing clears that state and must retain its Java record.
   if(Native.ready)try{if(Native.request(new JSONObject().put("op","pairing_state").put("host",host)).optBoolean("removed")){removeSaved(host);return;}}catch(Exception unavailable){}
-  if("host_denied".equals(code)){
-   boolean pending="approval_pending".equals(record.optString("state"))||record.optString("status").startsWith("Pending approval");
-   record.put("state",pending?"approval_pending":"host_denied").put("status",pending?"Pending approval on this host":"Access denied by this host. Request pairing again.");
+  if("approval_pending".equals(code)){
+   record.put("state","approval_pending").put("status","Pending approval on this host");
+  }else if("host_denied".equals(code)){
+   record.put("state","host_denied").put("status","Access denied by this host. Request pairing again.");
   }else if("service_denied".equals(code)){record.put("status","Service no longer listed or granted by this host. Refresh services.");}
   else if("Host state changed; re-pair required".equals(failure.getMessage())){record.put("state","state_changed").put("status","Host state changed. Verify this host and request pairing again.");}
   else if("Catalog rollback or inconsistent snapshot".equals(failure.getMessage())||"Wrong catalog owner".equals(failure.getMessage())||"Invalid or incomplete catalog".equals(failure.getMessage())||"catalog_rejected".equals(code)){record.put("state","unverified").put("status","Host catalog rejected. Cached entries are not trusted.");}

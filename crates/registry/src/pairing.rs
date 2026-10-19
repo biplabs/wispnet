@@ -454,6 +454,19 @@ pub(crate) fn reject(tx: &Transaction<'_>, id: &str) -> Result<(), ControlError>
     Ok(())
 }
 impl Authority {
+    /// Display-only state for the authenticated requester; this grants no access.
+    pub async fn pairing_pending(&self, peer: EndpointId) -> Result<bool, ControlError> {
+        let store = self.store.clone().lock_owned().await;
+        let host = self.host;
+        tokio::task::spawn_blocking(move || {
+            store.host_check(host, None)?;
+            Ok(store.0.query_row(
+                "SELECT EXISTS(SELECT 1 FROM host_invitations WHERE peer=?1 AND state='pending' AND expires>?2)",
+                params![peer.to_string(), crate::enrollment::now() as i64],
+                |row| row.get(0),
+            )?)
+        }).await.map_err(|_| ControlError::Storage)?
+    }
     pub async fn paired_hosts(
         &self,
     ) -> Result<Vec<wispnet_core::pairing::Bootstrap>, ControlError> {

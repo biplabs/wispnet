@@ -3,7 +3,7 @@ import tempfile
 import time
 from pathlib import Path
 from unittest.mock import patch
-from PySide6.QtWidgets import QApplication, QMessageBox, QTabWidget, QPushButton, QLabel
+from PySide6.QtWidgets import QApplication, QMessageBox, QTabWidget, QPushButton, QLabel, QLineEdit, QPlainTextEdit
 from PySide6.QtCore import Qt
 from wispnet_desktop.app import Window, appearance
 
@@ -23,16 +23,23 @@ class DesktopChecks(unittest.TestCase):
         window = Window(API(), tray=False)
         window.timer.stop()
         result = {"host": "a" * 64, "invitation": "b" * 64,
-                  "expires_at": time.time() + 300, "matrix": [[False, True], [True, False]]}
+                  "code": "wispnet1:private-code", "expires_at": time.time() + 300, "matrix": [[False, True], [True, False]]}
         window.show_qr(result, None)
         dialog = window.qr_dialog
         image = dialog.findChild(QLabel, "pairingQrImage")
         self.assertFalse(image.pixmap().isNull())
+        code = dialog.findChild(QPlainTextEdit, "pairingCode")
+        copy = dialog.findChild(QPushButton, "copyPairingCode")
+        self.assertTrue(code.isReadOnly())
+        copy.click()
+        self.assertEqual(self.app.clipboard().text(), result["code"])
         # Changing the wall-clock expiry also exercises the dialog's timer path.
         result["expires_at"] = 1
         from PySide6.QtCore import QTimer
         dialog.findChild(QTimer).timeout.emit()
         self.assertTrue(image.pixmap().isNull())
+        self.assertEqual(code.toPlainText(), "")
+        self.assertFalse(copy.isEnabled())
         self.assertTrue(any("QR expired" in label.text() for label in dialog.findChildren(QLabel)))
         dialog.reject()
         self.assertIsNone(window.qr_dialog)
@@ -169,6 +176,31 @@ class DesktopChecks(unittest.TestCase):
             QApplication.processEvents()
             window.deleteLater()
 
+    def test_pairing_code_input_is_visible(self):
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox
+        window = Window(API(), tray=False)
+        window.timer.stop()
+        def inspect(dialog):
+            code = dialog.findChild(QPlainTextEdit)
+            pair = dialog.findChild(QDialogButtonBox).button(QDialogButtonBox.StandardButton.Ok)
+            self.assertEqual(pair.text(), "Pair")
+            self.assertFalse(pair.isEnabled())
+            code.setPlainText(" \n ")
+            self.assertFalse(pair.isEnabled())
+            self.assertTrue(code.tabChangesFocus())
+            from PySide6.QtGui import QTextOption
+            self.assertEqual(code.wordWrapMode(), QTextOption.WrapMode.WrapAnywhere)
+            code.setPlainText("wispnet1:\nvisible-code")
+            self.assertEqual(code.toPlainText(), "wispnet1:\nvisible-code")
+            self.assertTrue(pair.isEnabled())
+            code.clear()
+            self.assertFalse(pair.isEnabled())
+            return QDialog.DialogCode.Rejected
+        with patch.object(QDialog, "exec", inspect):
+            window.pair()
+        window.pool.waitForDone()
+        window.close()
+
     def test_pair_name_is_private_display_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
             api = API()
@@ -183,6 +215,12 @@ class DesktopChecks(unittest.TestCase):
             file = Path(directory) / "desktop-peer-names.json"
             self.assertEqual(file.stat().st_mode & 0o777, 0o600)
             self.assertEqual(window.peer_names["a" * 64], "Desktop")
+            peer = "a" * 64
+            self.assertEqual(window.catalogs[peer]["state"], "Awaiting approval")
+            window.peer_updated(peer, None, "awaiting approval")
+            self.assertEqual(window.catalogs[peer]["state"], "Awaiting approval")
+            window.peer_updated(peer, None, "access denied")
+            self.assertEqual(window.catalogs[peer]["state"], "Denied")
             self.assertNotIn("invitation", file.read_text())
             window.pool.waitForDone()
             QApplication.processEvents()

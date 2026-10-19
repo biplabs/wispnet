@@ -25,23 +25,26 @@ final class PeerChecks {
     try{PairingQr.decode(new ByteArrayInputStream(new byte[4*1024*1024+1]));throw new Exception("Oversized QR accepted");}catch(IOException expected){}
     try{PairingQr.decode(new ByteArrayInputStream(new byte[]{1,2,3}));throw new Exception("Malformed QR accepted");}catch(IOException expected){}
     t.runOnMainSync(()->t.activity.onActivityResult(2,android.app.Activity.RESULT_CANCELED,null));
-    if(!t.activity.status.getText().toString().contains("paste a pairing code")||t.find(t.activity.root,"Import QR image")==null||t.find(t.activity.root,"Import invitation file")==null)throw new Exception("Camera cancellation lost fallback");
+    if(!t.activity.status.getText().toString().contains("paste a pairing code")||t.find(t.activity.root,"Import QR image")==null||t.find(t.activity.root,"Import invitation file")!=null)throw new Exception("Camera cancellation lost fallback");
     String decoded;try(InputStream input=new FileInputStream(new File(t.getTargetContext().getFilesDir(),"peer-invitation.png"))){decoded=PairingQr.decode(input);}
-    t.runOnMainSync(()->t.activity.reviewInvitation(decoded));t.await(()->t.activity.status.getText().toString().contains("Invitation ready for review"),"QR image review failed");
-    if(!target.equals(t.activity.host.getText().toString())||t.activity.hostVerified.isChecked()||store.all().has(target))throw new Exception("QR image implied verified pin or trust");
+    t.runOnMainSync(()->t.activity.reviewInvitation(decoded));t.await(()->t.activity.status.getText().toString().contains("Pairing code ready"),"QR image review failed");
+    if(!target.equals(t.activity.host.getText().toString())||store.all().has(target))throw new Exception("QR image implied verified pin or trust");
     t.runOnMainSync(()->t.activity.onActivityResult(2,android.app.Activity.RESULT_OK,new android.content.Intent().putExtra("SCAN_RESULT","https://untrusted.invalid/invitation")));
-    t.await(()->t.activity.status.getText().toString().contains("Cannot import invitation"),"QR URL was accepted");
+    t.await(()->t.activity.status.getText().toString().contains("Cannot read pairing code"),"QR URL was accepted");
     if(store.all().has(target)||t.activity.invitation.getText().length()!=0)throw new Exception("Invalid QR retained capability or trusted host");
     new File(t.getTargetContext().getFilesDir(),"peer-invitation.png").delete();
 
     android.content.Intent share=new android.content.Intent(android.content.Intent.ACTION_SEND).setClass(t.getTargetContext(),MainActivity.class).setType("text/plain").putExtra(android.content.Intent.EXTRA_TEXT,code).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK|android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP);
     t.activity=(MainActivity)t.startActivitySync(share);
-   }else t.runOnMainSync(()->{try{t.activity.importInvitation(new ByteArrayInputStream(document.getBytes(java.nio.charset.StandardCharsets.UTF_8)));}catch(IOException e){throw new RuntimeException(e);}});
-   t.await(()->t.activity.status.getText().toString().contains("Invitation ready for review"),"Camera-free import failed");
-   if(!target.equals(t.activity.host.getText().toString())||t.activity.hostVerified.isChecked()||store.all().has(target))throw new Exception("Import implied verified pin or pairing");
-   t.runOnMainSync(()->{t.activity.label.setText(name);android.widget.Button b=t.find(t.activity.root,"Request pairing");b.performClick();});
-   t.await(()->t.activity.status.getText().toString().contains("Compare the full host ID"),"Import skipped explicit host verification");
-   if(t.activity.invitation.getText().length()==0||store.all().has(target))throw new Exception("Unconfirmed request consumed invitation or paired");
+   }else t.runOnMainSync(()->t.activity.reviewInvitation(code));
+   t.await(()->t.activity.status.getText().toString().contains("Pairing code ready"),"Camera-free import failed");
+   if(!target.equals(t.activity.host.getText().toString())||store.all().has(target))throw new Exception("Import implied verified pin or pairing");
+   // Editing a reviewed code invalidates the preview and cannot submit stale trust.
+   t.runOnMainSync(()->{t.activity.invitation.setText("wispnet1:invalid");t.activity.pair();});
+   if(store.all().has(target)||!t.activity.status.getText().toString().contains("Review the pairing code first"))throw new Exception("Edited code reused stale target");
+   t.runOnMainSync(()->t.activity.reviewInvitation(code));
+   t.await(()->t.activity.status.getText().toString().contains("Pairing code ready"),"Pairing code review failed");
+   t.runOnMainSync(()->t.activity.label.setText(name));
    if(name.equals("Local computer"))t.runOnMainSync(()->t.activity.onActivityResult(2,android.app.Activity.RESULT_OK,new android.content.Intent().putExtra("SCAN_RESULT",code)));
    else t.click("Request pairing");
    t.await(()->store.all().has(target)&&"approval_pending".equals(store.all().getJSONObject(target).optString("state")),"Pairing did not remain pending");

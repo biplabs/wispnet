@@ -542,10 +542,12 @@ async fn explicit_tls_relay_without_udp_pins_identity_enforces_grants_and_recove
     let denied = control::connect_target(&stranger, target.clone())
         .await
         .unwrap();
-    assert!(
+    assert_eq!(
         control::catalog_on(&denied, key.endpoint_id())
             .await
-            .is_err()
+            .unwrap_err()
+            .to_string(),
+        "awaiting approval"
     );
     store
         .host_mutate(
@@ -648,10 +650,12 @@ async fn explicit_tls_relay_without_udp_pins_identity_enforces_grants_and_recove
     let denied = control::connect_target(&revoked, target.clone())
         .await
         .unwrap();
-    assert!(
+    assert_eq!(
         control::catalog_on(&denied, key.endpoint_id())
             .await
-            .is_err()
+            .unwrap_err()
+            .to_string(),
+        "access denied"
     );
     let current = control::connect_target(&outgoing, target.clone())
         .await
