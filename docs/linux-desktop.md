@@ -179,3 +179,15 @@ for legacy client-only phones, without creating saved host pins or granting any
 services. These probes are demand-driven, bounded to four concurrent attempts,
 and rate limited to one per device every 30 seconds. Offline and older devices
 remain listed. An updated Android app answers while its process is reachable.
+
+## Release version
+
+The shared product version is `VERSION` in
+`apps/node/desktop/wispnet_desktop/version.py`. Desktop packaging, the native
+CLI/TUI build, and Android builds read this value. All three interfaces show
+it with a commit SHA at the bottom right; `wispnet --version` also prints it. Android derives
+its default version code as `major * 1000000 + minor * 1000 + patch`.
+Debug identifiers append `.dirty.<source fingerprint>` for uncommitted changes,
+so the same label identifies the same source snapshot across machines. Rebuild
+and reinstall after editing or committing to update the displayed identifier.
+Explicit Android release-publishing version overrides remain available.

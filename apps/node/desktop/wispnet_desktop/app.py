@@ -65,6 +65,7 @@ from PySide6.QtWidgets import (
 )
 import math
 import random
+from .version import DISPLAY_VERSION
 from .api import NodeAPI
 
 
@@ -639,7 +640,13 @@ class Window(QMainWindow):
         self.status.setObjectName("statusText")
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         self.status.setWordWrap(True)
-        layout.addWidget(self.status)
+        footer = QHBoxLayout()
+        footer.addWidget(self.status, 1)
+        self.version_label = QLabel(f"v{DISPLAY_VERSION}")
+        self.version_label.setObjectName("statusText")
+        self.version_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom)
+        footer.addWidget(self.version_label)
+        layout.addLayout(footer)
 
         self.services = self.table(
             ["Service", "Backend", "Permitted clients"],

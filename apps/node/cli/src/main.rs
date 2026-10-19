@@ -52,6 +52,10 @@ fn main() -> ExitCode {
 
 async fn execute() -> Result<(), Box<dyn std::error::Error>> {
     let mut args: Vec<_> = env::args_os().skip(1).collect();
+    if args.len() == 1 && (args[0] == "--version" || args[0] == "-V") {
+        println!("wispnet {}", env!("WISPNET_VERSION"));
+        return Ok(());
+    }
     if args.is_empty() || (args.len() == 2 && args[0] == "--config") {
         let path = if args.is_empty() {
             PathBuf::from(env::var_os("HOME").ok_or("HOME is required; pass --config")?)

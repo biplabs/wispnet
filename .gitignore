@@ -8,3 +8,6 @@ __pycache__/
 keystore.properties
 
 /apps/node/desktop/.venv/
+
+# Generated release/source identifier for packaged desktop clients.
+apps/node/desktop/wispnet_desktop/build_info.py

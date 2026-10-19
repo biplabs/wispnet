@@ -35,5 +35,7 @@ mkdir -p "apps/android/app/src/main/jniLibs/$android_abi"
 rm -f "apps/android/app/src/main/jniLibs/$android_abi/libwipsnet_android.so"
 cp "target/$native_target/$android_profile/libwispnet_android.so" "apps/android/app/src/main/jniLibs/$android_abi/"
 "$ndk_bin/llvm-strip" --strip-debug "apps/android/app/src/main/jniLibs/$android_abi/libwispnet_android.so"
+shared_version="$(python3 -c 'import runpy; print(runpy.run_path("apps/node/desktop/wispnet_desktop/version.py")["VERSION"])')"
+shared_code="$(python3 -c 'import sys; a,b,c=map(int,sys.argv[1].split(".")); print(a*1000000+b*1000+c)' "$shared_version")"
 cd apps/android
-./gradlew --no-daemon "$gradle_task" "-PwispnetAndroidAbi=$android_abi" "-PwispnetVersionCode=${WISPNET_ANDROID_VERSION_CODE:-1}" "-PwispnetVersionName=${WISPNET_ANDROID_VERSION_NAME:-0.1.0}"
+./gradlew --no-daemon "$gradle_task" "-PwispnetAndroidAbi=$android_abi" "-PwispnetVersionCode=${WISPNET_ANDROID_VERSION_CODE:-$shared_code}" "-PwispnetVersionName=${WISPNET_ANDROID_VERSION_NAME:-$shared_version}"

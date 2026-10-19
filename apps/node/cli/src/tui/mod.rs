@@ -1557,10 +1557,22 @@ impl App {
     }
     fn draw(&mut self, frame: &mut Frame) {
         self.hits.clear();
-        let area = frame.area();
+        let full = frame.area();
+        let area = Rect {
+            height: full.height.saturating_sub(1),
+            ..full
+        };
+        frame.render_widget(
+            Paragraph::new(concat!("v", env!("WISPNET_VERSION"))).alignment(Alignment::Right),
+            Rect {
+                y: full.y + full.height.saturating_sub(1),
+                height: full.height.min(1),
+                ..full
+            },
+        );
         let base = Style::default().fg(Color::Gray).bg(Color::Rgb(10, 16, 29));
         frame.render_widget(Block::default().style(base), area);
-        if area.width < 65 || area.height < 16 {
+        if full.width < 65 || full.height < 16 {
             frame.render_widget(Paragraph::new("Wispnet — enlarge this terminal to at least 65 columns × 16 rows.\nq: exit · Ctrl+C: exit immediately").wrap(Wrap{trim:false}),area);
             return;
         }

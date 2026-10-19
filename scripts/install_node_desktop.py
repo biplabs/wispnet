@@ -150,6 +150,10 @@ shutil.copytree(
     dirs_exist_ok=True,
     ignore=shutil.ignore_patterns("__pycache__"),
 )
+build_info = destination / "wispnet_desktop/build_info.py"
+if not (source / "wispnet_desktop/build_info.py").exists():
+    label = subprocess.check_output(["python3", str(ROOT / "scripts/build_identity.py")], text=True).strip()
+    build_info.write_text("DISPLAY_VERSION = " + repr(label) + "\n")
 subprocess.run(["uv", "sync", "--locked", "--project", str(destination)], check=True)
 binpath = home / ".local/bin/wispnet-desktop"
 binpath.parent.mkdir(parents=True, exist_ok=True)

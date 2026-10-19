@@ -192,3 +192,16 @@ fn approval_selects_services_and_locks_existing_grants_to_the_reviewed_revision(
     assert_eq!(request["operation"]["services"], json!(["alpha", "beta"]));
     assert_eq!(request["operation"]["expected_revision"], 7);
 }
+
+#[test]
+fn release_version_stays_at_bottom_right_including_small_terminals() {
+    let (mut app, _, _) = fixture();
+    for (width, height) in [(100, 30), (65, 16), (60, 10)] {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let line: String = (0..width)
+            .map(|x| terminal.backend().buffer()[(x, height - 1)].symbol())
+            .collect();
+        assert!(line.ends_with(concat!("v", env!("WISPNET_VERSION"))));
+    }
+}

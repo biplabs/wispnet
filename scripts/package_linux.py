@@ -67,6 +67,8 @@ def package(binary, output):
             target = tree / name
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / name, target)
+        build_label = subprocess.check_output(["python3", str(ROOT / "scripts/build_identity.py")], text=True).strip()
+        (tree / "apps/node/desktop/wispnet_desktop/build_info.py").write_text("DISPLAY_VERSION = " + repr(build_label) + "\n")
         (tree / "bin").mkdir()
         shutil.copy2(binary, tree / "bin/wispnet")
         subprocess.run(

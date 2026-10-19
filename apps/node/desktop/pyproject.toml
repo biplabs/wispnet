@@ -1,6 +1,6 @@
 [project]
 name = "wispnet-desktop"
-version = "0.1.0"
+dynamic = ["version"]
 requires-python = ">=3.11"
 dependencies = ["PySide6-Essentials==6.10.2"]
 [project.scripts]
@@ -8,3 +8,6 @@ wispnet-desktop = "wispnet_desktop.app:main"
 [build-system]
 requires = ["hatchling==1.27.0"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "wispnet_desktop/version.py"
