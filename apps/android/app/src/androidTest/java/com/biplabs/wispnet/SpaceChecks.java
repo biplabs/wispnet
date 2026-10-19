@@ -21,9 +21,10 @@ final class SpaceChecks {
     t.activity.openingService=true;t.activity.pendingServiceUrl="http://launch-test.localhost:1234/";
     t.activity.finishServiceLaunch();
     if(browser.getHits()!=0)throw new AssertionError("Browser launched before animation");
-    t.activity.stars.jump(()->{t.activity.serviceJumpDone=true;t.activity.finishServiceLaunch();});
+    t.activity.stars.speedUp(()->{t.activity.serviceJumpDone=true;t.activity.finishServiceLaunch();});
    });
-   t.await(()->browser.getHits()==1,"Browser did not launch after warp");
+   t.runOnMainSync(()->{if(t.activity.root.getAlpha()!=1)throw new AssertionError("Service launch hid the directory");});
+   t.await(()->browser.getHits()==1,"Browser did not launch after star speed-up");
    t.runOnMainSync(()->{
     if(t.activity.openingService||t.activity.root.getAlpha()!=1)throw new AssertionError("Launch did not restore UI");
     t.activity.openingService=true;t.activity.serviceJumpDone=true;t.activity.finishServiceLaunch();

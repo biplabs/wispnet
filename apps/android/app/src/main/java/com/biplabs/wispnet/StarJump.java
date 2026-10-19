@@ -6,14 +6,16 @@ import android.view.View;
 /** Local canvas starfield and 3-beat hyperjump effect (lock-on, warp surge, arrival shockwave). */
 final class StarJump extends View {
  final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
- final float[] stars=new float[480];float progress=0;boolean hyperspace=false,decelerating=false;ValueAnimator animation;Shader glow,ambient,nebula,hyperGlow;
+ final float[] stars=new float[480];float progress=0,travelOffset=0;boolean hyperspace=false,decelerating=false,speeding=false;ValueAnimator animation;Shader glow,ambient,nebula,hyperGlow;
  StarJump(Context context){super(context);paint.setStrokeCap(Paint.Cap.ROUND);java.util.Random random=new java.util.Random(17);for(int i=0;i<stars.length;i++)stars[i]=random.nextFloat();setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);}
- void jump(Runnable done){
+ void jump(Runnable done){animateJump(false,done);}
+ void speedUp(Runnable done){animateJump(true,done);}
+ void animateJump(boolean starsOnly,Runnable done){
   cancel();if(!ValueAnimator.areAnimatorsEnabled()){done.run();return;}
-  decelerating=false;animation=ValueAnimator.ofFloat(0,1);animation.setDuration(900);
+  decelerating=false;speeding=starsOnly;animation=ValueAnimator.ofFloat(0,1);animation.setDuration(900);
   animation.setInterpolator(new android.view.animation.LinearInterpolator());
   animation.addUpdateListener(a->{progress=(float)a.getAnimatedValue();invalidate();});
-  animation.addListener(new AnimatorListenerAdapter(){boolean cancelled;public void onAnimationCancel(Animator a){cancelled=true;}public void onAnimationEnd(Animator a){animation=null;progress=0;invalidate();if(!cancelled)done.run();}});animation.start();
+  animation.addListener(new AnimatorListenerAdapter(){boolean cancelled;public void onAnimationCancel(Animator a){cancelled=true;}public void onAnimationEnd(Animator a){if(speeding)travelOffset=(travelOffset+progress*.75f)%1f;speeding=false;animation=null;progress=0;invalidate();if(!cancelled)done.run();}});animation.start();
  }
  void dropOut(){
   cancel();if(!ValueAnimator.areAnimatorsEnabled())return;
@@ -30,8 +32,8 @@ final class StarJump extends View {
   hyperGlow=new RadialGradient(w/2f,h*.38f,Math.max(1,Math.max(w,h)*.75f),new int[]{0x5522569e,0x2c163870,0x00070b14},new float[]{0,.58f,1},Shader.TileMode.CLAMP);
  }
  protected void onDraw(Canvas canvas){
-  super.onDraw(canvas);float d=getResources().getDisplayMetrics().density,cx=getWidth()/2f,cy=getHeight()/2f,scale=(float)Math.hypot(cx,cy);boolean warp=animation!=null;
-  long now=android.os.SystemClock.elapsedRealtime();float speedMul=hyperspace?1.8f:1f,cruise=((now*(long)(speedMul*100))/2400000f)%1f,pulse=.82f+.18f*(float)Math.sin(now*.0016);
+  super.onDraw(canvas);float d=getResources().getDisplayMetrics().density,cx=getWidth()/2f,cy=getHeight()/2f,scale=(float)Math.hypot(cx,cy);boolean warp=animation!=null&&!speeding;
+  long now=android.os.SystemClock.elapsedRealtime();float speedMul=hyperspace?1.8f:1f,cruise=(((now*(long)(speedMul*100))/2400000f)+travelOffset+(speeding?progress*.75f:0))%1f,pulse=.82f+.18f*(float)Math.sin(now*.0016);
   Shader bg=hyperspace&&hyperGlow!=null?hyperGlow:ambient;
   if(bg!=null){paint.setShader(bg);paint.setAlpha((int)(255*pulse));canvas.drawRect(0,0,getWidth(),getHeight(),paint);paint.setShader(null);}
   if(nebula!=null){paint.setShader(nebula);paint.setAlpha(hyperspace?245:210);canvas.drawRect(0,0,getWidth(),getHeight(),paint);paint.setShader(null);}

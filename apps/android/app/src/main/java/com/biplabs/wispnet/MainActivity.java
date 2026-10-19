@@ -263,8 +263,7 @@ public class MainActivity extends Activity {
   if(!AccessService.enabled){show("Start browser access first");return;}
   openingService=true;serviceJumpDone=false;pendingServiceUrl=null;int launch=++serviceLaunch;
   show("Opening "+service+"…");
-  root.animate().alpha(0).setDuration(120);
-  stars.jump(()->{if(launch!=serviceLaunch)return;serviceJumpDone=true;finishServiceLaunch();});
+  stars.speedUp(()->{if(launch!=serviceLaunch)return;serviceJumpDone=true;finishServiceLaunch();});
   work.execute(()->{try{
    JSONObject response=Native.request(new JSONObject().put("op","open").put("host",peer).put("host_name",store.all().getJSONObject(peer).getString("name")).put("service",service).put("incarnation",incarnation));
    syncTelemetry();String url=response.optString("launch_url",response.getString("url"));
