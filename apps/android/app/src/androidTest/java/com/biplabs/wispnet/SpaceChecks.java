@@ -10,6 +10,32 @@ final class SpaceChecks {
   final Bitmap[] bitmap={null};t.runOnMainSync(()->{View view=t.activity.screen;bitmap[0]=Bitmap.createBitmap(view.getWidth(),view.getHeight(),Bitmap.Config.ARGB_8888);view.draw(new Canvas(bitmap[0]));});
   try(FileOutputStream out=new FileOutputStream(new File(t.getTargetContext().getFilesDir(),name+".png"))){bitmap[0].compress(Bitmap.CompressFormat.PNG,100,out);}bitmap[0].recycle();
  }
+ static void serviceLaunch(AppTestRunner t)throws Exception {
+  t.resume();Native.ensure(t.getTargetContext());
+  t.runOnMainSync(()->{t.activity.showPairing(false);if(!AccessService.enabled)t.activity.toggleSpace();});t.await(()->t.activity.spaceShown&&!t.activity.jumping,"Access did not start");
+  android.content.IntentFilter filter=new android.content.IntentFilter(android.content.Intent.ACTION_VIEW);
+  filter.addDataScheme("http");filter.addCategory(android.content.Intent.CATEGORY_BROWSABLE);
+  Instrumentation.ActivityMonitor browser=t.addMonitor(filter,null,true);
+  try{
+   t.runOnMainSync(()->{
+    t.activity.openingService=true;t.activity.pendingServiceUrl="http://launch-test.localhost:1234/";
+    t.activity.finishServiceLaunch();
+    if(browser.getHits()!=0)throw new AssertionError("Browser launched before animation");
+    t.activity.stars.jump(()->{t.activity.serviceJumpDone=true;t.activity.finishServiceLaunch();});
+   });
+   t.await(()->browser.getHits()==1,"Browser did not launch after warp");
+   t.runOnMainSync(()->{
+    if(t.activity.openingService||t.activity.root.getAlpha()!=1)throw new AssertionError("Launch did not restore UI");
+    t.activity.openingService=true;t.activity.serviceJumpDone=true;t.activity.finishServiceLaunch();
+    if(browser.getHits()!=1)throw new AssertionError("Browser launched without a URL");
+    t.activity.pendingServiceUrl="http://launch-test.localhost:1234/";t.activity.finishServiceLaunch();
+    if(browser.getHits()!=2)throw new AssertionError("Slow connection did not launch after completed warp");
+    t.activity.openingService=true;t.activity.pendingServiceUrl="http://launch-test.localhost:1234/";
+    t.activity.resetServiceLaunch();t.activity.finishServiceLaunch();
+    if(browser.getHits()!=2)throw new AssertionError("Cancelled launch opened browser");
+   });
+  }finally{t.removeMonitor(browser);t.runOnMainSync(()->t.activity.resetServiceLaunch());t.getTargetContext().stopService(new android.content.Intent(t.getTargetContext(),AccessService.class));}
+ }
  static void headerLayout(AppTestRunner t)throws Exception {
   t.resume();Native.ensure(t.getTargetContext());
   if(!AccessService.enabled)t.click("Start browser access");

@@ -24,6 +24,7 @@ public class MainActivity extends Activity {
  CheckBox hostVerified;
  HostStore store;Button deviceName;Runnable closeServicePermissions;
  boolean pairingBusy=false;
+ boolean openingService=false,serviceJumpDone=false;int serviceLaunch=0;String pendingServiceUrl;
  final java.util.Set<String> refreshing=ConcurrentHashMap.newKeySet();
  final ConcurrentHashMap<String,String> peerTelemetry=new ConcurrentHashMap<>();
  void syncTelemetry(){
@@ -126,7 +127,7 @@ public class MainActivity extends Activity {
   for(int i=0;i<list.getChildCount();i++){View v=list.getChildAt(i);v.setAlpha(0f);v.setTranslationY(dp(18));v.setScaleY(0.94f);v.animate().alpha(1f).translationY(0).scaleY(1f).setStartDelay(i*55L).setDuration(220);}
  }
  void toggleSpace(){
-  if(starting||jumping)return;
+  if(starting||jumping||openingService)return;
   if(AccessService.enabled){stopService(new Intent(this,AccessService.class));lifecycle.postDelayed(this::syncSpace,40);return;}
   try{starting=true;enterRequested=true;startAt=SystemClock.elapsedRealtime();access.setEnabled(false);access.setText("…");startForegroundService(new Intent(this,AccessService.class));lifecycle.postDelayed(this::syncSpace,40);}catch(RuntimeException e){starting=false;enterRequested=false;access.setEnabled(true);show("Android could not start access. Try again.");}
  }
@@ -141,6 +142,7 @@ public class MainActivity extends Activity {
  void syncSpace(){
   syncRelay();
   if(access==null)return;boolean active=AccessService.enabled;
+  if(!active&&openingService)resetServiceLaunch();
   if(active&&enterRequested&&!jumping){starting=false;enterRequested=false;jumping=true;status.setVisibility(View.GONE);caption.setVisibility(View.GONE);root.animate().alpha(0).setDuration(120);access.setEnabled(false);stars.jump(()->{jumping=false;root.animate().alpha(1).setDuration(200);if(AccessService.enabled){spaceShown=true;dockToggle(true);servicesScroll.setVisibility(View.VISIBLE);refresh();holoReveal();}access.setEnabled(true);});}
   else if(active&&!jumping&&!spaceShown){spaceShown=true;dockToggle(true);servicesScroll.setVisibility(View.VISIBLE);}
   else if(!active&&(spaceShown||jumping)){boolean wasShown=spaceShown;stars.cancel();if(wasShown)stars.dropOut();root.animate().cancel();root.setAlpha(1);jumping=false;spaceShown=false;servicesScroll.setVisibility(View.GONE);dockToggle(false);access.setEnabled(true);}
@@ -242,7 +244,35 @@ public class MainActivity extends Activity {
    ((SpaceToggle)access).beacons=beacons;access.invalidate();
   }catch(Exception e){show("Saved directory unavailable");}
  }
- void open(String peer,String service,String incarnation){if(!AccessService.enabled){show("Start browser access first");return;}show("Opening "+service+"…");work.execute(()->{try{JSONObject response=Native.request(new JSONObject().put("op","open").put("host",peer).put("host_name",store.all().getJSONObject(peer).getString("name")).put("service",service).put("incarnation",incarnation));syncTelemetry();String url=response.optString("launch_url",response.getString("url"));runOnUiThread(()->{render();status.setVisibility(View.GONE);Intent browser=new Intent(Intent.ACTION_VIEW,Uri.parse(url));browser.addCategory(Intent.CATEGORY_BROWSABLE);try{startActivity(browser);}catch(ActivityNotFoundException missing){show("Install a browser to open this service.");}});}catch(Exception e){try{store.failed(peer,e);}catch(Exception ignored){}show("Cannot open service: "+e.getMessage());runOnUiThread(this::render);}});}
+ public boolean dispatchTouchEvent(MotionEvent event){return openingService||super.dispatchTouchEvent(event);}
+ void finishServiceLaunch(){
+  if(!openingService||!serviceJumpDone||pendingServiceUrl==null)return;
+  String url=pendingServiceUrl;resetServiceLaunch();
+  if(!AccessService.enabled){show("Start browser access first");return;}
+  status.setVisibility(View.GONE);
+  Intent browser=new Intent(Intent.ACTION_VIEW,Uri.parse(url));browser.addCategory(Intent.CATEGORY_BROWSABLE);
+  try{startActivity(browser);}catch(ActivityNotFoundException missing){show("Install a browser to open this service.");}
+ }
+ void resetServiceLaunch(){
+  serviceLaunch++;openingService=false;serviceJumpDone=false;pendingServiceUrl=null;
+  root.animate().cancel();root.setAlpha(1);stars.cancel();
+ }
+ void open(String peer,String service,String incarnation){
+  if(openingService||jumping)return;
+  if(!AccessService.enabled){show("Start browser access first");return;}
+  openingService=true;serviceJumpDone=false;pendingServiceUrl=null;int launch=++serviceLaunch;
+  show("Opening "+service+"…");
+  root.animate().alpha(0).setDuration(120);
+  stars.jump(()->{if(launch!=serviceLaunch)return;serviceJumpDone=true;finishServiceLaunch();});
+  work.execute(()->{try{
+   JSONObject response=Native.request(new JSONObject().put("op","open").put("host",peer).put("host_name",store.all().getJSONObject(peer).getString("name")).put("service",service).put("incarnation",incarnation));
+   syncTelemetry();String url=response.optString("launch_url",response.getString("url"));
+   runOnUiThread(()->{if(launch!=serviceLaunch)return;render();pendingServiceUrl=url;finishServiceLaunch();});
+  }catch(Exception e){
+   try{store.failed(peer,e);}catch(Exception ignored){}
+   runOnUiThread(()->{if(launch!=serviceLaunch)return;resetServiceLaunch();show("Cannot open service: "+e.getMessage());render();});
+  }});
+ }
  void scanPairingQr(){
   if(!getPackageManager().hasSystemFeature(android.content.pm.PackageManager.FEATURE_CAMERA_ANY)){show("No camera available. Import a QR image or invitation file, or paste a pairing code.");return;}
   try{com.journeyapps.barcodescanner.ScanOptions options=new com.journeyapps.barcodescanner.ScanOptions().setCaptureActivity(PairingCaptureActivity.class).setDesiredBarcodeFormats(com.journeyapps.barcodescanner.ScanOptions.QR_CODE).setBeepEnabled(false).setBarcodeImageEnabled(false).setTimeout(60000).setPrompt("Scan your computer’s Wispnet QR to pair.");startActivityForResult(options.createScanIntent(this),2);}catch(RuntimeException unavailable){show("Camera unavailable. Import a QR image or invitation file, or paste a pairing code.");}
@@ -273,6 +303,6 @@ public class MainActivity extends Activity {
  void configureSystemBars(){getWindow().setStatusBarColor(android.graphics.Color.TRANSPARENT);getWindow().setStatusBarContrastEnforced(false);WindowInsetsController controller=getWindow().getInsetsController();if(controller!=null){controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);controller.setSystemBarsAppearance(0,WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS);controller.show(WindowInsets.Type.statusBars());controller.hide(WindowInsets.Type.navigationBars());}}
  public void onWindowFocusChanged(boolean focused){super.onWindowFocusChanged(focused);if(focused)configureSystemBars();}
  protected void onResume(){super.onResume();configureSystemBars();if(store!=null&&!managesHosts()&&!jumping&&!starting)dockToggle(AccessService.enabled);lifecycle.post(updateAccess);syncSpace();}
- protected void onPause(){lifecycle.removeCallbacks(updateAccess);super.onPause();}
+ protected void onPause(){if(openingService)resetServiceLaunch();lifecycle.removeCallbacks(updateAccess);super.onPause();}
  protected void onDestroy(){root.animate().cancel();stars.cancel();access.animate().cancel();work.shutdown();super.onDestroy();}
 }
