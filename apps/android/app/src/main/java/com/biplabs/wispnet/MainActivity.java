@@ -28,7 +28,7 @@ public class MainActivity extends Activity {
  final ConcurrentHashMap<String,String> peerTelemetry=new ConcurrentHashMap<>();
  void syncTelemetry(){
   try{JSONObject peers=Native.command("telemetry").optJSONObject("peers");if(peers==null)return;
-   for(java.util.Iterator<String> it=peers.keys();it.hasNext();){String k=it.next();JSONObject t=peers.optJSONObject(k);if(t==null)continue;String p=t.optString("path","");long rtt=t.optLong("rtt_ms",0);String label=("direct".equals(p)?"LAST PATH: DIRECT":"relay".equals(p)?"LAST PATH: RELAY":"");if(rtt>0)label=label.isEmpty()?rtt+"ms":label+" · "+rtt+"ms";if(!label.isEmpty())peerTelemetry.put(k,label);}
+   for(java.util.Iterator<String> it=peers.keys();it.hasNext();){String k=it.next();JSONObject t=peers.optJSONObject(k);if(t==null)continue;String p=t.optString("path","");long rtt=t.optLong("rtt_ms",0);String label=("direct".equals(p)?"DIRECT":"relay".equals(p)?"RELAY":"");if(rtt>0)label=label.isEmpty()?rtt+"ms":label+" · "+rtt+"ms";if(!label.isEmpty())peerTelemetry.put(k,label);}
   }catch(Exception ignored){}
  }
  void text(LinearLayout parent,String value,int size){TextView t=new TextView(this);t.setText(value);t.setTextColor(size>=20?0xffedf2ff:0xff94a6c4);t.setTextSize(size);t.setTypeface(null,size>=20?android.graphics.Typeface.BOLD:android.graphics.Typeface.NORMAL);t.setPadding(0,dp(size>=20?18:8),0,dp(8));parent.addView(t);}
@@ -114,6 +114,7 @@ public class MainActivity extends Activity {
   ViewGroup parent=(ViewGroup)access.getParent();if(parent!=null)parent.removeView(access);
   if(docked&&!managesHosts())header.addView(access,new LinearLayout.LayoutParams(((SpaceToggle)access).dockedWidth(),dp(44)));
   else space.addView(access,new FrameLayout.LayoutParams(dp(108),dp(108),Gravity.CENTER));
+  access.setTranslationY(docked&&!managesHosts()?dp(6):0);
   FrameLayout.LayoutParams cap=(FrameLayout.LayoutParams)caption.getLayoutParams();cap.topMargin=dp(82);caption.setLayoutParams(cap);
   caption.setText(first?"establish your wisp network":"jump to wisp space");
   access.setOnClickListener(v->{if(first)showPairing(true);else toggleSpace();});
@@ -210,18 +211,19 @@ public class MainActivity extends Activity {
     int stateColor="available".equals(state)?0xff7be0b8:"approval_pending".equals(state)?0xfff0b85c:"host_denied".equals(state)?0xffff9aa8:0xff8fa3c4;
     beacons[bIdx++]=stateColor;
     if("available".equals(state))anyAvailable=true;else if("approval_pending".equals(state))anyPending=true;
-    Button machine=button(machinesList,name+"\n"+cardSub,()->showHostDialog(name,peer,statusText));
-    machine.setText(styledCardText(name,cardSub,stateColor));machine.setGravity(Gravity.LEFT|Gravity.CENTER_VERTICAL);machine.setPadding(dp(18),dp(14),dp(18),dp(14));machine.setBackground(card(0xff101a30,"available".equals(state)?0xff2b4270:0xff223252,16));
+    String hostTitle=name+" · "+peer.substring(0,8);
+    Button machine=button(machinesList,hostTitle+"\n"+cardSub,()->showHostDialog(name,peer,statusText));
+    machine.setText(styledCardText(hostTitle,cardSub,stateColor));machine.setGravity(Gravity.LEFT|Gravity.CENTER_VERTICAL);machine.setPadding(dp(18),dp(14),dp(18),dp(14));machine.setBackground(card(0xff101a30,"available".equals(state)?0xff2b4270:0xff223252,16));
     LinearLayout sector=new LinearLayout(this);sector.setOrientation(LinearLayout.VERTICAL);sector.setBackground(card(0xd80b1528,"available".equals(state)?0xff29497d:0xff1d2c4a,20));sector.setPadding(dp(16),dp(14),dp(16),dp(6));LinearLayout.LayoutParams secLp=new LinearLayout.LayoutParams(-1,-2);secLp.bottomMargin=dp(14);list.addView(sector,secLp);
     LinearLayout sectorHead=new LinearLayout(this);sectorHead.setGravity(Gravity.CENTER_VERTICAL);sectorHead.setPadding(dp(4),0,dp(4),dp(10));sectorHead.setOnClickListener(v->showHostDialog(name,peer,statusText));sector.addView(sectorHead,new LinearLayout.LayoutParams(-1,-2));
-    TextView sName=new TextView(this);sName.setText("◈  "+name.toUpperCase());sName.setTextColor(0xffedf4ff);sName.setTextSize(14);sName.setLetterSpacing(0.08f);sName.setTypeface(null,android.graphics.Typeface.BOLD);sectorHead.addView(sName,new LinearLayout.LayoutParams(0,-2,1));
+    TextView sName=new TextView(this);sName.setText("◈  "+name.toUpperCase()+" · "+peer.substring(0,8));sName.setTextColor(0xffedf4ff);sName.setTextSize(14);sName.setLetterSpacing(0.08f);sName.setTypeface(null,android.graphics.Typeface.BOLD);sectorHead.addView(sName,new LinearLayout.LayoutParams(0,-2,1));
     TextView sBadge=new TextView(this);sBadge.setText("available".equals(state)?("ONLINE"+(tel!=null?" · "+tel:"")):"approval_pending".equals(state)?"AWAITING APPROVAL":"host_denied".equals(state)?"ACCESS DENIED":"OFFLINE");sBadge.setTextColor("available".equals(state)?0xffedf4ff:stateColor);sBadge.setCompoundDrawablesWithIntrinsicBounds(new StatusDot(this,"available".equals(state)?0xff65ceff:"approval_pending".equals(state)?0xffe9b65c:"host_denied".equals(state)?0xffff9aa8:0xff7a8da8),null,null,null);sBadge.setCompoundDrawablePadding(dp(6));sBadge.setTextSize(11);sBadge.setLetterSpacing(0.06f);sBadge.setTypeface(null,android.graphics.Typeface.BOLD);sectorHead.addView(sBadge,new LinearLayout.LayoutParams(-2,-2));
     if(catalog==null){text(sector,name+" · "+("approval_pending".equals(state)?"Awaiting approval":"Unavailable"),14);continue;}
     JSONArray services=catalog.getJSONArray("services");if(services.length()==0)text(sector,name+" · No shared services",14);
     LinearLayout gridRow=null;
     for(int i=0;i<services.length();i++){String service=services.getJSONObject(i).getString("id");String incarnation=services.getJSONObject(i).optString("incarnation","");String display=services.getJSONObject(i).getString("display_name");String kind=services.getJSONObject(i).getString("kind");
      boolean allowed="http".equals(kind)&&incarnation.matches("[0-9a-f]{64}")&&!java.util.List.of("host_denied","approval_pending","state_changed","unverified").contains(state);
-     String sub=!"available".equals(state)?name+" · "+("host_denied".equals(state)?"Denied":"approval_pending".equals(state)?"Pending":"unreachable".equals(state)?"Offline · cached":"Unavailable"):kind.toUpperCase()+" · "+(tel!=null?tel:name);
+     String sub=!"available".equals(state)?name+" · "+("host_denied".equals(state)?"Denied":"approval_pending".equals(state)?"Pending":"unreachable".equals(state)?"Offline · cached":"Unavailable"):kind.toUpperCase();
      if(i%2==0){gridRow=new LinearLayout(this);gridRow.setOrientation(LinearLayout.HORIZONTAL);sector.addView(gridRow,new LinearLayout.LayoutParams(-1,-2));}
      Button row=button(gridRow,"✦  "+display+"   ↗\n"+sub,()->open(peer,service,incarnation));row.setText(styledCardText("✦  "+display+"   ↗",sub,allowed?0xff94a6c4:0xffff9aa8));row.setTag("Open "+name+" / "+service);row.setGravity(Gravity.LEFT|Gravity.CENTER_VERTICAL);row.setTextSize(17);row.setPadding(dp(18),dp(14),dp(18),dp(14));row.setBackground(card(0xff111e38,allowed?0xff32518a:0xff1d2842,16));
      LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(0,dp(88),1);params.bottomMargin=dp(10);if(i%2==0&&i+1<services.length())params.rightMargin=dp(10);row.setLayoutParams(params);
