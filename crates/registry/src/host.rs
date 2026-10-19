@@ -390,6 +390,53 @@ impl Authority {
             .await
             .map_err(|_| ControlError::Storage)?
     }
+    /// The transport-authenticated peer may update only its existing display label.
+    pub async fn set_client_name(
+        &self,
+        peer: EndpointId,
+        name: String,
+    ) -> Result<(), ControlError> {
+        if !valid_name(&name) {
+            return Err(ControlError::Invalid);
+        }
+        let host = self.host;
+        let mut store = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            self.store.clone().lock_owned(),
+        )
+        .await
+        .map_err(|_| ControlError::RateLimited)?;
+        tokio::task::spawn_blocking(move || {
+            store.host_check(host, None)?;
+            let tx = store
+                .0
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let previous: Option<String> = tx
+                .query_row(
+                    "SELECT name FROM host_clients WHERE id=?1",
+                    [peer.to_string()],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let previous = previous.ok_or(ControlError::Forbidden)?;
+            if previous != name {
+                let revision: i64 =
+                    tx.query_row("SELECT value FROM revision WHERE id=1", [], |r| r.get(0))?;
+                if revision == i64::MAX {
+                    return Err(ControlError::Invalid);
+                }
+                tx.execute(
+                    "UPDATE host_clients SET name=?1 WHERE id=?2",
+                    params![name, peer.to_string()],
+                )?;
+                tx.execute("UPDATE revision SET value=value+1 WHERE id=1", [])?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .await
+        .map_err(|_| ControlError::Storage)?
+    }
     pub async fn approved(&self, peer: EndpointId) -> bool {
         self.snapshot()
             .await

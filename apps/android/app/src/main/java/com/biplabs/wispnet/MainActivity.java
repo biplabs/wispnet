@@ -21,7 +21,7 @@ public class MainActivity extends Activity {
  final Runnable updateAccess=new Runnable(){public void run(){syncSpace();for(Runnable age:ageUpdates)age.run();lifecycle.postDelayed(this,200);}};EditText label,host,invitation;Button access;
  LinearLayout pairingForm,header,machinesList,reviewBox,addMachineBox;FrameLayout space,screen;ScrollView pairingScroll,servicesScroll;StarJump stars;TextView caption,sheetTitle;Button machinesPill,addMachineBtn;boolean spaceShown=false,enterRequested=false,jumping=false,starting=false;long startAt;String lastNetwork="";
  CheckBox hostVerified;
- HostStore store;
+ HostStore store;Button deviceName;
  boolean pairingBusy=false;
  final java.util.Set<String> refreshing=ConcurrentHashMap.newKeySet();
  final ConcurrentHashMap<String,String> peerTelemetry=new ConcurrentHashMap<>();
@@ -58,6 +58,7 @@ public class MainActivity extends Activity {
   LinearLayout sheetHeader=new LinearLayout(this);sheetHeader.setGravity(Gravity.CENTER_VERTICAL);LinearLayout.LayoutParams shlp=new LinearLayout.LayoutParams(-1,-2);shlp.bottomMargin=dp(12);pairingForm.addView(sheetHeader,shlp);
   sheetTitle=new TextView(this);sheetTitle.setText("Pair a machine");sheetTitle.setTextColor(0xffedf2ff);sheetTitle.setTextSize(20);sheetTitle.setTypeface(null,android.graphics.Typeface.BOLD);sheetHeader.addView(sheetTitle,new LinearLayout.LayoutParams(0,-2,1));
   Button closeSheet=button(sheetHeader,"✕",()->{if(managesHosts())finish();else showPairing(false);});closeSheet.setContentDescription("Close");closeSheet.setPadding(0,0,0,0);closeSheet.setTextSize(15);closeSheet.setBackground(card(0xff142038,0xff283b60,18));closeSheet.setLayoutParams(new LinearLayout.LayoutParams(dp(36),dp(36)));
+  deviceName=button(pairingForm,"Device: "+DeviceProfile.name(this)+" · Rename",this::renameDevice);deviceName.setContentDescription("Rename device");
   machinesList=new LinearLayout(this);machinesList.setOrientation(LinearLayout.VERTICAL);pairingForm.addView(machinesList);
   addMachineBtn=button(pairingForm,"+ Pair another machine",()->{boolean open=addMachineBox.getVisibility()!=View.VISIBLE;addMachineBox.setVisibility(open?View.VISIBLE:View.GONE);addMachineBtn.setText(open?"Hide pairing options":"+ Pair another machine");});addMachineBtn.setVisibility(View.GONE);
   addMachineBox=new LinearLayout(this);addMachineBox.setOrientation(LinearLayout.VERTICAL);pairingForm.addView(addMachineBox);
@@ -132,7 +133,7 @@ public class MainActivity extends Activity {
  void requestPairing(String expected,String document,String name){
   if(pairingBusy){show("A pairing request is already in progress. Please wait.");return;}
   pairingBusy=true;invitation.setText("");show("Requesting pairing from "+name+"… This may take up to a minute.");
-  work.execute(()->{try{Native.ensure(this);Native.request(new JSONObject().put("op","pair").put("host",expected).put("invitation",document));store.paired(expected,name);show("Pending owner approval · "+name);runOnUiThread(()->{if(managesHosts())finish();else{showPairing(false);render();}});}catch(Exception e){if(e instanceof Native.Failure&&"invitation_denied".equals(((Native.Failure)e).code))show("This host did not accept the invitation. Ask its owner for a new invitation.");else show("Pairing failed: "+e.getMessage()+". Scan a fresh invitation to try again.");}finally{runOnUiThread(()->pairingBusy=false);}});
+  work.execute(()->{try{Native.ensure(this);Native.request(new JSONObject().put("op","pair").put("name",DeviceProfile.name(this)).put("host",expected).put("invitation",document));store.paired(expected,name);show("Pending owner approval · "+name);runOnUiThread(()->{if(managesHosts())finish();else{showPairing(false);render();}});}catch(Exception e){if(e instanceof Native.Failure&&"invitation_denied".equals(((Native.Failure)e).code))show("This host did not accept the invitation. Ask its owner for a new invitation.");else show("Pairing failed: "+e.getMessage()+". Scan a fresh invitation to try again.");}finally{runOnUiThread(()->pairingBusy=false);}});
  }
  void pairScannedQr(String document){
   if(pairingBusy){show("A pairing request is already in progress. Please wait.");return;}
@@ -141,8 +142,17 @@ public class MainActivity extends Activity {
   work.execute(()->{try{Native.ensure(this);JSONObject preview=Native.request(new JSONObject().put("op","preview_invitation").put("invitation",document));String target=preview.getString("host");runOnUiThread(()->{host.setText(target);String name=preview.optString("host_name","").trim();if(name.isEmpty())name="Host "+target.substring(0,8);label.setText(name);requestPairing(target,document,name);});}catch(Exception e){show("Cannot import invitation: "+e.getMessage());}});
  }
 
+ void renameDevice(){
+  EditText input=new EditText(this);input.setSingleLine(true);input.setText(DeviceProfile.name(this));input.setSelectAllOnFocus(true);input.setContentDescription("Device name");
+  AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Device name").setMessage("This name appears on your paired computers.").setView(input).setPositiveButton("Save",null).setNegativeButton("Cancel",null).create();
+  dialog.setOnShowListener(ignored->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{String name=input.getText().toString().trim();
+   if(!DeviceProfile.valid(name)){input.setError("Enter a name up to 128 UTF-8 bytes, without control characters");return;}
+   try{DeviceProfile.save(this,name);deviceName.setText("Device: "+name+" · Rename");dialog.dismiss();show("Name saved. Updating paired computers…");work.execute(()->{boolean synced=DeviceProfile.syncAll(this);show(synced?"Device name updated":"Name saved. Paired computers will update when reachable; older hosts need an app update.");});}
+   catch(Exception failure){input.setError(failure.getMessage());}
+  }));dialog.show();
+ }
  void refresh(){
-  try{JSONObject hosts=store.all();for(java.util.Iterator<String> keys=hosts.keys();keys.hasNext();){String peer=keys.next();if(!refreshing.add(peer))continue;work.execute(()->{try{Native.ensure(this);JSONObject snapshot=Native.request(new JSONObject().put("op","catalog").put("host",peer));store.catalog(peer,snapshot);syncTelemetry();}catch(Exception e){try{store.failed(peer,e);}catch(Exception ignored){}}refreshing.remove(peer);runOnUiThread(this::render);});}render();}catch(Exception e){show("Cannot read saved hosts");}
+  try{JSONObject hosts=store.all();for(java.util.Iterator<String> keys=hosts.keys();keys.hasNext();){String peer=keys.next();if(!refreshing.add(peer))continue;work.execute(()->{try{Native.ensure(this);JSONObject snapshot=Native.request(new JSONObject().put("op","catalog").put("host",peer));store.catalog(peer,snapshot);syncTelemetry();DeviceProfile.syncHost(this,peer);}catch(Exception e){try{store.failed(peer,e);}catch(Exception ignored){}}refreshing.remove(peer);runOnUiThread(this::render);});}render();}catch(Exception e){show("Cannot read saved hosts");}
  }
  void showHostDialog(String name,String peer,String statusText){
   String tel=peerTelemetry.get(peer);String info=tel!=null?statusText+" · "+tel:statusText;

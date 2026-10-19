@@ -80,7 +80,7 @@ def main():
     threading.Thread(target=server.serve_forever,daemon=True).start()
     # Read only the public peer identity recorded by the previous physical test.
     records=json.loads(owner('host-status').stdout)
-    clients=records['clients'];matches=[c['peer'] for c in clients if c['name']=='Wispnet Android']
+    clients=records['clients'];matches=[c['peer'] for c in clients]
     if args.peer:
         assert args.peer in [c['peer'] for c in clients],'Specified tablet must already be approved'
         tablet=args.peer

@@ -9,6 +9,7 @@ import java.util.concurrent.*;
 public final class AccessService extends Service {
  public static volatile boolean enabled=false;
  public static volatile String networkStatus="Access stopped";
+ private final ScheduledExecutorService profileWork=Executors.newSingleThreadScheduledExecutor();
  private final ExecutorService networkWork=Executors.newSingleThreadExecutor();
  private final Object networkLock=new Object();
  private boolean destroyed=false,worker=false,starting=false;
@@ -17,7 +18,7 @@ public final class AccessService extends Service {
  private ConnectivityManager manager;
  private ConnectivityManager.NetworkCallback callback;
  public void onCreate(){
-  super.onCreate();NotificationManager nm=getSystemService(NotificationManager.class);
+  super.onCreate();profileWork.scheduleWithFixedDelay(()->{if(enabled)DeviceProfile.syncAll(this);},5,30,TimeUnit.SECONDS);NotificationManager nm=getSystemService(NotificationManager.class);
   nm.createNotificationChannel(new NotificationChannel("access","Wispnet browser access",NotificationManager.IMPORTANCE_LOW));
   startForeground(1,notification("Wispnet starting…"));
   manager=getSystemService(ConnectivityManager.class);current=manager.getActiveNetwork();
@@ -53,7 +54,7 @@ public final class AccessService extends Service {
   enabled=false;synchronized(networkLock){destroyed=true;}
   try{if(callback!=null)manager.unregisterNetworkCallback(callback);}catch(Exception ignored){}
   try{Native.command("stop");}catch(Exception ignored){}
-  networkWork.shutdown();networkStatus="Access stopped. Go online to use your saved service addresses.";
+  profileWork.shutdownNow();networkWork.shutdown();networkStatus="Access stopped. Go online to use your saved service addresses.";
   stopForeground(STOP_FOREGROUND_REMOVE);super.onDestroy();
  }
  @Override public void onTimeout(int startId,int fgsType){stopSelf();}

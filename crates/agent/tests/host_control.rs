@@ -994,3 +994,124 @@ async fn catalog_rejects_mismatched_pin_before_sending_a_stream() {
     client.close().await;
     server.close().await;
 }
+
+#[tokio::test]
+async fn authenticated_device_name_updates_only_own_label_and_preserves_access() {
+    let directory = dir();
+    let key = Identity::generate();
+    let device = Identity::generate();
+    let other = Identity::generate();
+    host::initialize(directory.path(), key.endpoint_id()).unwrap();
+    approve(directory.path(), key.endpoint_id(), device.endpoint_id(), 0);
+    approve(directory.path(), key.endpoint_id(), other.endpoint_id(), 1);
+    service(
+        directory.path(),
+        key.endpoint_id(),
+        device.endpoint_id(),
+        "127.0.0.1:8201".parse().unwrap(),
+        2,
+    );
+    let authority = Authority::open(directory.path(), key.endpoint_id()).unwrap();
+    let server = tunnel::TunnelHost::bind_host(key.secret_key(), &config(), authority.clone())
+        .await
+        .unwrap();
+    let endpoint = tunnel::bind_client(device.secret_key()).await.unwrap();
+    let connection = control::connect(
+        &endpoint,
+        key.endpoint_id(),
+        server.endpoint().bound_sockets()[0],
+    )
+    .await
+    .unwrap();
+    let before = control::catalog_on(&connection, key.endpoint_id())
+        .await
+        .unwrap();
+    control::set_name_on(&connection, key.endpoint_id(), "Johnny’s phone")
+        .await
+        .unwrap();
+    let snapshot = authority.snapshot().await.unwrap();
+    assert_eq!(
+        snapshot
+            .clients
+            .iter()
+            .find(|c| c.peer == device.endpoint_id())
+            .unwrap()
+            .name,
+        "Johnny’s phone"
+    );
+    assert_eq!(
+        snapshot
+            .clients
+            .iter()
+            .find(|c| c.peer == other.endpoint_id())
+            .unwrap()
+            .name,
+        "client"
+    );
+    assert_eq!(snapshot.services[0].allow, vec![device.endpoint_id()]);
+    let after = control::catalog_on(&connection, key.endpoint_id())
+        .await
+        .unwrap();
+    assert_eq!(before.services, after.services);
+    assert!(after.follows(&before));
+    control::set_name_on(&connection, key.endpoint_id(), "Johnny’s phone")
+        .await
+        .unwrap();
+    assert_eq!(
+        authority.snapshot().await.unwrap().revision,
+        snapshot.revision
+    );
+    for bad in ["", "bad\nname", &"a".repeat(129)] {
+        assert!(
+            control::set_name_on(&connection, key.endpoint_id(), bad)
+                .await
+                .is_err()
+        );
+        assert!(
+            authority
+                .set_client_name(device.endpoint_id(), bad.into())
+                .await
+                .is_err()
+        );
+    }
+    assert!(
+        control::set_name_on(&connection, other.endpoint_id(), "Forged")
+            .await
+            .is_err()
+    );
+    assert!(
+        authority
+            .set_client_name(Identity::generate().endpoint_id(), "Unknown".into())
+            .await
+            .is_err()
+    );
+    let reopened = Authority::open(directory.path(), key.endpoint_id()).unwrap();
+    assert_eq!(
+        reopened
+            .snapshot()
+            .await
+            .unwrap()
+            .clients
+            .iter()
+            .find(|c| c.peer == device.endpoint_id())
+            .unwrap()
+            .name,
+        "Johnny’s phone"
+    );
+    mutate(
+        directory.path(),
+        key.endpoint_id(),
+        Mutation::Revoke {
+            expected_revision: snapshot.revision,
+            peer: device.endpoint_id(),
+        },
+    );
+    assert!(
+        control::set_name_on(&connection, key.endpoint_id(), "Revoked")
+            .await
+            .is_err()
+    );
+    assert!(!authority.approved(device.endpoint_id()).await);
+    endpoint.close().await;
+    server.shutdown().await;
+}

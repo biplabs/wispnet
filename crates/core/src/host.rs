@@ -8,6 +8,7 @@ pub const MAX_RESPONSE: usize = 128 * 1024;
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
     Catalog {},
+    SetName { name: String },
 }
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]

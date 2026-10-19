@@ -194,6 +194,27 @@ impl Client {
                     .map_err(|_| "Cannot reset catalog baseline")??;
                 Ok(json!({"state":"pending_owner_approval","host":pending.host.to_string()}))
             }
+            "set_name" => {
+                let host = peer(value)?;
+                let name = argument(value, "name")?;
+                if !wipsnet_core::enrollment::valid_name(name) {
+                    return Err("Invalid device name".into());
+                }
+                if wipsnet_agent::peers::load(&self.state, host)
+                    .map_err(|_| "Invalid saved host")?
+                    .is_none()
+                {
+                    return Err("Pair with this host first".into());
+                }
+                let connection =
+                    wipsnet_agent::control::connect_target(&self.endpoint, self.target(host)?)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                let result = wipsnet_agent::control::set_name_on(&connection, host, name).await;
+                connection.close(0u32.into(), b"name update complete");
+                result.map_err(|e| e.to_string())?;
+                Ok(json!({"name":name}))
+            }
             "catalog" => {
                 let host = peer(value)?;
                 if wipsnet_agent::peers::load(&self.state, host)

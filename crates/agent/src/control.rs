@@ -58,8 +58,24 @@ pub(crate) async fn serve_stream(
 ) {
     let outcome = timeout(HANDSHAKE_TIMEOUT, async {
         let request = read_frame(&mut recv, host::MAX_REQUEST).await?;
-        let Request::Catalog {} = serde_json::from_slice(&request)
+        let request: Request = serde_json::from_slice(&request)
             .map_err(|_| TunnelError::Transport("invalid control request"))?;
+        if let Request::SetName { name } = request {
+            let reply = match authority.set_client_name(peer, name.clone()).await {
+                Ok(()) => serde_json::to_vec(&serde_json::json!({"name":name}))
+                    .map_err(|_| TunnelError::Transport("invalid device name"))?,
+                Err(wipsnet_registry::control::ControlError::Forbidden) => {
+                    br#"{"error":"access_denied"}"#.to_vec()
+                }
+                Err(wipsnet_registry::control::ControlError::Invalid) => {
+                    br#"{"error":"invalid_name"}"#.to_vec()
+                }
+                Err(_) => return Err(TunnelError::Transport("control unavailable")),
+            };
+            write_frame(&mut send, &reply).await?;
+            let _ = send.stopped().await;
+            return Ok(());
+        }
         let catalog = match authority.catalog(peer).await {
             Ok(catalog) => catalog,
             Err(wipsnet_registry::control::ControlError::Forbidden) => {
@@ -139,4 +155,36 @@ pub async fn catalog_on(
         return Err(TunnelError::Status(wipsnet_core::protocol::Status::Denied));
     }
     result
+}
+
+/// Display metadata only: the authenticated caller cannot choose another peer ID.
+pub async fn set_name_on(
+    connection: &Connection,
+    expected: EndpointId,
+    name: &str,
+) -> Result<(), TunnelError> {
+    if connection.remote_id() != expected || !wipsnet_core::enrollment::valid_name(name) {
+        return Err(TunnelError::Transport("invalid name or target identity"));
+    }
+    timeout(HANDSHAKE_TIMEOUT, async {
+        let (mut send, mut recv) = connection
+            .open_bi()
+            .await
+            .map_err(|_| TunnelError::Transport("control stream failed"))?;
+        let request = serde_json::to_vec(&Request::SetName { name: name.into() })
+            .map_err(|_| TunnelError::Transport("invalid device name"))?;
+        write_frame(&mut send, &request).await?;
+        let bytes = read_frame(&mut recv, host::MAX_RESPONSE).await?;
+        let reply: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|_| TunnelError::Transport("invalid name acknowledgement"))?;
+        if reply == serde_json::json!({"name":name}) {
+            Ok(())
+        } else {
+            Err(TunnelError::Transport(
+                "device name not accepted; update the host app",
+            ))
+        }
+    })
+    .await
+    .map_err(|_| TunnelError::Transport("device name update timeout"))?
 }

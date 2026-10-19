@@ -282,7 +282,7 @@ class HyperspaceToggle(QCheckBox):
         font = QFont("sans-serif", 9, QFont.Weight.Bold)
         font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.0)
         painter.setFont(font)
-        label = "HYPERSPACE ON" if on else "JUMP TO SPACE"
+        label = "ON" if on else "OFF"
         painter.drawText(
             42, 0, w - 50, h, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, label
         )
@@ -439,7 +439,7 @@ class Window(QMainWindow):
         self.heading_label = QLabel("◈  WISPNET")
         self.heading_label.setObjectName("heading")
         title_box.addWidget(self.heading_label)
-        self.subtitle_label = QLabel("◌ Sublight Standby")
+        self.subtitle_label = QLabel("◌ Off")
         self.subtitle_label.setObjectName("statusText")
         title_box.addWidget(self.subtitle_label)
         header_layout.addLayout(title_box, 1)
@@ -448,7 +448,7 @@ class Window(QMainWindow):
         self.access.clicked.connect(self.toggle_access)
         header_layout.addWidget(self.access)
 
-        self.link_btn = QPushButton("+  Link")
+        self.link_btn = QPushButton("+  Pair")
         self.link_btn.setProperty("variant", "primary")
         self.link_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.link_btn.clicked.connect(self.pair)
@@ -508,7 +508,7 @@ class Window(QMainWindow):
         self.local_sector_title = QLabel("◈  THIS MACHINE")
         self.local_sector_title.setObjectName("peerSectorHeader")
         local_head_row.addWidget(self.local_sector_title, 1)
-        share_btn = QPushButton("+  Share Port")
+        share_btn = QPushButton("+  Add service")
         share_btn.setProperty("variant", "primary")
         share_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         share_btn.clicked.connect(self.share)
@@ -522,10 +522,10 @@ class Window(QMainWindow):
         local_sector_layout.addWidget(self.local_cards_box)
         home_layout.addWidget(local_sector)
 
-        # Section 2: Linked Machines & Devices (Wisp Space)
+        # Section 2: Paired Machines & Devices (Wisp Space)
         peers_head_row = QHBoxLayout()
         peers_head_row.setContentsMargins(4, 4, 4, 0)
-        peers_title = QLabel("◈  LINKED MACHINES & DEVICES")
+        peers_title = QLabel("◈  PAIRED MACHINES & DEVICES")
         peers_title.setObjectName("peerSectorHeader")
         peers_head_row.addWidget(peers_title, 1)
         scan_btn = QPushButton("↻  Refresh")
@@ -560,11 +560,11 @@ class Window(QMainWindow):
 
         self.services = self.table(
             ["Service", "Backend", "Permitted clients"],
-            "Local Ports",
+            "Services",
             "Loopback services shared from this machine",
             [
                 ("✦ Open", self.open_local, "primary"),
-                ("+ Share Port", self.share, "primary"),
+                ("+ Add service", self.share, "primary"),
                 ("Edit", self.edit, "secondary"),
                 ("Remove", self.remove, "danger"),
             ],
@@ -584,20 +584,20 @@ class Window(QMainWindow):
         )
         self.peers = self.table(
             ["Peer", "Status", "Shared services", "Last refreshed"],
-            "Linked Machines",
-            "Remote machines linked from this computer",
+            "Paired Machines",
+            "Remote machines paired with this computer",
             [
                 (
                     "✦ Open service",
                     lambda: self.open_peer(max(0, self.peers.currentRow()), 0),
                     "primary",
                 ),
-                ("+ Link Machine", self.pair, "primary"),
+                ("+ Pair Machine", self.pair, "primary"),
             ],
         )
         self.pending = self.table(
             ["Invitation", "Client", "Peer ID", "State"],
-            "Link Requests",
+            "Pairing Requests",
             "Incoming pairing requests on this machine",
             [
                 ("✓ Approve", lambda: self.decide(True), "primary"),
@@ -820,11 +820,11 @@ class Window(QMainWindow):
         self.local_sector_title.setText(f"◈  THIS MACHINE · {host_title}")
         if result["access_enabled"]:
             self.subtitle_label.setText(
-                f"● Hyperspace Active  ·  {count} connected device{'s' if count != 1 else ''}"
+                f"● On  ·  {count} connected device{'s' if count != 1 else ''}"
             )
         else:
             self.subtitle_label.setText(
-                f"◌ Sublight Standby  ·  {len(result['host']['clients'])} paired device{'s' if len(result['host']['clients']) != 1 else ''}"
+                f"◌ Off  ·  {len(result['host']['clients'])} paired device{'s' if len(result['host']['clients']) != 1 else ''}"
             )
         self.status.setText(
             f"{result['host_name']}  ·  Active clients: {count}  ·  {result['transport_streams']} transport streams  ·  Activity window: {window}s  ·  Relay: {result['relay']}"
@@ -834,7 +834,7 @@ class Window(QMainWindow):
             first_req = pending_reqs[0]
             who = first_req.get("name") or (first_req.get("peer") or "")[:12] or "Device"
             self.incoming_label.setText(
-                f"⚡ Incoming Link Request from {who} ({len(pending_reqs)} pending)"
+                f"⚡ Incoming Pairing Request from {who} ({len(pending_reqs)} pending)"
             )
             self.incoming_banner.show()
         else:
@@ -893,7 +893,7 @@ class Window(QMainWindow):
                 self.local_cards_layout.addWidget(tile, idx // 2, idx % 2)
         else:
             empty = QLabel(
-                "No local ports shared yet — click '+ Share Port' to expose a local web app."
+                "No services yet — click '+ Add service' to expose a local web app."
             )
             empty.setObjectName("sectorSubtitle")
             self.local_cards_layout.addWidget(empty, 0, 0, 1, 2)
@@ -1189,7 +1189,7 @@ class Window(QMainWindow):
             empty_layout = QHBoxLayout(empty_frame)
             empty_layout.setContentsMargins(16, 14, 16, 14)
             empty_lbl = QLabel(
-                "No machines or devices linked yet — click '+ Link' in the top bar to connect."
+                "No machines or devices paired yet — click '+ Pair' in the top bar to connect."
             )
             empty_lbl.setObjectName("sectorSubtitle")
             empty_layout.addWidget(empty_lbl, 1)
@@ -1246,7 +1246,7 @@ class Window(QMainWindow):
             existing = None
         revision = self.snapshot["host"]["revision"]
         dialog = QDialog(self)
-        dialog.setWindowTitle("Share a local port")
+        dialog.setWindowTitle("Edit service" if existing else "Add service")
         dialog.setMinimumWidth(400)
         form = QFormLayout(dialog)
         display_name = QLineEdit()
@@ -1388,7 +1388,7 @@ class Window(QMainWindow):
 
     def pair(self):
         dialog = QDialog(self)
-        dialog.setWindowTitle("Link a Remote Machine")
+        dialog.setWindowTitle("Pair a Remote Machine")
         dialog.setMinimumWidth(420)
         form = QFormLayout(dialog)
         hint = QLabel(
