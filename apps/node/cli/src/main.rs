@@ -1,5 +1,6 @@
 use std::{env, path::PathBuf, process::ExitCode};
 mod retry;
+mod tui;
 use tracing_subscriber::prelude::*;
 use wispnet_agent::{diagnostics, identity::FileIdentityStore, tunnel};
 use wispnet_core::{
@@ -8,6 +9,7 @@ use wispnet_core::{
 };
 
 const USAGE: &str = "Wispnet development CLI
+Interactive management: wispnet [--config /absolute/path/host.toml]
 QR pairing: wispnet --qrcode [--config /absolute/path/host.toml]
 Usage: wispnet <check|identity-init|status|agent|registry|registry-init|registry-backup|registry-directory> --config /absolute/path/config.toml
 Backup: wispnet registry-backup --config /absolute/path/config.toml --output /absolute/path/new-backup.sqlite3
@@ -50,6 +52,15 @@ fn main() -> ExitCode {
 
 async fn execute() -> Result<(), Box<dyn std::error::Error>> {
     let mut args: Vec<_> = env::args_os().skip(1).collect();
+    if args.is_empty() || (args.len() == 2 && args[0] == "--config") {
+        let path = if args.is_empty() {
+            PathBuf::from(env::var_os("HOME").ok_or("HOME is required; pass --config")?)
+                .join(".config/wispnet-node/host.toml")
+        } else {
+            PathBuf::from(&args[1])
+        };
+        return tui::run(path);
+    }
     if args.first().is_some_and(|a| a == "--qrcode") && args.len() == 1 {
         let home = env::var_os("HOME").ok_or("HOME is required; pass --config explicitly")?;
         args.extend([

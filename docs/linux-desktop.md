@@ -24,6 +24,11 @@ The header’s **Go offline** button stops `wispnet-host.service`, closing the n
 
 ## Headless hosts
 
+Run `wispnet`, or `ssh -t desktop.home wispnet`, for interactive pairing,
+approvals, service grants and machine removal. See the [terminal guide](terminal.md)
+for controls and feature details.
+
+
 The same installer automatically selects node-only mode when `graphical-session.target` is inactive. Force it explicitly with:
 
 ```sh

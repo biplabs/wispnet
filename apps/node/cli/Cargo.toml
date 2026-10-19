@@ -15,6 +15,12 @@ tokio = { workspace = true, features = ["io-std", "io-util"] }
 tracing.workspace = true
 zeroize.workspace = true
 tracing-subscriber.workspace = true
+ratatui = { version = "=0.30.2", default-features = false, features = ["crossterm"] }
+crossterm = "=0.29.0"
+libc.workspace = true
+tempfile.workspace = true
+signal-hook = "=0.3.18"
+url = "=2.5.8"
 
 [[bin]]
 name = "wispnet"
@@ -25,7 +31,6 @@ irelay = { package = "iroh-relay", version = "=1.3.0", default-features = false,
 rcgen = "=0.14.8"
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std"] }
 rustls-pki-types = "=1.15.1"
-tempfile.workspace = true
 tokio = { workspace = true, features = ["process", "time", "net"] }
 # Isolated Sites wire-compatibility probe; not used by the application transport.
 iroh-base.workspace = true

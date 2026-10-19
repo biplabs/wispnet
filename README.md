@@ -115,6 +115,12 @@ Catalog freshness, local browser-session lifetime, and any explicitly expiring h
 
 This removes a **mesh-wide registry/authorization single point of failure**, not every dependency. Each service still depends on its own hosting computer and backend; Wispnet does not replicate application execution or wake sleeping computers. v1 has one relay, so relay-dependent connections and some new connections can be interrupted by its outage. Multi-relay resilience is future work, not a v1 availability guarantee.
 
+## Terminal management
+
+Run `wispnet` for interactive QR pairing, pending approvals, machine removal,
+local service grants and owner operations. Use `ssh -t desktop.home wispnet`
+on a headless computer. See the [terminal guide](docs/terminal.md).
+
 ## Pairing and revocation without a master
 
 An invitation identifies the **target host**, its pinned EndpointId, the configured relay, and a short-lived enrollment capability. The client authenticates that host before sending secrets. Host-specific approval records remain on that host. Pairing with Machine 1 does not automatically approve the phone on Machine 2, nor imply that either computer can administer the other.
