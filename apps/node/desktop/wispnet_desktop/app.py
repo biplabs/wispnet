@@ -733,7 +733,7 @@ class Window(QMainWindow):
         dialog.setWindowTitle("Pair with this machine")
         layout = QVBoxLayout(dialog)
         instruction = QLabel("In Wispnet on your phone, select Scan pairing QR.\n"
-                             "Then approve its request on this computer and grant services.")
+                             "Then review its request and choose allowed services on this computer.")
         layout.addWidget(instruction)
         host = QLabel("Host ID: " + result["host"])
         host.setTextFormat(Qt.TextFormat.PlainText)
@@ -1523,27 +1523,79 @@ class Window(QMainWindow):
 
     def decide(self, approve):
         row = self.pending.currentRow()
-        if row < 0:
+        if row < 0 or not self.snapshot:
             return
         if approve and self.pending.item(row, 3).text() != "pending":
             self._set_message("Only proved pending requests can be approved")
             return
-        if (
-            QMessageBox.question(
-                self,
-                "Pairing request",
-                ("Approve" if approve else "Reject")
-                + " this specific request on this node?\n"
-                + self.pending.item(row, 2).text(),
-            )
-            == QMessageBox.StandardButton.Yes
-        ):
-            self.mutation(
-                {
-                    "op": "approve_invitation" if approve else "reject_invitation",
-                    "invitation": self.pending.item(row, 0).text(),
-                }
-            )
+        # Keep this exact request and revision even if polling changes the table
+        # while a modal dialog is open.
+        invitation = self.pending.item(row, 0).text()
+        peer = self.pending.item(row, 2).text()
+        name = self.pending.item(row, 1).text()
+        revision = self.snapshot["host"]["revision"]
+        if not approve:
+            if QMessageBox.question(self, "Reject pairing request",
+                                    "Reject this specific request on this node?\n" + peer
+                                    ) == QMessageBox.StandardButton.Yes:
+                self.mutation({"op": "reject_invitation", "invitation": invitation,
+                               "expected_revision": revision})
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Approve device and choose services")
+        dialog.setMinimumWidth(500)
+        layout = QVBoxLayout(dialog)
+        identity = QLabel(f"Device: {name}\nFull device ID: {peer}")
+        identity.setTextFormat(Qt.TextFormat.PlainText)
+        identity.setWordWrap(True)
+        identity.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        dialog.setMinimumWidth(max(500, identity.fontMetrics().horizontalAdvance(peer) + 40))
+        layout.addWidget(identity)
+        note = QLabel("Select the services this device may access. Existing grants are preserved.")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        choices = QListWidget()
+        choices.setObjectName("approvalServices")
+        for service in self.snapshot["host"]["services"]:
+            title = service.get("display_name") or service["id"]
+            granted = peer in service.get("allow", [])
+            item = QListWidgetItem(f"{title} · {service['id']} · {service['kind']}"
+                                   + (" (already granted)" if granted else ""))
+            item.setData(Qt.ItemDataRole.UserRole, service["id"])
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked if granted else Qt.CheckState.Unchecked)
+            if granted:
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+            choices.addItem(item)
+        layout.addWidget(choices)
+        summary = QLabel()
+        summary.setWordWrap(True)
+
+        def summarize():
+            count = sum(choices.item(i).checkState() == Qt.CheckState.Checked
+                        for i in range(choices.count()))
+            summary.setText(f"Approve pairing and grant {count} selected service(s) together."
+                            if count else "No services selected: approve pairing without new service access.")
+
+        choices.itemChanged.connect(summarize)
+        summarize()
+        layout.addWidget(summary)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                                   QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Approve device")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        selected = [choices.item(i).data(Qt.ItemDataRole.UserRole)
+                    for i in range(choices.count())
+                    if choices.item(i).checkState() == Qt.CheckState.Checked]
+        self.perform({"op": "mutate", "operation": {
+            "op": "approve_invitation", "invitation": invitation,
+            "expected_revision": revision, "services": selected,
+        }}, success=f"Device approved · {len(selected)} selected service(s) granted")
 
     def pair(self):
         dialog = QDialog(self)

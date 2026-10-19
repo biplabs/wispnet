@@ -236,6 +236,8 @@ struct Field {
 }
 #[derive(Clone)]
 enum FieldKind {
+    ReadOnly,
+    Granted,
     Text(usize),
     Check(bool),
     Choice(Vec<String>, usize),
@@ -265,6 +267,12 @@ impl Field {
 }
 #[derive(Clone)]
 enum FormKind {
+    Approval {
+        invitation: String,
+        peer: String,
+        name: String,
+        revision: u64,
+    },
     Service {
         existing: Option<String>,
         revision: u64,
@@ -556,7 +564,7 @@ impl App {
                             "Expires in {} seconds",
                             v["expires_at"].as_u64().unwrap_or(0).saturating_sub(now())
                         ),
-                        "Approve pairing, then explicitly select service grants.".into(),
+                        "Choose service access while approving this request.".into(),
                     ];
                     row
                 })
@@ -793,8 +801,57 @@ impl App {
                 }))
             }
             Action::Pending(v) => {
-                let detail=vec![format!("Device: {}",clean(text(&v,"name"))),format!("Full client ID: {}",text(&v,"peer")),format!("Invitation: {}",text(&v,"invitation")),"Approval grants pairing only. Configure each service's permitted devices afterward.".into()];
-                self.choice("Review pairing request",detail.clone(),vec![entry("approve","Approve this device",Action::Confirm{title:"Approve pairing".into(),detail:detail.clone(),work:self.mutate(json!({"op":"approve_invitation","invitation":v["invitation"],"expected_revision":self.revision()}))}),entry("reject","Reject this request",Action::Confirm{title:"Reject pairing".into(),detail,work:self.mutate(json!({"op":"reject_invitation","invitation":v["invitation"],"expected_revision":self.revision()}))})]);
+                let peer = text(&v, "peer").to_owned();
+                let name = clean(text(&v, "name"));
+                let detail = vec![
+                    format!("Device: {name}"),
+                    format!("Full client ID: {peer}"),
+                    format!("Invitation: {}", text(&v, "invitation")),
+                    "Choose services during approval. Existing grants are preserved.".into(),
+                ];
+                let mut fields = vec![
+                    Field {
+                        label: "Device".into(),
+                        value: name.clone(),
+                        kind: FieldKind::ReadOnly,
+                    },
+                    Field {
+                        label: "Full client ID".into(),
+                        value: peer.clone(),
+                        kind: FieldKind::ReadOnly,
+                    },
+                ];
+                for service in self.services() {
+                    let mut field = Field::check(
+                        &format!(
+                            "Grant {} · {} · {}",
+                            clean(text(&service, "display_name")),
+                            text(&service, "id"),
+                            text(&service, "kind")
+                        ),
+                        service["id"].clone(),
+                        false,
+                    );
+                    if array(&service["allow"]).contains(&json!(peer)) {
+                        field.kind = FieldKind::Granted;
+                    }
+                    fields.push(field);
+                }
+                let form = Form {
+                    title: "Approve device and select services".into(),
+                    kind: FormKind::Approval {
+                        invitation: text(&v, "invitation").to_owned(),
+                        peer,
+                        name,
+                        revision: self.revision(),
+                    },
+                    fields,
+                    selected: 2,
+                };
+                self.choice("Review pairing request", detail.clone(), vec![
+                    entry("approve", "Approve this device and choose services", Action::Form(form)),
+                    entry("reject", "Reject this request", Action::Confirm { title: "Reject pairing".into(), detail, work: self.mutate(json!({"op":"reject_invitation","invitation":v["invitation"],"expected_revision":self.revision()})) }),
+                ]);
             }
             Action::Machine(peer) => {
                 let client = self.clients().iter().any(|v| v["peer"] == peer);
@@ -965,6 +1022,32 @@ impl App {
     }
     fn save_form(&mut self, form: Form) -> Result<(), String> {
         match form.kind {
+            FormKind::Approval {
+                invitation,
+                peer,
+                name,
+                revision,
+            } => {
+                let chosen: Vec<&Field> = form
+                    .fields
+                    .iter()
+                    .filter(|f| matches!(f.kind, FieldKind::Check(true) | FieldKind::Granted))
+                    .collect();
+                let services: Vec<Value> = chosen
+                    .iter()
+                    .map(|f| {
+                        serde_json::from_str(&f.value)
+                            .map_err(|_| "Invalid selected service".to_string())
+                    })
+                    .collect::<Result<_, _>>()?;
+                let mut detail = vec![format!("Device: {name}"), format!("Full client ID: {peer}"), "Pairing and the selected grants will be saved together. Existing grants are preserved.".into()];
+                if chosen.is_empty() {
+                    detail.push("No services selected: pair without new service access.".into());
+                } else {
+                    detail.extend(chosen.iter().map(|f| f.label.clone()));
+                }
+                self.confirmation("Approve pairing and service access".into(), detail, self.mutate(json!({"op":"approve_invitation","invitation":invitation,"expected_revision":revision,"services":services})));
+            }
             FormKind::Service { existing, revision } => {
                 let name = form.fields[0].value.trim();
                 if !wispnet_core::enrollment::valid_name(name) {
@@ -1322,6 +1405,11 @@ impl App {
                         _ => {
                             if let Some(field) = form.fields.get_mut(form.selected) {
                                 match &mut field.kind {
+                                    FieldKind::ReadOnly | FieldKind::Granted => {
+                                        if key.code == KeyCode::Enter {
+                                            form.selected = (form.selected + 1) % count;
+                                        }
+                                    }
                                     FieldKind::Check(v) => {
                                         if matches!(key.code, KeyCode::Enter | KeyCode::Char(' ')) {
                                             *v = !*v;
@@ -1801,6 +1889,8 @@ impl App {
                     .enumerate()
                     .map(|(n, f)| {
                         let value = match &f.kind {
+                            FieldKind::ReadOnly => clean(&f.value),
+                            FieldKind::Granted => "[x] Already granted (preserved)".into(),
                             FieldKind::Text(_) => {
                                 if matches!(form.kind, FormKind::Pair { file: false })
                                     && !f.value.is_empty()

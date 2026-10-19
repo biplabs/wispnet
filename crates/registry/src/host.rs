@@ -30,6 +30,9 @@ pub enum Mutation {
     ApproveInvitation {
         expected_revision: u64,
         invitation: String,
+        /// Additional existing services to grant in the same approval transaction.
+        #[serde(default)]
+        services: Vec<String>,
     },
     RejectInvitation {
         expected_revision: u64,
@@ -256,8 +259,34 @@ pub(crate) fn apply_mutation(
     operation: Mutation,
 ) -> Result<(), ControlError> {
     match operation {
-        Mutation::ApproveInvitation { invitation, .. } => {
-            crate::pairing::approve(tx, &invitation, crate::enrollment::now())?;
+        Mutation::ApproveInvitation {
+            invitation,
+            services,
+            ..
+        } => {
+            let unique: std::collections::BTreeSet<_> = services.iter().collect();
+            if services.len() > 128 || unique.len() != services.len() {
+                return Err(ControlError::Invalid);
+            }
+            for service in &services {
+                if !valid_service_id(service)
+                    || !tx.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM host_services WHERE id=?1)",
+                        [service],
+                        |r| r.get::<_, bool>(0),
+                    )?
+                {
+                    return Err(ControlError::Invalid);
+                }
+            }
+            let peer = crate::pairing::approve(tx, &invitation, crate::enrollment::now())?;
+            // Preserve other clients' grants and any access this peer already has.
+            for service in services {
+                tx.execute(
+                    "INSERT OR IGNORE INTO host_grants VALUES(?1,?2)",
+                    params![service, peer],
+                )?;
+            }
         }
         Mutation::RejectInvitation { invitation, .. } => {
             crate::pairing::reject(tx, &invitation)?;

@@ -112,8 +112,14 @@ client. Use the current policy revision from `host-status` and a protected local
 `reject_invitation` uses the same fields to reject an issued, challenged or pending
 invitation. These are owner-local operations using that host's protected owner
 token. Approval inserts only the proved peer/name, consumes the invitation, and
-increments policy revision atomically. Catalog access then works; service grants
-still require a separate owner service operation. Approval never restores a grant
+increments policy revision atomically. The optional `services` array selects existing
+service IDs to grant to this proved peer in the same transaction, for example
+`"services":["llama","gike"]`. The desktop and terminal approval forms offer this
+selection with new grants unchecked. Existing grants and other clients' access
+are preserved. Unknown/duplicate IDs, an expired or unproved invitation, and a
+stale reviewed revision reject the complete approval without partial grants.
+Omitting `services` (or selecting none) retains pairing-only behavior; grants may
+also be edited later through the owner service controls. Approval never restores a grant
 removed by revocation or grants reciprocal/admin rights. No complete-purpose proof
 or client bearer token is required: the client's transport identity is its key.
 

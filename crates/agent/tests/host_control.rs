@@ -552,6 +552,7 @@ async fn explicit_tls_relay_without_udp_pins_identity_enforces_grants_and_recove
             key.endpoint_id(),
             &owner,
             Mutation::ApproveInvitation {
+                services: vec![],
                 expected_revision: 2,
                 invitation: invitation.invitation.clone(),
             },

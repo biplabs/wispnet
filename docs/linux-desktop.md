@@ -139,3 +139,14 @@ owner credentials and grants. The relay installer similarly preserves TLS/ACME
 state while upgrading its paths and service. Old `wipsnet/...` wire protocol IDs
 and signing-domain bytes remain frozen so installed clients can still connect;
 those strings are compatibility identifiers, not product names.
+
+## Approve a device and select services
+
+The incoming-request **Approve** action opens a review with the full device ID
+and local-service checkboxes. New grants start unchecked. Existing grants appear
+checked and locked, since this action adds access; use service configuration to
+withdraw existing grants. Confirm **Approve device** to pair and grant the selected
+services together in one policy revision. Cancelling changes nothing. No selection
+pairs the device without adding access. A concurrent policy change, removed service,
+or expired request rejects the entire operation and requires a fresh review.
+The terminal approval flow offers the same selection and atomic behavior.

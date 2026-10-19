@@ -151,6 +151,10 @@ class TerminalManagement(unittest.TestCase):
     def test_real_approval_grants_pairing_removal_and_qr(self):
         a, aapi, pa, porta = self.host('fixture-phone')
         b, bapi, pb, portb = self.host('fixture-host')
+        for revision, sid in enumerate(['private', 'scan-only']):
+            bapi.request(op='mutate', operation={'op':'service','expected_revision':revision,
+                         'id':sid,'display_name':'Scan service' if sid=='scan-only' else 'Private service',
+                         'kind':'http','backend':'127.0.0.1:8201','allow':[]})
         invitation_file = self.root / 'initial-invitation.json'
         subprocess.run([BINARY, 'host-invite', '--config', b, '--output', invitation_file], capture_output=True, check=True)
         invitation = json.loads(invitation_file.read_text())
@@ -164,11 +168,17 @@ class TerminalManagement(unittest.TestCase):
         self.assertIn(pa, term.text)
         self.assertEqual(bapi.request(op='status')['host']['clients'], [])
         term.send(b'\r')
-        term.expect('Approve pairing')
-        term.send(b'\x1b')
+        term.expect('Approve device and select services')
+        term.send(b' \x1b')
         self.assertEqual(bapi.request(op='status')['host']['clients'], [])
-        term.send(b'\r\r\r')
-        self.changed(bapi, lambda s: len(s['host']['clients']) == 1)
+        self.assertTrue(all(not s['allow'] for s in bapi.request(op='status')['host']['services']))
+        term.send(b'\r\r\x1b[B \x1b[B\r')
+        term.expect('Approve pairing and service access')
+        term.send(b'\r')
+        approved = self.changed(bapi, lambda s: len(s['host']['clients']) == 1)
+        self.assertEqual(approved['host']['revision'], 3)
+        self.assertEqual({s['id']:s['allow'] for s in approved['host']['services']},
+                         {'private':[], 'scan-only':[pa]})
         term.expect('1 clients')
 
         # The real form creates a loopback service with its explicitly selected device.
@@ -179,9 +189,9 @@ class TerminalManagement(unittest.TestCase):
         term.expect('Save service and grants')
         self.assertIn(pa, term.text)
         term.send(b'\r')
-        state = self.changed(bapi, lambda s: len(s['host']['services']) == 1)
+        state = self.changed(bapi, lambda s: len(s['host']['services']) == 3)
         self.assertEqual(state['host']['services'][0]['allow'], [pa])
-        term.expect('1 services')
+        term.expect('3 services')
         term.send(b'\x1b[B\r\x1b[B\r')
         term.expect('Browser service')
         self.assertTrue(bapi.request(op='status')['access_enabled'])

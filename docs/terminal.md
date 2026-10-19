@@ -43,15 +43,22 @@ the app refuses to wrap or clip a QR. QR contrast stays black on white even if
 the displayed QR remains sensitive until it expires or is consumed.
 
 Scan using Wispnet on the phone. The terminal automatically switches to the
-incoming request. Select the device, review its full ID, choose **Approve this
-device**, then confirm. Rejection follows the same review flow. Only the exact
-proved invitation is approved. Approval alone grants no services.
+incoming request. Select the device, review its full ID, and choose **Approve this
+device and choose services**. Toggle the services you want to grant, then review
+and confirm the combined approval. New grants start unchecked; existing access
+is shown as already granted and is preserved. Selecting none pairs the device
+without adding service access. Rejection follows the same request review flow.
+Only the exact proved invitation is approved.
 
-Next open **Local services**, choose a service, and select **Edit service and
-permitted devices**. Toggle the intended devices and review/save. The same
-form adds services, chooses HTTP/TCP, edits their loopback backend, and removes
-a service. Replacing an existing service ID explicitly warns that the backend
-and full access list will be replaced.
+Pairing and all selected grants commit together in one policy revision. A stale
+review, removed service or expired invitation rejects the whole operation. Nothing
+is partially approved or automatically retried. Existing low-level callers that
+omit the optional service list retain pairing-only behavior.
+
+Later, open **Local services**, choose a service, and select **Edit service and
+permitted devices** to change access. That form also adds services, chooses
+HTTP/TCP, edits their loopback backend, and removes a service. Replacing an existing
+service ID explicitly warns that the backend and full access list will be replaced.
 
 To pair this computer to a remote host, use **Pair remote host** and paste its
 pairing code or import its bounded mode-0600 invitation file. Compare the full

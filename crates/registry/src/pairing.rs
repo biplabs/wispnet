@@ -270,7 +270,7 @@ fn attempt(tx: &Transaction<'_>, id: &str, now: u64) -> Result<(), ControlError>
     )?;
     Ok(())
 }
-pub(crate) fn approve(tx: &Transaction<'_>, id: &str, now: u64) -> Result<(), ControlError> {
+pub(crate) fn approve(tx: &Transaction<'_>, id: &str, now: u64) -> Result<String, ControlError> {
     expire(tx, now)?;
     let pending: Option<(String, String)> = tx
         .query_row(
@@ -298,7 +298,7 @@ pub(crate) fn approve(tx: &Transaction<'_>, id: &str, now: u64) -> Result<(), Co
         "UPDATE host_invitations SET state='spent',challenge=NULL WHERE id=?1",
         [id],
     )?;
-    Ok(())
+    Ok(peer)
 }
 pub(crate) fn reject(tx: &Transaction<'_>, id: &str) -> Result<(), ControlError> {
     if !valid_code(id)

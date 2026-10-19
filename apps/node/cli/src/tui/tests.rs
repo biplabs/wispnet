@@ -24,10 +24,11 @@ fn approval_confirms_the_original_peer_invitation_and_revision() {
     let invitation = app.pending()[0].clone();
     app.action(Action::Pending(invitation.clone()));
     assert!(rx.try_recv().is_err());
-    app.key(KeyCode::Enter.into()); // Review -> separate approval confirmation.
+    app.key(KeyCode::Enter.into()); // Review -> service selection form.
     assert!(rx.try_recv().is_err());
     app.snapshot.as_mut().unwrap()["host"]["revision"] = json!(8);
-    app.key(KeyCode::Enter.into());
+    app.key(KeyCode::Enter.into()); // Review chosen services.
+    app.key(KeyCode::Enter.into()); // Confirm one atomic approval.
     let Work {
         task: Task::Request(v),
         ..
@@ -37,7 +38,7 @@ fn approval_confirms_the_original_peer_invitation_and_revision() {
     };
     assert_eq!(
         v["operation"],
-        json!({"op":"approve_invitation","invitation":invitation["invitation"],"expected_revision":7})
+        json!({"op":"approve_invitation","invitation":invitation["invitation"],"expected_revision":7,"services":[]})
     );
     assert!(rx.try_recv().is_err()); // No automatic retry or replacement revision.
 }
@@ -154,4 +155,40 @@ fn confirmed_actions_wait_for_background_poll_without_replacing_their_revision()
     };
     assert_eq!(value["operation"]["expected_revision"], 7);
     assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn approval_selects_services_and_locks_existing_grants_to_the_reviewed_revision() {
+    let (mut app, rx, _) = fixture();
+    app.snapshot.as_mut().unwrap()["host"]["services"] = json!([
+        {"id":"alpha","display_name":"Alpha","kind":"http","allow":[]},
+        {"id":"beta","display_name":"Beta","kind":"http","allow":["b".repeat(64)]},
+        {"id":"gamma","display_name":"Gamma","kind":"tcp","allow":[]}
+    ]);
+    app.action(Action::Pending(app.pending()[0].clone()));
+    app.key(KeyCode::Enter.into());
+    let Some(Modal::Form(form)) = &app.modal else {
+        panic!("Missing services form")
+    };
+    assert!(matches!(form.fields[2].kind, FieldKind::Check(false)));
+    assert!(matches!(form.fields[3].kind, FieldKind::Granted));
+    assert!(matches!(form.fields[4].kind, FieldKind::Check(false)));
+    app.key(KeyCode::Char(' ').into()); // Alpha selected.
+    app.key(KeyCode::Down.into());
+    app.key(KeyCode::Char(' ').into()); // Existing Beta stays granted.
+    app.key(KeyCode::Down.into()); // Gamma remains unchecked.
+    app.key(KeyCode::Down.into()); // Review approval.
+    app.key(KeyCode::Enter.into());
+    assert!(rx.try_recv().is_err());
+    app.snapshot.as_mut().unwrap()["host"]["revision"] = json!(8);
+    app.key(KeyCode::Enter.into());
+    let Work {
+        task: Task::Request(request),
+        ..
+    } = rx.try_recv().unwrap()
+    else {
+        panic!("Missing atomic approval")
+    };
+    assert_eq!(request["operation"]["services"], json!(["alpha", "beta"]));
+    assert_eq!(request["operation"]["expected_revision"], 7);
 }

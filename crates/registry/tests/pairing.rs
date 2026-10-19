@@ -110,6 +110,7 @@ fn target_local_proofs_are_single_use_and_owner_approval_is_separate() {
                 host,
                 &owner,
                 Mutation::ApproveInvitation {
+                    services: vec![],
                     expected_revision: 1,
                     invitation: invitation.invitation.clone()
                 }
@@ -122,6 +123,7 @@ fn target_local_proofs_are_single_use_and_owner_approval_is_separate() {
                 host,
                 &owner,
                 Mutation::ApproveInvitation {
+                    services: vec![],
                     expected_revision: 0,
                     invitation: invitation.invitation.clone()
                 }
@@ -245,6 +247,7 @@ fn attempts_expiry_rejection_and_capacity_are_durable_and_bounded() {
                 host,
                 &owner,
                 Mutation::ApproveInvitation {
+                    services: vec![],
                     expected_revision: 1,
                     invitation: invitation.invitation.clone()
                 }
@@ -345,6 +348,7 @@ fn revocation_cancels_unfinished_requests_and_expired_proofs_cannot_be_approved(
                 host,
                 &owner,
                 Mutation::ApproveInvitation {
+                    services: vec![],
                     expected_revision: 2,
                     invitation: invitation.invitation.clone()
                 }
@@ -353,4 +357,236 @@ fn revocation_cancels_unfinished_requests_and_expired_proofs_cannot_be_approved(
     );
     assert!(store.host_snapshot(host).unwrap().clients.is_empty());
     assert_eq!(store.host_snapshot(host).unwrap().revision, 2);
+}
+
+#[test]
+fn approval_and_selected_grants_commit_together_and_preserve_other_access() {
+    use wispnet_core::identity::EndpointId;
+    fn pending(store: &mut Store, host: EndpointId, owner: &str, device: &Identity) -> String {
+        let now = wispnet_registry::enrollment::now();
+        let invitation = store
+            .pairing_invite(host, owner, "https://relay.example", now, 300)
+            .unwrap();
+        let claim = Claim {
+            invitation: invitation.invitation.clone(),
+            code: invitation.code.clone(),
+            name: "new phone".into(),
+        };
+        let challenge = store
+            .pairing_challenge(host, device.endpoint_id(), &claim, now)
+            .unwrap();
+        let proof = Proof {
+            signature: device.secret_key().sign(&challenge.signing_bytes()),
+            challenge,
+        };
+        store
+            .pairing_prove(host, device.endpoint_id(), &proof, now)
+            .unwrap();
+        invitation.invitation.clone()
+    }
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let host = Identity::generate().endpoint_id();
+    let device = Identity::generate();
+    let other = Identity::generate();
+    host::initialize(directory.path(), host).unwrap();
+    let (mut store, owner) = host::owner_store(directory.path(), host).unwrap();
+    let mut revision = store
+        .host_mutate(
+            host,
+            &owner,
+            Mutation::Approve {
+                expected_revision: 0,
+                peer: other.endpoint_id(),
+                name: "existing phone".into(),
+            },
+        )
+        .unwrap();
+    for id in ["alpha", "beta", "gamma"] {
+        revision = store
+            .host_mutate(
+                host,
+                &owner,
+                Mutation::Service {
+                    expected_revision: revision,
+                    id: id.into(),
+                    backend: "127.0.0.1:8201".parse().unwrap(),
+                    allow: vec![other.endpoint_id()],
+                    display_name: None,
+                    kind: None,
+                },
+            )
+            .unwrap();
+    }
+    let invitation = pending(&mut store, host, &owner, &device);
+    let before = serde_json::to_value(store.host_snapshot(host).unwrap()).unwrap();
+    for services in [
+        vec!["alpha".into(), "missing".into()],
+        vec!["alpha".into(), "alpha".into()],
+    ] {
+        assert!(
+            store
+                .host_mutate(
+                    host,
+                    &owner,
+                    Mutation::ApproveInvitation {
+                        expected_revision: revision,
+                        invitation: invitation.clone(),
+                        services
+                    }
+                )
+                .is_err()
+        );
+        assert_eq!(
+            serde_json::to_value(store.host_snapshot(host).unwrap()).unwrap(),
+            before
+        );
+        assert_eq!(
+            store
+                .pairing_list(host, &owner, wispnet_registry::enrollment::now())
+                .unwrap()
+                .iter()
+                .find(|v| v.invitation == invitation)
+                .unwrap()
+                .state,
+            "pending"
+        );
+    }
+    assert!(matches!(
+        store.host_mutate(
+            host,
+            &owner,
+            Mutation::ApproveInvitation {
+                expected_revision: revision - 1,
+                invitation: invitation.clone(),
+                services: vec!["alpha".into()]
+            }
+        ),
+        Err(ControlError::Conflict)
+    ));
+    let approved = store
+        .host_mutate(
+            host,
+            &owner,
+            Mutation::ApproveInvitation {
+                expected_revision: revision,
+                invitation: invitation.clone(),
+                services: vec!["alpha".into(), "gamma".into()],
+            },
+        )
+        .unwrap();
+    assert_eq!(approved, revision + 1);
+    let snapshot = store.host_snapshot(host).unwrap();
+    assert_eq!(snapshot.clients.len(), 2);
+    for (index, service) in snapshot.services.iter().enumerate() {
+        assert!(service.allow.contains(&other.endpoint_id()));
+        assert_eq!(
+            service.allow.contains(&device.endpoint_id()),
+            service.id != "beta"
+        );
+        assert_eq!(
+            service.incarnation,
+            before["services"][index]["incarnation"]
+        );
+        assert_eq!(
+            service.backend.to_string(),
+            before["services"][index]["backend"]
+        );
+    }
+    assert!(
+        store
+            .host_mutate(
+                host,
+                &owner,
+                Mutation::ApproveInvitation {
+                    expected_revision: approved,
+                    invitation,
+                    services: vec!["beta".into()]
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(store.host_snapshot(host).unwrap().revision, approved);
+    // Old callers omit services; re-pairing never withdraws or restores any other grant.
+    let re_pair = pending(&mut store, host, &owner, &device);
+    let old_request: Mutation = serde_json::from_value(serde_json::json!({"op":"approve_invitation","expected_revision":approved,"invitation":re_pair})).unwrap();
+    revision = store.host_mutate(host, &owner, old_request).unwrap();
+    let next = pending(&mut store, host, &owner, &Identity::generate());
+    // Remove/recreate a reviewed ID: a stale approval cannot grant the new service.
+    let reviewed = revision;
+    revision = store
+        .host_mutate(
+            host,
+            &owner,
+            Mutation::Remove {
+                expected_revision: revision,
+                id: "gamma".into(),
+            },
+        )
+        .unwrap();
+    revision = store
+        .host_mutate(
+            host,
+            &owner,
+            Mutation::Service {
+                expected_revision: revision,
+                id: "gamma".into(),
+                backend: "127.0.0.1:8201".parse().unwrap(),
+                allow: vec![other.endpoint_id()],
+                display_name: None,
+                kind: None,
+            },
+        )
+        .unwrap();
+    assert!(matches!(
+        store.host_mutate(
+            host,
+            &owner,
+            Mutation::ApproveInvitation {
+                expected_revision: reviewed,
+                invitation: next.clone(),
+                services: vec!["gamma".into()]
+            }
+        ),
+        Err(ControlError::Conflict)
+    ));
+    store
+        .pairing_list(host, &owner, wispnet_registry::enrollment::now() + 301)
+        .unwrap();
+    assert!(
+        store
+            .host_mutate(
+                host,
+                &owner,
+                Mutation::ApproveInvitation {
+                    expected_revision: revision,
+                    invitation: next,
+                    services: vec!["alpha".into()]
+                }
+            )
+            .is_err()
+    );
+    drop(store);
+    let (mut store, _) = host::owner_store(directory.path(), host).unwrap();
+    let snapshot = store.host_snapshot(host).unwrap();
+    assert_eq!(snapshot.revision, revision);
+    assert_eq!(snapshot.clients.len(), 2);
+    assert!(
+        snapshot
+            .services
+            .iter()
+            .find(|s| s.id == "alpha")
+            .unwrap()
+            .allow
+            .contains(&device.endpoint_id())
+    );
+    assert!(
+        !snapshot
+            .services
+            .iter()
+            .find(|s| s.id == "beta")
+            .unwrap()
+            .allow
+            .contains(&device.endpoint_id())
+    );
 }
