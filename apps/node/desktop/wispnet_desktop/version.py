@@ -1,5 +1,5 @@
 """Shared release version and packaged source identifier."""
-VERSION = "0.2.0"
+VERSION = "0.1.0"
 try:
     from .build_info import DISPLAY_VERSION
 except ImportError:
