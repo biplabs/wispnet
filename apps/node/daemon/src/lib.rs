@@ -50,10 +50,7 @@ impl State {
                             continue;
                         };
                         let Ok(id) = id.parse() else { continue };
-                        if wispnet_agent::peers::load(&self.state_dir, id)
-                            .map_err(|e| e.to_string())?
-                            .is_some()
-                        {
+                        if self.client.saved_host(id).await?.is_some() {
                             pins.push(id.to_string());
                         }
                     }
@@ -229,6 +226,26 @@ pub async fn run(
     let identity = store.load()?;
     let authority =
         wispnet_registry::host::Authority::open(&config.state_dir, identity.endpoint_id())?;
+    // Older installations kept outbound pins in private files rather than the policy DB.
+    // Index their authenticated identities for deletion, without adding any clients/grants.
+    if let Ok(entries) = std::fs::read_dir(config.state_dir.join("peer-pins")) {
+        let (mut policy, owner) =
+            wispnet_registry::host::owner_store(&config.state_dir, identity.endpoint_id())?;
+        for entry in entries.take(129) {
+            let entry = entry?;
+            let name = entry.file_name();
+            let Some(peer) = name
+                .to_str()
+                .and_then(|s| s.strip_suffix(".json"))
+                .and_then(|s| s.parse().ok())
+            else {
+                continue;
+            };
+            if wispnet_agent::peers::load(&config.state_dir, peer)?.is_some() {
+                policy.index_legacy_pin(identity.endpoint_id(), &owner, peer)?;
+            }
+        }
+    }
     let transport = config.transport.as_ref().ok_or("Host transport required")?;
     let host = wispnet_agent::tunnel::TunnelHost::bind_host(
         identity.secret_key(),

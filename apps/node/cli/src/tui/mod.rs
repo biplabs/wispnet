@@ -74,7 +74,6 @@ enum Task {
     Remove {
         peer: String,
         revision: u64,
-        client: bool,
     },
     Pair {
         preview: Value,
@@ -116,24 +115,8 @@ fn perform(api: &Api, task: Task) -> Result<Value, String> {
         Task::Status => api.request(json!({"op":"status"})),
         Task::Request(v) => api.request(v),
         Task::Online(v) => api.online(v),
-        Task::Remove {
-            peer,
-            revision,
-            client,
-        } => {
-            if client {
-                api.request(json!({"op":"mutate","operation":{"op":"revoke","peer":peer,"expected_revision":revision}}))?;
-            }
-            api.request(json!({"op":"unpair","host":peer}))
-                .map_err(|e| {
-                    if client {
-                        format!(
-                            "Local grants revoked; forgetting the saved host was not confirmed: {e}"
-                        )
-                    } else {
-                        e
-                    }
-                })
+        Task::Remove { peer, revision } => {
+            api.request(json!({"op":"unpair","host":peer,"expected_revision":revision}))
         }
         Task::Pair { preview, document } => {
             let host = text(&preview, "host");
@@ -876,7 +859,7 @@ impl App {
                         }),
                     ));
                 }
-                choices.push(entry("remove","Remove machine / revoke local access",Action::Confirm{title:"Remove this machine".into(),detail:vec![self.name(&peer),format!("Full ID: {peer}"),"Revokes its service grants here, ends active access, and forgets its saved pin and browser routes. Permissions on the remote host remain managed there.".into()],work:Work{kind:Kind::Saved,task:Task::Remove{peer,client,revision:self.revision()}}}));
+                choices.push(entry("remove","Remove machine / revoke local access",Action::Confirm{title:"Remove this machine".into(),detail:vec![self.name(&peer),format!("Full ID: {peer}"),"Revokes its service grants here, ends active access, and forgets its saved pin and browser routes. The other machine will remove this pairing when it next contacts this machine. Offline or unavailable peers keep their record until then.".into()],work:Work{kind:Kind::Saved,task:Task::Remove{peer,revision:self.revision()}}}));
                 self.choice("Manage machine", detail, choices);
             }
             Action::Service(service) => {

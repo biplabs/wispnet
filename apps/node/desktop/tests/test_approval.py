@@ -216,13 +216,16 @@ class ApprovalChecks(unittest.TestCase):
                         self.assertLess(time.monotonic(),deadline)
                         time.sleep(.02)
                 self.assertEqual([s['id'] for s in bapi.request(op='catalog',host=pa)['services']],['reverse'])
-                # Local removal drops the reciprocal pin and all local grants only.
+                # Local removal is immediate; the other host learns it on catalog contact.
                 bapi.request(op='unpair',host=pa)
                 removed = bapi.request(op='status')
                 self.assertNotIn(pa,removed['peer_pins'])
                 self.assertEqual(removed['host']['clients'],[])
                 self.assertTrue(all(not service['allow'] for service in removed['host']['services']))
-                self.assertEqual(aapi.request(op='status')['host']['services'][0]['allow'],[pb])
+                with self.assertRaisesRegex(ValueError, 'Pairing removed'):
+                    aapi.request(op='catalog',host=pb)
+                self.assertEqual(aapi.request(op='status')['host']['services'][0]['allow'],[])
+                self.assertNotIn(pb,aapi.request(op='status')['peer_pins'])
                 with self.assertRaises(ValueError):
                     bapi.request(op='catalog',host=pa)
 

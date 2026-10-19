@@ -83,7 +83,7 @@ impl Store {
                 CREATE TABLE services (id TEXT PRIMARY KEY, host TEXT NOT NULL REFERENCES devices(id));
                 CREATE TABLE grants (service TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE, device TEXT NOT NULL REFERENCES devices(id), PRIMARY KEY(service,device));
                 PRAGMA user_version=1;")?,
-            1..=9 => {},
+            1..=10 => {},
             _ => return Err(Error::UnsupportedSchema),
         }
         if version < 2 {
@@ -149,6 +149,15 @@ impl Store {
                 peer TEXT PRIMARY KEY REFERENCES host_clients(id) ON DELETE CASCADE,
                 bootstrap TEXT NOT NULL);
                 PRAGMA user_version=9;",
+            )?;
+        }
+        if version < 10 {
+            tx.execute_batch(
+                "ALTER TABLE host_pairings ADD COLUMN pairing TEXT NOT NULL DEFAULT '';
+                ALTER TABLE host_pairing_offers ADD COLUMN pairing TEXT NOT NULL DEFAULT '';
+                CREATE TABLE host_pairing_blocks(peer TEXT PRIMARY KEY, pairing TEXT NOT NULL);
+                CREATE TABLE host_legacy_pins(peer TEXT PRIMARY KEY);
+                PRAGMA user_version=10;",
             )?;
         }
         tx.commit()?;

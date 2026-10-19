@@ -98,7 +98,7 @@ SQLite schema 8 stores `display_name` and `kind` on the owner. Existing rows get
 their local ID as display name and type `http`, matching the previous browser
 workflow. The migration advances revision once if existing services gain this
 metadata, preserving host identity/generation, incarnations, credentials, grants,
-pins and operation receipts. Schema 9 adds durable mutual-pairing records without changing service metadata or policy revisions. Schema-5/6/7/8 binaries cannot open schema 9.
+pins and operation receipts. Schema 9 adds durable mutual-pairing records without changing service metadata or policy revisions. Schema 10 adds pairing session IDs and local removal state for authenticated checks on contact. Schema-5/6/7/8/9 binaries cannot open schema 10.
 
 Owner `service` mutations accept optional `display_name` and `kind`. Omitted/null
 metadata preserves an existing record; a fresh record defaults to its ID/`http`.

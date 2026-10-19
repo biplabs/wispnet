@@ -24,6 +24,10 @@ pub(crate) async fn serve_stream(
         let request: Request = serde_json::from_slice(&bytes)
             .map_err(|_| TunnelError::Transport("invalid pairing request"))?;
         let bytes = match request {
+            Request::Status { pairing } => match authority.pairing_status(peer, pairing).await {
+                Ok(ack) => serde_json::to_vec(&ack),
+                Err(_) => serde_json::to_vec(&serde_json::json!({"error":"denied"})),
+            },
             Request::Hello {} => {
                 if bytes.len() > 256 {
                     return Err(TunnelError::Transport("pairing hello too large"));
@@ -35,6 +39,13 @@ pub(crate) async fn serve_stream(
             }
             Request::Challenge { claim } => match authority.pairing_challenge(peer, claim).await {
                 Ok(challenge) => serde_json::to_vec(&challenge),
+                Err(_) => serde_json::to_vec(&serde_json::json!({"error":"denied"})),
+            },
+            Request::ProveMutualSession { proof, bootstrap } => match authority
+                .pairing_prove_session(peer, proof, Some(bootstrap), true)
+                .await
+            {
+                Ok(pending) => serde_json::to_vec(&pending),
                 Err(_) => serde_json::to_vec(&serde_json::json!({"error":"denied"})),
             },
             Request::ProveMutual { proof, bootstrap } => match authority
@@ -220,6 +231,29 @@ async fn rpc(
     .map_err(|_| TunnelError::Transport("pairing request timeout"))?
 }
 
+/// A denial/timeout is never interpreted as deletion. Only a pinned, explicit status is.
+pub async fn pairing_status(
+    endpoint: &Endpoint,
+    target: EndpointAddr,
+    pairing: &str,
+) -> Result<pairing::Status, TunnelError> {
+    let expected = target.id;
+    let bytes = rpc(
+        endpoint,
+        target,
+        &Request::Status {
+            pairing: pairing.to_owned(),
+        },
+    )
+    .await?;
+    let status: pairing::Status = serde_json::from_slice(&bytes)
+        .map_err(|_| TunnelError::Transport("invalid pairing status"))?;
+    if status.host != expected || status.peer != endpoint.id() || status.pairing != pairing {
+        return Err(TunnelError::Transport("pairing status identity mismatch"));
+    }
+    Ok(status)
+}
+
 /// Explicit two-step proof request. Never retries or grants service access.
 pub async fn request_enrollment(
     endpoint: &Endpoint,
@@ -273,7 +307,7 @@ pub async fn request_enrollment_with_bootstrap(
     // The reverse bootstrap travels on the same identity-authenticated channel as
     // the single-use proof. It is stored pending, and activated only by the owner.
     let request = match bootstrap {
-        Some(bootstrap) => Request::ProveMutual { proof, bootstrap },
+        Some(bootstrap) => Request::ProveMutualSession { proof, bootstrap },
         None => Request::Prove { proof },
     };
     let bytes = rpc(endpoint, target, &request).await?;

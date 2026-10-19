@@ -106,9 +106,9 @@ For explicit owner approval, use `{"op":"approve","peer":"FULL_CLIENT_ID","name"
 
 An intent is atomically saved before dispatch in private `combined-operations/` journals. Up to four targets execute independently. An unreachable target, failed owner connection, timeout or unconfirmed reply remains **pending**; a negative host acknowledgement is **rejected**. Only all-applied targets make `complete` true. A batch with rejections can be `finished` without being complete. Retry acts only on pending targets; rejected targets need a newly reviewed operation. No background retries or automatic replay of arbitrary HTTP/application writes occur.
 
-Each host stores the operation ID, immutable action hash and acknowledgement atomically with its own authority mutation in SQLite schema 9 (receipts introduced in schema 6). A repeated ID returns the saved receipt; changing its action fails closed. If a reply was lost after commit, retry confirms the earlier result without re-executing it. An old approval receipt cannot recreate approval after a later local revocation. Applied revisions are historical acknowledgements, not a promise that current permissions still match that earlier action; the serving host's current policy always wins. New-access policy is durable at acknowledgement; affected active streams close under the existing bounded host-policy checks, not through catalog propagation.
+Each host stores the operation ID, immutable action hash and acknowledgement atomically with its own authority mutation in SQLite schema 10 (receipts introduced in schema 6). A repeated ID returns the saved receipt; changing its action fails closed. If a reply was lost after commit, retry confirms the earlier result without re-executing it. An old approval receipt cannot recreate approval after a later local revocation. Applied revisions are historical acknowledgements, not a promise that current permissions still match that earlier action; the serving host's current policy always wins. New-access policy is durable at acknowledgement; affected active streams close under the existing bounded host-policy checks, not through catalog propagation.
 
-Limits are 32 selected hosts, four concurrent attempts, 128 local operation journals and 10,000 retained target receipts. Receipt replay protection is not automatically evicted; hitting its limit rejects new operations. Completed local journals can be archived explicitly without changing host permissions or deleting target receipts. Host recovery must preserve receipts along with authority; stale-backup recovery remains #19 work. Older binaries that support only schema 5/6/7/8 cannot open schema 9; the new installer preserves identities/configuration rather than resetting authority.
+Limits are 32 selected hosts, four concurrent attempts, 128 local operation journals and 10,000 retained target receipts. Receipt replay protection is not automatically evicted; hitting its limit rejects new operations. Completed local journals can be archived explicitly without changing host permissions or deleting target receipts. Host recovery must preserve receipts along with authority; stale-backup recovery remains #19 work. Older binaries that support only schema 5/6/7/8/9 cannot open schema 10; the new installer preserves identities/configuration rather than resetting authority.
 
 Observed on both physical computers on 2026-10-17: combined approval applied at both hosts; revocation with headless desktop.home stopped showed local applied / remote pending, while its offline registry still contained the client. Pending status survived a local node restart and completed after the remote node restarted, without repeating the local mutation. Already-revoked and wrong-host actions produced explicit rejection. A deliberately discarded real applied reply remained pending; after remote restart and a later revocation, retry returned its earlier applied revision without restoring access or advancing the current revision. The headless CLI also performed a target-local combined operation and reported its rejection. The installed GUI displayed actual applied/pending/rejected journals, including a pending host, and its rendered table was inspected. Tests used a temporary client without service grants; fixture approvals were removed, phone/tablet grants and backend bindings were preserved, and original browser settings were restored.
 ## Generate a pairing QR
@@ -150,3 +150,27 @@ services together in one policy revision. Cancelling changes nothing. No selecti
 pairs the device without adding access. A concurrent policy change, removed service,
 or expired request rejects the entire operation and requires a fresh review.
 The terminal approval flow offers the same selection and atomic behavior.
+
+## Removal learned on contact
+
+The machine-card trash button atomically revokes local access and forgets the
+host. The other machine learns this during its next service-directory refresh or
+Open operation that checks the catalog. It queries the pinned host over the
+identity-authenticated pairing protocol, which remains reachable after service
+access is revoked. An explicit **removed** response causes local cleanup of that
+same pairing and all its grants. Pending approval, an empty service catalog,
+unknown status, generic denial and transport failure keep the record intact.
+
+There is no outgoing deletion queue, acknowledgement retry loop or mailbox.
+Both machines must eventually be reachable at the same time. Desktop catalog
+refresh discovers removal automatically while the app is running; in the TUI,
+browsing or refreshing a host's services performs the check. New pairings share
+a unique session ID, and cleanup compares it again under the local transaction
+so a delayed response cannot delete a newer pairing. Existing saved file pins
+are indexed without adding clients or widening grants. Local removal markers
+prevent those pins reappearing after a restart.
+
+Both desktop/headless nodes need this update. Older phone clients that do not
+implement the status check may retain stale entries. SQLite schema 10 stores
+session IDs and local removal state; older binaries must not be used against the
+upgraded state. Individual service grants remain independently controlled.

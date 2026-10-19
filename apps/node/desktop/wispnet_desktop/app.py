@@ -1214,8 +1214,8 @@ class Window(QMainWindow):
             revoke_btn = QPushButton()
             revoke_btn.setIcon(trash_icon())
             revoke_btn.setObjectName("tileIconBtn")
-            revoke_btn.setAccessibleName("Revoke device access")
-            revoke_btn.setToolTip("Revoke this device's access")
+            revoke_btn.setAccessibleName("Remove device")
+            revoke_btn.setToolTip("Remove this device on both machines")
             revoke_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             revoke_btn.clicked.connect(
                 lambda _=False, p=c_peer: self._revoke_peer_by_id(p)
@@ -1255,27 +1255,17 @@ class Window(QMainWindow):
         if QMessageBox.question(
             self, "Unpair machine",
             "Forget this machine and revoke its grants on this node?\n"
-            "Permissions on the remote machine must be revoked there.\n" + peer,
+            "The other machine will remove this pairing when it next contacts this machine.\n" + peer,
         ) != QMessageBox.StandardButton.Yes:
             return
-        is_client = any(c["peer"] == peer for c in self.snapshot["host"]["clients"])
         revision = self.snapshot["host"]["revision"]
-
-        def run():
-            if is_client:
-                self.api.request(op="mutate", operation={
-                    "op": "revoke", "peer": peer, "expected_revision": revision,
-                })
-            return self.api.request(op="unpair", host=peer)
-
-        self.submit(run, lambda value, error: self.result(value, error, "Machine unpaired"))
+        self.submit(
+            lambda: self.api.request(op="unpair", host=peer, expected_revision=revision),
+            lambda value, error: self.result(value, error, "Machine removed; the other machine will learn on its next contact"),
+        )
 
     def _revoke_peer_by_id(self, peer):
-        for r in range(self.devices.rowCount()):
-            if self.devices.item(r, 1) and self.devices.item(r, 1).text() == peer:
-                self.devices.selectRow(r)
-                self.revoke()
-                return
+        self._unpair_peer(peer)
 
     def perform(self, request, success="Saved"):
         self.submit(

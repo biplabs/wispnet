@@ -83,8 +83,18 @@ same native browser gateway; TCP services use `wispnet tunnel`.
 
 **Remove machine / revoke local access** shows the full target ID and asks for
 confirmation. It revokes that client's grants on this node, ends active access,
-and removes its saved host pin and browser routes. Permissions on the remote
-host must be revoked there. No other machine's approval changes.
+and removes its saved host pin and browser routes immediately. The other machine
+learns about removal on its next service-directory refresh or Open attempt that
+checks the catalog. It asks the pinned host for the status of that specific
+pairing, then removes its own record and grants only after an explicit,
+authenticated **removed** response. Pending approval, no granted services, an
+unknown status, generic access denial and timeouts do not delete a pairing.
+
+There is no outgoing deletion queue or background delivery worker. If either
+machine is offline, the record stays until their next successful contact. Both
+nodes need this update for automatic cleanup; older clients may keep stale entries.
+A delayed response cannot remove a newer pairing. Revoking an individual service
+grant is independent and does not unpair the machines.
 
 On a graphical session, Open launches the local browser. Over SSH it displays
 the local gateway URL instead. That URL belongs to the remote computer; use a

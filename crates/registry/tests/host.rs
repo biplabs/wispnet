@@ -143,7 +143,7 @@ fn service_incarnation_persists_on_edit_and_restart_but_not_recreation() {
     // Simulate the real schema-6 table, preserving the authority and grants.
     drop(store);
     let db = rusqlite::Connection::open(dir.path().join("host.sqlite3")).unwrap();
-    db.execute_batch("DROP TABLE host_pairing_offers; DROP TABLE host_pairings; ALTER TABLE host_services DROP COLUMN incarnation; ALTER TABLE host_services DROP COLUMN display_name; ALTER TABLE host_services DROP COLUMN kind; PRAGMA user_version=6;")
+    db.execute_batch("DROP TABLE host_pairing_blocks; DROP TABLE host_legacy_pins; DROP TABLE host_pairing_offers; DROP TABLE host_pairings; ALTER TABLE host_services DROP COLUMN incarnation; ALTER TABLE host_services DROP COLUMN display_name; ALTER TABLE host_services DROP COLUMN kind; PRAGMA user_version=6;")
         .unwrap();
     drop(db);
     let (mut store, _) = host::owner_store(dir.path(), id).unwrap();
@@ -290,7 +290,7 @@ fn schema_eight_adds_mutual_pairing_without_changing_identity_revision_or_grants
     drop(store);
     let db = rusqlite::Connection::open(dir.path().join("host.sqlite3")).unwrap();
     db.execute_batch(
-        "DROP TABLE host_pairing_offers; DROP TABLE host_pairings; PRAGMA user_version=8;",
+        "DROP TABLE host_pairing_blocks; DROP TABLE host_legacy_pins; DROP TABLE host_pairing_offers; DROP TABLE host_pairings; PRAGMA user_version=8;",
     )
     .unwrap();
     drop(db);

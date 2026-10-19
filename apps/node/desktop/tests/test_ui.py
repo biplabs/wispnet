@@ -339,14 +339,11 @@ class DesktopChecks(unittest.TestCase):
             window.api.request = lambda **kw: requests.append(kw)
             with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
                 remove.click()
-            self.assertEqual(requests, [{"op": "unpair", "host": peer}])
+            self.assertEqual(requests, [{"op": "unpair", "host": peer, "expected_revision": 4}])
             window.snapshot["host"]["clients"] = [{"peer": peer}]
             with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
                 remove.click()
-            self.assertEqual(requests[-2:], [
-                {"op": "mutate", "operation": {"op": "revoke", "peer": peer, "expected_revision": 4}},
-                {"op": "unpair", "host": peer},
-            ])
+            self.assertEqual(requests[-1], {"op": "unpair", "host": peer, "expected_revision": 4})
             window.deleteLater()
 
     def test_combined_view_never_calls_partial_results_complete(self):

@@ -15,6 +15,9 @@ pub const MAX_RESPONSE: usize = 4096;
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
     Hello {},
+    Status {
+        pairing: String,
+    },
     Challenge {
         claim: Claim,
     },
@@ -23,6 +26,10 @@ pub enum Request {
     },
     /// Host-to-host pairing: authenticated reverse bootstrap, never service grants.
     ProveMutual {
+        proof: Proof,
+        bootstrap: Bootstrap,
+    },
+    ProveMutualSession {
         proof: Proof,
         bootstrap: Bootstrap,
     },
@@ -60,4 +67,22 @@ pub struct Pending {
 pub struct Hello {
     pub version: u16,
     pub host: EndpointId,
+}
+
+/// Returned only over the identity-authenticated pairing channel.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Status {
+    pub host: EndpointId,
+    pub peer: EndpointId,
+    pub pairing: String,
+    pub state: PairingState,
+}
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum PairingState {
+    Paired,
+    Pending,
+    Removed,
+    Unknown,
 }

@@ -22,6 +22,7 @@ python3 scripts/smoke.py
 python3 scripts/registry_smoke.py
 python3 scripts/host_smoke.py
 python3 scripts/test_node_desktop.py
+python3 scripts/test_mutual_deletion.py
 uv run --with pyte==0.8.2 --with zxing-cpp==2.3.0 --with pillow==11.3.0 python scripts/test_tui.py
 python3 -m unittest discover -s scripts -p test_linux_distribution.py
 QT_QPA_PLATFORM=offscreen uv run --project apps/node/desktop --locked python -m unittest discover -s apps/node/desktop/tests

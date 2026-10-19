@@ -109,6 +109,7 @@ impl Client {
             .clone()
     }
     pub async fn catalog(&self, host: EndpointId) -> Result<Value, String> {
+        self.check_pairing(host).await?;
         let state = self.state.clone();
         let epoch =
             tokio::task::spawn_blocking(move || wispnet_agent::catalogs::begin(&state, host))
@@ -150,6 +151,14 @@ impl Client {
         {
             return Ok(Some(record));
         }
+        if let Some(authority) = &self.local_authority
+            && authority
+                .pairing_blocked(host)
+                .await
+                .map_err(|e| e.to_string())?
+        {
+            return Ok(None);
+        }
         wispnet_agent::peers::load(&self.state, host).map_err(|_| "Invalid saved host".into())
     }
     pub async fn target(&self, host: EndpointId) -> Result<iroh::EndpointAddr, String> {
@@ -159,6 +168,45 @@ impl Client {
             self.saved_host(host).await?.and_then(|p| p.direct_hint),
         )
         .map_err(|e| e.to_string())
+    }
+    async fn check_pairing(&self, host: EndpointId) -> Result<(), String> {
+        let Some(authority) = &self.local_authority else {
+            return Ok(());
+        };
+        let Some(pairing) = authority
+            .pairing_session(host)
+            .await
+            .map_err(|e| e.to_string())?
+        else {
+            return Ok(());
+        };
+        let target = self.target(host).await?;
+        // Older peers and transport failures do not prove removal. Normal catalog
+        // authorization still applies, including when no status can be obtained.
+        let Ok(status) =
+            wispnet_agent::pairing::pairing_status(&self.endpoint, target, &pairing).await
+        else {
+            return Ok(());
+        };
+        if status.state != wispnet_core::pairing::PairingState::Removed {
+            return Ok(());
+        }
+        let state = self.state.clone();
+        let own = self.endpoint.id();
+        let removed = tokio::task::spawn_blocking(move || {
+            let (mut store, owner) =
+                wispnet_registry::host::owner_store(&state, own).map_err(|e| e.to_string())?;
+            store
+                .apply_remote_removal(own, &owner, host, &pairing)
+                .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|_| "Cannot apply remote removal")??;
+        if removed {
+            self.gateway.forget(self, host).await?;
+            return Err("Pairing removed by remote machine".into());
+        }
+        Err("Pairing changed during refresh; try again".into())
     }
     pub async fn command(self: &Arc<Self>, value: &Value) -> Result<Value, String> {
         match argument(value, "op")? {
@@ -200,6 +248,7 @@ impl Client {
                                 .into_iter()
                                 .find(|a| !a.ip().is_unspecified()),
                         });
+                let session = invitation.invitation.clone();
                 let pending = wispnet_agent::pairing::request_enrollment_with_bootstrap(
                     &self.endpoint,
                     host,
@@ -225,7 +274,7 @@ impl Client {
                         let (mut store, owner) = wispnet_registry::host::owner_store(&state, own)
                             .map_err(|e| e.to_string())?;
                         store
-                            .pairing_accept_host(own, &owner, &bootstrap, &name)
+                            .pairing_accept_session(own, &owner, &bootstrap, &name, Some(&session))
                             .map_err(|e| e.to_string())
                     })
                     .await
@@ -245,20 +294,45 @@ impl Client {
                 if host == self.endpoint.id() {
                     return Err("Cannot unpair this machine".into());
                 }
-                self.gateway.forget(self, host).await?;
-                if self.local_authority.is_some() {
+                let saved = self.saved_host(host).await?;
+                if let Some(authority) = &self.local_authority {
+                    let known = authority
+                        .snapshot()
+                        .await
+                        .map_err(|e| e.to_string())?
+                        .clients
+                        .iter()
+                        .any(|c| c.peer == host);
+                    let bootstrap = saved.or_else(|| {
+                        if !known {
+                            return None;
+                        }
+                        self.config.relay_url.clone().map(|relay_url| {
+                            wispnet_core::pairing::Bootstrap {
+                                version: wispnet_core::pairing::VERSION,
+                                host,
+                                relay_url,
+                                direct_hint: None,
+                            }
+                        })
+                    });
                     let state = self.state.clone();
                     let own = self.endpoint.id();
+                    let expected = value
+                        .get("expected_revision")
+                        .map(|v| v.as_u64().ok_or("Invalid policy revision"))
+                        .transpose()?;
                     tokio::task::spawn_blocking(move || {
                         let (mut store, owner) = wispnet_registry::host::owner_store(&state, own)
                             .map_err(|e| e.to_string())?;
                         store
-                            .pairing_forget_host(own, &owner, host)
+                            .delete_pairing(own, &owner, host, bootstrap.as_ref(), expected)
                             .map_err(|e| e.to_string())
                     })
                     .await
-                    .map_err(|_| "Cannot remove mutual pairing")??;
+                    .map_err(|_| "Cannot remove pairing")??;
                 }
+                self.gateway.forget(self, host).await?;
                 wispnet_agent::peers::remove(&self.state, host).map_err(|e| e.to_string())?;
                 Ok(json!({"unpaired":host.to_string()}))
             }

@@ -33,7 +33,20 @@ impl Store {
         bootstrap: &wispnet_core::pairing::Bootstrap,
         name: &str,
     ) -> Result<(), ControlError> {
+        self.pairing_accept_session(host, owner, bootstrap, name, None)
+    }
+    pub fn pairing_accept_session(
+        &mut self,
+        host: EndpointId,
+        owner: &str,
+        bootstrap: &wispnet_core::pairing::Bootstrap,
+        name: &str,
+        pairing: Option<&str>,
+    ) -> Result<(), ControlError> {
         self.host_check(host, Some(owner))?;
+        if pairing.is_some_and(|p| !valid_code(p)) {
+            return Err(ControlError::Invalid);
+        }
         if !bootstrap.valid(bootstrap.host) || bootstrap.host == host || !valid_name(name) {
             return Err(ControlError::Invalid);
         }
@@ -53,8 +66,9 @@ impl Store {
             "INSERT INTO host_clients VALUES(?1,?2) ON CONFLICT(id) DO NOTHING",
             params![peer, name],
         )?;
-        tx.execute("INSERT INTO host_pairings VALUES(?1,?2) ON CONFLICT(peer) DO UPDATE SET bootstrap=excluded.bootstrap",
-            params![peer, serde_json::to_string(bootstrap).map_err(|_| ControlError::Invalid)?])?;
+        tx.execute("INSERT INTO host_pairings(peer,bootstrap,pairing) VALUES(?1,?2,coalesce(?3,'')) ON CONFLICT(peer) DO UPDATE SET bootstrap=excluded.bootstrap,pairing=coalesce(?3,host_pairings.pairing)",
+            params![peer, serde_json::to_string(bootstrap).map_err(|_| ControlError::Invalid)?, pairing])?;
+        tx.execute("DELETE FROM host_pairing_blocks WHERE peer=?1", [&peer])?;
         tx.execute("UPDATE revision SET value=value+1 WHERE id=1", [])?;
         tx.commit()?;
         Ok(())
@@ -281,6 +295,17 @@ impl Store {
         bootstrap: Option<&wispnet_core::pairing::Bootstrap>,
         now: u64,
     ) -> Result<Pending, ControlError> {
+        self.pairing_prove_session(host, peer, proof, bootstrap, now, false)
+    }
+    pub fn pairing_prove_session(
+        &mut self,
+        host: EndpointId,
+        peer: EndpointId,
+        proof: &Proof,
+        bootstrap: Option<&wispnet_core::pairing::Bootstrap>,
+        now: u64,
+        session: bool,
+    ) -> Result<Pending, ControlError> {
         self.host_check(host, None)?;
         if bootstrap.is_some_and(|b| !b.valid(peer) || peer == host) {
             return Err(ControlError::Invalid);
@@ -327,10 +352,15 @@ impl Store {
         }
         if let Some(bootstrap) = bootstrap {
             tx.execute(
-                "INSERT INTO host_pairing_offers VALUES(?1,?2)",
+                "INSERT INTO host_pairing_offers(invitation,bootstrap,pairing) VALUES(?1,?2,?3)",
                 params![
                     challenge.invitation,
-                    serde_json::to_string(bootstrap).map_err(|_| ControlError::Invalid)?
+                    serde_json::to_string(bootstrap).map_err(|_| ControlError::Invalid)?,
+                    if session {
+                        challenge.invitation.as_str()
+                    } else {
+                        ""
+                    }
                 ],
             )?;
         }
@@ -398,11 +428,12 @@ pub(crate) fn approve(tx: &Transaction<'_>, id: &str, now: u64) -> Result<String
         params![peer, name],
     )?;
     tx.execute(
-        "INSERT INTO host_pairings(peer,bootstrap)
-        SELECT ?1,bootstrap FROM host_pairing_offers WHERE invitation=?2
-        ON CONFLICT(peer) DO UPDATE SET bootstrap=excluded.bootstrap",
+        "INSERT INTO host_pairings(peer,bootstrap,pairing)
+        SELECT ?1,bootstrap,pairing FROM host_pairing_offers WHERE invitation=?2
+        ON CONFLICT(peer) DO UPDATE SET bootstrap=excluded.bootstrap,pairing=excluded.pairing",
         params![peer, id],
     )?;
+    tx.execute("DELETE FROM host_pairing_blocks WHERE peer=?1", [&peer])?;
     tx.execute("DELETE FROM host_pairing_offers WHERE invitation=?1", [id])?;
     tx.execute(
         "UPDATE host_invitations SET state='spent',challenge=NULL WHERE id=?1",
@@ -463,6 +494,16 @@ impl Authority {
         proof: Proof,
         bootstrap: Option<wispnet_core::pairing::Bootstrap>,
     ) -> Result<Pending, ControlError> {
+        self.pairing_prove_session(peer, proof, bootstrap, false)
+            .await
+    }
+    pub async fn pairing_prove_session(
+        &self,
+        peer: EndpointId,
+        proof: Proof,
+        bootstrap: Option<wispnet_core::pairing::Bootstrap>,
+        session: bool,
+    ) -> Result<Pending, ControlError> {
         let mut store = tokio::time::timeout(
             std::time::Duration::from_millis(500),
             self.store.clone().lock_owned(),
@@ -471,12 +512,13 @@ impl Authority {
         .map_err(|_| ControlError::RateLimited)?;
         let host = self.host;
         tokio::task::spawn_blocking(move || {
-            store.pairing_prove_with_bootstrap(
+            store.pairing_prove_session(
                 host,
                 peer,
                 &proof,
                 bootstrap.as_ref(),
                 crate::enrollment::now(),
+                session,
             )
         })
         .await
