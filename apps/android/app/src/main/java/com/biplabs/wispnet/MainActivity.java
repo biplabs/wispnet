@@ -21,11 +21,11 @@ public class MainActivity extends Activity {
  final Runnable dismissNotice=()->dismissNotice();
  long relayCheckedAt=0;boolean relayBusy=false;
  final Handler lifecycle=new Handler(Looper.getMainLooper());
- final Runnable updateAccess=new Runnable(){public void run(){syncSpace();for(Runnable age:ageUpdates)age.run();lifecycle.postDelayed(this,200);}};EditText label,host,invitation;Button access;
+ final Runnable updateAccess=new Runnable(){public void run(){syncSpace();for(Runnable age:ageUpdates)age.run();lifecycle.postDelayed(this,200);}};TextView label;EditText host,invitation;Button access;
  LinearLayout pairingForm,header,machinesList,reviewBox,addMachineBox;FrameLayout space,screen;ScrollView pairingScroll,servicesScroll;StarJump stars;TextView caption,sheetTitle;Button machinesPill,addMachineBtn;boolean spaceShown=false,enterRequested=false,jumping=false,starting=false;long startAt;String lastNetwork="",devicePeer="";
  CheckBox hostVerified;
- HostStore store;Button deviceName;Runnable closeServicePermissions;
- boolean pairingBusy=false;
+ HostStore store;Runnable closeServicePermissions;
+ boolean pairingBusy=false,addingMachine=false;
  boolean openingService=false,serviceJumpDone=false;int serviceLaunch=0;String pendingServiceUrl;
  final java.util.Set<String> refreshing=ConcurrentHashMap.newKeySet();
  final ConcurrentHashMap<String,String> peerTelemetry=new ConcurrentHashMap<>();
@@ -68,9 +68,8 @@ public class MainActivity extends Activity {
   LinearLayout sheetHeader=new LinearLayout(this);sheetHeader.setGravity(Gravity.CENTER_VERTICAL);LinearLayout.LayoutParams shlp=new LinearLayout.LayoutParams(-1,-2);shlp.bottomMargin=dp(12);pairingForm.addView(sheetHeader,shlp);
   sheetTitle=new TextView(this);sheetTitle.setText("Pair a machine");sheetTitle.setTextColor(0xffedf2ff);sheetTitle.setTextSize(20);sheetTitle.setTypeface(null,android.graphics.Typeface.BOLD);sheetHeader.addView(sheetTitle,new LinearLayout.LayoutParams(0,-2,1));
   Button closeSheet=button(sheetHeader,"✕",()->{if(managesHosts())finish();else showPairing(false);});closeSheet.setContentDescription("Close");closeSheet.setPadding(0,0,0,0);closeSheet.setTextSize(15);closeSheet.setBackground(card(0xff142038,0xff283b60,18));closeSheet.setLayoutParams(new LinearLayout.LayoutParams(dp(36),dp(36)));
-  deviceName=button(pairingForm,"Device: "+DeviceProfile.name(this)+" · Rename",this::renameDevice);deviceName.setContentDescription("Rename device");
   machinesList=new LinearLayout(this);machinesList.setOrientation(LinearLayout.VERTICAL);pairingForm.addView(machinesList);
-  addMachineBtn=button(pairingForm,"+ Pair another machine",()->{boolean open=addMachineBox.getVisibility()!=View.VISIBLE;addMachineBox.setVisibility(open?View.VISIBLE:View.GONE);addMachineBtn.setText(open?"Hide pairing options":"+ Pair another machine");});addMachineBtn.setVisibility(View.GONE);
+  addMachineBtn=button(pairingForm,"+ Pair another machine",()->{addingMachine=true;render();pairingScroll.smoothScrollTo(0,0);});addMachineBtn.setVisibility(View.GONE);
   addMachineBox=new LinearLayout(this);addMachineBox.setOrientation(LinearLayout.VERTICAL);pairingForm.addView(addMachineBox);
   LinearLayout tabBar=new LinearLayout(this);tabBar.setBackground(card(0xff0d1526,0xff1e2d4a,14));tabBar.setPadding(dp(4),dp(4),dp(4),dp(4));LinearLayout.LayoutParams tblp=new LinearLayout.LayoutParams(-1,-2);tblp.bottomMargin=dp(14);addMachineBox.addView(tabBar,tblp);
   LinearLayout qrTab=new LinearLayout(this),codeTab=new LinearLayout(this);
@@ -84,9 +83,9 @@ public class MainActivity extends Activity {
   button(codeTab,"Import invitation file",()->{Intent pick=new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(pick,1);});
   selectTab.accept(0);
   reviewBox=new LinearLayout(this);reviewBox.setOrientation(LinearLayout.VERTICAL);reviewBox.setBackground(card(0xff101a30,0xff283b60,16));reviewBox.setPadding(dp(16),dp(8),dp(16),dp(12));LinearLayout.LayoutParams rblp=new LinearLayout.LayoutParams(-1,-2);rblp.topMargin=dp(6);rblp.bottomMargin=dp(10);reviewBox.setVisibility(View.GONE);addMachineBox.addView(reviewBox,rblp);
-  text(reviewBox,"Verify target machine",15);label=field(reviewBox,"Machine name",InputType.TYPE_CLASS_TEXT);host=field(reviewBox,"Host ID",InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+  text(reviewBox,"Verify target machine",15);label=new TextView(this);label.setTextColor(0xffedf2ff);label.setTextSize(16);label.setPadding(0,dp(8),0,dp(8));reviewBox.addView(label);host=field(reviewBox,"Host ID",InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
   hostVerified=new CheckBox(this);hostVerified.setTextColor(0xffc5d2e8);hostVerified.setPadding(dp(8),dp(10),dp(8),dp(10));hostVerified.setText("I compared this host ID with the target computer");LinearLayout.LayoutParams cvlp=new LinearLayout.LayoutParams(-1,-2);cvlp.bottomMargin=dp(8);reviewBox.addView(hostVerified,cvlp);
-  host.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){} public void onTextChanged(CharSequence s,int start,int before,int count){hostVerified.setChecked(false);if(s.length()>0){addMachineBox.setVisibility(View.VISIBLE);reviewBox.setVisibility(View.VISIBLE);}else reviewBox.setVisibility(View.GONE);} public void afterTextChanged(android.text.Editable s){}});
+  host.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){} public void onTextChanged(CharSequence s,int start,int before,int count){hostVerified.setChecked(false);if(s.length()>0){addingMachine=true;updatePairingMode(true);reviewBox.setVisibility(View.VISIBLE);}else reviewBox.setVisibility(View.GONE);} public void afterTextChanged(android.text.Editable s){}});
   button(reviewBox,"Request pairing",this::pair);
   LinearLayout.LayoutParams idlp=new LinearLayout.LayoutParams(-1,-2);idlp.topMargin=dp(8);addMachineBox.addView(identity,idlp);
   dockToggle(AccessService.enabled);showPairing(managesHosts());spaceShown=AccessService.enabled;servicesScroll.setVisibility(spaceShown?View.VISIBLE:View.GONE);
@@ -104,7 +103,16 @@ public class MainActivity extends Activity {
  int dp(int value){return Math.round(value*getResources().getDisplayMetrics().density);}
  android.graphics.drawable.GradientDrawable tint(int color,int radius){return card(color,0xff283b60,radius);}
  android.graphics.drawable.GradientDrawable card(int fill,int stroke,int radius){android.graphics.drawable.GradientDrawable d=new android.graphics.drawable.GradientDrawable();d.setColor(fill);d.setCornerRadius(dp(radius));d.setStroke(Math.max(1,dp(1)),stroke);return d;}
+ void updatePairingMode(boolean hasRecords){
+  boolean pairing=addingMachine||!hasRecords;
+  sheetTitle.setText(pairing?"Pair a machine":"Paired machines");
+  machinesList.setVisibility(pairing?View.GONE:View.VISIBLE);
+  addMachineBtn.setVisibility(pairing?View.GONE:View.VISIBLE);
+  addMachineBox.setVisibility(pairing?View.VISIBLE:View.GONE);
+  identity.setVisibility(pairing?View.GONE:View.VISIBLE);
+ }
  void showPairing(boolean visible){
+  if(!visible){addingMachine=false;render();}
   if(closeServicePermissions!=null)closeServicePermissions.run();
   pairingScroll.setVisibility(visible?View.VISIBLE:View.GONE);space.setVisibility(visible?View.GONE:View.VISIBLE);
   if(access!=null&&access.getParent()==header)access.setVisibility(visible?View.GONE:View.VISIBLE);
@@ -193,7 +201,7 @@ public class MainActivity extends Activity {
  });}
  void pair(){final String expected=host.getText().toString().trim(),document=invitation.getText().toString(),name=label.getText().toString().trim();
   if(!hostVerified.isChecked()){show("Compare the full host ID with the target computer, then confirm it before requesting pairing.");return;}
-  if(expected.isEmpty()||document.isEmpty()||name.isEmpty()){show("Enter machine name, verified host ID and invitation");return;}
+  if(expected.isEmpty()||document.isEmpty()||name.isEmpty()){show("Import an invitation and verify the host ID");return;}
   requestPairing(expected,document,name);
  }
  void requestPairing(String expected,String document,String name){
@@ -213,7 +221,7 @@ public class MainActivity extends Activity {
   AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Device name").setMessage("This name appears on your paired computers.").setView(input).setPositiveButton("Save",null).setNegativeButton("Cancel",null).create();
   dialog.setOnShowListener(ignored->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{String name=input.getText().toString().trim();
    if(!DeviceProfile.valid(name)){input.setError("Enter a name up to 128 UTF-8 bytes, without control characters");return;}
-   try{DeviceProfile.save(this,name);deviceName.setText("Device: "+name+" · Rename");updateDeviceHeading();dialog.dismiss();show("Name saved. Updating paired computers…");work.execute(()->{boolean synced=DeviceProfile.syncAll(this);show(synced?"Device name updated":"Name saved. Paired computers will update when reachable; older hosts need an app update.");});}
+   try{DeviceProfile.save(this,name);updateDeviceHeading();dialog.dismiss();show("Name saved. Updating paired computers…");work.execute(()->{boolean synced=DeviceProfile.syncAll(this);show(synced?"Device name updated":"Name saved. Paired computers will update when reachable; older hosts need an app update.");});}
    catch(Exception failure){input.setError(failure.getMessage());}
   }));dialog.show();
  }
@@ -259,10 +267,8 @@ public class MainActivity extends Activity {
   Button reload=button(heading,"↻",this::refresh);reload.setContentDescription("Refresh services");reload.setTag("Refresh all hosts");reload.setPadding(0,0,0,0);reload.setTextSize(18);reload.setLayoutParams(new LinearLayout.LayoutParams(dp(44),dp(44)));
   try{JSONObject records=store.all();if(!managesHosts()&&!spaceShown&&!starting&&!jumping)dockToggle(AccessService.enabled);
    boolean hasRecords=records.length()>0;
-   sheetTitle.setText(hasRecords?"Paired machines":"Pair a machine");
-   addMachineBtn.setVisibility(hasRecords?View.VISIBLE:View.GONE);
+   updatePairingMode(hasRecords);
    if(!hasRecords){((SpaceToggle)access).beacons=new int[0];access.invalidate();addMachineBox.setVisibility(View.VISIBLE);text(list,"Pair a machine to get started",16);return;}
-   if(host.getText().length()==0){addMachineBox.setVisibility(View.GONE);addMachineBtn.setText("+ Pair another machine");}
    boolean anyAvailable=false,anyPending=false;int[] beacons=new int[records.length()];int bIdx=0;
    java.util.ArrayList<String> rawPeers=new java.util.ArrayList<>();records.keys().forEachRemaining(rawPeers::add);java.util.List<String> peerOrder=ordered("machines",rawPeers);
    for(String peer:peerOrder){JSONObject record=records.getJSONObject(peer);String name=record.getString("name"),state=record.optString("state"),statusText=record.optString("status");JSONObject catalog=record.optJSONObject("catalog");
@@ -273,6 +279,7 @@ public class MainActivity extends Activity {
     if("available".equals(state))anyAvailable=true;else if("approval_pending".equals(state))anyPending=true;
     String hostTitle=name+" · "+peer.substring(0,8);
     Button machine=button(machinesList,hostTitle+"\n"+cardSub,()->showHostDialog(name,peer,statusText));
+    android.graphics.drawable.Drawable machineGear=getDrawable(R.drawable.ic_service_settings);machineGear.setBounds(0,0,dp(24),dp(24));machine.setCompoundDrawables(null,null,machineGear,null);machine.setCompoundDrawablePadding(dp(16));machine.setContentDescription("Manage "+name+", "+peer.substring(0,8)+". "+cardSub);
     machine.setText(styledCardText(hostTitle,cardSub,stateColor));machine.setGravity(Gravity.LEFT|Gravity.CENTER_VERTICAL);machine.setPadding(dp(18),dp(14),dp(18),dp(14));machine.setBackground(card(0xff101a30,"available".equals(state)?0xff2b4270:0xff223252,16));
     LinearLayout sector=new LinearLayout(this);sector.setOrientation(LinearLayout.VERTICAL);sector.setBackground(card(0xd80b1528,"available".equals(state)?0xff29497d:0xff1d2c4a,20));sector.setPadding(dp(16),dp(14),dp(16),dp(6));LinearLayout.LayoutParams secLp=new LinearLayout.LayoutParams(-1,-2);secLp.bottomMargin=dp(14);list.addView(sector,secLp);
     LinearLayout sectorHead=new LinearLayout(this);sectorHead.setGravity(Gravity.CENTER_VERTICAL);sectorHead.setPadding(dp(4),0,dp(4),dp(10));sectorHead.setOnClickListener(v->showHostDialog(name,peer,statusText));sector.addView(sectorHead,new LinearLayout.LayoutParams(-1,-2));
@@ -345,7 +352,7 @@ public class MainActivity extends Activity {
  void reviewInvitation(String document){
   if(document.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>8192){invitation.setText("");show("Invitation is too large. Ask for a new invitation file.");return;}
   hostVerified.setChecked(false);invitation.setText("");show("Reviewing invitation…");
-  work.execute(()->{try{Native.ensure(this);JSONObject preview=Native.request(new JSONObject().put("op","preview_invitation").put("invitation",document));runOnUiThread(()->{host.setText(preview.optString("host"));String machine=preview.optString("host_name","").trim();if(!machine.isEmpty())label.setText(machine);invitation.setText(document);show("Invitation ready for review. Compare the full host ID on the target computer. Importing does not request pairing or grant access.");});}catch(Exception e){show("Cannot import invitation: "+e.getMessage());}});
+  work.execute(()->{try{Native.ensure(this);JSONObject preview=Native.request(new JSONObject().put("op","preview_invitation").put("invitation",document));runOnUiThread(()->{host.setText(preview.optString("host"));String machine=preview.optString("host_name","").trim();label.setText(machine.isEmpty()?"Host "+preview.optString("host").substring(0,8):machine);invitation.setText(document);show("Invitation ready for review. Compare the full host ID on the target computer. Importing does not request pairing or grant access.");});}catch(Exception e){show("Cannot import invitation: "+e.getMessage());}});
  }
  void importInvitation(InputStream in)throws IOException{byte[] bytes=in.readNBytes(8193);if(bytes.length>8192)throw new IOException();String document=new String(bytes,java.nio.charset.StandardCharsets.UTF_8);runOnUiThread(()->reviewInvitation(document));}
  void readInvitation(Uri uri){
