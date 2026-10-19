@@ -14,6 +14,7 @@ public final class AccessService extends Service {
  private final Object networkLock=new Object();
  private boolean destroyed=false,worker=false,starting=false;
  private long generation=0;
+ private boolean interrupted=false;
  private Network current;
  private ConnectivityManager manager;
  private ConnectivityManager.NetworkCallback callback;
@@ -28,6 +29,7 @@ public final class AccessService extends Service {
    public void onLost(Network network){synchronized(networkLock){if(destroyed||!network.equals(current))return;current=null;changed();}}
   };manager.registerDefaultNetworkCallback(callback);
  }
+ static String reconnectedMessage(boolean interrupted){return interrupted?"Reconnected. A page was interrupted; reload that page to continue.":"Network available";}
  private Notification notification(String title){
   Intent stop=new Intent(this,AccessService.class).setAction("stop");
   PendingIntent pending=PendingIntent.getService(this,2,stop,PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
@@ -37,13 +39,31 @@ public final class AccessService extends Service {
  // Call while holding networkLock. Drain every generation, including a callback
  // arriving during native recovery; coalescing must never lose the final network.
  private void changed(){
-  generation++;networkStatus=current==null?"Network lost. Requests interrupted; reconnect and reload the page.":"Network changed. Reload the page; requests are not retried.";
+  generation++;networkStatus=current==null?"No network. Waiting for a connection…":"Reconnecting…";
   if(worker)return;worker=true;
   networkWork.execute(()->{while(true){long observed;synchronized(networkLock){if(destroyed){worker=false;return;}observed=generation;}
-   try{Native.command("network");}catch(Exception ignored){networkStatus="Network recovery failed. Stop and start access, then reopen the service.";}
-   synchronized(networkLock){if(destroyed||observed==generation){worker=false;return;}}
+   boolean failed=false;
+   try{
+    int count=Native.command("network").optInt("interrupted_requests",0);
+    synchronized(networkLock){interrupted|=count>0;}
+   }catch(Exception ignored){failed=true;}
+   synchronized(networkLock){
+    if(destroyed){worker=false;return;}
+    if(observed!=generation)continue;
+    if(failed)networkStatus="Could not reconnect. Go offline, then online to try again.";
+    else if(current!=null){
+     networkStatus=reconnectedMessage(interrupted);
+     if(interrupted){
+      final String notice=networkStatus;
+      profileWork.schedule(()->{synchronized(networkLock){if(!destroyed&&observed==generation&&notice.equals(networkStatus))networkStatus="Network available";}},10,TimeUnit.SECONDS);
+     }
+     interrupted=false;
+    }
+    worker=false;return;
+   }
   }});
  }
+
  public int onStartCommand(Intent intent,int flags,int startId){
   if(intent!=null&&"stop".equals(intent.getAction())){stopSelf();return START_NOT_STICKY;}
   synchronized(networkLock){if(destroyed||starting||enabled)return START_NOT_STICKY;starting=true;}

@@ -16,10 +16,11 @@ public class MainActivity extends Activity {
  void manageHosts(){startActivity(new Intent(this,HostManagementActivity.class));}
  final ExecutorService work=Executors.newFixedThreadPool(4);
  final java.util.ArrayList<Runnable> ageUpdates=new java.util.ArrayList<>();
- LinearLayout root,list;TextView status,identity,network;
+ LinearLayout root,list;TextView status,identity,network,deviceHeading,relayLabel;
+ long relayCheckedAt=0;boolean relayBusy=false;
  final Handler lifecycle=new Handler(Looper.getMainLooper());
  final Runnable updateAccess=new Runnable(){public void run(){syncSpace();for(Runnable age:ageUpdates)age.run();lifecycle.postDelayed(this,200);}};EditText label,host,invitation;Button access;
- LinearLayout pairingForm,header,machinesList,reviewBox,addMachineBox;FrameLayout space,screen;ScrollView pairingScroll,servicesScroll;StarJump stars;TextView caption,sheetTitle;Button machinesPill,addMachineBtn;boolean spaceShown=false,enterRequested=false,jumping=false,starting=false;long startAt;String lastNetwork="";
+ LinearLayout pairingForm,header,machinesList,reviewBox,addMachineBox;FrameLayout space,screen;ScrollView pairingScroll,servicesScroll;StarJump stars;TextView caption,sheetTitle;Button machinesPill,addMachineBtn;boolean spaceShown=false,enterRequested=false,jumping=false,starting=false;long startAt;String lastNetwork="",devicePeer="";
  CheckBox hostVerified;
  HostStore store;Button deviceName;
  boolean pairingBusy=false;
@@ -34,7 +35,6 @@ public class MainActivity extends Activity {
  Button button(LinearLayout parent,String title,Runnable action){boolean primary=java.util.List.of("Scan with camera","Scan pairing QR","Import QR image","Review pasted invitation","Request pairing").contains(title);Button b=new Button(this);b.setText(title);b.setTextColor(0xffedf2ff);b.setAllCaps(false);b.setTextSize(15);b.setPadding(dp(18),dp(12),dp(18),dp(12));b.setBackground(card(primary?0xff1f3666:0xff142038,primary?0xff4b73c2:0xff283b60,14));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.bottomMargin=dp(10);parent.addView(b,lp);b.setOnClickListener(v->action.run());return b;}
  EditText field(LinearLayout parent,String hint,int type){EditText e=new EditText(this);e.setHint(hint);e.setInputType(type);e.setTextColor(0xffedf2ff);e.setHintTextColor(0xff6e82a3);e.setTextSize(15);e.setBackground(card(0xff0d1526,0xff25385c,14));e.setPadding(dp(16),dp(14),dp(16),dp(14));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.bottomMargin=dp(10);parent.addView(e,lp);return e;}
  CharSequence styledCardText(String top,String bottom,int bottomColor){android.text.SpannableStringBuilder sb=new android.text.SpannableStringBuilder(top+"\n"+bottom);sb.setSpan(new android.text.style.StyleSpan(android.graphics.Typeface.BOLD),0,top.length(),android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);for(char ch:new char[]{'↗','✦'}){int idx=top.indexOf(ch);if(idx>=0)sb.setSpan(new android.text.style.ForegroundColorSpan(0xff65ceff),idx,idx+1,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);}int start=top.length()+1,end=sb.length();sb.setSpan(new android.text.style.RelativeSizeSpan(0.78f),start,end,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);sb.setSpan(new android.text.style.ForegroundColorSpan(bottomColor),start,end,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);return sb;}
- CharSequence pillText(int dotColor){String label="●  Manage system";android.text.SpannableStringBuilder sb=new android.text.SpannableStringBuilder(label);sb.setSpan(new android.text.style.ForegroundColorSpan(dotColor),0,1,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);return sb;}
  public void onCreate(Bundle state){
   super.onCreate(state);getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);store=new HostStore(this);
   getWindow().getAttributes().layoutInDisplayCutoutMode=WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
@@ -42,9 +42,14 @@ public class MainActivity extends Activity {
   root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);screen=new FrameLayout(this);screen.setBackgroundColor(0xff070b14);stars=new StarJump(this);screen.addView(stars,new FrameLayout.LayoutParams(-1,-1));View statusScrim=new View(this);statusScrim.setBackgroundColor(0x66070b14);screen.addView(statusScrim,new FrameLayout.LayoutParams(-1,0,Gravity.TOP));screen.addView(root,new FrameLayout.LayoutParams(-1,-1));setContentView(screen);configureSystemBars();
   getWindow().setDecorFitsSystemWindows(false);root.setOnApplyWindowInsetsListener((view,insets)->{android.graphics.Insets bars=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout()|WindowInsets.Type.ime());view.setPadding(dp(20)+bars.left,bars.top,dp(20)+bars.right,bars.bottom);int top=insets.getInsets(WindowInsets.Type.statusBars()|WindowInsets.Type.displayCutout()).top;ViewGroup.LayoutParams shade=statusScrim.getLayoutParams();if(shade.height!=top){shade.height=top;statusScrim.setLayoutParams(shade);}return insets;});
   header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL|Gravity.LEFT);root.addView(header,new LinearLayout.LayoutParams(-1,dp(64)));
-  machinesPill=button(header,managesHosts()?"‹":"●  Manage system",()->{if(managesHosts())finish();else showPairing(pairingScroll.getVisibility()!=View.VISIBLE);});machinesPill.setContentDescription(managesHosts()?"Back to space":"Manage system");machinesPill.setBackground(card(0xd8101c34,0xff2b4373,21));machinesPill.setPadding(dp(managesHosts()?0:16),0,dp(managesHosts()?0:16),0);machinesPill.setTextSize(managesHosts()?18:14);LinearLayout.LayoutParams mlp=new LinearLayout.LayoutParams(managesHosts()?dp(44):-2,dp(42));mlp.rightMargin=dp(12);machinesPill.setLayoutParams(mlp);
+  if(!managesHosts()){
+   LinearLayout deviceHeader=new LinearLayout(this);deviceHeader.setOrientation(LinearLayout.VERTICAL);deviceHeader.setPadding(0,dp(12),0,dp(4));
+   deviceHeading=new TextView(this);deviceHeading.setText(DeviceProfile.name(this));deviceHeading.setTextColor(0xffedf2ff);deviceHeading.setTextSize(21);deviceHeading.setTypeface(null,android.graphics.Typeface.BOLD);deviceHeading.setSingleLine(true);deviceHeading.setEllipsize(android.text.TextUtils.TruncateAt.END);deviceHeading.setContentDescription("Device name: "+DeviceProfile.name(this));deviceHeading.setOnClickListener(v->renameDevice());
+   deviceHeader.addView(deviceHeading,new LinearLayout.LayoutParams(-1,-2));
+   header.addView(deviceHeader,new LinearLayout.LayoutParams(0,-2,1));
+  }
+  machinesPill=button(managesHosts()?header:new LinearLayout(this),managesHosts()?"‹":"Manage",()->{if(managesHosts())finish();else showPairing(pairingScroll.getVisibility()!=View.VISIBLE);});machinesPill.setContentDescription(managesHosts()?"Back to space":"Manage paired machines");machinesPill.setBackground(card(0xd8101c34,0xff2b4373,21));machinesPill.setPadding(dp(managesHosts()?0:16),0,dp(managesHosts()?0:16),0);machinesPill.setTextSize(managesHosts()?18:14);LinearLayout.LayoutParams mlp=new LinearLayout.LayoutParams(managesHosts()?dp(44):-2,dp(42));mlp.rightMargin=dp(12);machinesPill.setLayoutParams(mlp);
   if(managesHosts()){ImageView logo=new ImageView(this);logo.setImageResource(R.drawable.ic_wispnet_logo);LinearLayout.LayoutParams ilp=new LinearLayout.LayoutParams(dp(34),dp(34));ilp.rightMargin=dp(12);header.addView(logo,ilp);TextView ht=new TextView(this);ht.setText("Wispnet · Hosts");ht.setTextColor(0xffedf2ff);ht.setTextSize(19);ht.setTypeface(null,android.graphics.Typeface.BOLD);header.addView(ht,new LinearLayout.LayoutParams(0,-2,1));}
-  else header.addView(new View(this),new LinearLayout.LayoutParams(0,0,1));
   status=new TextView(this);status.setTextColor(0xffb8d4ff);status.setTextSize(14);status.setBackground(card(0xeb101d36,0xff2d4a7c,14));status.setPadding(dp(16),dp(12),dp(16),dp(12));LinearLayout.LayoutParams slp=new LinearLayout.LayoutParams(-1,-2);slp.bottomMargin=dp(10);status.setVisibility(View.GONE);root.addView(status,slp);
   network=new TextView(this);identity=new TextView(this);identity.setTextColor(0xff8fa3c4);identity.setTextSize(12);identity.setTypeface(android.graphics.Typeface.MONOSPACE);identity.setBackground(card(0xff0d1526,0xff1e2d4a,14));identity.setPadding(dp(16),dp(12),dp(16),dp(12));identity.setTextIsSelectable(true);
   space=new FrameLayout(this);root.addView(space,new LinearLayout.LayoutParams(-1,0,1));
@@ -54,6 +59,7 @@ public class MainActivity extends Activity {
   pairingScroll=new ScrollView(this);pairingScroll.setFillViewport(true);pairingScroll.setVerticalScrollBarEnabled(false);LinearLayout sheetWrap=new LinearLayout(this);sheetWrap.setOrientation(LinearLayout.VERTICAL);
   View scrim=new View(this);scrim.setMinimumHeight(dp(56));scrim.setOnClickListener(v->{if(managesHosts())finish();else showPairing(false);});sheetWrap.addView(scrim,new LinearLayout.LayoutParams(-1,0,1));
   pairingForm=new LinearLayout(this);pairingForm.setOrientation(LinearLayout.VERTICAL);pairingForm.setBackground(card(0xee0b1324,0xff294270,24));pairingForm.setPadding(dp(20),dp(12),dp(20),dp(24));LinearLayout.LayoutParams pflp=new LinearLayout.LayoutParams(-1,-2);pflp.bottomMargin=dp(12);sheetWrap.addView(pairingForm,pflp);pairingScroll.addView(sheetWrap);root.addView(pairingScroll,new LinearLayout.LayoutParams(-1,0,1));
+  relayLabel=new TextView(this);relayLabel.setText("● Relay: connecting…");relayLabel.setTextColor(0xff94a6c4);relayLabel.setTextSize(12);relayLabel.setPadding(0,dp(6),0,dp(10));root.addView(relayLabel,new LinearLayout.LayoutParams(-1,-2));
   View handle=new View(this);handle.setBackground(card(0x668fa3c4,0x00000000,2));LinearLayout.LayoutParams hdlp=new LinearLayout.LayoutParams(dp(40),dp(4));hdlp.gravity=Gravity.CENTER_HORIZONTAL;hdlp.bottomMargin=dp(12);pairingForm.addView(handle,hdlp);
   LinearLayout sheetHeader=new LinearLayout(this);sheetHeader.setGravity(Gravity.CENTER_VERTICAL);LinearLayout.LayoutParams shlp=new LinearLayout.LayoutParams(-1,-2);shlp.bottomMargin=dp(12);pairingForm.addView(sheetHeader,shlp);
   sheetTitle=new TextView(this);sheetTitle.setText("Pair a machine");sheetTitle.setTextColor(0xffedf2ff);sheetTitle.setTextSize(20);sheetTitle.setTypeface(null,android.graphics.Typeface.BOLD);sheetHeader.addView(sheetTitle,new LinearLayout.LayoutParams(0,-2,1));
@@ -83,7 +89,13 @@ public class MainActivity extends Activity {
   if(checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},2);
   status.setText("");
   receiveInvitation(getIntent());
-  work.execute(()->{try{Native.ensure(this);String peer=Native.command("identity").getString("peer");runOnUiThread(()->{identity.setText("Device ID\n"+peer);if(status.getText().toString().startsWith("Preparing protected"))status.setText("Ready. Pair with each machine independently.");refresh();});}catch(Exception e){show("Cannot initialize protected identity: "+e.getMessage());}});
+  work.execute(()->{try{Native.ensure(this);String peer=Native.command("identity").getString("peer");runOnUiThread(()->{identity.setText("Device ID\n"+peer);devicePeer=peer;updateDeviceHeading();if(status.getText().toString().startsWith("Preparing protected"))status.setText("Ready. Pair with each machine independently.");refresh();});}catch(Exception e){show("Cannot initialize protected identity: "+e.getMessage());}});
+ }
+ void updateDeviceHeading(){
+  if(deviceHeading==null)return;
+  String name=DeviceProfile.name(this);
+  deviceHeading.setText(name+(devicePeer.isEmpty()?"":" · "+devicePeer.substring(0,8)));
+  deviceHeading.setContentDescription("Device name: "+name+(devicePeer.isEmpty()?"":". Device ID: "+devicePeer));
  }
  int dp(int value){return Math.round(value*getResources().getDisplayMetrics().density);}
  android.graphics.drawable.GradientDrawable tint(int color,int radius){return card(color,0xff283b60,radius);}
@@ -98,7 +110,7 @@ public class MainActivity extends Activity {
   boolean first=!paired&&!managesHosts()&&!docked;
   ((SpaceToggle)access).plus=first;
   if(stars!=null)stars.hyperspace=docked;
-  if(!managesHosts())header.getChildAt(0).setVisibility(paired?View.VISIBLE:View.GONE);
+  if(!managesHosts())machinesPill.setVisibility(paired?View.VISIBLE:View.GONE);
   ViewGroup parent=(ViewGroup)access.getParent();if(parent!=null)parent.removeView(access);
   if(docked&&!managesHosts())header.addView(access,new LinearLayout.LayoutParams(((SpaceToggle)access).dockedWidth(),dp(44)));
   else space.addView(access,new FrameLayout.LayoutParams(dp(108),dp(108),Gravity.CENTER));
@@ -116,13 +128,31 @@ public class MainActivity extends Activity {
   if(AccessService.enabled){stopService(new Intent(this,AccessService.class));lifecycle.postDelayed(this::syncSpace,40);return;}
   try{starting=true;enterRequested=true;startAt=SystemClock.elapsedRealtime();access.setEnabled(false);access.setText("…");startForegroundService(new Intent(this,AccessService.class));lifecycle.postDelayed(this::syncSpace,40);}catch(RuntimeException e){starting=false;enterRequested=false;access.setEnabled(true);show("Android could not start access. Try again.");}
  }
+ void syncRelay(){
+  if(relayLabel==null||!Native.ready||relayBusy||SystemClock.elapsedRealtime()-relayCheckedAt<2000)return;
+  relayBusy=true;relayCheckedAt=SystemClock.elapsedRealtime();
+  work.execute(()->{
+   String state;try{state=Native.command("relay_status").getString("relay");}catch(Exception failure){state="unavailable";}
+   final String observed=state;runOnUiThread(()->{relayBusy=false;relayLabel.setText("● Relay: "+observed);});
+  });
+ }
  void syncSpace(){
+  syncRelay();
   if(access==null)return;boolean active=AccessService.enabled;
   if(active&&enterRequested&&!jumping){starting=false;enterRequested=false;jumping=true;status.setVisibility(View.GONE);caption.setVisibility(View.GONE);root.animate().alpha(0).setDuration(120);access.setEnabled(false);stars.jump(()->{jumping=false;root.animate().alpha(1).setDuration(200);if(AccessService.enabled){spaceShown=true;dockToggle(true);servicesScroll.setVisibility(View.VISIBLE);refresh();holoReveal();}access.setEnabled(true);});}
   else if(active&&!jumping&&!spaceShown){spaceShown=true;dockToggle(true);servicesScroll.setVisibility(View.VISIBLE);}
   else if(!active&&(spaceShown||jumping)){boolean wasShown=spaceShown;stars.cancel();if(wasShown)stars.dropOut();root.animate().cancel();root.setAlpha(1);jumping=false;spaceShown=false;servicesScroll.setVisibility(View.GONE);dockToggle(false);access.setEnabled(true);}
   if(starting&&SystemClock.elapsedRealtime()-startAt>15000){starting=false;enterRequested=false;dockToggle(false);access.setEnabled(true);stopService(new Intent(this,AccessService.class));show("Access could not start. Try again.");}
-  String current=AccessService.networkStatus;network.setText(current);if(active&&!current.equals(lastNetwork)&&!current.equals("Network available"))show(current);lastNetwork=current;
+  updateNetworkFeedback(AccessService.networkStatus,active);
+ }
+ void updateNetworkFeedback(String current,boolean active){
+  network.setText(current);
+  if(active&&!current.equals(lastNetwork)){
+   if(current.equals("Network available")){
+    if(status.getText().toString().equals(lastNetwork)){status.setText("");status.setVisibility(View.GONE);}
+   }else show(current);
+  }
+  lastNetwork=current;
  }
  void show(String value){runOnUiThread(()->{status.setText(value);status.setVisibility(View.VISIBLE);status.announceForAccessibility(value);if(pairingScroll.getVisibility()==View.VISIBLE)pairingScroll.post(()->pairingScroll.smoothScrollTo(0,0));});}
  void pair(){final String expected=host.getText().toString().trim(),document=invitation.getText().toString(),name=label.getText().toString().trim();
@@ -147,7 +177,7 @@ public class MainActivity extends Activity {
   AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Device name").setMessage("This name appears on your paired computers.").setView(input).setPositiveButton("Save",null).setNegativeButton("Cancel",null).create();
   dialog.setOnShowListener(ignored->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{String name=input.getText().toString().trim();
    if(!DeviceProfile.valid(name)){input.setError("Enter a name up to 128 UTF-8 bytes, without control characters");return;}
-   try{DeviceProfile.save(this,name);deviceName.setText("Device: "+name+" · Rename");dialog.dismiss();show("Name saved. Updating paired computers…");work.execute(()->{boolean synced=DeviceProfile.syncAll(this);show(synced?"Device name updated":"Name saved. Paired computers will update when reachable; older hosts need an app update.");});}
+   try{DeviceProfile.save(this,name);deviceName.setText("Device: "+name+" · Rename");updateDeviceHeading();dialog.dismiss();show("Name saved. Updating paired computers…");work.execute(()->{boolean synced=DeviceProfile.syncAll(this);show(synced?"Device name updated":"Name saved. Paired computers will update when reachable; older hosts need an app update.");});}
    catch(Exception failure){input.setError(failure.getMessage());}
   }));dialog.show();
  }
@@ -161,8 +191,11 @@ public class MainActivity extends Activity {
  void render(){
   list.removeAllViews();ageUpdates.clear();machinesList.removeAllViews();
   LinearLayout heading=new LinearLayout(this);heading.setGravity(Gravity.CENTER_VERTICAL);LinearLayout.LayoutParams hlp=new LinearLayout.LayoutParams(-1,-2);hlp.bottomMargin=dp(12);list.addView(heading,hlp);
-  ImageView badge=new ImageView(this);badge.setImageResource(R.drawable.ic_wispnet_logo);LinearLayout.LayoutParams blp=new LinearLayout.LayoutParams(dp(28),dp(28));blp.rightMargin=dp(10);heading.addView(badge,blp);
-  TextView dirTitle=new TextView(this);dirTitle.setText("SYSTEMS");dirTitle.setTextColor(0xff94a6c4);dirTitle.setTextSize(12);dirTitle.setLetterSpacing(0.12f);dirTitle.setTypeface(null,android.graphics.Typeface.BOLD);heading.addView(dirTitle,new LinearLayout.LayoutParams(0,-2,1));
+  TextView dirTitle=new TextView(this);dirTitle.setText("PAIRED MACHINES");dirTitle.setTextColor(0xff94a6c4);dirTitle.setTextSize(12);dirTitle.setLetterSpacing(0.12f);dirTitle.setTypeface(null,android.graphics.Typeface.BOLD);heading.addView(dirTitle,new LinearLayout.LayoutParams(0,-2,1));
+  if(!managesHosts()){
+   ViewGroup oldParent=(ViewGroup)machinesPill.getParent();if(oldParent!=null)oldParent.removeView(machinesPill);
+   heading.addView(machinesPill);
+  }
   Button reload=button(heading,"↻",this::refresh);reload.setContentDescription("Refresh services");reload.setTag("Refresh all hosts");reload.setPadding(0,0,0,0);reload.setTextSize(18);reload.setLayoutParams(new LinearLayout.LayoutParams(dp(44),dp(44)));
   try{JSONObject records=store.all();if(!managesHosts()&&!spaceShown&&!starting&&!jumping)dockToggle(AccessService.enabled);
    boolean hasRecords=records.length()>0;
@@ -182,7 +215,7 @@ public class MainActivity extends Activity {
     LinearLayout sector=new LinearLayout(this);sector.setOrientation(LinearLayout.VERTICAL);sector.setBackground(card(0xd80b1528,"available".equals(state)?0xff29497d:0xff1d2c4a,20));sector.setPadding(dp(16),dp(14),dp(16),dp(6));LinearLayout.LayoutParams secLp=new LinearLayout.LayoutParams(-1,-2);secLp.bottomMargin=dp(14);list.addView(sector,secLp);
     LinearLayout sectorHead=new LinearLayout(this);sectorHead.setGravity(Gravity.CENTER_VERTICAL);sectorHead.setPadding(dp(4),0,dp(4),dp(10));sectorHead.setOnClickListener(v->showHostDialog(name,peer,statusText));sector.addView(sectorHead,new LinearLayout.LayoutParams(-1,-2));
     TextView sName=new TextView(this);sName.setText("◈  "+name.toUpperCase());sName.setTextColor(0xffedf4ff);sName.setTextSize(14);sName.setLetterSpacing(0.08f);sName.setTypeface(null,android.graphics.Typeface.BOLD);sectorHead.addView(sName,new LinearLayout.LayoutParams(0,-2,1));
-    TextView sBadge=new TextView(this);sBadge.setText("available".equals(state)?("● ONLINE"+(tel!=null?" · "+tel:"")):"approval_pending".equals(state)?"◌ AWAITING APPROVAL":"host_denied".equals(state)?"✕ ACCESS DENIED":"◌ OFFLINE");sBadge.setTextColor(stateColor);sBadge.setTextSize(11);sBadge.setLetterSpacing(0.06f);sBadge.setTypeface(null,android.graphics.Typeface.BOLD);sectorHead.addView(sBadge,new LinearLayout.LayoutParams(-2,-2));
+    TextView sBadge=new TextView(this);sBadge.setText("available".equals(state)?("ONLINE"+(tel!=null?" · "+tel:"")):"approval_pending".equals(state)?"AWAITING APPROVAL":"host_denied".equals(state)?"ACCESS DENIED":"OFFLINE");sBadge.setTextColor("available".equals(state)?0xffedf4ff:stateColor);sBadge.setCompoundDrawablesWithIntrinsicBounds(new StatusDot(this,"available".equals(state)?0xff65ceff:"approval_pending".equals(state)?0xffe9b65c:"host_denied".equals(state)?0xffff9aa8:0xff7a8da8),null,null,null);sBadge.setCompoundDrawablePadding(dp(6));sBadge.setTextSize(11);sBadge.setLetterSpacing(0.06f);sBadge.setTypeface(null,android.graphics.Typeface.BOLD);sectorHead.addView(sBadge,new LinearLayout.LayoutParams(-2,-2));
     if(catalog==null){text(sector,name+" · "+("approval_pending".equals(state)?"Awaiting approval":"Unavailable"),14);continue;}
     JSONArray services=catalog.getJSONArray("services");if(services.length()==0)text(sector,name+" · No shared services",14);
     LinearLayout gridRow=null;
@@ -197,7 +230,6 @@ public class MainActivity extends Activity {
     }
    }
    ((SpaceToggle)access).beacons=beacons;access.invalidate();
-   if(!managesHosts())machinesPill.setText(pillText(anyAvailable?0xff7be0b8:anyPending?0xfff0b85c:0xff8fa3c4));
   }catch(Exception e){show("Saved directory unavailable");}
  }
  void open(String peer,String service,String incarnation){if(!AccessService.enabled){show("Start browser access first");return;}show("Opening "+service+"…");work.execute(()->{try{JSONObject response=Native.request(new JSONObject().put("op","open").put("host",peer).put("host_name",store.all().getJSONObject(peer).getString("name")).put("service",service).put("incarnation",incarnation));syncTelemetry();String url=response.optString("launch_url",response.getString("url"));runOnUiThread(()->{render();status.setVisibility(View.GONE);Intent browser=new Intent(Intent.ACTION_VIEW,Uri.parse(url));browser.addCategory(Intent.CATEGORY_BROWSABLE);try{startActivity(browser);}catch(ActivityNotFoundException missing){show("Install a browser to open this service.");}});}catch(Exception e){try{store.failed(peer,e);}catch(Exception ignored){}show("Cannot open service: "+e.getMessage());runOnUiThread(this::render);}});}

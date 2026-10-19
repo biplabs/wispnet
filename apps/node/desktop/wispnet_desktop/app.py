@@ -67,11 +67,11 @@ from .api import NodeAPI
 
 
 class StarfieldBanner(QWidget):
-    """Star Wars-inspired navicomputer header with drifting 3D starfield and 3-beat hyperjump."""
+    """Full-window drifting starfield and hyperjump animation behind the cards."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setObjectName("headerCard")
+        self.setObjectName("starfieldBackground")
         self.setMinimumHeight(92)
         rng = random.Random(17)
         self.stars = [
@@ -126,10 +126,8 @@ class StarfieldBanner(QWidget):
             bg.setColorAt(0.55, QColor("#0a1224"))
             bg.setColorAt(1.0, QColor("#070c18"))
         painter.setBrush(bg)
-        painter.setPen(
-            QPen(QColor("#3868b8" if self.hyperspace else "#263c66"), 1.2)
-        )
-        painter.drawRoundedRect(1, 1, w - 2, h - 2, 18, 18)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRect(self.rect())
 
         pulse = 0.82 + 0.18 * math.sin(now * 1.6)
         nebula = QRadialGradient(w * 0.5, cy, max(1.0, w * 0.45))
@@ -141,7 +139,7 @@ class StarfieldBanner(QWidget):
         nebula.setColorAt(1.0, QColor(7, 11, 20, 0))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(nebula)
-        painter.drawRoundedRect(2, 2, w - 4, h - 4, 17, 17)
+        painter.drawRect(self.rect())
 
         lock_on = (
             math.sin((progress / 0.18) * math.pi)
@@ -309,19 +307,34 @@ def icon(count=0, online=False):
     return QIcon(pixmap)
 
 
-def node_state_icon(online):
+def node_state_icon(online, idle=False):
     pixmap = QPixmap(16, 16)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     painter.setPen(Qt.PenStyle.NoPen)
     for radius, color in (
-        (7.5, "#4465ceff" if online else "#224a5d7a"),
-        (4.2, "#65ceff" if online else "#7a8da8"),
-        (1.8, "#f4fcff" if online else "#b5c2d4"),
+        (7.5, "#44e9b65c" if idle else "#4465ceff" if online else "#224a5d7a"),
+        (4.2, "#e9b65c" if idle else "#65ceff" if online else "#7a8da8"),
+        (1.8, "#fff5de" if idle else "#f4fcff" if online else "#b5c2d4"),
     ):
         painter.setBrush(QColor(color))
         painter.drawEllipse(QPointF(8, 8), radius, radius)
+    painter.end()
+    return QIcon(pixmap)
+
+
+def trash_icon():
+    pixmap = QPixmap(20, 20)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(QPen(QColor("#b8c8df"), 1.5))
+    painter.drawRoundedRect(5, 6, 10, 12, 1.5, 1.5)
+    painter.drawLine(3, 4, 17, 4)
+    painter.drawRoundedRect(8, 1, 4, 3, 1, 1)
+    painter.drawLine(8, 9, 8, 15)
+    painter.drawLine(12, 9, 12, 15)
     painter.end()
     return QIcon(pixmap)
 
@@ -373,15 +386,17 @@ class Window(QMainWindow):
         self.setWindowIcon(icon())
         self.resize(860, 660)
 
-        main = QWidget()
+        self.header_banner = StarfieldBanner()
+        main = self.header_banner
         layout = QVBoxLayout(main)
         layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(14)
         self.setCentralWidget(main)
 
         # ── Unified Local Machine Command Card (Header + Local Services) ──
-        self.header_banner = StarfieldBanner()
-        banner_vbox = QVBoxLayout(self.header_banner)
+        header_card = QWidget()
+        header_card.setObjectName("headerCard")
+        banner_vbox = QVBoxLayout(header_card)
         banner_vbox.setContentsMargins(18, 14, 18, 14)
         banner_vbox.setSpacing(12)
 
@@ -419,7 +434,6 @@ class Window(QMainWindow):
         self.link_btn.setFixedHeight(36)
         self.link_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.link_btn.clicked.connect(self.pair)
-        header_layout.addWidget(self.link_btn)
 
         banner_vbox.addLayout(header_layout)
 
@@ -430,7 +444,7 @@ class Window(QMainWindow):
         self.local_cards_layout.setSpacing(10)
         banner_vbox.addWidget(self.local_cards_box)
 
-        layout.addWidget(self.header_banner)
+        layout.addWidget(header_card)
 
         # ── Incoming Pairing Alert Banner (only shown when a request is pending) ──
         self.incoming_banner = QFrame()
@@ -454,6 +468,8 @@ class Window(QMainWindow):
 
         self.home_page = QScrollArea()
         self.home_page.setWidgetResizable(True)
+        self.home_page.viewport().setObjectName("homeViewport")
+        self.home_page.viewport().setAutoFillBackground(False)
         self.home_page.setFrameShape(QFrame.Shape.NoFrame)
         self.home_page.setObjectName("homeScroll")
         home_container = QWidget()
@@ -472,6 +488,7 @@ class Window(QMainWindow):
         scan_btn.setProperty("variant", "secondary")
         scan_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         scan_btn.clicked.connect(self.refresh)
+        peers_head_row.addWidget(self.link_btn)
         peers_head_row.addWidget(scan_btn)
         home_layout.addLayout(peers_head_row)
 
@@ -789,9 +806,11 @@ class Window(QMainWindow):
                 meta_row.addStretch(1)
                 left_col.addLayout(meta_row)
                 tile_layout.addLayout(left_col, 1)
-                del_btn = QPushButton("✕")
+                del_btn = QPushButton()
+                del_btn.setIcon(trash_icon())
+                del_btn.setAccessibleName("Remove service")
                 del_btn.setObjectName("tileIconBtn")
-                del_btn.setToolTip("Stop sharing this port")
+                del_btn.setToolTip("Remove this service and stop sharing it")
                 del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 del_btn.clicked.connect(
                     lambda _=False, r=idx: (
@@ -978,9 +997,9 @@ class Window(QMainWindow):
             )
             tel_badge = self._format_telemetry(peer)
             status_badge = (
-                f"● ONLINE · {tel_badge}"
+                f"ONLINE · {tel_badge}"
                 if state == "Available" and tel_badge
-                else "● ONLINE"
+                else "ONLINE"
                 if state == "Available"
                 else f"◌ {state.upper()}"
             )
@@ -990,13 +1009,23 @@ class Window(QMainWindow):
             sec_layout.setContentsMargins(16, 14, 16, 14)
             sec_layout.setSpacing(10)
             head_row = QHBoxLayout()
-            sec_head = QLabel(
-                f"◈  {host_label.upper()} · {peer[:8]}   ·   {status_badge}"
-            )
+            title = f"◈  {host_label.upper()} · {peer[:8]}   ·"
+            sec_head = QLabel(title if state == "Available" else f"{title}   {status_badge}")
+            sec_head.setTextFormat(Qt.TextFormat.PlainText)
             sec_head.setObjectName("peerSectorHeader")
-            head_row.addWidget(sec_head, 1)
-            revoke_btn = QPushButton("✕")
+            head_row.addWidget(sec_head, 0 if state == "Available" else 1)
+            if state == "Available":
+                dot = QLabel()
+                dot.setPixmap(node_state_icon(True).pixmap(16, 16))
+                dot.setFixedSize(16, 16)
+                head_row.addWidget(dot)
+                status_label = QLabel(status_badge)
+                status_label.setObjectName("peerSectorHeader")
+                head_row.addWidget(status_label, 1)
+            revoke_btn = QPushButton()
+            revoke_btn.setIcon(trash_icon())
             revoke_btn.setObjectName("tileIconBtn")
+            revoke_btn.setAccessibleName("Unpair machine")
             revoke_btn.setToolTip("Unpair this machine and revoke its local grants")
             revoke_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             revoke_btn.clicked.connect(
@@ -1052,15 +1081,15 @@ class Window(QMainWindow):
             tel_badge = self._format_telemetry(c_peer)
             if c_peer in connected:
                 streams = connected[c_peer]
-                c_status = f"● CONNECTED ({streams} stream{'s' if streams != 1 else ''})"
+                c_status = f"CONNECTED ({streams} stream{'s' if streams != 1 else ''})"
                 if tel_badge:
                     c_status += f" · {tel_badge}"
             elif c_peer in recent:
-                c_status = f"● ACTIVE ({recent[c_peer]}s AGO)"
+                c_status = f"ACTIVE ({recent[c_peer]}s AGO)"
                 if tel_badge:
                     c_status += f" · {tel_badge}"
             else:
-                c_status = "◌ STANDBY · CLIENT"
+                c_status = "IDLE · CLIENT"
                 if tel_badge:
                     c_status += f" · {tel_badge}"
             allowed = [
@@ -1074,13 +1103,22 @@ class Window(QMainWindow):
             sec_layout.setContentsMargins(16, 12, 16, 12)
             sec_layout.setSpacing(6)
             head_row = QHBoxLayout()
-            sec_head = QLabel(
-                f"◈  {c_name.upper()} · {c_peer[:8]}   ·   {c_status}"
-            )
+            sec_head = QLabel(f"◈  {c_name.upper()} · {c_peer[:8]}   ·")
+            sec_head.setTextFormat(Qt.TextFormat.PlainText)
             sec_head.setObjectName("peerSectorHeader")
-            head_row.addWidget(sec_head, 1)
-            revoke_btn = QPushButton("✕")
+            head_row.addWidget(sec_head)
+            idle = c_peer not in connected and c_peer not in recent
+            dot = QLabel()
+            dot.setPixmap(node_state_icon(not idle, idle=idle).pixmap(16, 16))
+            dot.setFixedSize(16, 16)
+            head_row.addWidget(dot)
+            status_label = QLabel(c_status)
+            status_label.setObjectName("peerSectorHeader")
+            head_row.addWidget(status_label, 1)
+            revoke_btn = QPushButton()
+            revoke_btn.setIcon(trash_icon())
             revoke_btn.setObjectName("tileIconBtn")
+            revoke_btn.setAccessibleName("Revoke device access")
             revoke_btn.setToolTip("Revoke this device's access")
             revoke_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             revoke_btn.clicked.connect(
@@ -1739,9 +1777,18 @@ def appearance(app):
             color: #edf2ff;
             font-size: 14px;
         }
-        QMainWindow, QDialog, QMessageBox, QScrollArea#homeScroll, QWidget#homeContainer {
+        QMainWindow, QDialog, QMessageBox {
             background: #070b14;
         }
+        QScrollArea#homeScroll, QWidget#homeContainer, QWidget#homeViewport {
+            background: transparent;
+        }
+        QWidget#headerCard {
+            background: rgba(11, 20, 38, 210);
+            border: 1px solid #294270;
+            border-radius: 18px;
+        }
+        QWidget#starfieldBackground QLabel,
         QWidget#headerCard QLabel,
         QWidget#localCardsBox,
         QWidget#peerCardsBox,

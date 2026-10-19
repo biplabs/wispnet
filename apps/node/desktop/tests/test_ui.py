@@ -259,7 +259,7 @@ class DesktopChecks(unittest.TestCase):
             window.draw_peers()
             self.assertEqual(window.findChildren(QTabWidget), [])
             buttons = window.peer_cards_box.findChildren(QPushButton)
-            remove = next(b for b in buttons if b.text() == "✕")
+            remove = next(b for b in buttons if b.accessibleName() == "Unpair machine")
             requests = []
             window.submit = lambda fn, callback, peer=False: fn()
             window.api.request = lambda **kw: requests.append(kw)

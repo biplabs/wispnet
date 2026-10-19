@@ -4,7 +4,7 @@ use iroh::{EndpointId, endpoint::Connection};
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -51,12 +51,15 @@ impl Gateways {
         self.interrupt().await;
     }
     /// Interrupt sockets without replaying requests or discarding saved addresses.
-    pub async fn interrupt(&self) {
+    pub async fn interrupt(&self) -> usize {
+        let mut interrupted = 0;
         let mut guard = self.workers.lock().await;
         for worker in guard.drain(..) {
+            interrupted += worker.route.active_requests.load(Ordering::Acquire);
             worker.task.abort();
             let _ = worker.task.await;
         }
+        interrupted
     }
     /// Remove this host's listeners and bookmarks while preserving other hosts.
     pub async fn forget(&self, client: &Client, peer: EndpointId) -> Result<(), String> {
@@ -225,6 +228,7 @@ impl Gateways {
                 .collect(),
             credential: token(),
             bootstraps: Mutex::new(Vec::new()),
+            active_requests: AtomicUsize::new(0),
         });
         let connections = self.connections.clone();
         let active_route = route.clone();
@@ -255,7 +259,15 @@ impl Gateways {
 trait ServiceIo: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> ServiceIo for T {}
 
+struct ActiveRequest<'a>(&'a AtomicUsize);
+impl Drop for ActiveRequest<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 struct Route {
+    active_requests: AtomicUsize,
     client: Arc<Client>,
     peer: EndpointId,
     service: String,
@@ -508,6 +520,8 @@ impl Route {
             )
             .await;
         }
+        self.active_requests.fetch_add(1, Ordering::AcqRel);
+        let _active_request = ActiveRequest(&self.active_requests);
         let local = if self.peer == self.client.endpoint.id() {
             self.client.local_authority.as_ref()
         } else {
@@ -1004,9 +1018,11 @@ mod tests {
                 .starts_with("HTTP/1.1 401")
         );
         assert_ne!(old_cookie, cookie(&raw(&url, "GET", "/", NAV).await));
-        c.command(&serde_json::json!({"op":"network"}))
+        let recovered = c
+            .command(&serde_json::json!({"op":"network"}))
             .await
             .unwrap();
+        assert_eq!(recovered["interrupted_requests"], 0);
         assert!(raw(&url, "GET", "/", NAV).await.starts_with("HTTP/1.1 303"));
         c.gateway.stop().await;
         c.endpoint.close().await;
@@ -1018,6 +1034,128 @@ mod tests {
                 .is_err()
         );
         different.endpoint.close().await;
+    }
+    #[tokio::test]
+    async fn network_recovery_reports_only_inflight_browser_requests() {
+        use wipsnet_registry::host::{self, Authority, Mutation};
+        let state = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let key = wipsnet_core::identity::SecretKey::generate();
+        let peer = key.public();
+        host::initialize(state.path(), peer).unwrap();
+        let backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = backend.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut s, _)) = backend.accept().await else {
+                    break;
+                };
+                let request = headers(&mut s).await.unwrap();
+                if request.starts_with(b"GET /hold ") {
+                    s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n")
+                        .await
+                        .unwrap();
+                    std::future::pending::<()>().await;
+                }
+                let _ = s
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .await;
+            }
+        });
+        {
+            let (mut store, owner) = host::owner_store(state.path(), peer).unwrap();
+            store
+                .host_mutate(
+                    peer,
+                    &owner,
+                    Mutation::Service {
+                        expected_revision: 0,
+                        id: "site".into(),
+                        backend: address,
+                        allow: vec![],
+                        display_name: None,
+                        kind: None,
+                    },
+                )
+                .unwrap();
+        }
+        let authority = Authority::open(state.path(), peer).unwrap();
+        let service = authority.services().await.unwrap().remove(0);
+        let config =
+            serde_json::from_value(serde_json::json!({"bind_addr":"127.0.0.1:0"})).unwrap();
+        let endpoint = wipsnet_agent::tunnel::bind_configured_client(&key, Some(&config))
+            .await
+            .unwrap();
+        let c = Client::from_endpoint(
+            endpoint,
+            key,
+            state.path().into(),
+            config,
+            authority.clone(),
+        );
+        assert_eq!(
+            c.command(&serde_json::json!({"op":"relay_status"}))
+                .await
+                .unwrap()["relay"],
+            "disabled"
+        );
+        c.gateway.enable();
+        let url = c
+            .gateway
+            .open(c.clone(), peer, "site".into(), service.incarnation)
+            .await
+            .unwrap();
+        let session = cookie(&raw(&url, "GET", "/", NAV).await);
+        assert!(
+            raw(&url, "GET", "/", &format!("Cookie: {session}\r\n"))
+                .await
+                .ends_with("ok")
+        );
+        let parsed = url::Url::parse(&url).unwrap();
+        let _idle = TcpStream::connect(("127.0.0.1", parsed.port().unwrap()))
+            .await
+            .unwrap();
+        let result = c
+            .command(&serde_json::json!({"op":"network"}))
+            .await
+            .unwrap();
+        assert_eq!(result["interrupted_requests"], 0);
+        let session = cookie(&raw(&url, "GET", "/", NAV).await);
+        let mut stream = TcpStream::connect(("127.0.0.1", parsed.port().unwrap()))
+            .await
+            .unwrap();
+        stream
+            .write_all(
+                format!(
+                    "GET /hold HTTP/1.1\r\nHost: {}:{}\r\nCookie: {session}\r\n\r\n",
+                    parsed.host_str().unwrap(),
+                    parsed.port().unwrap()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        headers(&mut stream).await.unwrap();
+        let result = c
+            .command(&serde_json::json!({"op":"network"}))
+            .await
+            .unwrap();
+        assert_eq!(result["interrupted_requests"], 1);
+        let mut remaining = Vec::new();
+        tokio::time::timeout(Duration::from_secs(2), stream.read_to_end(&mut remaining))
+            .await
+            .unwrap()
+            .unwrap();
+        let result = c
+            .command(&serde_json::json!({"op":"network"}))
+            .await
+            .unwrap();
+        assert_eq!(result["interrupted_requests"], 0);
+        c.gateway.stop().await;
+        c.endpoint.close().await;
+        server.abort();
     }
     #[tokio::test]
     async fn persistent_route_checks_local_policy_on_every_request_and_survives_old_deadline() {

@@ -54,6 +54,8 @@ QR scanning and saved QR image import use the same invitation review flow. The c
 
 ## Lifecycle and network recovery checks
 
+Network loss shows a waiting message while the app reconnects. Successful recovery clears that message. Reload advice appears only when recovery interrupts an authenticated in-flight browser request or WebSocket; idle browser sockets and completed requests do not trigger it. This advisory clears after ten seconds and does not replace unrelated operation errors. Requests are never replayed automatically.
+
 The app now invalidates existing loopback sessions when the default Android network changes. An interrupted HTTP request is never replayed by the app. The access setting stays enabled; return to Wispnet and open the service again to create a fresh session. The UI shows network loss/change and actual service state, including a notification Stop action. Network callback processing drains the latest change even when another callback arrives during recovery. Activity recreation does not own or stop the service; process death closes its sockets and requires an explicit Start after reopening.
 
 The repeatable physical test uses a unique temporary host-local HTTP/SSE/WebSocket fixture granted only to the existing approved tablet. It restores Wi-Fi enabled state, screen timeout, USB stay-awake setting, battery simulation, and device idle state; it restarts the relay and removes the fixture grant on exit. With `--force-relay`, both host agents temporarily use relay-only transport; original configuration and normal transport are restored afterward. It does not change host identities, real service grants, or app identity/pairings. Run only when these temporary network/relay interruptions are acceptable:

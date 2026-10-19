@@ -234,6 +234,9 @@ impl Client {
                 }
                 self.catalog(host).await
             }
+            "relay_status" => Ok(
+                json!({"relay":wipsnet_agent::diagnostics::relay_state(&self.endpoint,self.config.relay_url.is_some())}),
+            ),
             "telemetry" => {
                 let peers: serde_json::Map<String, Value> = self
                     .telemetry_map()
@@ -256,12 +259,12 @@ impl Client {
                 Ok(json!({"enabled":false}))
             }
             "network" => {
-                self.gateway.interrupt().await;
+                let interrupted = self.gateway.interrupt().await;
                 self.endpoint.network_change().await;
                 if self.gateway.is_enabled() {
                     self.gateway.restore(self.clone()).await?;
                 }
-                Ok(json!({"network_changed":true}))
+                Ok(json!({"network_changed":true,"interrupted_requests":interrupted}))
             }
             "open" => {
                 let host = peer(value)?;

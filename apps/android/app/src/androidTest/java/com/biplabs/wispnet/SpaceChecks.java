@@ -10,6 +10,33 @@ final class SpaceChecks {
   final Bitmap[] bitmap={null};t.runOnMainSync(()->{View view=t.activity.screen;bitmap[0]=Bitmap.createBitmap(view.getWidth(),view.getHeight(),Bitmap.Config.ARGB_8888);view.draw(new Canvas(bitmap[0]));});
   try(FileOutputStream out=new FileOutputStream(new File(t.getTargetContext().getFilesDir(),name+".png"))){bitmap[0].compress(Bitmap.CompressFormat.PNG,100,out);}bitmap[0].recycle();
  }
+ static void headerLayout(AppTestRunner t)throws Exception {
+  t.resume();Native.ensure(t.getTargetContext());
+  if(!AccessService.enabled)t.click("Start browser access");
+  t.await(()->t.activity.spaceShown&&!t.activity.jumping,"Online screen did not appear");t.waitForIdleSync();
+  if(!t.activity.deviceHeading.getText().toString().equals(DeviceProfile.name(t.getTargetContext())+" · "+Native.command("identity").getString("peer").substring(0,8)))throw new Exception("Missing device name");
+  if(!t.activity.machinesPill.getText().toString().equals("Manage"))throw new Exception("Wrong paired machines label");
+  if(t.activity.access.getParent()!=t.activity.header||t.activity.deviceHeading.getParent().getParent()!=t.activity.header)throw new Exception("Device name and offline button are not in the same header");
+  t.await(()->t.activity.relayLabel.getText().toString().startsWith("● Relay: ")&&!t.activity.relayLabel.getText().toString().contains("connecting"),"Missing relay observation");
+  snapshot(t,"android-header");
+ }
+ static void networkFeedback(AppTestRunner t)throws Exception {
+  if(!"Network available".equals(AccessService.reconnectedMessage(false)))throw new Exception("Idle reconnect asked to reload");
+  if(!AccessService.reconnectedMessage(true).contains("reload"))throw new Exception("Interrupted page missing reload advice");
+  t.resume();
+  t.runOnMainSync(()->{
+   t.activity.updateNetworkFeedback("Reconnecting…",true);
+   if(t.activity.status.getVisibility()!=View.VISIBLE)throw new AssertionError("Missing reconnect notice");
+   t.activity.updateNetworkFeedback(AccessService.reconnectedMessage(false),true);
+   if(t.activity.status.getVisibility()!=View.GONE)throw new AssertionError("Recovered message stayed visible");
+   t.activity.updateNetworkFeedback(AccessService.reconnectedMessage(true),true);
+   if(!t.activity.status.getText().toString().contains("reload"))throw new AssertionError("Missing interrupted-page notice");
+   t.activity.show("Unrelated operation failed");
+   t.activity.updateNetworkFeedback("Network available",true);
+   if(!t.activity.status.getText().toString().equals("Unrelated operation failed")||t.activity.status.getVisibility()!=View.VISIBLE)throw new AssertionError("Recovery erased unrelated feedback");
+   t.activity.status.setText("");t.activity.status.setVisibility(View.GONE);
+  });
+ }
  static void buttonLayout(AppTestRunner t)throws Exception {
   final Bitmap[] bitmap={null};
   t.runOnMainSync(()->{
@@ -24,14 +51,14 @@ final class SpaceChecks {
  }
  static void run(AppTestRunner t)throws Exception {
   t.resume();Native.ensure(t.getTargetContext());
-  if(t.activity.pairingScroll.getVisibility()!=View.GONE||t.activity.header.getChildAt(0).getVisibility()!=View.GONE||!((SpaceToggle)t.activity.access).plus)throw new Exception("Unpaired home must hide management and hosts pill and show plus");
+  if(t.activity.pairingScroll.getVisibility()!=View.GONE||t.activity.machinesPill.getVisibility()!=View.GONE||!((SpaceToggle)t.activity.access).plus)throw new Exception("Unpaired home must hide management and hosts pill and show plus");
   t.runOnMainSync(()->t.activity.access.performClick());t.waitForIdleSync();
   if(t.activity.pairingScroll.getVisibility()!=View.VISIBLE)throw new Exception("Pairing sheet did not open from plus");
   t.runOnMainSync(()->t.activity.showPairing(false));t.waitForIdleSync();
   String host="4b5afc25209fc5aac1007be0b5a3f8adf1a1e7b7fdb8663a7f8a4ee2152f0320";
   HostStore store=new HostStore(t.getTargetContext());store.paired(host,"j-strix");store.catalog(host,new JSONObject().put("version",1).put("complete",true).put("service_count",2).put("host",host).put("generation","c".repeat(64)).put("revision",1).put("services",new JSONArray().put(new JSONObject().put("id","llama").put("incarnation","b".repeat(64)).put("display_name","Llama").put("kind","http")).put(new JSONObject().put("id","website").put("incarnation","a".repeat(64)).put("display_name","Website").put("kind","http"))));
   t.runOnMainSync(()->{t.activity.showPairing(false);t.activity.render();});t.waitForIdleSync();
-  if(t.activity.servicesScroll.getVisibility()!=View.GONE||t.activity.caption.getVisibility()!=View.VISIBLE||t.activity.status.getVisibility()!=View.GONE||!t.activity.caption.getText().toString().equals("jump to wisp space")||((SpaceToggle)t.activity.access).plus||t.activity.header.getChildAt(0).getVisibility()!=View.VISIBLE||t.activity.header.getChildAt(0).getLeft()>=t.activity.header.getWidth()/2||!t.activity.machinesPill.getText().toString().contains("Manage system"))throw new Exception("Idle home is cluttered or hosts pill is not top-left");
+  if(t.activity.servicesScroll.getVisibility()!=View.GONE||t.activity.caption.getVisibility()!=View.VISIBLE||t.activity.status.getVisibility()!=View.GONE||!t.activity.caption.getText().toString().equals("jump to wisp space")||((SpaceToggle)t.activity.access).plus||t.activity.machinesPill.getVisibility()!=View.VISIBLE||!t.activity.machinesPill.getText().toString().contains("Manage"))throw new Exception("Idle home is cluttered or hosts pill is not top-left");
   if(t.activity.stars.getWidth()!=t.activity.screen.getWidth()||t.activity.stars.getHeight()!=t.activity.screen.getHeight())throw new Exception("Warp background is not full bleed");
   snapshot(t,"space-idle");
   t.click("Start browser access");t.await(()->t.activity.jumping||t.activity.spaceShown,"Entry did not start");
