@@ -189,6 +189,7 @@ class DesktopChecks(unittest.TestCase):
             window.timer.stop()
             window.online = True
             window.snapshot = {
+                "host_name": "J Strix",
                 "host": {
                     "host": "f" * 64,
                     "services": [
@@ -213,7 +214,8 @@ class DesktopChecks(unittest.TestCase):
             with patch.object(window.api, "request", return_value={}) as call:
                 request()
                 call.assert_called_once_with(
-                    op="open", host="f" * 64, service="website", incarnation="a" * 64
+                    op="open", host="f" * 64, service="website", incarnation="a" * 64,
+                    host_name="J Strix",
                 )
             window.deleteLater()
 

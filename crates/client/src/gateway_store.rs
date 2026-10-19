@@ -16,6 +16,8 @@ pub(super) struct Binding {
     pub incarnation: String,
     pub hostname: String,
     pub port: u16,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
 }
 impl Binding {
     pub fn authority(&self) -> String {
@@ -24,20 +26,80 @@ impl Binding {
     pub fn url(&self) -> String {
         format!("http://{}/", self.authority())
     }
+    pub fn names(&self) -> impl Iterator<Item = &String> {
+        std::iter::once(&self.hostname).chain(self.aliases.iter())
+    }
     fn valid(&self) -> bool {
         self.port >= 1024
             && wipsnet_core::protocol::valid_service_id(&self.service)
             && wipsnet_core::enrollment::valid_code(&self.incarnation)
+            && valid_hostname(&self.hostname)
+            && self.aliases.len() <= 1
             && self
-                .hostname
-                .strip_prefix('w')
-                .and_then(|s| s.strip_suffix(".localhost"))
-                .is_some_and(|s| {
-                    s.len() == 32
-                        && s.bytes()
-                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-                })
+                .aliases
+                .iter()
+                .all(|a| legacy_hostname(a) && a != &self.hostname)
     }
+}
+fn valid_hostname(hostname: &str) -> bool {
+    hostname.strip_suffix(".localhost").is_some_and(|s| {
+        !s.is_empty()
+            && s.len() <= 63
+            && !s.starts_with('-')
+            && !s.ends_with('-')
+            && s.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    })
+}
+pub(super) fn legacy_hostname(hostname: &str) -> bool {
+    hostname
+        .strip_prefix('w')
+        .and_then(|s| s.strip_suffix(".localhost"))
+        .is_some_and(|s| {
+            s.len() == 32
+                && s.bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        })
+}
+fn slug(name: &str, fallback: &str) -> String {
+    let mut result = String::new();
+    for b in name.bytes() {
+        if result.len() >= 28 {
+            break;
+        }
+        if b.is_ascii_alphanumeric() {
+            result.push((b as char).to_ascii_lowercase());
+        } else if !result.is_empty() && !result.ends_with('-') {
+            result.push('-');
+        }
+    }
+    let trimmed = result.trim_end_matches('-');
+    if trimmed.is_empty() {
+        fallback.into()
+    } else {
+        trimmed.into()
+    }
+}
+pub(super) fn readable_hostname(system: Option<&str>, service: &str, saved: &[Binding]) -> String {
+    let base = format!(
+        "{}-{}",
+        slug(system.unwrap_or("system"), "system"),
+        slug(service, "service")
+    );
+    for suffix in 1..=17 {
+        let candidate = if suffix == 1 {
+            format!("{base}.localhost")
+        } else {
+            format!("{base}-{suffix}.localhost")
+        };
+        if !saved
+            .iter()
+            .any(|b| b.names().any(|name| name == &candidate))
+        {
+            return candidate;
+        }
+    }
+    unreachable!("at most sixteen browser names are reserved")
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -81,7 +143,7 @@ pub(super) fn load(state: &Path, owner: EndpointId) -> Result<Vec<Binding>, Stri
         .read_to_end(&mut bytes)
         .map_err(|_| error())?;
     let saved: Saved = serde_json::from_slice(&bytes).map_err(|_| error())?;
-    if saved.version != 1
+    if ![1, 2].contains(&saved.version)
         || saved.owner != owner
         || saved.routes.len() > 16
         || saved.routes.iter().any(|r| !r.valid())
@@ -91,7 +153,7 @@ pub(super) fn load(state: &Path, owner: EndpointId) -> Result<Vec<Binding>, Stri
     for (i, r) in saved.routes.iter().enumerate() {
         if saved.routes[..i].iter().any(|b| {
             b.port == r.port
-                || b.hostname == r.hostname
+                || b.names().any(|name| r.names().any(|other| other == name))
                 || (b.peer == r.peer && b.service == r.service)
         }) {
             return Err(error());
@@ -109,7 +171,7 @@ pub(super) fn save(state: &Path, owner: EndpointId, routes: &[Binding]) -> Resul
     serde_json::to_writer(
         &mut file,
         &Saved {
-            version: 1,
+            version: 2,
             owner,
             routes: routes.to_vec(),
         },
@@ -128,6 +190,41 @@ pub(super) fn save(state: &Path, owner: EndpointId, routes: &[Binding]) -> Resul
 mod tests {
     use super::*;
     #[test]
+    fn readable_names_are_bounded_and_resolve_slug_collisions() {
+        let owner = wipsnet_core::identity::SecretKey::generate().public();
+        let mut saved = Vec::new();
+        for n in 1..=16 {
+            let name = readable_hostname(Some("J Strix"), "llama", &saved);
+            assert_eq!(
+                name,
+                if n == 1 {
+                    "j-strix-llama.localhost".into()
+                } else {
+                    format!("j-strix-llama-{n}.localhost")
+                }
+            );
+            saved.push(Binding {
+                peer: owner,
+                service: format!("service{n}"),
+                incarnation: "a".repeat(64),
+                hostname: name,
+                port: 49152 + n,
+                aliases: vec![],
+            });
+        }
+        assert_eq!(
+            readable_hostname(Some("j-strix"), "llama", &saved),
+            "j-strix-llama-17.localhost"
+        );
+        for name in ["", "中文", "../../example.com", &"A".repeat(256)] {
+            assert!(valid_hostname(&readable_hostname(Some(name), "llama", &[])));
+        }
+        assert_eq!(
+            readable_hostname(None, "llama", &[]),
+            "system-llama.localhost"
+        );
+    }
+    #[test]
     fn address_records_reject_corruption_duplicates_unsafe_permissions_and_symlinks() {
         let state = tempfile::tempdir().unwrap();
         fs::set_permissions(state.path(), fs::Permissions::from_mode(0o700)).unwrap();
@@ -138,6 +235,7 @@ mod tests {
             incarnation: "a".repeat(64),
             hostname: format!("w{}.localhost", "b".repeat(32)),
             port: 49152,
+            aliases: vec![],
         };
         save(state.path(), owner, std::slice::from_ref(&binding)).unwrap();
         assert_eq!(load(state.path(), owner).unwrap()[0].url(), binding.url());

@@ -271,7 +271,13 @@ impl Client {
                 }
                 let url = self
                     .gateway
-                    .open(self.clone(), host, id.to_owned(), incarnation.to_owned())
+                    .open_named(
+                        self.clone(),
+                        host,
+                        id.to_owned(),
+                        incarnation.to_owned(),
+                        value.get("host_name").and_then(Value::as_str),
+                    )
                     .await?;
                 let launch_url = self.gateway.launch_url(host, id).await?;
                 Ok(json!({"url":url,"launch_url":launch_url}))

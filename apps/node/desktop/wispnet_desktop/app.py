@@ -1643,7 +1643,8 @@ class Window(QMainWindow):
         )
         self.submit(
             lambda: self.api.request(
-                op="open", host=host, service=service, incarnation=incarnation
+                op="open", host=host, service=service, incarnation=incarnation,
+                host_name=self.snapshot["host_name"],
             ),
             self.open_result,
         )
@@ -1676,7 +1677,8 @@ class Window(QMainWindow):
             return
         self.submit(
             lambda: self.api.request(
-                op="open", host=peer, service=service, incarnation=incarnation
+                op="open", host=peer, service=service, incarnation=incarnation,
+                host_name=self.peer_names.get(peer) or "System",
             ),
             self.open_result,
         )

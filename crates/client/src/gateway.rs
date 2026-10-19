@@ -101,6 +101,20 @@ impl Gateways {
         service: String,
         incarnation: String,
     ) -> Result<String, String> {
+        self.open_named(client, peer, service, incarnation, None)
+            .await
+    }
+    pub async fn open_named(
+        &self,
+        client: Arc<Client>,
+        peer: EndpointId,
+        service: String,
+        incarnation: String,
+        system_name: Option<&str>,
+    ) -> Result<String, String> {
+        if system_name.is_some_and(|s| !wipsnet_core::enrollment::valid_name(s)) {
+            return Err("Invalid system display name".into());
+        }
         if !wipsnet_core::protocol::valid_service_id(&service)
             || !wipsnet_core::enrollment::valid_code(&incarnation)
         {
@@ -111,19 +125,32 @@ impl Gateways {
         if !self.is_enabled() {
             return Err("Start browser access first".into());
         }
-        if let Some(worker) = workers.iter().find(|w| {
-            w.binding.peer == peer
-                && w.binding.service == service
-                && w.binding.incarnation == incarnation
-        }) {
-            return Ok(worker.binding.url());
-        }
         let mut saved = store::load(&client.state, client.endpoint.id())?;
         let index = saved
             .iter()
             .position(|b| b.peer == peer && b.service == service);
         if index.is_none() && saved.len() >= 16 {
             return Err("Too many saved browser services".into());
+        }
+        let old = index.map(|i| &saved[i]);
+        let migrate =
+            old.is_some_and(|b| store::legacy_hostname(&b.hostname)) && system_name.is_some();
+        let hostname = match old {
+            Some(binding) if !migrate => binding.hostname.clone(),
+            _ => store::readable_hostname(system_name, &service, &saved),
+        };
+        let aliases = if migrate {
+            vec![old.unwrap().hostname.clone()]
+        } else {
+            old.map(|b| b.aliases.clone()).unwrap_or_default()
+        };
+        if let Some(worker) = workers.iter().find(|w| {
+            w.binding.peer == peer
+                && w.binding.service == service
+                && w.binding.incarnation == incarnation
+                && w.binding.hostname == hostname
+        }) {
+            return Ok(worker.binding.url());
         }
         let port = index.map(|i| saved[i].port).unwrap_or(0);
         // An explicit new incarnation replaces the binding, preserving its origin.
@@ -142,9 +169,8 @@ impl Gateways {
             peer,
             service,
             incarnation,
-            hostname: index
-                .map(|i| saved[i].hostname.clone())
-                .unwrap_or_else(|| format!("w{}.localhost", &token()[..32])),
+            hostname,
+            aliases,
             port: listener
                 .local_addr()
                 .map_err(|_| "Cannot inspect browser port")?
@@ -181,7 +207,10 @@ impl Gateways {
             service: binding.service.clone(),
             incarnation: binding.incarnation.clone(),
             local_binding,
-            authority: binding.authority(),
+            authorities: binding
+                .names()
+                .map(|name| format!("{}:{}", name, binding.port))
+                .collect(),
             credential: token(),
             bootstraps: Mutex::new(Vec::new()),
         });
@@ -220,7 +249,7 @@ struct Route {
     service: String,
     incarnation: String,
     local_binding: Option<std::net::SocketAddr>,
-    authority: String,
+    authorities: Vec<String>,
     credential: String,
     bootstraps: Mutex<Vec<(String, std::time::Instant)>>,
 }
@@ -323,8 +352,11 @@ impl Route {
                 return response(&mut socket, "400 Bad Request", "Invalid HTTP headers", "").await;
             }
         };
-        let origin = format!("http://{}", self.authority);
-        if !request.safe(&self.authority) {
+        if !self
+            .authorities
+            .iter()
+            .any(|authority| request.safe(authority))
+        {
             return response(
                 &mut socket,
                 "421 Misdirected Request",
@@ -333,6 +365,7 @@ impl Route {
             )
             .await;
         }
+        let origin = format!("http://{}", request.one("host").ok_or(())?);
         let (websocket, length) = match http::framing(&request) {
             Ok(result) => result,
             Err(()) => {
@@ -688,6 +721,115 @@ mod tests {
         )
         .await
         .unwrap()
+    }
+    #[tokio::test]
+    async fn readable_names_migrate_preserve_aliases_and_survive_duplicate_system_names() {
+        let state = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let key = wipsnet_core::identity::SecretKey::generate();
+        let c = client(state.path(), key.clone()).await;
+        let peer = wipsnet_core::identity::SecretKey::generate().public();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let binding = store::Binding {
+            peer,
+            service: "llama".into(),
+            incarnation: "a".repeat(64),
+            hostname: format!("w{}.localhost", "b".repeat(32)),
+            port: listener.local_addr().unwrap().port(),
+            aliases: vec![],
+        };
+        drop(listener);
+        store::save(
+            state.path(),
+            c.endpoint.id(),
+            std::slice::from_ref(&binding),
+        )
+        .unwrap();
+        let path = state.path().join("browser-routes.json");
+        let mut v: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        v["version"] = 1.into();
+        std::fs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
+        c.command(&serde_json::json!({"op":"enable"}))
+            .await
+            .unwrap();
+        let url = c
+            .gateway
+            .open_named(
+                c.clone(),
+                peer,
+                "llama".into(),
+                "a".repeat(64),
+                Some("J Strix"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            url,
+            format!("http://j-strix-llama.localhost:{}/", binding.port)
+        );
+        assert!(
+            raw(&binding.url(), "GET", "/", NAV)
+                .await
+                .starts_with("HTTP/1.1 303")
+        );
+        assert!(raw(&url, "GET", "/", NAV).await.starts_with("HTTP/1.1 303"));
+        let other_peer = wipsnet_core::identity::SecretKey::generate().public();
+        let other = c
+            .gateway
+            .open_named(
+                c.clone(),
+                other_peer,
+                "llama".into(),
+                "a".repeat(64),
+                Some("J Strix"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            url::Url::parse(&other).unwrap().host_str(),
+            Some("j-strix-llama-2.localhost")
+        );
+        c.gateway.stop().await;
+        c.endpoint.close().await;
+        drop(c);
+        let c = client(state.path(), key).await;
+        c.command(&serde_json::json!({"op":"enable"}))
+            .await
+            .unwrap();
+        assert_eq!(
+            url,
+            c.gateway
+                .open_named(
+                    c.clone(),
+                    peer,
+                    "llama".into(),
+                    "a".repeat(64),
+                    Some("Renamed")
+                )
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            other,
+            c.gateway
+                .open_named(
+                    c.clone(),
+                    other_peer,
+                    "llama".into(),
+                    "a".repeat(64),
+                    Some("Renamed")
+                )
+                .await
+                .unwrap()
+        );
+        assert!(
+            raw(&binding.url(), "GET", "/", NAV)
+                .await
+                .starts_with("HTTP/1.1 303")
+        );
+        c.gateway.stop().await;
+        c.endpoint.close().await;
     }
     #[tokio::test]
     async fn stable_bookmarks_restore_ports_rotate_credentials_and_reject_cross_origin() {

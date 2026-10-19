@@ -3,8 +3,13 @@
 ## v1 decision
 
 The shared Rust Android/desktop gateway serves **HTTP only on IPv4 loopback**.
-Each client installation saves one `w<128-bit>.localhost:<port>` address per
-pinned system and service. Open returns the stable root URL, with no capability
+Each client installation saves one readable address such as
+`j-strix-llama.localhost:<port>` per pinned system and service. Names are
+lowercase ASCII slugs; collisions receive a saved numeric suffix (`-2`, `-3`).
+Saved names survive display-name changes and reconnect order. Existing random
+addresses remain accepted as aliases when their primary name is upgraded on
+the next explicit Open; the port stays unchanged. Version 2 address records
+retain compatibility with version 1 records. Open returns the stable root URL, with no capability
 in its path, query or fragment. Repeated opens reuse the listener; going online
 restores saved listeners on exactly their original ports. A conflicting local
 port fails explicitly rather than silently changing a bookmark. Addresses are
