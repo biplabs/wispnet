@@ -218,6 +218,8 @@ The isolated `space-ui` instrumentation checks management navigation, clean idle
 
 The space background and warp now fill the entire window, including behind cutouts. System bars are hidden with transient swipe access. Safe-area/keyboard padding applies only to controls; it does not shrink the animation. Controls fade away during the jump so the gear/header area cannot block it.
 
+Service cards use one column in windows narrower than 600 dp and two columns in wider windows.
+
 Tapping a service starts the same 900 ms star jump before browser handoff. The browser waits for both the warp and the native open response; disabled system animations skip the visual delay. Launches ignore repeated taps, restore the directory on failure, and cancel pending browser handoff when the activity leaves the foreground or access stops.
 
 Polish validation on 2026-10-16: the normal tablet development app retained its protected identity and both host pairings, and passed real GIKE/Desktop/Llama browser loading, a streamed Llama API reply, session denials, 30-second browser handoff and explicit Stop. A separate physical-tablet peercheck sandbox passed the final fullscreen warp/directory/recreation/native-Stop UI test; its captured cards use display fixtures. The tablet's animator duration scale was changed from 0 to 1 at the user's animation-preview request; the app still respects disabled system animations.
