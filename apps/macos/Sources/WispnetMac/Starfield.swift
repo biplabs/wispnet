@@ -2,6 +2,7 @@ import SwiftUI
 
 /// The Linux desktop's starfield, drawn natively at the same 30 fps cadence.
 struct Starfield: View {
+    static let jumpDuration = 0.9
     let online: Bool
     let warpStartedAt: TimeInterval?
     let active: Bool
@@ -44,8 +45,8 @@ struct Starfield: View {
         let scale = hypot(center.x, center.y)
         let rectangle = Path(CGRect(origin: .zero, size: size))
         let elapsed = warpStartedAt.map { now - $0 } ?? 999
-        let warp = !reduceMotion && elapsed >= 0 && elapsed < 0.9
-        let progress = warp ? min(1, max(0, elapsed / 0.9)) : 0
+        let warp = !reduceMotion && elapsed >= 0 && elapsed < Self.jumpDuration
+        let progress = warp ? min(1, max(0, elapsed / Self.jumpDuration)) : 0
         let lockOn = warp && progress < 0.18 ? sin((progress / 0.18) * .pi) : 0
         let warpPhase = warp ? max(0, (progress - 0.14) / 0.86) : 0
         let surge = warp ? sin(.pi * pow(warpPhase, 0.75)) : 0

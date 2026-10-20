@@ -41,8 +41,9 @@ the node again, just as the enabled Linux user service starts at login.
 
 The content area follows the Linux desktop's drifting 96-star background and
 blue nebula, with faster motion online and a 0.9-second hyperjump when opening
-local or remote services. Native controls sit above translucent cards. Animation
-pauses while the window is hidden, minimized or fully covered, and respects the
+local or remote services. The browser opens after the jump finishes; access is
+prepared concurrently. Native controls sit above transparent, outlined panels.
+Animation pauses while the window is hidden, minimized or fully covered, and respects the
 macOS Reduce Motion setting.
 
 ## Services and pairing

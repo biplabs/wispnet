@@ -135,7 +135,9 @@ struct PeerViewState {
     func open(_ service: Service, host: String) {
         guard online, !busy, service.kind == "http", let status = status else { return }
         let payload = status.openRequest(for: service, on: host, privateNames: names)
-        warpStartedAt = ProcessInfo.processInfo.systemUptime
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        let jumpDuration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : Starfield.jumpDuration
+        warpStartedAt = startedAt
         busy = true
         message = nil
         Task {
@@ -148,6 +150,11 @@ struct PeerViewState {
                 }.value
                 let result = try JSONSerialization.jsonObject(with: data) as? [String: Any]
                 let url = try browserURL(result?["url"] as? String ?? "")
+                // Prepare access during the jump, then hand off only after it ends.
+                let remaining = jumpDuration - (ProcessInfo.processInfo.systemUptime - startedAt)
+                if remaining > 0 {
+                    try await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+                }
                 guard NSWorkspace.shared.open(url) else { throw NodeError("Could not open your browser.") }
             } catch { message = error.localizedDescription }
         }

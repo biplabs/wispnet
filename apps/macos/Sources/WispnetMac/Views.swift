@@ -92,6 +92,7 @@ struct ContentView: View {
                 }
             }
         }
+        .groupBoxStyle(TransparentPanelStyle())
         .preferredColorScheme(.dark)
         .frame(minWidth: 850, minHeight: 580)
         .sheet(isPresented: $pair) { PairView(model: model) }
@@ -110,7 +111,6 @@ struct ContentView: View {
             Button { model.generateQR() } label: { Label("Pair this machine", systemImage: "qrcode") }.disabled(model.busy)
         }
         .padding(18)
-        .background(Color(red: 0.035, green: 0.07, blue: 0.14).opacity(0.82), in: RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(.cyan.opacity(0.18)))
     }
     private var directory: some View {
@@ -166,8 +166,8 @@ struct ContentView: View {
                                 Spacer(minLength: 0)
                                 Image(systemName: "arrow.up.right").foregroundStyle(.secondary)
                             }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(RoundedRectangle(cornerRadius: 12))
                         }.buttonStyle(.plain)
-                            .background(Color(red: 0.035, green: 0.07, blue: 0.14).opacity(0.86), in: RoundedRectangle(cornerRadius: 12))
                             .overlay(RoundedRectangle(cornerRadius: 12).stroke(.cyan.opacity(0.18)))
                             .disabled(model.busy || !enabled || service.kind != "http")
                     }
@@ -281,4 +281,16 @@ struct ContentView: View {
     alert.addButton(withTitle: "Continue")
     alert.addButton(withTitle: "Cancel")
     return alert.runModal() == .alertFirstButtonReturn
+}
+
+private struct TransparentPanelStyle: GroupBoxStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            configuration.label
+            configuration.content
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.cyan.opacity(0.18)))
+    }
 }
