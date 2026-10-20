@@ -176,57 +176,6 @@ impl Gateways {
             worker.binding.authority()
         ))
     }
-    /// Short-lived, route-scoped credentials for approved native applications.
-    pub async fn app_access(
-        &self,
-        peer: EndpointId,
-        service: &str,
-        grant: &str,
-    ) -> Result<String, String> {
-        if !wispnet_core::enrollment::valid_code(grant) {
-            return Err("Invalid app grant".into());
-        }
-        let workers = self.workers.lock().await;
-        let worker = workers
-            .iter()
-            .find(|w| w.binding.peer == peer && w.binding.service == service)
-            .ok_or("Service route unavailable")?;
-        let mut access = worker.route.app_access.lock().await;
-        access.retain(|(_, _, expires)| *expires > std::time::Instant::now());
-        // Renewing a grant invalidates its previous credential.
-        access.retain(|(id, _, _)| id != grant);
-        if access.len() >= 32 {
-            return Err("Too many app sessions".into());
-        }
-        let credential = token();
-        access.push((
-            grant.to_owned(),
-            credential.clone(),
-            std::time::Instant::now() + Duration::from_secs(900),
-        ));
-        Ok(credential)
-    }
-    /// Cancel active requests as well as credentials on routes using this grant.
-    pub async fn revoke_app(&self, grant: &str) {
-        let mut workers = self.workers.lock().await;
-        let mut index = 0;
-        while index < workers.len() {
-            let affected = workers[index]
-                .route
-                .app_access
-                .lock()
-                .await
-                .iter()
-                .any(|(id, _, _)| id == grant);
-            if affected {
-                let worker = workers.remove(index);
-                worker.task.abort();
-                let _ = worker.task.await;
-            } else {
-                index += 1;
-            }
-        }
-    }
     /// Rebind exactly the saved ports. Never silently move a bookmark to a new port.
     pub async fn restore(&self, client: Arc<Client>) -> Result<(), String> {
         {
@@ -418,7 +367,6 @@ impl Gateways {
                 .collect(),
             credential: token(),
             bootstraps: Mutex::new(Vec::new()),
-            app_access: Mutex::new(Vec::new()),
             active_requests: AtomicUsize::new(0),
         });
         let connections = self.connections.clone();
@@ -467,7 +415,6 @@ struct Route {
     authorities: Vec<String>,
     credential: String,
     bootstraps: Mutex<Vec<(String, std::time::Instant)>>,
-    app_access: Mutex<Vec<(String, String, std::time::Instant)>>,
 }
 struct Close(Connection);
 impl Drop for Close {
@@ -503,6 +450,34 @@ impl Request {
             && !self.path.starts_with("//")
             && !self.path.contains(['\r', '\n', '\\'])
             && self.method.bytes().all(|b| b.is_ascii_uppercase())
+    }
+    pub(crate) fn native(&self) -> bool {
+        [
+            "origin",
+            "sec-fetch-site",
+            "sec-fetch-mode",
+            "sec-fetch-dest",
+        ]
+        .iter()
+        .all(|h| self.values(h).is_empty())
+    }
+    pub(crate) fn allowed_website<'a>(
+        &'a self,
+        settings: &crate::access_settings::Settings,
+    ) -> Option<&'a str> {
+        if [
+            "origin",
+            "sec-fetch-site",
+            "sec-fetch-mode",
+            "sec-fetch-dest",
+        ]
+        .iter()
+        .any(|h| self.values(h).len() > 1)
+        {
+            return None;
+        }
+        self.one("origin")
+            .filter(|o| settings.allowed_origins.iter().any(|s| s == o))
     }
     fn same_origin(&self, origin: &str) -> bool {
         self.values("origin").iter().all(|v| *v == origin)
@@ -648,22 +623,19 @@ impl Route {
             && request.one("sec-fetch-mode") == Some("navigate")
             && request.one("sec-fetch-dest") == Some("document")
             && request.values("origin").is_empty();
-        let allowed_origin = request
-            .one("origin")
-            .filter(|_| request.values("origin").len() == 1)
-            .filter(|origin| {
-                crate::access_settings::Settings::load(&self.client.state)
-                    .is_ok_and(|s| s.allowed_origins.iter().any(|v| v == origin))
-            });
+        let settings =
+            crate::access_settings::Settings::load(&self.client.state).map_err(|_| ())?;
+        let allowed_origin = request.allowed_website(&settings);
+        let api_access = request.native() || allowed_origin.is_some();
         let cors = allowed_origin
             .map(|o| format!("Access-Control-Allow-Origin: {o}\r\nVary: Origin\r\n"))
             .unwrap_or_default();
         if !cors.is_empty()
             && request.method == "OPTIONS"
             && length == 0
-            && (!request.path.starts_with("/_wispnet/") || request.path == "/_wispnet/access")
+            && !request.path.starts_with("/_wispnet/")
         {
-            return response(&mut socket,"204 No Content","",&format!("{cors}Access-Control-Allow-Methods: GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, Authorization, X-Wispnet-Access\r\nAccess-Control-Max-Age: 60\r\n")).await;
+            return response(&mut socket,"204 No Content","",&format!("{cors}Access-Control-Allow-Methods: GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, Authorization\r\nAccess-Control-Max-Age: 60\r\n")).await;
         }
         if !request.same_origin(&origin) && cors.is_empty() {
             return response(
@@ -673,33 +645,6 @@ impl Route {
                 "",
             )
             .await;
-        }
-        if request.path == "/_wispnet/access"
-            && request.method == "POST"
-            && length == 0
-            && !websocket
-        {
-            let native =
-                request.values("origin").is_empty() && request.values("sec-fetch-site").is_empty();
-            if !native && cors.is_empty() && request.one("origin") != Some(origin.as_str()) {
-                return response(
-                    &mut socket,
-                    "403 Forbidden",
-                    "Website origin not allowed",
-                    "",
-                )
-                .await;
-            }
-            let result=async {
-                if self.client.service_incarnation(self.peer,&self.service).await? != self.incarnation {return Err("Service changed; resolve again".to_owned());}
-                let access=self.client.gateway.app_access(self.peer,&self.service,&crate::token()).await?;
-                Ok(serde_json::json!({"api_version":1,"url":format!("{origin}/"),"header_name":"X-Wispnet-Access","access_token":access,"expires_in_seconds":900}))
-            }.await;
-            let (status, body) = match result {
-                Ok(v) => ("200 OK", v.to_string()),
-                Err(e) => ("403 Forbidden", serde_json::json!({"error":e}).to_string()),
-            };
-            return socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\n{cors}\r\n{body}",body.len()).as_bytes()).await.map_err(|_|());
         }
         // Retired bootstrap paths must never forward local credentials upstream.
         if request.path.starts_with("/_wispnet/") || request.path.starts_with("/_wipsnet/") {
@@ -737,23 +682,11 @@ impl Route {
             .map(str::trim)
             .filter(|s| s.split('=').next() == Some(COOKIE))
             .collect();
-        let app_credential = request.one("x-wispnet-access");
-        let app_authenticated = if let Some(credential) = app_credential {
-            self.app_access
-                .lock()
-                .await
-                .iter()
-                .any(|(_, expected, expires)| {
-                    *expires > std::time::Instant::now() && constant_equal(credential, expected)
-                })
-        } else {
-            false
-        };
         let cookie_authenticated = request.same_origin(&origin)
             && sessions.len() == 1
             && constant_equal(sessions[0], &format!("{COOKIE}={}", self.credential));
-        if !(app_authenticated || app_credential.is_none() && cookie_authenticated) {
-            if navigation && app_credential.is_none() {
+        if !(api_access || cookie_authenticated) {
+            if navigation {
                 return response(&mut socket, "303 See Other", "", &format!("Location: {}\r\nSet-Cookie: {COOKIE}={}; Path=/; HttpOnly; SameSite=Strict\r\n", request.path, self.credential)).await;
             }
             return response(
@@ -765,7 +698,7 @@ impl Route {
             .await;
         }
         if (websocket || !["GET", "HEAD"].contains(&request.method.as_str()))
-            && !app_authenticated
+            && !api_access
             && request.one("origin") != Some(origin.as_str())
         {
             return response(
@@ -928,7 +861,7 @@ impl Route {
                     .await;
                 }
             };
-            if !cors.is_empty() && app_authenticated {
+            if !cors.is_empty() && api_access {
                 let end = head.bytes.len() - 2;
                 head.bytes.splice(end..end, cors.bytes());
             }
@@ -1277,7 +1210,11 @@ mod tests {
                 .await
                 .unwrap()
         );
-        assert!(raw(&url, "GET", "/", "").await.starts_with("HTTP/1.1 401"));
+        assert!(
+            raw(&url, "GET", "/", "Sec-Fetch-Site: same-origin\r\n")
+                .await
+                .starts_with("HTTP/1.1 401")
+        );
         for headers in [
             "Origin: https://attacker.invalid\r\n",
             "Sec-Fetch-Site: cross-site\r\nSec-Fetch-Mode: navigate\r\nSec-Fetch-Dest: document\r\n",
@@ -1299,9 +1236,14 @@ mod tests {
             url::Url::parse(&other).unwrap().host_str()
         );
         assert!(
-            raw(&other, "GET", "/", &format!("Cookie: {old_cookie}\r\n"))
-                .await
-                .starts_with("HTTP/1.1 401")
+            raw(
+                &other,
+                "GET",
+                "/",
+                &format!("Cookie: {old_cookie}\r\nSec-Fetch-Site: same-origin\r\n")
+            )
+            .await
+            .starts_with("HTTP/1.1 401")
         );
         c.gateway.stop().await;
         let port = url::Url::parse(&url).unwrap().port().unwrap();
@@ -1328,9 +1270,14 @@ mod tests {
                 .unwrap()
         );
         assert!(
-            raw(&url, "GET", "/", &format!("Cookie: {old_cookie}\r\n"))
-                .await
-                .starts_with("HTTP/1.1 401")
+            raw(
+                &url,
+                "GET",
+                "/",
+                &format!("Cookie: {old_cookie}\r\nSec-Fetch-Site: same-origin\r\n")
+            )
+            .await
+            .starts_with("HTTP/1.1 401")
         );
         assert_ne!(old_cookie, cookie(&raw(&url, "GET", "/", NAV).await));
         let recovered = c
@@ -1589,7 +1536,7 @@ mod tests {
         server.abort();
     }
     #[tokio::test]
-    async fn native_app_credentials_are_scoped_rotate_expire_and_revoke() {
+    async fn native_calls_need_no_token_and_stop_cancels_active_requests() {
         use wispnet_registry::host::{self, Authority, Mutation};
         let state = tempfile::tempdir().unwrap();
         std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -1668,73 +1615,30 @@ mod tests {
             .await
             .unwrap();
 
-        let grant = "b".repeat(64);
-        let access = c.gateway.app_access(peer, "site", &grant).await.unwrap();
-        let auth = format!("X-Wispnet-Access: {access}\r\nAuthorization: Bearer backend-key\r\n");
-        assert!(raw(&url, "POST", "/", &auth).await.ends_with("ok"));
+        let auth = "Authorization: Bearer backend-key\r\n";
+        assert!(raw(&url, "POST", "/", auth).await.ends_with("ok"));
         assert!(
-            raw(&url, "GET", "/", "X-Wispnet-Access: wrong\r\n")
-                .await
-                .starts_with("HTTP/1.1 401")
-        );
-        let cross = format!("{auth}Origin: https://evil.example\r\n");
-        assert!(
-            raw(&url, "POST", "/", &cross)
-                .await
-                .starts_with("HTTP/1.1 403")
-        );
-        let other = c
-            .gateway
-            .open(c.clone(), peer, "other".into(), "a".repeat(64))
+            raw(
+                &url,
+                "GET",
+                "/",
+                &format!("{auth}Origin: https://evil.example\r\n")
+            )
             .await
-            .unwrap();
-        assert!(
-            raw(&other, "GET", "/", &auth)
-                .await
-                .starts_with("HTTP/1.1 401")
+            .starts_with("HTTP/1.1 403")
         );
-        let renewed = c.gateway.app_access(peer, "site", &grant).await.unwrap();
-        assert_ne!(access, renewed);
-        assert!(
-            raw(&url, "GET", "/", &auth)
-                .await
-                .starts_with("HTTP/1.1 401")
-        );
-        {
-            let workers = c.gateway.workers.lock().await;
-            let route = &workers
-                .iter()
-                .find(|w| w.binding.service == "site")
-                .unwrap()
-                .route;
-            route.app_access.lock().await[0].2 = std::time::Instant::now() - Duration::from_secs(1);
-        }
-        let auth = format!("X-Wispnet-Access: {renewed}\r\n");
-        assert!(
-            raw(&url, "GET", "/", &auth)
-                .await
-                .starts_with("HTTP/1.1 401")
-        );
-        let access = c.gateway.app_access(peer, "site", &grant).await.unwrap();
         let parsed = url::Url::parse(&url).unwrap();
         let mut stream = TcpStream::connect(("127.0.0.1", parsed.port().unwrap()))
             .await
             .unwrap();
-        stream.write_all(format!("GET /hold HTTP/1.1\r\nHost: {}:{}\r\nX-Wispnet-Access: {access}\r\nAuthorization: Bearer backend-key\r\n\r\n", parsed.host_str().unwrap(), parsed.port().unwrap()).as_bytes()).await.unwrap();
+        stream.write_all(format!("GET /hold HTTP/1.1\r\nHost: {}:{}\r\nAuthorization: Bearer backend-key\r\n\r\n", parsed.host_str().unwrap(), parsed.port().unwrap()).as_bytes()).await.unwrap();
         headers(&mut stream).await.unwrap();
-        c.gateway.revoke_app(&grant).await;
+        c.gateway.stop().await;
         let mut rest = Vec::new();
         tokio::time::timeout(Duration::from_secs(2), stream.read_to_end(&mut rest))
             .await
             .unwrap()
             .unwrap();
-        c.gateway.restore(c.clone()).await.unwrap();
-        assert!(
-            raw(&url, "GET", "/", &format!("X-Wispnet-Access: {access}\r\n"))
-                .await
-                .starts_with("HTTP/1.1 401")
-        );
-        assert!(c.gateway.app_access(peer, "other", &grant).await.is_ok());
         c.gateway.stop().await;
         c.endpoint.close().await;
         server.abort();

@@ -13,7 +13,7 @@ import java.util.concurrent.*;
 public final class MainActivity extends Activity {
  private EditText host,service,registry;
  private TextView status;
- private String endpoint,credential;
+ private String endpoint;
  private final ExecutorService work=Executors.newSingleThreadExecutor();
  public void onCreate(Bundle state){
   super.onCreate(state);LinearLayout layout=new LinearLayout(this);layout.setOrientation(1);layout.setPadding(24,48,24,24);setContentView(layout);
@@ -30,7 +30,7 @@ public final class MainActivity extends Activity {
   work.execute(()->{try{
    HttpURLConnection connection=(HttpURLConnection)new URL(base+"/v1/resolve").openConnection();connection.setConnectTimeout(5000);connection.setReadTimeout(25000);connection.setRequestMethod("POST");connection.setDoOutput(true);connection.setRequestProperty("Content-Type","application/json");
    byte[] body=new org.json.JSONObject().put("host_id",hostId).put("service_id",serviceId).toString().getBytes(StandardCharsets.UTF_8);connection.setFixedLengthStreamingMode(body.length);try(OutputStream stream=connection.getOutputStream()){stream.write(body);}
-   try{if(connection.getResponseCode()!=200){runOnUiThread(()->status.setText("service_unavailable"));return;}org.json.JSONObject result=new org.json.JSONObject(new String(connection.getInputStream().readAllBytes(),StandardCharsets.UTF_8));endpoint=result.getString("url");credential=result.getString("access_token");}finally{connection.disconnect();}
+   try{if(connection.getResponseCode()!=200){runOnUiThread(()->status.setText("service_unavailable"));return;}org.json.JSONObject result=new org.json.JSONObject(new String(connection.getInputStream().readAllBytes(),StandardCharsets.UTF_8));endpoint=result.getString("url");}finally{connection.disconnect();}
    fetch();
   }catch(Exception failure){runOnUiThread(()->status.setText("service_unavailable"));}});
  }
@@ -43,7 +43,7 @@ public final class MainActivity extends Activity {
     // No dependency on platform wildcard .localhost DNS support.
     try(Socket socket=new Socket()){
      socket.connect(new InetSocketAddress("127.0.0.1",uri.getPort()),5000);socket.setSoTimeout(15000);
-     String request="GET "+path+" HTTP/1.1\r\nHost: "+uri.getRawAuthority()+"\r\nX-Wispnet-Access: "+credential+"\r\nConnection: close\r\n\r\n";
+     String request="GET "+path+" HTTP/1.1\r\nHost: "+uri.getRawAuthority()+"\r\nConnection: close\r\n\r\n";
      socket.getOutputStream().write(request.getBytes(StandardCharsets.US_ASCII));
      String line=new BufferedReader(new InputStreamReader(socket.getInputStream(),StandardCharsets.UTF_8)).readLine();
      runOnUiThread(()->status.setText(line==null?"connection_closed":line));

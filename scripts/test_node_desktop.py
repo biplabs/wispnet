@@ -252,7 +252,7 @@ class NodeIntegration(unittest.TestCase):
                     conn.close()
                     return result
 
-                self.assertEqual(exchange("/")[0], 401)
+                self.assertEqual(exchange("/")[0], 200)
                 status, headers, _ = exchange(
                     "/",
                     {
@@ -329,7 +329,7 @@ class NodeIntegration(unittest.TestCase):
                         incarnation=local_incarnation,
                     )["url"]
                 )
-                self.assertEqual(exchange("/")[0], 401)
+                self.assertEqual(exchange("/")[0], 200)
                 self.assertEqual(exchange("/", {"Host": "other.localhost"})[0], 421)
                 status, headers, _ = exchange(
                     "/",

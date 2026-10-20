@@ -136,10 +136,7 @@ impl Client {
         let url = self
             .open_route(&json!({"host":host,"service":id,"incarnation":incarnation}))
             .await?;
-        let access = self.gateway.app_access(host, id, &crate::token()).await?;
-        Ok(
-            json!({"api_version":1,"host_id":host,"service_id":id,"url":url,"header_name":"X-Wispnet-Access","access_token":access,"expires_in_seconds":900}),
-        )
+        Ok(json!({"api_version":1,"host_id":host,"service_id":id,"url":url}))
     }
 }
 pub(crate) async fn start(client: Arc<Client>, port: u16) -> Result<JoinHandle<()>, String> {
@@ -177,27 +174,18 @@ async fn handle(client: Arc<Client>, mut socket: TcpStream, port: u16) -> Result
         .await;
     }
     let settings = Settings::load(&client.state).map_err(|_| ())?;
-    let cors = match request.one("origin") {
-        Some(origin)
-            if request.values("origin").len() == 1
-                && settings.allowed_origins.iter().any(|s| s == origin) =>
-        {
-            format!("Access-Control-Allow-Origin: {origin}\r\nVary: Origin\r\n")
-        }
-        None if request.values("origin").is_empty()
-            && request.values("sec-fetch-site").is_empty() =>
-        {
-            String::new()
-        }
-        _ => {
-            return response(
-                &mut socket,
-                "403 Forbidden",
-                "Website origin not allowed",
-                "",
-            )
-            .await;
-        }
+    let cors = if let Some(origin) = request.allowed_website(&settings) {
+        format!("Access-Control-Allow-Origin: {origin}\r\nVary: Origin\r\n")
+    } else if request.native() {
+        String::new()
+    } else {
+        return response(
+            &mut socket,
+            "403 Forbidden",
+            "Website origin not allowed",
+            "",
+        )
+        .await;
     };
     let (_, length) = match super::gateway::http::framing(&request) {
         Ok((false, n)) if n <= 4096 => (false, n),
@@ -265,7 +253,7 @@ mod tests {
         reply
     }
     #[tokio::test]
-    async fn registry_ports_origins_tokens_policy_and_lifecycle() {
+    async fn registry_ports_tokenless_origins_policy_and_lifecycle() {
         use wispnet_registry::host::{self, Authority, Mutation};
         let state = tempfile::tempdir().unwrap();
         std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -274,12 +262,15 @@ mod tests {
         host::initialize(state.path(), own).unwrap();
         let backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = backend.local_addr().unwrap();
+        let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let backend_hits = hits.clone();
         let server = tokio::spawn(async move {
             loop {
                 let Ok((mut socket, _)) = backend.accept().await else {
                     break;
                 };
                 let head = headers(&mut socket).await.unwrap();
+                backend_hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 assert!(!String::from_utf8_lossy(&head).contains("X-Wispnet-Access"));
                 socket
                     .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
@@ -368,13 +359,18 @@ mod tests {
             serde_json::from_str(result.split("\r\n\r\n").nth(1).unwrap()).unwrap();
         let url = url::Url::parse(resolved["url"].as_str().unwrap()).unwrap();
         assert_eq!(url.port(), Some(service_port));
-        let access = resolved["access_token"].as_str().unwrap();
+        assert!(resolved.get("access_token").is_none());
+        assert!(resolved.get("header_name").is_none());
+        assert!(resolved.get("expires_in_seconds").is_none());
         async fn service(port: u16, authority: &str, extra: &str) -> String {
+            request_service(port, authority, "GET", extra).await
+        }
+        async fn request_service(port: u16, authority: &str, method: &str, extra: &str) -> String {
             let mut socket = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
             socket
                 .write_all(
                     format!(
-                        "GET / HTTP/1.1\r\nHost: {authority}\r\n{extra}Connection: close\r\n\r\n"
+                        "{method} / HTTP/1.1\r\nHost: {authority}\r\n{extra}Connection: close\r\nContent-Length: 0\r\n\r\n"
                     )
                     .as_bytes(),
                 )
@@ -391,25 +387,56 @@ mod tests {
         direct.write_all(format!("POST /_wispnet/access HTTP/1.1\r\nHost: {authority}\r\nOrigin: https://chat.example\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
         let mut direct_reply = String::new();
         direct.read_to_string(&mut direct_reply).await.unwrap();
-        assert!(direct_reply.starts_with("HTTP/1.1 200"), "{direct_reply}");
-        assert!(direct_reply.contains("access_token"));
-        let auth = format!("Origin: https://chat.example\r\nX-Wispnet-Access: {access}\r\n");
+        assert!(direct_reply.starts_with("HTTP/1.1 404"), "{direct_reply}");
+        let auth = String::from("Origin: https://chat.example\r\n");
         let reply = service(service_port, &authority, &auth).await;
         assert!(reply.ends_with("ok"), "{reply}");
         assert!(reply.contains("Access-Control-Allow-Origin: https://chat.example"));
         assert!(
             service(service_port, &authority, "Origin: https://chat.example\r\n")
                 .await
-                .starts_with("HTTP/1.1 401")
+                .starts_with("HTTP/1.1 200")
         );
         assert!(
-            service(
-                service_port,
-                &authority,
-                &format!("Origin: https://evil.example\r\nX-Wispnet-Access: {access}\r\n")
-            )
-            .await
-            .starts_with("HTTP/1.1 403")
+            service(service_port, &authority, "Origin: https://evil.example\r\n")
+                .await
+                .starts_with("HTTP/1.1 403")
+        );
+        assert!(
+            request_service(service_port, &authority, "POST", "")
+                .await
+                .ends_with("ok")
+        );
+        assert!(
+            service(service_port, &authority, "X-Wispnet-Access: retired\r\n")
+                .await
+                .ends_with("ok")
+        );
+        let before = hits.load(std::sync::atomic::Ordering::SeqCst);
+        for extra in [
+            "Origin: https://evil.example\r\n",
+            "Origin: null\r\n",
+            "Origin: https://chat.example\r\nOrigin: https://evil.example\r\n",
+            "Sec-Fetch-Site: cross-site\r\nSec-Fetch-Mode: no-cors\r\n",
+            "Origin: https://chat.example\r\nSec-Fetch-Site: cross-site\r\nSec-Fetch-Site: same-origin\r\n",
+        ] {
+            for method in ["GET", "POST", "OPTIONS"] {
+                let reply = request_service(service_port, &authority, method, extra).await;
+                assert!(
+                    reply.starts_with("HTTP/1.1 403"),
+                    "{method} {extra}: {reply}"
+                );
+            }
+            assert!(
+                call(registry, "GET", "/v1/services", extra, "")
+                    .await
+                    .starts_with("HTTP/1.1 403")
+            );
+        }
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            before,
+            "Denied requests reached backend"
         );
         let occupied = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let mut bad = settings.clone();

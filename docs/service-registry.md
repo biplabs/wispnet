@@ -28,7 +28,7 @@ llama.cpp can run at backend port 8201 while the phone and Linux gateway both us
 18401. Leave the gateway port blank to use automatic allocation; an existing
 saved automatic port remains stable. Chosen ports must be unique and in
 1024–65535. Port conflicts produce an error; no silent fallback occurs.
-Changing settings reconnects active sessions and rotates their credentials.
+Changing settings reconnects active sessions and resets browser sessions.
 Failed live listener changes restore the previous settings and routes; if that
 recovery fails, access stops with an error. Taking Wispnet offline closes the
 registry and service connections. Settings and saved addresses survive restart.
@@ -76,7 +76,7 @@ only this device; they never change the remote host's backend or permissions.
 returns backend addresses, browser login links, or access tokens. Offline or
 denied remote hosts are reported separately in `errors`; cached catalogs do not
 authorize access. Use `POST /v1/resolve` to recheck authority, start a route and
-obtain a credential:
+obtain its URL:
 
 ```js
 const registry = 'http://127.0.0.1:18400';
@@ -90,34 +90,31 @@ const response = await fetch(`${registry}/v1/resolve`, {
 });
 if (!response.ok) throw new Error('Cannot open service');
 const endpoint = await response.json();
-const models = await fetch(new URL('/v1/models', endpoint.url), {
-  headers: {[endpoint.header_name]: endpoint.access_token}
-}).then(r => r.json());
+const models = await fetch(new URL('/v1/models', endpoint.url)).then(r => r.json());
 ```
 
-Resolve returns `url`, `header_name` (`X-Wispnet-Access`), `access_token`,
-`expires_in_seconds` (900), `host_id`, `service_id` and `api_version`.
-Send the token on **every** service request, including SSE. Backend
-`Authorization` headers remain available for an LLM's own API key. The gateway
-strips its access header before forwarding. Never put credentials in URLs or
-logs, and never forward them to another origin through redirects. Re-resolve
-after expiry, connection failures, settings changes or restarting access. The
-bounded gateway permits 32 unexpired API sessions per service and 16 saved routes.
-
-For a known fixed service URL, `POST /_wispnet/access` with an empty body returns
-the same URL/header/token/expiry fields after checking the current service.
-This avoids registry discovery once a service address has been configured. It
-uses the same allowed-website-origin rule and needs no per-app permission.
+Resolve returns `url`, `host_id`, `service_id` and `api_version`. No access token,
+credential header, expiry or renewal is required. Call the URL directly, including
+for POST and SSE requests. A service's own `Authorization` API key remains required
+if that service enforces one. Re-resolve after connection failures or port changes.
+For a known fixed service URL, call it directly without contacting the registry.
+The obsolete `/_wispnet/access` token endpoint is removed (404).
 
 Some Android Java clients cannot resolve wildcard `.localhost`. Connect to
 127.0.0.1 at the returned port and send the URL's exact authority in `Host`.
 Do not substitute `Host: 127.0.0.1` on service routes. The independent Android
 `discovery-example` uses the registry over HTTP and demonstrates this fallback.
 
-Browser callers need an allowed origin on both the registry and service route.
-CORS does not enable cookie-based cross-origin access: API calls require the
-returned header token. Browser localhost/network permissions and secure-context
-rules can impose additional restrictions. Existing browser navigation retains
-its single-use handoff and same-origin session-cookie mechanism. Browser CORS
-cannot authenticate arbitrary native processes; the trust boundary for native
-apps is the local device, as requested by the device-level permission model.
+Browser callers need an exact allowed origin on both the registry and service
+route. Unknown, null or duplicate Origin headers are rejected before forwarding,
+including simple cross-origin POSTs and requests whose Fetch Metadata shows a
+cross-site caller but omits Origin. Allowed websites need no token or cookie for
+API calls. Native clients send no browser Origin/Fetch Metadata headers and use
+the device's host/service grants directly. Retired `X-Wispnet-Access` headers are
+ignored and stripped upstream; they cannot bypass origin checks.
+
+Browser localhost/network permissions and secure-context rules can impose
+additional restrictions. Existing browser navigation retains its single-use
+handoff and same-origin session-cookie mechanism; these browser session cookies
+are separate from the removed API access tokens. Local native apps share the
+device's trust boundary; browser headers do not authenticate native processes.

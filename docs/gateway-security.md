@@ -16,15 +16,14 @@ port fails explicitly rather than silently changing a bookmark. Addresses are
 saved in owner-only `browser-routes.json`, bound to the installation identity;
 browser credentials are never persisted in this file.
 
-Native Android and Linux apps can obtain a route-scoped `X-Wispnet-Access`
-credential through the [shared service registry](service-registry.md). Native
-callers use device-level access; there is no per-app consent layer. Websites
-must have an exact allowed origin configured on the device. Credentials expire
-after 15 minutes, stay in memory, and are stripped before forwarding. They do
-not replace upstream Authorization headers. Host revocation still terminates
-access. Browser cookies retain the behavior described below. Local native apps
-share the device's access boundary and can also imitate browser navigation
-headers on loopback.
+Native Android and Linux apps resolve URLs through the [shared registry](service-registry.md)
+and call them directly using device-level access. No API access token, per-app
+consent or credential renewal is required. Websites must have an exact allowed
+origin configured on the device; unauthorized website requests are rejected
+before forwarding, including simple POSTs and opaque/malformed origins. A service's
+own Authorization/API-key requirements remain unchanged. Host revocation still
+terminates access. Browser navigation retains its separate session-cookie and
+single-use handoff behavior. Native apps share the device's trust boundary.
 
 There is no ten-minute route or cookie deadline. Going offline and process death
 close sockets; going online restores the same addresses. Network changes cancel
@@ -189,12 +188,10 @@ that the same address and credential still work; it replaces the old expiry test
 
 ## Device-level HTTP API
 
-The [shared service registry](service-registry.md) supersedes Android per-app
-consent. Native callers use the device's host/service grants; API credentials
-remain route-scoped and expire after 15 minutes. Cross-origin API access is
-allowed only for exact website origins configured on that device and requires
-`X-Wispnet-Access`; browser cookies alone cannot authorize it. Upstream CORS
-headers remain stripped; the gateway generates its own approved-origin headers.
-The registry and service listeners remain loopback-only, reject unexpected Host
-headers, and expose no management operations. Registry and per-service gateway
-ports are configurable, with stable saved addresses and explicit conflict errors.
+The [shared service registry](service-registry.md) uses the device's host/service
+grants without per-app consent or API access tokens. Approved website origins
+can call service APIs directly; other website requests are blocked before reaching
+the backend. Upstream CORS headers remain stripped; the gateway generates its own
+approved-origin headers. The registry and service listeners remain loopback-only,
+reject unexpected Host headers, and expose no management operations. Ports are
+configurable, with stable saved addresses and explicit conflict errors.
