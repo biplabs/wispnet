@@ -221,3 +221,7 @@ The [native relay lifecycle harness](docs/native-relay-validation.md) also exerc
 Older implementation guides describe earlier HTTPS-controller prototypes, not the accepted architecture. Development now uses fresh per-host state; production migration/import compatibility is not current work. #16/#17 focus on independent host control and target-bound pairing without a global owner credential. #9 supplies per-host catalog synchronization and live local authorization. The checkpoint above does not mark these complete.
 
 **One service directory. Independent hosts. No master node. A disposable cloud relay.**
+
+Owner nodes can optionally [publish a local HTTP service publicly](docs/public-access.md)
+with an HTTPS URL under `wispnet.app`; private device grants do not permit
+republishing another node's service.

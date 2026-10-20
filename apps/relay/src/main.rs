@@ -23,6 +23,8 @@ use zeroize::Zeroizing;
 #[serde(deny_unknown_fields)]
 struct Config {
     listen: SocketAddr,
+    #[serde(default)]
+    http_only: bool,
     certificate: Option<PathBuf>,
     private_key: Option<PathBuf>,
     acme_hostname: Option<String>,
@@ -155,15 +157,34 @@ async fn serve(path: &Path) -> Result<(), &'static str> {
     if config.listen.port() == 0 || !(1..=1024).contains(&config.max_connections) {
         return Err("invalid relay listener or connection limit");
     }
-    let certificate_config = certificate_config(&config)?;
+    if config.http_only
+        && (!config.listen.ip().is_loopback()
+            || config.certificate.is_some()
+            || config.private_key.is_some()
+            || config.acme_hostname.is_some()
+            || config.acme_cache.is_some())
+    {
+        return Err(
+            "HTTP-only packet relay must be loopback-only with TLS configured at its front end",
+        );
+    }
+    let certificate_config = if config.http_only {
+        None
+    } else {
+        Some(certificate_config(&config)?)
+    };
     // Auxiliary HTTP stays loopback-only on an ephemeral port. QUIC and metrics
     // listeners remain disabled; only the configured TLS port is exposed.
-    let mut relay = RelayConfig::new(
+    let mut relay = RelayConfig::new(if config.http_only {
+        config.listen
+    } else {
         "127.0.0.1:0"
             .parse::<SocketAddr>()
-            .expect("constant address"),
-    );
-    relay.tls = Some(TlsConfig::new(config.listen, certificate_config));
+            .expect("constant address")
+    });
+    if let Some(certificate_config) = certificate_config {
+        relay.tls = Some(TlsConfig::new(config.listen, certificate_config));
+    }
     relay.access = Arc::new(Admission {
         current: AtomicUsize::new(0),
         maximum: config.max_connections,
@@ -242,6 +263,7 @@ mod tests {
     #[test]
     fn tls_mode_never_silently_falls_back_or_accepts_mixed_settings() {
         let mut config = Config {
+            http_only: false,
             listen: "127.0.0.1:8443".parse().unwrap(),
             max_connections: 2,
             certificate: None,

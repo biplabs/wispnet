@@ -854,11 +854,18 @@ impl App {
                 self.choice("Manage machine", detail, choices);
             }
             Action::Service(service) => {
-                let details = vec![
+                let mut details = vec![
                     format!("Service: {}", clean(text(&service, "display_name"))),
                     format!("ID: {}", text(&service, "id")),
                     format!("Backend: {}", text(&service, "backend")),
                 ];
+                if let Some(publication) = array(&self.status()["public_access"]["services"])
+                    .iter()
+                    .find(|p| p["service"] == service["id"])
+                {
+                    details.push(format!("Public URL: {}", text(publication, "url")));
+                    details.push(format!("Public status: {}", text(publication, "state")));
+                }
                 let mut choices = vec![entry(
                     "edit",
                     "Edit service and permitted devices",
@@ -872,6 +879,12 @@ impl App {
                     ));
                 }
                 choices.push(entry("remove","Remove service",Action::Confirm{title:"Remove local service".into(),detail:details.clone(),work:self.mutate(json!({"op":"remove","id":service["id"],"expected_revision":self.revision()}))}));
+                if service["kind"] == "http" {
+                    let enabled = array(&self.status()["public_access"]["services"])
+                        .iter()
+                        .any(|p| p["service"] == service["id"] && p["enabled"] == true);
+                    choices.push(entry("public", if enabled {"Disable public access"}else{"Enable public access (anyone can connect)"},Action::Run(Work{kind:Kind::Saved,task:Task::Request(json!({"op":"configure_public","service":service["id"],"incarnation":service["incarnation"],"enabled":!enabled,"name":self.status()["host_name"]}))})));
+                }
                 self.choice("Manage service", details, choices);
             }
             Action::Remote(host, service) => {

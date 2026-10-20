@@ -19,6 +19,23 @@ class DesktopChecks(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
         appearance(cls.app)
 
+    def test_public_toggle_targets_owned_service_incarnation_only(self):
+        window = Window(API(), tray=False)
+        window.timer.stop()
+        window.pool.waitForDone()
+        window.snapshot = {"host_name": "J desktop", "host": {"services": [{"id": "llama", "incarnation": "a" * 64}]}}
+        calls = []
+        window.api.request = lambda **request: calls.append(request) or {}
+        window.submit = lambda fn, done, peer=False: done(fn(), None)
+        window.refresh = lambda: None
+        window.toggle_public("llama", True)
+        self.assertEqual(calls, [{"op": "configure_public", "service": "llama", "incarnation": "a" * 64, "enabled": True, "name": "J desktop"}])
+        self.assertEqual(window.public_busy, set())
+        window.toggle_public("llama", False)
+        self.assertFalse(calls[-1]["enabled"])
+        self.assertNotIn("host", calls[-1])
+        window.close()
+
     def test_access_settings_preserves_offline_service_ports_and_rejects_invalid_input(self):
         window = Window(API(), tray=False)
         window.timer.stop()

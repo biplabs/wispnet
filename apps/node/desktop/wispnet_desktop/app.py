@@ -476,6 +476,7 @@ class Window(QMainWindow):
         self.operation_routes = []
         self.catalog_cache = CatalogCache(getattr(api, "state", None))
         self.cache_loaded = set()
+        self.public_busy = set()
         self.peer_busy = set()
         self.busy = False
         self.online = False
@@ -1042,6 +1043,25 @@ class Window(QMainWindow):
                     lambda _=False, sid=s["id"]: self.edit_service_devices(sid)
                 )
                 meta_row.addWidget(dev_btn)
+                if s["kind"] == "http":
+                    publication = next((p for p in result.get("public_access", {}).get("services", []) if p["service"] == s["id"]), {})
+                    public = QPushButton("Public")
+                    public.setCheckable(True)
+                    public.setChecked(publication.get("enabled", False))
+                    public.setEnabled(s["id"] not in self.public_busy)
+                    public.setAccessibleName(f"Public access for {s['id']}")
+                    public.setToolTip("Anyone with the public URL can connect; the service's own login still applies")
+                    public.clicked.connect(lambda enabled, sid=s["id"]: self.toggle_public(sid, enabled))
+                    meta_row.addWidget(public)
+                    if publication.get("url"):
+                        address = QLabel(publication["url"])
+                        address.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                        address.setWordWrap(True)
+                        address.setToolTip(publication.get("state", "connecting"))
+                        left_col.addWidget(address)
+                        state = QLabel("Public · " + publication.get("state", "connecting"))
+                        state.setObjectName("sectorSubtitle")
+                        left_col.addWidget(state)
                 meta_row.addStretch(1)
                 left_col.addLayout(meta_row)
                 tile_layout.addLayout(left_col, 1)
@@ -1554,6 +1574,21 @@ class Window(QMainWindow):
                     ],
                 }
             )
+
+    def toggle_public(self, service_id, enabled):
+        if not self.snapshot or service_id in self.public_busy:
+            return
+        service = next(s for s in self.snapshot["host"]["services"] if s["id"] == service_id)
+        self.public_busy.add(service_id)
+        request = {"op": "configure_public", "service": service_id, "incarnation": service["incarnation"], "enabled": enabled, "name": self.snapshot["host_name"]}
+        def done(value, error):
+            self.public_busy.discard(service_id)
+            if error:
+                self._set_message(error)
+            else:
+                self._set_message("Public access enabled" if enabled else "Public access disabled")
+            self.refresh()
+        self.submit(lambda: self.api.request(**request), done)
 
     def access_settings(self):
         self.submit(lambda: self.api.request(op="gateway_settings"), self._access_settings_loaded)

@@ -62,3 +62,15 @@ Each host separately backs up its identity, policy/registry, administration cred
 Power off either computer, restart the other host and phone, access that host's existing services, register/update a service there, and pair a fresh client using only that host's approval. Repeat in both directions and do not impose an unrelated-peer policy timeout. Exercise duplicate local service IDs, forged catalogs, independent catalog versions, host-local revocation, partial multi-host revocation, lost caches, relay destruction/rebuild, and one-host recovery while the other continues operating.
 
 Documentation acceptance is not implementation acceptance. Keep completed evidence, build instructions, and current limitations accurate throughout migration.
+
+## Explicit public publishing extension
+
+[Owner-controlled public access](../public-access.md) is an opt-in extension:
+a separate HTTPS/public gateway terminates public application traffic while the
+packet relay remains opaque. An owning node alone enables publication of its
+current local HTTP binding. Private device grants do not confer publish rights
+and are not changed by publishing. The public gateway has a separate identity
+and publisher admission list; live authenticated owner connections register
+transient public routes. It stores no host owner credentials and cannot authorize
+private services. Public traffic trusts the TLS-terminating gateway with plaintext;
+this is explicit and separate from private end-to-end encrypted paired traffic.

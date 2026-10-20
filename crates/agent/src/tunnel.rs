@@ -594,7 +594,7 @@ pub struct ServiceStream {
     completion: Option<Pin<Box<dyn Future<Output = io::Result<()>> + Send>>>,
 }
 impl ServiceStream {
-    fn new(send: SendStream, recv: RecvStream) -> Self {
+    pub fn new(send: SendStream, recv: RecvStream) -> Self {
         Self {
             send,
             recv,

@@ -4759,7 +4759,11 @@ name = "wispnet-client"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "bytes",
+ "http-body-util",
  "httparse",
+ "hyper",
+ "hyper-util",
  "iroh",
  "libc",
  "serde",
@@ -4800,6 +4804,21 @@ dependencies = [
  "wispnet-client",
  "wispnet-core",
  "wispnet-registry",
+]
+
+[[package]]
+name = "wispnet-public-gateway"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "wispnet-agent",
+ "wispnet-client",
+ "wispnet-core",
 ]
 
 [[package]]

@@ -35,6 +35,9 @@ impl State {
                 .map_err(|_| "Cannot generate pairing QR".to_owned())?
             }
             "status" => {
+                if let Err(error) = self.client.publications.reconcile(&self.client).await {
+                    tracing::warn!("Public access reconciliation failed: {error}");
+                }
                 let snapshot = self.authority.snapshot().await.map_err(|e| e.to_string())?;
                 let peers = self.counts.peers();
                 let mut recent = self.counts.recent_peers();
@@ -91,7 +94,7 @@ impl State {
                     }
                 }
                 Ok(
-                    json!({"api_version":1,"host":snapshot,"host_name":host_name,"connected_peers":peers,"recent_peers":recent,"peer_telemetry":telemetry,"presence_timeout_seconds":wispnet_agent::tunnel::PRESENCE_TIMEOUT.as_secs(),"transport_streams":self.counts.streams(),"invitations":invitations,"peer_pins":pins,"relay":wispnet_agent::diagnostics::relay_state(&self.client.endpoint,self.relay_configured),"access_enabled":self.client.gateway.is_enabled()}),
+                    json!({"api_version":1,"host":snapshot,"host_name":host_name,"connected_peers":peers,"recent_peers":recent,"peer_telemetry":telemetry,"presence_timeout_seconds":wispnet_agent::tunnel::PRESENCE_TIMEOUT.as_secs(),"transport_streams":self.counts.streams(),"invitations":invitations,"peer_pins":pins,"relay":wispnet_agent::diagnostics::relay_state(&self.client.endpoint,self.relay_configured),"access_enabled":self.client.gateway.is_enabled(),"public_access":self.client.publications.status(&self.client).await.unwrap_or_else(|e|json!({"error":e,"services":[]}))}),
                 )
             }
             "apply_operation" => {
@@ -149,8 +152,19 @@ impl State {
                 value["name"] = json!(self.device_name);
                 self.client.command(&value).await
             }
-            "gateway_settings" | "configure_access" | "resolve_service" | "unpair"
-            | "preview_invitation" | "catalog" | "telemetry" | "open" | "enable" | "stop"
+            "public_status"
+            | "configure_public"
+            | "configure_public_gateway"
+            | "gateway_settings"
+            | "configure_access"
+            | "resolve_service"
+            | "unpair"
+            | "preview_invitation"
+            | "catalog"
+            | "telemetry"
+            | "open"
+            | "enable"
+            | "stop"
             | "access_status" => self.client.command(&value).await,
             _ => Err("Unsupported local operation".into()),
         }
@@ -271,6 +285,9 @@ pub async fn run(
         transport.clone(),
         authority.clone(),
     );
+    if let Err(error) = client.publications.restore(client.clone()).await {
+        tracing::warn!("Public services unavailable: {error}");
+    }
     let path = config.state_dir.join("node.sock");
     if let Ok(metadata) = std::fs::symlink_metadata(&path) {
         if !metadata.file_type().is_socket() {
@@ -301,6 +318,7 @@ pub async fn run(
     }
     tasks.abort_all();
     while tasks.join_next().await.is_some() {}
+    client.publications.stop().await;
     client.gateway.stop().await;
     drop(state);
     drop(client);

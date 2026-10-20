@@ -1,6 +1,7 @@
 //! Shared peer browser client. One identity/endpoint shared by pairing, catalogs and gateway.
 pub mod access_settings;
 pub mod gateway;
+pub mod public_access;
 mod service_registry;
 use iroh::Endpoint;
 use serde_json::{Value, json};
@@ -31,6 +32,7 @@ pub struct Client {
     config: TransportConfig,
     state: PathBuf,
     pub gateway: gateway::Gateways,
+    pub publications: public_access::Publications,
     pub(crate) local_authority: Option<wispnet_registry::host::Authority>,
     telemetry: Mutex<wispnet_agent::tunnel::PeerTelemetry>,
     _host: Option<wispnet_agent::tunnel::TunnelHost>,
@@ -114,6 +116,7 @@ impl Client {
             state,
             config,
             gateway: gateway::Gateways::default(),
+            publications: public_access::Publications::new(),
             local_authority: Some(authority),
             telemetry: Mutex::new(std::collections::BTreeMap::new()),
             _host: None,
@@ -138,6 +141,7 @@ impl Client {
             config,
             state,
             gateway: gateway::Gateways::default(),
+            publications: public_access::Publications::new(),
             local_authority: None,
             telemetry: Mutex::new(std::collections::BTreeMap::new()),
             _host: None,
@@ -192,6 +196,7 @@ impl Client {
             config,
             state,
             gateway: gateway::Gateways::default(),
+            publications: public_access::Publications::new(),
             local_authority: Some(authority),
             telemetry: Mutex::new(std::collections::BTreeMap::new()),
             _host: Some(host),
@@ -521,6 +526,10 @@ impl Client {
                     .map(|(k, (path, rtt_ms))| (k, json!({"path": path, "rtt_ms": rtt_ms})))
                     .collect();
                 Ok(json!({"peers": peers}))
+            }
+            "public_status" => self.publications.status(self).await,
+            "configure_public" | "configure_public_gateway" => {
+                self.publications.configure(self.clone(), value).await
             }
             "gateway_settings" => self.gateway.settings(self).await,
             "configure_access" => {

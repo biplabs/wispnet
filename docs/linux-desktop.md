@@ -197,3 +197,10 @@ Explicit Android release-publishing version overrides remain available.
 **Access settings** configures the local registry port, allowed website origins
 and each known HTTP service's gateway port. The same HTTP API is available on
 Android; see the [registry contract and examples](service-registry.md).
+
+## Public access
+
+Locally owned HTTP service cards have a **Public** toggle and show the public URL
+and tunnel state when enabled. Remote cards do not offer publishing. See
+[owner-controlled public services](public-access.md) for authority, deployment,
+privacy and owner API details.

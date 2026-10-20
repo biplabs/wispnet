@@ -146,3 +146,13 @@ Manual mode is still available by omitting `--acme`. Relay config accepts either
 partial/mixed configuration. ACME starts asynchronously; service startup alone
 is not certificate issuance proof. Confirm `curl --fail https://relay.wispnet.app/ping`
 without custom trust after installing/updating public mode.
+
+## Public HTTPS front end
+
+The owner-controlled [public service gateway](public-access.md) adds a separate
+application ingress beside this packet relay. In that deployment Caddy owns port
+8443 and normal public TLS, while `wispnet-relay` uses its explicit loopback-only
+HTTP mode on 18443. Clients retain `https://relay.wispnet.app`. The packet relay
+still has no node/application identity or service registry; those belong to the
+separate public gateway and individual owning nodes. The deployment installer
+preserves a rollback snapshot of the earlier packet-only configuration.

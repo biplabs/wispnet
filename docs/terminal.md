@@ -135,3 +135,10 @@ native hosts and exercises approval/cancellation, service grants, machine remova
 invitation-file pairing, mouse navigation, stale-conflict rejection, terminal
 resize and restoration on Ctrl+C/SIGTERM. It independently decodes the QR from
 actual terminal cells. These checks do not replace live optical camera scanning.
+
+## Publish a local HTTP service
+
+In **Local services**, select an HTTP service and choose **Enable public access
+(anyone can connect)**. The service menu shows its public URL and connection state;
+**Disable public access** closes that route and its active streams. Only the
+owning node can publish. See [public access](public-access.md).
