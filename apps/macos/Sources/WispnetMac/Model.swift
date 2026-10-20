@@ -13,6 +13,8 @@ struct PeerViewState {
     @Published var status: NodeStatus?
     @Published var online = false
     @Published var busy = false
+    @Published var windowVisible = false
+    @Published var warpStartedAt: TimeInterval?
     @Published var message: String?
     @Published var peers: [String: PeerViewState] = [:]
     @Published var qr: PairingQR?
@@ -133,6 +135,7 @@ struct PeerViewState {
     func open(_ service: Service, host: String) {
         guard online, !busy, service.kind == "http", let status = status else { return }
         let payload = status.openRequest(for: service, on: host, privateNames: names)
+        warpStartedAt = ProcessInfo.processInfo.systemUptime
         busy = true
         message = nil
         Task {

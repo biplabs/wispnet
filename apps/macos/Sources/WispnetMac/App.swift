@@ -104,15 +104,26 @@ import WispnetCore
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+        model.windowVisible = true
     }
     @objc private func toggleOnline() { model.setOnline(!model.online); updateMenu() }
     @objc private func hideApp() { NSApp.hide(nil) }
     @objc private func about() { NSApp.orderFrontStandardAboutPanel(nil) }
     @objc private func quit() { NSApp.terminate(nil) }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
+        model.windowVisible = false
         sender.orderOut(nil)
         NSApp.setActivationPolicy(.accessory)
         return false
+    }
+    func windowDidMiniaturize(_ notification: Notification) { model.windowVisible = false }
+    func windowDidDeminiaturize(_ notification: Notification) { model.windowVisible = true }
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        model.windowVisible = window.occlusionState.contains(.visible) && !NSApp.isHidden
+    }
+    func applicationDidHide(_ notification: Notification) { model.windowVisible = false }
+    func applicationDidUnhide(_ notification: Notification) {
+        model.windowVisible = window.isVisible && !window.isMiniaturized
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
