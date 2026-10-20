@@ -45,8 +45,9 @@ import WispnetCore
         window.delegate = self
         window.center()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "network", accessibilityDescription: "Wispnet")
-        statusItem.button?.image?.isTemplate = true
+        statusItem.button?.title = "W"
+        statusItem.button?.font = .systemFont(ofSize: 14, weight: .semibold)
+        statusItem.button?.setAccessibilityLabel("Wispnet")
         statusItem.menu = menu
         model.onStatus = { [weak self] in self?.updateMenu() }
         installMainMenu()
