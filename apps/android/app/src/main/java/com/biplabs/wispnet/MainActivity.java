@@ -24,7 +24,7 @@ public class MainActivity extends Activity {
  final Runnable updateAccess=new Runnable(){public void run(){syncSpace();for(Runnable age:ageUpdates)age.run();lifecycle.postDelayed(this,200);}};TextView label;EditText host,invitation;Button access;
  LinearLayout pairingForm,header,machinesList,reviewBox,addMachineBox;FrameLayout space,screen;ScrollView pairingScroll,servicesScroll;StarJump stars;TextView caption,sheetTitle,pairingFeedback;Button pairCodeButton,machinesPill,addMachineBtn;boolean spaceShown=false,enterRequested=false,jumping=false,starting=false;long startAt;String lastNetwork="",devicePeer="";
  String reviewedCode="";int reviewVersion=0;
- HostStore store;Runnable closeServicePermissions;
+ HostStore store;Runnable closeServiceSettings;
  boolean pairingBusy=false,checkingPairing=false,addingMachine=false;
  boolean openingService=false,serviceJumpDone=false;int serviceLaunch=0;String pendingServiceUrl;
  final java.util.Set<String> refreshing=ConcurrentHashMap.newKeySet();
@@ -63,6 +63,7 @@ public class MainActivity extends Activity {
   View scrim=new View(this);scrim.setMinimumHeight(dp(56));scrim.setOnClickListener(v->{if(managesHosts())finish();else showPairing(false);});sheetWrap.addView(scrim,new LinearLayout.LayoutParams(-1,0,1));
   pairingForm=new LinearLayout(this);pairingForm.setOrientation(LinearLayout.VERTICAL);pairingForm.setBackground(card(0xee0b1324,0xff294270,24));pairingForm.setPadding(dp(20),dp(12),dp(20),dp(24));LinearLayout.LayoutParams pflp=new LinearLayout.LayoutParams(-1,-2);pflp.bottomMargin=dp(12);sheetWrap.addView(pairingForm,pflp);pairingScroll.addView(sheetWrap);root.addView(pairingScroll,new LinearLayout.LayoutParams(-1,0,1));
   relayLabel=new TextView(this);relayLabel.setText("● Relay: connecting…");relayLabel.setTextColor(0xff94a6c4);relayLabel.setTextSize(12);relayLabel.setPadding(0,dp(6),0,dp(2));root.addView(relayLabel,new LinearLayout.LayoutParams(-1,-2));
+  button(header,"⚙",()->ServiceSettings.show(this,null,null,"Access settings")).setContentDescription("Access settings");
   TextView versionLabel=new TextView(this);versionLabel.setText("v"+getVersionName());versionLabel.setTextColor(0xff94a6c4);versionLabel.setTextSize(12);versionLabel.setGravity(Gravity.START);versionLabel.setPadding(0,0,0,dp(6));root.addView(versionLabel,new LinearLayout.LayoutParams(-1,-2));
   View handle=new View(this);handle.setBackground(card(0x668fa3c4,0x00000000,2));LinearLayout.LayoutParams hdlp=new LinearLayout.LayoutParams(dp(40),dp(4));hdlp.gravity=Gravity.CENTER_HORIZONTAL;hdlp.bottomMargin=dp(12);pairingForm.addView(handle,hdlp);
   LinearLayout sheetHeader=new LinearLayout(this);sheetHeader.setGravity(Gravity.CENTER_VERTICAL);LinearLayout.LayoutParams shlp=new LinearLayout.LayoutParams(-1,-2);shlp.bottomMargin=dp(12);pairingForm.addView(sheetHeader,shlp);
@@ -113,7 +114,7 @@ public class MainActivity extends Activity {
  }
  void showPairing(boolean visible){
   if(!visible){addingMachine=false;render();}
-  if(closeServicePermissions!=null)closeServicePermissions.run();
+  if(closeServiceSettings!=null)closeServiceSettings.run();
   pairingScroll.setVisibility(visible?View.VISIBLE:View.GONE);space.setVisibility(visible?View.GONE:View.VISIBLE);
   if(access!=null&&access.getParent()==header)access.setVisibility(visible?View.GONE:View.VISIBLE);
   if(visible&&pairingForm!=null){pairingForm.setTranslationY(dp(36));pairingForm.setAlpha(0f);pairingForm.animate().translationY(0).alpha(1f).setDuration(200);}
@@ -131,7 +132,7 @@ public class MainActivity extends Activity {
   FrameLayout.LayoutParams cap=(FrameLayout.LayoutParams)caption.getLayoutParams();cap.topMargin=dp(82);caption.setLayoutParams(cap);
   caption.setText(first?"establish your wisp network":"jump to wisp space");
   access.setOnClickListener(v->{if(first)showPairing(true);else toggleSpace();});
-  access.setVisibility((closeServicePermissions!=null||pairingScroll!=null&&pairingScroll.getVisibility()==View.VISIBLE)&&docked?View.GONE:View.VISIBLE);access.setText("");access.setContentDescription(first?"Establish your wisp network":docked?"Go offline":"Enter wisp space");access.setAlpha(1);access.setSelected(docked);access.setTag(first?"Establish your wisp network":docked?"Stop browser access":"Start browser access");caption.setVisibility(docked?View.GONE:View.VISIBLE);access.invalidate();
+  access.setVisibility((closeServiceSettings!=null||pairingScroll!=null&&pairingScroll.getVisibility()==View.VISIBLE)&&docked?View.GONE:View.VISIBLE);access.setText("");access.setContentDescription(first?"Establish your wisp network":docked?"Go offline":"Enter wisp space");access.setAlpha(1);access.setSelected(docked);access.setTag(first?"Establish your wisp network":docked?"Stop browser access":"Start browser access");caption.setVisibility(docked?View.GONE:View.VISIBLE);access.invalidate();
  }
  void holoReveal(){
   if(!android.animation.ValueAnimator.areAnimatorsEnabled())return;
@@ -307,8 +308,8 @@ public class MainActivity extends Activity {
      LinearLayout body=new LinearLayout(this);tile.addView(body,new FrameLayout.LayoutParams(-1,-1));
      Button row=button(body,"✦  "+display+"   ↗\n"+sub,()->open(peer,service,incarnation));row.setText("");row.setTag("Open "+name+" / "+service);row.setGravity(Gravity.LEFT|Gravity.CENTER_VERTICAL);row.setTextSize(17);row.setPadding(dp(12),dp(14),dp(48),dp(14));row.setBackgroundColor(android.graphics.Color.TRANSPARENT);row.setLayoutParams(new LinearLayout.LayoutParams(-1,-1));
      LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(0,dp(88),1);params.bottomMargin=dp(10);if(i%serviceColumns<serviceColumns-1&&i+1<services.length())params.rightMargin=dp(10);gridRow.addView(tile,params);
-     ImageButton gear=new ImageButton(this);gear.setImageResource(R.drawable.ic_service_settings);gear.setPadding(dp(12),dp(12),dp(12),dp(12));gear.setBackground(card(0x00111e38,0x00283b60,12));gear.setContentDescription("Permissions for "+display+" on "+name);gear.setTag("Configure "+name+" / "+service);
-     gear.setOnClickListener(v->ServicePermissions.show(this,peer,service,display));tile.addView(gear,new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.END|Gravity.CENTER_VERTICAL));
+     ImageButton gear=new ImageButton(this);gear.setImageResource(R.drawable.ic_service_settings);gear.setPadding(dp(12),dp(12),dp(12),dp(12));gear.setBackground(card(0x00111e38,0x00283b60,12));gear.setContentDescription("Settings for "+display+" on "+name);gear.setTag("Configure "+name+" / "+service);
+     gear.setOnClickListener(v->ServiceSettings.show(this,peer,service,display));tile.addView(gear,new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.END|Gravity.CENTER_VERTICAL));
      row.setEnabled(allowed);row.setAlpha(allowed?1:.45f);row.setContentDescription(display+", "+name+", "+statusText);
      reorderable(tile,tile,"services/"+peer,service,serviceOrder);
      reorderable(row,tile,"services/"+peer,service,serviceOrder);

@@ -9,8 +9,6 @@
   <activity android:name=".MainActivity" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity>
   <activity android:name=".HostManagementActivity" android:exported="true"><intent-filter><action android:name="android.intent.action.SEND"/><category android:name="android.intent.category.DEFAULT"/><data android:mimeType="text/plain"/></intent-filter></activity>
   <activity android:name=".PairingCaptureActivity" android:exported="false" android:theme="@style/zxing_CaptureTheme"/>
-  <service android:name=".ServiceDiscoveryService" android:exported="true"/>
-  <activity android:name=".ServiceConsentActivity" android:exported="false"/>
   <service android:name=".AccessService" android:foregroundServiceType="dataSync" android:exported="false"/>
  </application>
 </manifest>

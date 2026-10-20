@@ -10,6 +10,7 @@ import org.json.*;
 
 /** Actual Binder callers run in the example application's independent UID. */
 final class DiscoveryChecks {
+ static int registryPort=18400;
  static AccessibilityNodeInfo find(AccessibilityNodeInfo node,String text){
   if(node==null)return null;
   if(node.getText()!=null&&node.getText().toString().equalsIgnoreCase(text))return node;
@@ -24,7 +25,7 @@ final class DiscoveryChecks {
  static void launch(AppTestRunner t,String host,String service,String claim)throws Exception{
   Intent intent=new Intent().setComponent(new ComponentName("app.wispnet.discoveryexample","app.wispnet.discoveryexample.MainActivity"))
    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_CLEAR_TASK).putExtra("wispnet_package",t.getTargetContext().getPackageName())
-   .putExtra("host_id",host).putExtra("service_id",service).putExtra("resolve",true);
+   .putExtra("host_id",host).putExtra("service_id",service).putExtra("registry_port",registryPort).putExtra("resolve",true);
   if(claim!=null)intent.putExtra("claim_package",claim);
   t.getTargetContext().startActivity(intent);
  }
@@ -38,40 +39,22 @@ final class DiscoveryChecks {
   Native.request(new JSONObject().put("op","pair").put("host",host).put("name","Discovery test phone").put("invitation",document));
   new HostStore(context).paired(host,"Discovery test host");barrier(t,"discovery-pending-owner");
   JSONObject catalog=Native.request(new JSONObject().put("op","catalog").put("host",host));new HostStore(context).catalog(host,catalog);
+  int servicePort;
+  try(java.net.ServerSocket registry=new java.net.ServerSocket(0,1,java.net.InetAddress.getLoopbackAddress());java.net.ServerSocket gateway=new java.net.ServerSocket(0,1,java.net.InetAddress.getLoopbackAddress())){registryPort=registry.getLocalPort();servicePort=gateway.getLocalPort();}
+  JSONObject settings=Native.command("gateway_settings").getJSONObject("settings");settings.put("registry_port",registryPort).put("service_ports",new JSONArray().put(new JSONObject().put("host",host).put("service",service).put("port",servicePort)));
+  Native.request(new JSONObject().put("op","configure_access").put("settings",settings));
   t.runOnMainSync(()->context.startForegroundService(new Intent(context,AccessService.class)));
   t.await(()->AccessService.enabled,"Access not enabled");
-  launch(t,host,service,"com.android.settings");t.await(()->visible(t,"caller_rejected"),"Caller package spoof accepted");
-  launch(t,"a".repeat(64),service,null);t.await(()->visible(t,"host_not_paired"),"Unpaired host accepted");
-  launch(t,"bad",service,null);t.await(()->visible(t,"invalid_request"),"Malformed host accepted");
-  launch(t,host,"missing-service",null);t.await(()->visible(t,"service_unavailable"),"Unknown service accepted");
-  launch(t,host,service+"-tcp",null);t.await(()->visible(t,"unsupported_protocol"),"TCP service exposed as HTTP");
-  launch(t,host,service,null);click(t,"Deny");t.await(()->visible(t,"denied"),"Deny not returned");
-  if(new AppGrants(context).all().length()!=0)throw new Exception("Denial persisted a grant");
-  click(t,"Resolve service");click(t,"Allow");t.await(()->visible(t,"HTTP/1.1 200 OK"),"Independent app did not reach backend");t.stage("discovery-external-http");
-  // A service gear lists only that service's grants, including while cached/offline.
-  JSONObject grants=new AppGrants(context).all();String grant=grants.keys().next();JSONObject g=grants.getJSONObject(grant);
-  JSONObject unrelated=new JSONObject(g.toString()).put("service_id",service+"-tcp").put("label","Other service app");
-  JSONObject otherHost=new JSONObject(g.toString()).put("host_id","a".repeat(64)).put("label","Other host app");
-  new AppGrants(context).approve("c".repeat(64),unrelated);new AppGrants(context).approve("d".repeat(64),otherHost);
+  JSONArray routes=Native.command("gateway_settings").getJSONArray("routes");boolean bound=false;for(int i=0;i<routes.length();i++){JSONObject r=routes.getJSONObject(i);if(host.equals(r.getString("host"))&&service.equals(r.getString("service"))&&r.getInt("port")==servicePort)bound=true;}if(!bound)throw new Exception("Fixed service port was not opened on startup");
+  launch(t,host,service,null);t.await(()->visible(t,"HTTP/1.1 200 OK"),"Independent HTTP registry client did not reach backend");t.stage("discovery-external-http");
   t.resume();t.await(()->t.activity.spaceShown&&!t.activity.jumping,"Service cards not shown");
   String gearTag="Configure Discovery test host / "+service;
   t.await(()->t.activity.root.findViewWithTag(gearTag)!=null,"Missing service gear");
   t.runOnMainSync(()->t.activity.root.findViewWithTag(gearTag).performClick());
-  t.await(()->visible(t,"App permissions"),"Service permissions missing");
-  if(t.activity.root.findViewWithTag("Service permissions sheet")==null||t.activity.space.getVisibility()!=android.view.View.GONE)throw new Exception("Permissions did not use the in-screen sheet");
-  if(!t.getUiAutomation().getRootInActiveWindow().findAccessibilityNodeInfosByText("Other service app").isEmpty()||!t.getUiAutomation().getRootInActiveWindow().findAccessibilityNodeInfosByText("Other host app").isEmpty())throw new Exception("Service permissions leaked another service or host's grants");
-  SpaceChecks.snapshot(t,"service-permissions");
-  click(t,"Revoke app.wispnet.discoveryexample");click(t,"Revoke");
-  t.await(()->!new AppGrants(context).all().has(grant),"Revocation not persisted");
-  t.await(()->visible(t,"No apps have access to this service."),"Native revocation did not finish");
-  if(new AppGrants(context).all().length()!=2)throw new Exception("Revoking a service changed unrelated grants");
-  SpaceChecks.snapshot(t,"service-gears");
-  t.stage("discovery-service-gear-revoked");
-  context.startActivity(new Intent().setComponent(new ComponentName("app.wispnet.discoveryexample","app.wispnet.discoveryexample.MainActivity"))
-   .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)); // Keep the old credential in the existing activity.
-  click(t,"Call saved endpoint");t.await(()->visible(t,"HTTP/1.1 401 Unauthorized"),"Revoked credential remained usable");
-  click(t,"Resolve service");click(t,"Allow");t.await(()->visible(t,"HTTP/1.1 200 OK"),"Reapproval failed");
-  barrier(t,"discovery-withdraw-service");click(t,"Resolve service");t.await(()->visible(t,"service_unavailable"),"Host grant withdrawal did not deny discovery");
+  t.await(()->visible(t,"Service gateway port"),"Service port setting missing");
+  if(t.activity.root.findViewWithTag("Service settings sheet")==null)throw new Exception("Settings did not use the in-screen sheet");
+  SpaceChecks.snapshot(t,"service-settings");
+  barrier(t,"discovery-withdraw-service");launch(t,host,service,null);t.await(()->visible(t,"service_unavailable"),"Host grant withdrawal did not deny discovery");
   context.stopService(new Intent(context,AccessService.class));t.stage("discovery-passed");
  }
 }

@@ -231,10 +231,12 @@ Earlier emulator UI runs passed before the final fullscreen change. Final API-35
 
 ## Integration with other Android apps
 
-The [Android service discovery API](android-service-discovery.md) resolves a full
-host ID and service ID to an authenticated local endpoint without manual port
-configuration. Access requires per-app user approval and the host's existing
-phone/service grants. A separate example app and physical Binder tests are included.
+The [shared HTTP registry](service-registry.md) resolves a full host ID and
+service ID to an authenticated local endpoint. Android and Linux use the same
+configurable registry port and optional fixed service gateway ports. Native apps
+use the phone's existing host/service grants without per-app approval. Websites
+require an explicitly allowed origin. A separate example app and physical HTTP
+registry tests cover independent-app access and host grant withdrawal.
 
 ## Pairing removal in both directions
 
@@ -244,7 +246,7 @@ pins are indexed without adding host service grants or changing the phone identi
 New QR pairings register both endpoints, with no phone services granted by default.
 
 Removing a machine in Android first revokes its native pairing and browser routes,
-then clears its Android card and app-access consents. A desktop learns removal on
+then clears its Android card. A desktop learns removal on
 its next catalog refresh. For older client-only phone entries, refreshing the
 GUI/TUI device directory probes the phone's authenticated pairing status, with four
 concurrent probes at most and a 30-second per-device cooldown. There is no deletion

@@ -1,5 +1,7 @@
 //! Shared peer browser client. One identity/endpoint shared by pairing, catalogs and gateway.
+pub mod access_settings;
 pub mod gateway;
+mod service_registry;
 use iroh::Endpoint;
 use serde_json::{Value, json};
 use std::{
@@ -54,6 +56,51 @@ fn peer(value: &Value) -> Result<EndpointId, String> {
         .map_err(|_| "Invalid host pin".into())
 }
 impl Client {
+    pub(crate) async fn open_route(self: &Arc<Self>, value: &Value) -> Result<String, String> {
+        let host = peer(value)?;
+        let id = argument(value, "service")?;
+        let incarnation = argument(value, "incarnation")?;
+        if !wispnet_core::enrollment::valid_code(incarnation) {
+            return Err("Refresh this service before opening".into());
+        }
+        if host == self.endpoint.id()
+            && let Some(authority) = &self.local_authority
+        {
+            // Only the owner-only node API constructs a local authority client.
+            // Local owner access needs neither a self-pin nor a self-grant.
+            let services = authority.services().await.map_err(|e| e.to_string())?;
+            if !services.iter().any(|s| {
+                s.id == id
+                    && s.incarnation == incarnation
+                    && s.kind == wispnet_core::host::ServiceKind::Http
+            }) {
+                return Err("Service no longer permitted".into());
+            }
+        } else {
+            if self.saved_host(host).await?.is_none() {
+                return Err("Pair with this host first".into());
+            }
+            let catalog = self.catalog(host).await?;
+            if !catalog["services"].as_array().is_some_and(|s| {
+                s.iter().any(|s| {
+                    s["id"] == id && s["incarnation"] == incarnation && s["kind"] == "http"
+                })
+            }) {
+                return Err("Service no longer permitted".into());
+            }
+        }
+        let url = self
+            .gateway
+            .open_named(
+                self.clone(),
+                host,
+                id.to_owned(),
+                incarnation.to_owned(),
+                value.get("host_name").and_then(Value::as_str),
+            )
+            .await?;
+        Ok(url)
+    }
     pub fn from_endpoint(
         endpoint: Endpoint,
         key: SecretKey,
@@ -475,6 +522,15 @@ impl Client {
                     .collect();
                 Ok(json!({"peers": peers}))
             }
+            "gateway_settings" => self.gateway.settings(self).await,
+            "configure_access" => {
+                let settings = serde_json::from_value(
+                    value.get("settings").ok_or("Missing settings")?.clone(),
+                )
+                .map_err(|_| "Invalid access settings")?;
+                self.gateway.configure(self.clone(), settings).await
+            }
+            "resolve_service" => self.resolve_service(value).await,
             "access_status" => Ok(json!({"enabled":self.gateway.is_enabled()})),
             "enable" => {
                 self.gateway.enable();
@@ -496,69 +552,12 @@ impl Client {
                 }
                 Ok(json!({"network_changed":true,"interrupted_requests":interrupted}))
             }
-            "open" | "app_open" => {
+            "open" => {
                 let host = peer(value)?;
                 let id = argument(value, "service")?;
-                let incarnation = argument(value, "incarnation")?;
-                if !wispnet_core::enrollment::valid_code(incarnation) {
-                    return Err("Refresh this service before opening".into());
-                }
-                if host == self.endpoint.id()
-                    && let Some(authority) = &self.local_authority
-                {
-                    // Only the owner-only node API constructs a local authority client.
-                    // Local owner access needs neither a self-pin nor a self-grant.
-                    let services = authority.services().await.map_err(|e| e.to_string())?;
-                    if !services.iter().any(|s| {
-                        s.id == id
-                            && s.incarnation == incarnation
-                            && s.kind == wispnet_core::host::ServiceKind::Http
-                    }) {
-                        return Err("Service no longer permitted".into());
-                    }
-                } else {
-                    if self.saved_host(host).await?.is_none() {
-                        return Err("Pair with this host first".into());
-                    }
-                    let catalog = self.catalog(host).await?;
-                    if !catalog["services"].as_array().is_some_and(|s| {
-                        s.iter().any(|s| {
-                            s["id"] == id && s["incarnation"] == incarnation && s["kind"] == "http"
-                        })
-                    }) {
-                        return Err("Service no longer permitted".into());
-                    }
-                }
-                let url = self
-                    .gateway
-                    .open_named(
-                        self.clone(),
-                        host,
-                        id.to_owned(),
-                        incarnation.to_owned(),
-                        value.get("host_name").and_then(Value::as_str),
-                    )
-                    .await?;
-                if value["op"] == "app_open" {
-                    let access = self
-                        .gateway
-                        .app_access(host, id, argument(value, "grant")?)
-                        .await?;
-                    return Ok(json!({"url":url,"access_token":access,"expires_in_seconds":900}));
-                }
+                let url = self.open_route(value).await?;
                 let launch_url = self.gateway.launch_url(host, id).await?;
                 Ok(json!({"url":url,"launch_url":launch_url}))
-            }
-            "app_revoke" => {
-                let grant = argument(value, "grant")?;
-                if !wispnet_core::enrollment::valid_code(grant) {
-                    return Err("Invalid app grant".into());
-                }
-                self.gateway.revoke_app(grant).await;
-                if self.gateway.is_enabled() {
-                    self.gateway.restore(self.clone()).await?;
-                }
-                Ok(json!({"revoked":true}))
             }
             _ => Err("Unknown app operation".into()),
         }

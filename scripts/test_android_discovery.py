@@ -90,11 +90,6 @@ def main():
                             mutate({'op': 'service', 'id': service, 'backend': f'127.0.0.1:{server.server_port}', 'kind': 'http', 'display_name': 'Discovery', 'allow': [peer]});registered.append(service)
                             mutate({'op': 'service', 'id': service + '-tcp', 'backend': f'127.0.0.1:{server.server_port}', 'kind': 'tcp', 'allow': [peer]});registered.append(service + '-tcp')
                             adb('shell', 'run-as', PKG, 'touch', 'files/discovery-continue')
-                        elif stage == 'discovery-service-gear-revoked':
-                            image = subprocess.check_output(['adb', '-s', args.serial, 'exec-out', 'run-as', PKG, 'cat', 'files/service-gears.png'])
-                            Path('/tmp/wispnet-service-gears.png').write_bytes(image)
-                            image = subprocess.check_output(['adb', '-s', args.serial, 'exec-out', 'run-as', PKG, 'cat', 'files/service-permissions.png'])
-                            Path('/tmp/wispnet-service-permissions.png').write_bytes(image)
                         elif stage == 'discovery-withdraw-service':
                             mutate({'op': 'service', 'id': service, 'backend': f'127.0.0.1:{server.server_port}', 'kind': 'http', 'allow': []})
                             adb('shell', 'run-as', PKG, 'touch', 'files/discovery-continue')
@@ -102,7 +97,7 @@ def main():
             text = log.read_text()
             assert 'result=passed' in text, text
             assert 'discovery-external-http' in seen, text
-            print('Independent app discovery, spoof denial, consent denial/approval, HTTP, revocation and host denial passed')
+            print('Independent app HTTP registry with configured registry/service ports, service settings and host denial passed')
         finally:
             if process and process.poll() is None:
                 adb('shell', 'am', 'force-stop', PKG);process.terminate();process.wait(timeout=10)

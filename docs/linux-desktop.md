@@ -191,3 +191,9 @@ Debug identifiers append `.dirty.<source fingerprint>` for uncommitted changes,
 so the same label identifies the same source snapshot across machines. Rebuild
 and reinstall after editing or committing to update the displayed identifier.
 Explicit Android release-publishing version overrides remain available.
+
+## Registry and service gateway ports
+
+**Access settings** configures the local registry port, allowed website origins
+and each known HTTP service's gateway port. The same HTTP API is available on
+Android; see the [registry contract and examples](service-registry.md).

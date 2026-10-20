@@ -16,14 +16,15 @@ port fails explicitly rather than silently changing a bookmark. Addresses are
 saved in owner-only `browser-routes.json`, bound to the installation identity;
 browser credentials are never persisted in this file.
 
-Approved native Android apps can also obtain a route-scoped `X-Wispnet-Access`
-credential through the [service discovery API](android-service-discovery.md).
-These credentials expire after 15 minutes, are kept only in memory, and are
-stripped before forwarding. They do not replace upstream Authorization headers.
-Revocation closes the affected route's active requests and invalidates its
-credentials. Browser cookies retain the behavior described below. The API's
-per-app issuance checks do not isolate the browser listener from hostile native
-apps that can imitate browser navigation headers on loopback.
+Native Android and Linux apps can obtain a route-scoped `X-Wispnet-Access`
+credential through the [shared service registry](service-registry.md). Native
+callers use device-level access; there is no per-app consent layer. Websites
+must have an exact allowed origin configured on the device. Credentials expire
+after 15 minutes, stay in memory, and are stripped before forwarding. They do
+not replace upstream Authorization headers. Host revocation still terminates
+access. Browser cookies retain the behavior described below. Local native apps
+share the device's access boundary and can also imitate browser navigation
+headers on loopback.
 
 There is no ten-minute route or cookie deadline. Going offline and process death
 close sockets; going online restores the same addresses. Network changes cancel
@@ -185,3 +186,15 @@ an existing route, and continued access after advancing past the old ten-minute
 boundary. Header and aggregate socket limits remain bounded. The Android optional
 `--persistent-session` acceptance run streams for more than ten minutes and checks
 that the same address and credential still work; it replaces the old expiry test.
+
+## Device-level HTTP API
+
+The [shared service registry](service-registry.md) supersedes Android per-app
+consent. Native callers use the device's host/service grants; API credentials
+remain route-scoped and expire after 15 minutes. Cross-origin API access is
+allowed only for exact website origins configured on that device and requires
+`X-Wispnet-Access`; browser cookies alone cannot authorize it. Upstream CORS
+headers remain stripped; the gateway generates its own approved-origin headers.
+The registry and service listeners remain loopback-only, reject unexpected Host
+headers, and expose no management operations. Registry and per-service gateway
+ports are configurable, with stable saved addresses and explicit conflict errors.

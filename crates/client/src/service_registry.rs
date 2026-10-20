@@ -1,0 +1,468 @@
+//! Loopback-only discovery for native clients and explicitly allowed websites.
+use crate::{
+    Client,
+    access_settings::Settings,
+    gateway::{headers, parse, response},
+};
+use serde_json::{Value, json};
+use std::{sync::Arc, time::Duration};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{TcpListener, TcpStream},
+    task::JoinHandle,
+};
+
+impl Client {
+    pub(crate) async fn service_list(self: &Arc<Self>) -> Result<Value, String> {
+        let mut hosts = std::collections::BTreeSet::new();
+        if let Some(authority) = &self.local_authority {
+            for pin in authority.paired_hosts().await.map_err(|e| e.to_string())? {
+                hosts.insert(pin.host);
+            }
+        }
+        for entry in std::fs::read_dir(self.state.join("peer-pins"))
+            .into_iter()
+            .flatten()
+            .take(129)
+            .flatten()
+        {
+            if let Some(host) = entry
+                .file_name()
+                .to_str()
+                .and_then(|s| s.strip_suffix(".json"))
+                .and_then(|s| s.parse().ok())
+            {
+                hosts.insert(host);
+            }
+        }
+        let mut services = vec![];
+        let mut errors = vec![];
+        if let Some(authority) = &self.local_authority {
+            for service in authority.services().await.map_err(|e| e.to_string())? {
+                if service.kind == wispnet_core::host::ServiceKind::Http {
+                    services.push(json!({"host_id":self.endpoint.id(),"service_id":service.id,"display_name":service.display_name,"incarnation":service.incarnation,"kind":"http"}));
+                }
+            }
+        }
+        let slots = Arc::new(tokio::sync::Semaphore::new(4));
+        let mut pending = tokio::task::JoinSet::new();
+        for host in hosts
+            .into_iter()
+            .take(128)
+            .filter(|h| *h != self.endpoint.id())
+        {
+            let client = self.clone();
+            let slots = slots.clone();
+            pending.spawn(async move {
+                let catalog = tokio::time::timeout(Duration::from_secs(6), async {
+                    let _permit = slots.acquire().await.map_err(|_| "Catalog queue closed")?;
+                    if client.saved_host(host).await?.is_none() {
+                        return Err("Host not paired".into());
+                    }
+                    client.catalog(host).await
+                })
+                .await;
+                (host, catalog)
+            });
+        }
+        while let Some(result) = pending.join_next().await {
+            let (host, catalog) = result.map_err(|_| "Catalog task failed")?;
+            match catalog {
+                Ok(Ok(c)) => {
+                    if let Some(items) = c["services"].as_array() {
+                        for s in items {
+                            if s["kind"] == "http" {
+                                services.push(json!({"host_id":host,"service_id":s["id"],"display_name":s["display_name"],"incarnation":s["incarnation"],"kind":"http"}));
+                            }
+                        }
+                    }
+                }
+                _ => errors.push(json!({"host_id":host,"error":"unavailable"})),
+            }
+        }
+        let addresses = self.gateway.settings(self).await?;
+        for service in &mut services {
+            service["url"] = addresses["routes"]
+                .as_array()
+                .and_then(|routes| {
+                    routes.iter().find(|r| {
+                        r["host"] == service["host_id"] && r["service"] == service["service_id"]
+                    })
+                })
+                .map(|r| r["url"].clone())
+                .unwrap_or(Value::Null);
+        }
+        Ok(json!({"api_version":1,"services":services,"errors":errors}))
+    }
+    pub(crate) async fn service_incarnation(
+        &self,
+        host: iroh::EndpointId,
+        id: &str,
+    ) -> Result<String, String> {
+        let incarnation = if host == self.endpoint.id() {
+            let authority = self
+                .local_authority
+                .as_ref()
+                .ok_or("Local service unavailable")?;
+            authority
+                .services()
+                .await
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .find(|s| s.id == id && s.kind == wispnet_core::host::ServiceKind::Http)
+                .ok_or("Service unavailable")?
+                .incarnation
+        } else {
+            if self.saved_host(host).await?.is_none() {
+                return Err("Host not paired".into());
+            }
+            let catalog = self.catalog(host).await?;
+            catalog["services"]
+                .as_array()
+                .and_then(|s| s.iter().find(|s| s["id"] == id && s["kind"] == "http"))
+                .and_then(|s| s["incarnation"].as_str())
+                .ok_or("Service unavailable")?
+                .to_owned()
+        };
+        Ok(incarnation)
+    }
+    pub(crate) async fn resolve_service(self: &Arc<Self>, value: &Value) -> Result<Value, String> {
+        let host = crate::peer(value)?;
+        let id = crate::argument(value, "service")?;
+        if !wispnet_core::protocol::valid_service_id(id) {
+            return Err("Invalid service ID".into());
+        }
+        let incarnation = self.service_incarnation(host, id).await?;
+        let url = self
+            .open_route(&json!({"host":host,"service":id,"incarnation":incarnation}))
+            .await?;
+        let access = self.gateway.app_access(host, id, &crate::token()).await?;
+        Ok(
+            json!({"api_version":1,"host_id":host,"service_id":id,"url":url,"header_name":"X-Wispnet-Access","access_token":access,"expires_in_seconds":900}),
+        )
+    }
+}
+pub(crate) async fn start(client: Arc<Client>, port: u16) -> Result<JoinHandle<()>, String> {
+    let listener = TcpListener::bind(("127.0.0.1", port)).await.map_err(|_| {
+        format!("Registry port {port} unavailable; choose another port in Access settings")
+    })?;
+    Ok(tokio::spawn(async move {
+        let slots = Arc::new(tokio::sync::Semaphore::new(8));
+        let mut tasks = tokio::task::JoinSet::new();
+        loop {
+            tokio::select! {
+                accepted=listener.accept()=>{let Ok((socket,_))=accepted else {break};let Ok(permit)=slots.clone().try_acquire_owned() else {continue};let c=client.clone();tasks.spawn(async move {let _permit=permit;let _=tokio::time::timeout(Duration::from_secs(25),handle(c,socket,port)).await;});},
+                _=tasks.join_next(),if !tasks.is_empty()=>{}
+            }
+        }
+    }))
+}
+async fn handle(client: Arc<Client>, mut socket: TcpStream, port: u16) -> Result<(), ()> {
+    let request = match headers(&mut socket).await.and_then(|b| parse(&b)) {
+        Ok(r) => r,
+        Err(_) => return response(&mut socket, "400 Bad Request", "Invalid request", "").await,
+    };
+    let authorities = [
+        format!("registry.wispnet.localhost:{port}"),
+        format!("localhost:{port}"),
+        format!("127.0.0.1:{port}"),
+    ];
+    if !authorities.iter().any(|a| request.safe(a)) {
+        return response(
+            &mut socket,
+            "421 Misdirected Request",
+            "Unknown registry authority",
+            "",
+        )
+        .await;
+    }
+    let settings = Settings::load(&client.state).map_err(|_| ())?;
+    let cors = match request.one("origin") {
+        Some(origin)
+            if request.values("origin").len() == 1
+                && settings.allowed_origins.iter().any(|s| s == origin) =>
+        {
+            format!("Access-Control-Allow-Origin: {origin}\r\nVary: Origin\r\n")
+        }
+        None if request.values("origin").is_empty()
+            && request.values("sec-fetch-site").is_empty() =>
+        {
+            String::new()
+        }
+        _ => {
+            return response(
+                &mut socket,
+                "403 Forbidden",
+                "Website origin not allowed",
+                "",
+            )
+            .await;
+        }
+    };
+    let (_, length) = match super::gateway::http::framing(&request) {
+        Ok((false, n)) if n <= 4096 => (false, n),
+        _ => return response(&mut socket, "400 Bad Request", "Invalid framing", "").await,
+    };
+    if request.method == "OPTIONS"
+        && length == 0
+        && ["/v1/services", "/v1/resolve"].contains(&request.path.as_str())
+    {
+        return response(&mut socket,"204 No Content","",&format!("{cors}Access-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nAccess-Control-Max-Age: 60\r\n")).await;
+    }
+    let result = match (request.method.as_str(), request.path.as_str()) {
+        ("GET", "/v1/services") if length == 0 => client.service_list().await,
+        ("POST", "/v1/resolve")
+            if request
+                .one("content-type")
+                .is_some_and(|s| s.split(';').next() == Some("application/json")) =>
+        {
+            let mut bytes = vec![0; length as usize];
+            socket.read_exact(&mut bytes).await.map_err(|_| ())?;
+            match serde_json::from_slice::<Value>(&bytes) {
+                Ok(v) => {
+                    client
+                        .resolve_service(&json!({"host":v["host_id"],"service":v["service_id"]}))
+                        .await
+                }
+                Err(_) => Err("Invalid JSON".into()),
+            }
+        }
+        _ => {
+            return response(
+                &mut socket,
+                "404 Not Found",
+                "Unknown registry endpoint",
+                &cors,
+            )
+            .await;
+        }
+    };
+    let (status, body) = match result {
+        Ok(v) => ("200 OK", v),
+        Err(e) => ("400 Bad Request", json!({"error":e})),
+    };
+    let body = body.to_string();
+    socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n{cors}\r\n{body}",body.len()).as_bytes()).await.map_err(|_|())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::access_settings::ServicePort;
+    use std::os::unix::fs::PermissionsExt;
+    fn unused_port() -> u16 {
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
+    async fn call(port: u16, method: &str, path: &str, extra: &str, body: &str) -> String {
+        let mut socket = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        socket.write_all(format!("{method} {path} HTTP/1.1\r\nHost: localhost:{port}\r\nConnection: close\r\nContent-Length: {}\r\n{extra}\r\n{body}",body.len()).as_bytes()).await.unwrap();
+        let mut reply = String::new();
+        socket.read_to_string(&mut reply).await.unwrap();
+        reply
+    }
+    #[tokio::test]
+    async fn registry_ports_origins_tokens_policy_and_lifecycle() {
+        use wispnet_registry::host::{self, Authority, Mutation};
+        let state = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let key = wispnet_core::identity::SecretKey::generate();
+        let own = key.public();
+        host::initialize(state.path(), own).unwrap();
+        let backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = backend.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = backend.accept().await else {
+                    break;
+                };
+                let head = headers(&mut socket).await.unwrap();
+                assert!(!String::from_utf8_lossy(&head).contains("X-Wispnet-Access"));
+                socket
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                    .await
+                    .unwrap();
+            }
+        });
+        let (mut store, owner) = host::owner_store(state.path(), own).unwrap();
+        store
+            .host_mutate(
+                own,
+                &owner,
+                Mutation::Service {
+                    expected_revision: 0,
+                    id: "llama".into(),
+                    backend: address,
+                    allow: vec![],
+                    display_name: None,
+                    kind: None,
+                },
+            )
+            .unwrap();
+        let config = serde_json::from_value(json!({"bind_addr":"127.0.0.1:0"})).unwrap();
+        let endpoint = wispnet_agent::tunnel::bind_configured_client(&key, Some(&config))
+            .await
+            .unwrap();
+        let client = Client::from_endpoint(
+            endpoint,
+            key,
+            state.path().into(),
+            config,
+            Authority::open(state.path(), own).unwrap(),
+        );
+        let registry = unused_port();
+        let service_port = unused_port();
+        let settings = Settings {
+            registry_port: registry,
+            allowed_origins: vec!["https://chat.example".into()],
+            service_ports: vec![ServicePort {
+                host: own,
+                service: "llama".into(),
+                port: service_port,
+            }],
+        };
+        settings.save(state.path()).unwrap();
+        client.command(&json!({"op":"enable"})).await.unwrap();
+        let list = call(registry, "GET", "/v1/services", "", "").await;
+        assert!(list.contains("llama"));
+        assert!(!list.contains(&address.to_string()));
+        assert!(
+            call(
+                registry,
+                "GET",
+                "/v1/services",
+                "Origin: https://evil.example\r\n",
+                ""
+            )
+            .await
+            .starts_with("HTTP/1.1 403")
+        );
+        assert!(
+            call(registry, "GET", "/v1/services", "Origin: null\r\n", "")
+                .await
+                .starts_with("HTTP/1.1 403")
+        );
+        let preflight = call(
+            registry,
+            "OPTIONS",
+            "/v1/resolve",
+            "Origin: https://chat.example\r\nAccess-Control-Request-Method: POST\r\n",
+            "",
+        )
+        .await;
+        assert!(preflight.contains("Access-Control-Allow-Origin: https://chat.example"));
+        let body = json!({"host_id":own,"service_id":"llama"}).to_string();
+        let result = call(
+            registry,
+            "POST",
+            "/v1/resolve",
+            "Content-Type: application/json\r\nOrigin: https://chat.example\r\n",
+            &body,
+        )
+        .await;
+        assert!(result.starts_with("HTTP/1.1 200"), "{result}");
+        let resolved: Value =
+            serde_json::from_str(result.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        let url = url::Url::parse(resolved["url"].as_str().unwrap()).unwrap();
+        assert_eq!(url.port(), Some(service_port));
+        let access = resolved["access_token"].as_str().unwrap();
+        async fn service(port: u16, authority: &str, extra: &str) -> String {
+            let mut socket = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+            socket
+                .write_all(
+                    format!(
+                        "GET / HTTP/1.1\r\nHost: {authority}\r\n{extra}Connection: close\r\n\r\n"
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            let mut reply = String::new();
+            socket.read_to_string(&mut reply).await.unwrap();
+            reply
+        }
+        let authority = format!("{}:{service_port}", url.host_str().unwrap());
+        let mut direct = TcpStream::connect(("127.0.0.1", service_port))
+            .await
+            .unwrap();
+        direct.write_all(format!("POST /_wispnet/access HTTP/1.1\r\nHost: {authority}\r\nOrigin: https://chat.example\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+        let mut direct_reply = String::new();
+        direct.read_to_string(&mut direct_reply).await.unwrap();
+        assert!(direct_reply.starts_with("HTTP/1.1 200"), "{direct_reply}");
+        assert!(direct_reply.contains("access_token"));
+        let auth = format!("Origin: https://chat.example\r\nX-Wispnet-Access: {access}\r\n");
+        let reply = service(service_port, &authority, &auth).await;
+        assert!(reply.ends_with("ok"), "{reply}");
+        assert!(reply.contains("Access-Control-Allow-Origin: https://chat.example"));
+        assert!(
+            service(service_port, &authority, "Origin: https://chat.example\r\n")
+                .await
+                .starts_with("HTTP/1.1 401")
+        );
+        assert!(
+            service(
+                service_port,
+                &authority,
+                &format!("Origin: https://evil.example\r\nX-Wispnet-Access: {access}\r\n")
+            )
+            .await
+            .starts_with("HTTP/1.1 403")
+        );
+        let occupied = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut bad = settings.clone();
+        bad.registry_port = occupied.local_addr().unwrap().port();
+        assert!(client.gateway.configure(client.clone(), bad).await.is_err());
+        assert_eq!(Settings::load(state.path()).unwrap(), settings);
+        assert!(
+            call(registry, "GET", "/v1/services", "", "")
+                .await
+                .starts_with("HTTP/1.1 200")
+        );
+        let new_port = unused_port();
+        let mut changed = settings.clone();
+        changed.registry_port = new_port;
+        changed.service_ports[0].port = unused_port();
+        client
+            .gateway
+            .configure(client.clone(), changed.clone())
+            .await
+            .unwrap();
+        assert!(TcpStream::connect(("127.0.0.1", registry)).await.is_err());
+        assert!(
+            TcpStream::connect(("127.0.0.1", service_port))
+                .await
+                .is_err()
+        );
+        client.command(&json!({"op":"stop"})).await.unwrap();
+        assert!(TcpStream::connect(("127.0.0.1", new_port)).await.is_err());
+        client.command(&json!({"op":"enable"})).await.unwrap();
+        assert_eq!(Settings::load(state.path()).unwrap(), changed);
+        store
+            .host_mutate(
+                own,
+                &owner,
+                Mutation::Remove {
+                    expected_revision: 1,
+                    id: "llama".into(),
+                },
+            )
+            .unwrap();
+        assert!(
+            !call(
+                new_port,
+                "POST",
+                "/v1/resolve",
+                "Content-Type: application/json\r\n",
+                &body
+            )
+            .await
+            .starts_with("HTTP/1.1 200")
+        );
+        client.gateway.stop().await;
+        client.endpoint.close().await;
+        server.abort();
+    }
+}

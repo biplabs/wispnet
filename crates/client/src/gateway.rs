@@ -15,7 +15,7 @@ use tokio::{
     task::{JoinHandle, JoinSet},
 };
 #[path = "gateway_http.rs"]
-mod http;
+pub(crate) mod http;
 #[path = "gateway_store.rs"]
 mod store;
 const COOKIE: &str = "_wispnet_session";
@@ -29,6 +29,8 @@ pub struct Gateways {
     enabled: AtomicBool,
     workers: Mutex<Vec<Worker>>,
     connections: Arc<Semaphore>,
+    registry: Mutex<Option<JoinHandle<()>>>,
+    settings_lock: Mutex<()>,
 }
 impl Default for Gateways {
     fn default() -> Self {
@@ -36,10 +38,81 @@ impl Default for Gateways {
             enabled: AtomicBool::new(false),
             workers: Mutex::new(Vec::new()),
             connections: Arc::new(Semaphore::new(32)),
+            registry: Mutex::new(None),
+            settings_lock: Mutex::new(()),
         }
     }
 }
 impl Gateways {
+    pub async fn settings(&self, client: &Client) -> Result<serde_json::Value, String> {
+        let settings = crate::access_settings::Settings::load(&client.state)?;
+        let routes = store::load(&client.state, client.endpoint.id())?;
+        Ok(
+            serde_json::json!({"settings":settings,"routes":routes.iter().map(|b|serde_json::json!({"host":b.peer,"service":b.service,"port":b.port,"url":b.url()})).collect::<Vec<_>>(),"enabled":self.is_enabled()}),
+        )
+    }
+    pub async fn configure(
+        &self,
+        client: Arc<Client>,
+        settings: crate::access_settings::Settings,
+    ) -> Result<serde_json::Value, String> {
+        let _lock = self.settings_lock.lock().await;
+        settings.validate()?;
+        let previous = crate::access_settings::Settings::load(&client.state)?;
+        if previous == settings {
+            return self.settings(&client).await;
+        }
+        let routes = store::load(&client.state, client.endpoint.id())?;
+        // Check requested ports before stopping working listeners or changing state.
+        let mut probes = vec![];
+        let mut ports = vec![settings.registry_port];
+        ports.extend(routes.iter().map(|r| {
+            settings
+                .service_ports
+                .iter()
+                .find(|s| s.host == r.peer && s.service == r.service)
+                .map_or(r.port, |s| s.port)
+        }));
+        ports.extend(settings.service_ports.iter().map(|s| s.port));
+        ports.sort_unstable();
+        ports.dedup();
+        for port in ports {
+            let already_bound = self.is_enabled()
+                && (previous.registry_port == port
+                    || self
+                        .workers
+                        .lock()
+                        .await
+                        .iter()
+                        .any(|w| w.binding.port == port));
+            if !already_bound {
+                probes.push(
+                    TcpListener::bind(("127.0.0.1", port))
+                        .await
+                        .map_err(|_| format!("Port {port} unavailable; choose another port"))?,
+                );
+            }
+        }
+        let enabled = self.is_enabled();
+        settings.save(&client.state)?;
+        if enabled {
+            self.interrupt().await;
+            drop(probes);
+            if let Err(error) = self.restore(client.clone()).await {
+                self.interrupt().await;
+                previous.save(&client.state)?;
+                store::save(&client.state, client.endpoint.id(), &routes)?;
+                if self.restore(client.clone()).await.is_err() {
+                    self.stop().await;
+                    return Err(format!(
+                        "{error}; could not restore previous listeners; access stopped"
+                    ));
+                }
+                return Err(error);
+            }
+        }
+        self.settings(&client).await
+    }
     pub fn is_enabled(&self) -> bool {
         self.enabled.load(Ordering::Acquire)
     }
@@ -52,6 +125,10 @@ impl Gateways {
     }
     /// Interrupt sockets without replaying requests or discarding saved addresses.
     pub async fn interrupt(&self) -> usize {
+        if let Some(task) = self.registry.lock().await.take() {
+            task.abort();
+            let _ = task.await;
+        }
         let mut interrupted = 0;
         let mut guard = self.workers.lock().await;
         for worker in guard.drain(..) {
@@ -65,6 +142,9 @@ impl Gateways {
     pub async fn forget(&self, client: &Client, peer: EndpointId) -> Result<(), String> {
         let mut workers = self.workers.lock().await;
         let mut saved = store::load(&client.state, client.endpoint.id())?;
+        let mut settings = crate::access_settings::Settings::load(&client.state)?;
+        settings.service_ports.retain(|route| route.host != peer);
+        settings.save(&client.state)?;
         saved.retain(|binding| binding.peer != peer);
         store::save(&client.state, client.endpoint.id(), &saved)?;
         for worker in workers.iter().filter(|w| w.binding.peer == peer) {
@@ -149,6 +229,18 @@ impl Gateways {
     }
     /// Rebind exactly the saved ports. Never silently move a bookmark to a new port.
     pub async fn restore(&self, client: Arc<Client>) -> Result<(), String> {
+        {
+            let mut registry = self.registry.lock().await;
+            if registry.as_ref().is_none_or(|t| t.is_finished()) {
+                *registry = Some(
+                    crate::service_registry::start(
+                        client.clone(),
+                        crate::access_settings::Settings::load(&client.state)?.registry_port,
+                    )
+                    .await?,
+                );
+            }
+        }
         for binding in store::load(&client.state, client.endpoint.id())? {
             self.open(
                 client.clone(),
@@ -158,6 +250,27 @@ impl Gateways {
             )
             .await?;
         }
+        // Fixed ports must be usable without a preceding registry request or UI Open.
+        let saved = store::load(&client.state, client.endpoint.id())?;
+        let configured = crate::access_settings::Settings::load(&client.state)?.service_ports;
+        tokio::time::timeout(Duration::from_secs(8), async {
+            for route in configured {
+                if saved
+                    .iter()
+                    .any(|s| s.peer == route.host && s.service == route.service)
+                {
+                    continue;
+                }
+                let incarnation = client
+                    .service_incarnation(route.host, &route.service)
+                    .await?;
+                self.open(client.clone(), route.host, route.service, incarnation)
+                    .await?;
+            }
+            Ok::<_, String>(())
+        })
+        .await
+        .map_err(|_| "Timed out opening configured service ports")??;
         Ok(())
     }
     pub async fn open(
@@ -220,15 +333,31 @@ impl Gateways {
             }
         };
         let aliases = Vec::new();
+        let settings = crate::access_settings::Settings::load(&client.state)?;
+        let port = settings
+            .service_ports
+            .iter()
+            .find(|s| s.host == peer && s.service == service)
+            .map(|s| s.port)
+            .or_else(|| index.map(|i| saved[i].port))
+            .unwrap_or(0);
         if let Some(worker) = workers.iter().find(|w| {
             w.binding.peer == peer
                 && w.binding.service == service
                 && w.binding.incarnation == incarnation
                 && w.binding.hostname == hostname
+                && w.binding.port == port
         }) {
             return Ok(worker.binding.url());
         }
-        let port = index.map(|i| saved[i].port).unwrap_or(0);
+
+        if saved
+            .iter()
+            .any(|b| (b.peer != peer || b.service != service) && b.port == port)
+            || port == settings.registry_port
+        {
+            return Err("Service port conflicts with another saved route or registry".into());
+        }
         // An explicit new incarnation replaces the binding, preserving its origin.
         if let Some(i) = workers
             .iter()
@@ -239,7 +368,7 @@ impl Gateways {
             let _ = old.task.await;
         }
         let listener = TcpListener::bind(("127.0.0.1", port)).await.map_err(
-            |_| "Saved browser port unavailable; close the conflicting application and try again",
+            |_| "Saved browser port unavailable; choose another port in Access settings",
         )?;
         let binding = store::Binding {
             peer,
@@ -347,20 +476,20 @@ impl Drop for Close {
     }
 }
 #[derive(Debug)]
-struct Request {
-    method: String,
-    path: String,
+pub(crate) struct Request {
+    pub(crate) method: String,
+    pub(crate) path: String,
     headers: Vec<(String, String)>,
 }
 impl Request {
-    fn values(&self, name: &str) -> Vec<&str> {
+    pub(crate) fn values(&self, name: &str) -> Vec<&str> {
         self.headers
             .iter()
             .filter(|(n, _)| n.eq_ignore_ascii_case(name))
             .map(|(_, v)| v.as_str())
             .collect()
     }
-    fn one(&self, name: &str) -> Option<&str> {
+    pub(crate) fn one(&self, name: &str) -> Option<&str> {
         let values = self.values(name);
         if values.len() == 1 {
             Some(values[0])
@@ -368,7 +497,7 @@ impl Request {
             None
         }
     }
-    fn safe(&self, authority: &str) -> bool {
+    pub(crate) fn safe(&self, authority: &str) -> bool {
         self.values("host") == [authority]
             && self.path.starts_with('/')
             && !self.path.starts_with("//")
@@ -386,7 +515,7 @@ impl Request {
             && self.values("sec-fetch-dest").len() <= 1
     }
 }
-async fn headers(stream: &mut (impl AsyncRead + Unpin)) -> Result<Vec<u8>, ()> {
+pub(crate) async fn headers(stream: &mut (impl AsyncRead + Unpin)) -> Result<Vec<u8>, ()> {
     tokio::time::timeout(Duration::from_secs(10), async {
         let mut bytes = Vec::new();
         while bytes.len() < 32768 {
@@ -400,7 +529,7 @@ async fn headers(stream: &mut (impl AsyncRead + Unpin)) -> Result<Vec<u8>, ()> {
     .await
     .map_err(|_| ())?
 }
-fn parse(bytes: &[u8]) -> Result<Request, ()> {
+pub(crate) fn parse(bytes: &[u8]) -> Result<Request, ()> {
     let mut storage = [httparse::EMPTY_HEADER; 96];
     let mut request = httparse::Request::new(&mut storage);
     if !request.parse(bytes).map_err(|_| ())?.is_complete() || request.version != Some(1) {
@@ -424,7 +553,12 @@ fn parse(bytes: &[u8]) -> Result<Request, ()> {
 fn constant_equal(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0, |d, (a, b)| d | (a ^ b)) == 0
 }
-async fn response(socket: &mut TcpStream, status: &str, body: &str, extra: &str) -> Result<(), ()> {
+pub(crate) async fn response(
+    socket: &mut TcpStream,
+    status: &str,
+    body: &str,
+    extra: &str,
+) -> Result<(), ()> {
     let value = format!(
         "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\n{extra}\r\n{body}",
         body.len()
@@ -514,7 +648,24 @@ impl Route {
             && request.one("sec-fetch-mode") == Some("navigate")
             && request.one("sec-fetch-dest") == Some("document")
             && request.values("origin").is_empty();
-        if !request.same_origin(&origin) {
+        let allowed_origin = request
+            .one("origin")
+            .filter(|_| request.values("origin").len() == 1)
+            .filter(|origin| {
+                crate::access_settings::Settings::load(&self.client.state)
+                    .is_ok_and(|s| s.allowed_origins.iter().any(|v| v == origin))
+            });
+        let cors = allowed_origin
+            .map(|o| format!("Access-Control-Allow-Origin: {o}\r\nVary: Origin\r\n"))
+            .unwrap_or_default();
+        if !cors.is_empty()
+            && request.method == "OPTIONS"
+            && length == 0
+            && (!request.path.starts_with("/_wispnet/") || request.path == "/_wispnet/access")
+        {
+            return response(&mut socket,"204 No Content","",&format!("{cors}Access-Control-Allow-Methods: GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, Authorization, X-Wispnet-Access\r\nAccess-Control-Max-Age: 60\r\n")).await;
+        }
+        if !request.same_origin(&origin) && cors.is_empty() {
             return response(
                 &mut socket,
                 "403 Forbidden",
@@ -522,6 +673,33 @@ impl Route {
                 "",
             )
             .await;
+        }
+        if request.path == "/_wispnet/access"
+            && request.method == "POST"
+            && length == 0
+            && !websocket
+        {
+            let native =
+                request.values("origin").is_empty() && request.values("sec-fetch-site").is_empty();
+            if !native && cors.is_empty() && request.one("origin") != Some(origin.as_str()) {
+                return response(
+                    &mut socket,
+                    "403 Forbidden",
+                    "Website origin not allowed",
+                    "",
+                )
+                .await;
+            }
+            let result=async {
+                if self.client.service_incarnation(self.peer,&self.service).await? != self.incarnation {return Err("Service changed; resolve again".to_owned());}
+                let access=self.client.gateway.app_access(self.peer,&self.service,&crate::token()).await?;
+                Ok(serde_json::json!({"api_version":1,"url":format!("{origin}/"),"header_name":"X-Wispnet-Access","access_token":access,"expires_in_seconds":900}))
+            }.await;
+            let (status, body) = match result {
+                Ok(v) => ("200 OK", v.to_string()),
+                Err(e) => ("403 Forbidden", serde_json::json!({"error":e}).to_string()),
+            };
+            return socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\n{cors}\r\n{body}",body.len()).as_bytes()).await.map_err(|_|());
         }
         // Retired bootstrap paths must never forward local credentials upstream.
         if request.path.starts_with("/_wispnet/") || request.path.starts_with("/_wipsnet/") {
@@ -571,7 +749,8 @@ impl Route {
         } else {
             false
         };
-        let cookie_authenticated = sessions.len() == 1
+        let cookie_authenticated = request.same_origin(&origin)
+            && sessions.len() == 1
             && constant_equal(sessions[0], &format!("{COOKIE}={}", self.credential));
         if !(app_authenticated || app_credential.is_none() && cookie_authenticated) {
             if navigation && app_credential.is_none() {
@@ -734,7 +913,7 @@ impl Route {
             if copied != length {
                 return Err(());
             }
-            let head = match headers(&mut service)
+            let mut head = match headers(&mut service)
                 .await
                 .and_then(|bytes| http::response(&bytes, &request, &origin, binding, websocket))
             {
@@ -749,6 +928,10 @@ impl Route {
                     .await;
                 }
             };
+            if !cors.is_empty() && app_authenticated {
+                let end = head.bytes.len() - 2;
+                head.bytes.splice(end..end, cors.bytes());
+            }
             socket.write_all(&head.bytes).await.map_err(|_| ())?;
             if matches!(head.body, http::Body::WebSocket) {
                 let _ = tokio::io::copy_bidirectional(&mut socket, &mut service).await;
@@ -827,6 +1010,16 @@ mod tests {
     async fn readable_names_include_host_identity_and_survive_duplicate_system_names() {
         let state = tempfile::tempdir().unwrap();
         std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            crate::access_settings::Settings {
+                registry_port: listener.local_addr().unwrap().port(),
+                ..Default::default()
+            }
+            .save(state.path())
+            .unwrap();
+        }
+
         let key = wispnet_core::identity::SecretKey::generate();
         let c = client(state.path(), key.clone()).await;
         let peer = wispnet_core::identity::SecretKey::generate().public();
@@ -940,6 +1133,16 @@ mod tests {
     async fn unpair_removes_only_target_routes_and_pin() {
         let state = tempfile::tempdir().unwrap();
         std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            crate::access_settings::Settings {
+                registry_port: listener.local_addr().unwrap().port(),
+                ..Default::default()
+            }
+            .save(state.path())
+            .unwrap();
+        }
+
         let c = client(state.path(), wispnet_core::identity::SecretKey::generate()).await;
         let peer = wispnet_core::identity::SecretKey::generate().public();
         let other = wispnet_core::identity::SecretKey::generate().public();
@@ -968,6 +1171,17 @@ mod tests {
             .find(|binding| binding.peer == peer)
             .unwrap()
             .port;
+        let mut settings = crate::access_settings::Settings::load(state.path()).unwrap();
+        settings.service_ports = store::load(state.path(), c.endpoint.id())
+            .unwrap()
+            .iter()
+            .map(|b| crate::access_settings::ServicePort {
+                host: b.peer,
+                service: b.service.clone(),
+                port: b.port,
+            })
+            .collect();
+        settings.save(state.path()).unwrap();
         c.command(&serde_json::json!({"op":"unpair", "host":peer.to_string()}))
             .await
             .unwrap();
@@ -987,6 +1201,13 @@ mod tests {
         let saved = store::load(state.path(), c.endpoint.id()).unwrap();
         assert_eq!(saved.len(), 1);
         assert_eq!(saved[0].peer, other);
+        let settings = crate::access_settings::Settings::load(state.path()).unwrap();
+        assert_eq!(settings.service_ports.len(), 1);
+        assert_eq!(settings.service_ports[0].host, other);
+        c.command(&serde_json::json!({"op":"network"}))
+            .await
+            .unwrap();
+
         assert!(
             c.command(&serde_json::json!({"op":"unpair", "host":c.endpoint.id().to_string()}))
                 .await
@@ -999,6 +1220,16 @@ mod tests {
     async fn stable_bookmarks_restore_ports_rotate_credentials_and_reject_cross_origin() {
         let state = tempfile::tempdir().unwrap();
         std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            crate::access_settings::Settings {
+                registry_port: listener.local_addr().unwrap().port(),
+                ..Default::default()
+            }
+            .save(state.path())
+            .unwrap();
+        }
+
         let key = wispnet_core::identity::SecretKey::generate();
         let c = client(state.path(), key.clone()).await;
         let peer = wispnet_core::identity::SecretKey::generate().public();
@@ -1124,6 +1355,16 @@ mod tests {
         use wispnet_registry::host::{self, Authority, Mutation};
         let state = tempfile::tempdir().unwrap();
         std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            crate::access_settings::Settings {
+                registry_port: listener.local_addr().unwrap().port(),
+                ..Default::default()
+            }
+            .save(state.path())
+            .unwrap();
+        }
+
         let key = wispnet_core::identity::SecretKey::generate();
         let peer = key.public();
         host::initialize(state.path(), peer).unwrap();
@@ -1246,6 +1487,16 @@ mod tests {
         use wispnet_registry::host::{self, Authority, Mutation};
         let state = tempfile::tempdir().unwrap();
         std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            crate::access_settings::Settings {
+                registry_port: listener.local_addr().unwrap().port(),
+                ..Default::default()
+            }
+            .save(state.path())
+            .unwrap();
+        }
+
         let key = wispnet_core::identity::SecretKey::generate();
         let peer = key.public();
         host::initialize(state.path(), peer).unwrap();
@@ -1342,6 +1593,16 @@ mod tests {
         use wispnet_registry::host::{self, Authority, Mutation};
         let state = tempfile::tempdir().unwrap();
         std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            crate::access_settings::Settings {
+                registry_port: listener.local_addr().unwrap().port(),
+                ..Default::default()
+            }
+            .save(state.path())
+            .unwrap();
+        }
+
         let key = wispnet_core::identity::SecretKey::generate();
         let peer = key.public();
         host::initialize(state.path(), peer).unwrap();
@@ -1482,6 +1743,16 @@ mod tests {
     async fn route_and_socket_limits_release_capacity_and_header_deadline_is_total() {
         let state = tempfile::tempdir().unwrap();
         std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            crate::access_settings::Settings {
+                registry_port: listener.local_addr().unwrap().port(),
+                ..Default::default()
+            }
+            .save(state.path())
+            .unwrap();
+        }
+
         let config =
             serde_json::from_value(serde_json::json!({"bind_addr":"127.0.0.1:0"})).unwrap();
         let client = Client::new(

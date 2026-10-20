@@ -556,6 +556,11 @@ class Window(QMainWindow):
         self.share_btn.clicked.connect(self.share)
         header_layout.addWidget(self.share_btn)
 
+        self.access_settings_btn = QPushButton("Access settings")
+        self.access_settings_btn.setProperty("variant", "secondary")
+        self.access_settings_btn.clicked.connect(self.access_settings)
+        header_layout.addWidget(self.access_settings_btn)
+
         self.qr_btn = QPushButton("Pair this machine")
         self.qr_btn.setProperty("variant", "secondary")
         self.qr_btn.setFixedHeight(36)
@@ -1549,6 +1554,77 @@ class Window(QMainWindow):
                     ],
                 }
             )
+
+    def access_settings(self):
+        self.submit(lambda: self.api.request(op="gateway_settings"), self._access_settings_loaded)
+
+    def _access_settings_loaded(self, data, error):
+        if error:
+            self._set_message(error)
+            return
+        settings = data["settings"]
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Access settings")
+        dialog.setMinimumWidth(440)
+        form = QFormLayout(dialog)
+        port = QLineEdit(str(settings["registry_port"]))
+        port.setObjectName("registryPort")
+        form.addRow("Registry port", port)
+        origins = QPlainTextEdit("\n".join(settings["allowed_origins"]))
+        origins.setObjectName("allowedOrigins")
+        origins.setPlaceholderText("https://example.com\nOne exact website origin per line")
+        origins.setMaximumHeight(90)
+        form.addRow("Allowed websites", origins)
+        services = {}
+        if self.snapshot:
+            for svc in self.snapshot["host"]["services"]:
+                if svc["kind"] == "http":
+                    services[(self.snapshot["host"]["host"], svc["id"])] = svc.get("display_name") or svc["id"]
+        for host, entry in self.catalogs.items():
+            for svc in entry.get("catalog", {}).get("services", []):
+                if svc["kind"] == "http":
+                    services[(host, svc["id"])] = (self.peer_names.get(host) or host[:8]) + " / " + (svc.get("display_name") or svc["id"])
+        for route in settings["service_ports"]:
+            services.setdefault((route["host"], route["service"]), route["host"][:8] + " / " + route["service"])
+        fields = {}
+        for (host, service), label in services.items():
+            selected = next((str(r["port"]) for r in settings["service_ports"] if r["host"] == host and r["service"] == service), "")
+            field = QLineEdit(selected)
+            field.setObjectName(f"gatewayPort_{host}_{service}")
+            field.setPlaceholderText("Automatic")
+            field.setToolTip("Gateway port on this device; separate from the backend port")
+            fields[(host, service)] = field
+            form.addRow(label, field)
+        hint = QLabel("Leave service ports blank for automatic assignment.\nSaving reconnects active sessions. Ports: 1024–65535.")
+        hint.setWordWrap(True)
+        form.addRow(hint)
+        feedback = QLabel()
+        feedback.setWordWrap(True)
+        form.addRow(feedback)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        form.addRow(buttons)
+        buttons.rejected.connect(dialog.reject)
+        def save():
+            try:
+                registry_port = int(port.text().strip())
+                routes = [{"host": host, "service": service, "port": int(field.text().strip())} for (host, service), field in fields.items() if field.text().strip()]
+                if not all(1024 <= value <= 65535 for value in [registry_port] + [r["port"] for r in routes]):
+                    raise ValueError("Ports must be between 1024 and 65535")
+                updated = {"registry_port": registry_port, "allowed_origins": [s.strip() for s in origins.toPlainText().splitlines() if s.strip()], "service_ports": routes}
+            except ValueError as failure:
+                feedback.setText(str(failure))
+                return
+            buttons.setEnabled(False)
+            def done(value, error):
+                if error:
+                    feedback.setText(error)
+                    buttons.setEnabled(True)
+                else:
+                    dialog.accept()
+                    self._set_message("Access settings saved")
+            self.submit(lambda: self.api.request(op="configure_access", settings=updated), done)
+        buttons.accepted.connect(save)
+        dialog.exec()
 
     def share(self, existing=None):
         if not self.snapshot:

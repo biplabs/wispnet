@@ -33,8 +33,6 @@ final class RemovalChecks {
    barrier(t,"legacy-phone-removed");return;
   }
   pair(t,a,"removal-a.json","approve-a");
-  AppGrants grants=new AppGrants(t.getTargetContext());String ga="a".repeat(64),gb="b".repeat(64);
-  grants.approve(ga,new JSONObject().put("host_id",a));grants.approve(gb,new JSONObject().put("host_id",b));
   store.failed(a,new Native.Failure("access denied","host_denied"));if(!store.all().has(a))throw new Exception("Generic denial erased pairing");
   barrier(t,"host-offline");
   try{request("catalog",a);throw new Exception("Offline host unexpectedly answered");}catch(Native.Failure unavailable){store.failed(a,unavailable);}
@@ -43,12 +41,12 @@ final class RemovalChecks {
   barrier(t,"delete-a");
   try{request("catalog",a);throw new Exception("Deleted pairing still usable");}
   catch(Native.Failure removed){if(!"pairing_removed".equals(removed.code))throw removed;store.failed(a,removed);}
-  if(store.all().has(a)||request("pairing_state",a).getBoolean("paired")||grants.all().has(ga)||!grants.all().has(gb))throw new Exception("Remote cleanup affected wrong records or retained consent");
+  if(store.all().has(a)||request("pairing_state",a).getBoolean("paired"))throw new Exception("Remote cleanup affected wrong records or retained consent");
   pair(t,b,"removal-b.json","approve-b");
   store.failed(b,new Native.Failure("Pairing removed by remote machine","pairing_removed"));
   if(!store.all().has(b))throw new Exception("Stale callback erased current pairing");
   t.runOnMainSync(()->t.activity.removeHost(b));t.await(()->!store.all().has(b),"Phone removal did not clear the card");
-  if(request("pairing_state",b).getBoolean("paired")||grants.all().has(gb))throw new Exception("Phone removal retained native pairing or consent");
+  if(request("pairing_state",b).getBoolean("paired"))throw new Exception("Phone removal retained native pairing or consent");
   barrier(t,"phone-removed");
  }
  private RemovalChecks(){}

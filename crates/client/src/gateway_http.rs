@@ -68,7 +68,7 @@ fn cookie_value(value: &str) -> bool {
             || (0x5d..=0x7e).contains(&b)
     })
 }
-pub(super) fn framing(request: &Request) -> Result<(bool, u64), ()> {
+pub(crate) fn framing(request: &Request) -> Result<(bool, u64), ()> {
     for key in [
         "content-length",
         "connection",

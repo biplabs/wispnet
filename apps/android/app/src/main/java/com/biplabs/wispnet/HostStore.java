@@ -16,7 +16,7 @@ final class HostStore {
   synchronized(LOCK){if(Native.request(new JSONObject().put("op","pairing_state").put("host",host)).getBoolean("paired"))throw new Exception("Pairing changed; review this machine again");removeSaved(host);}
  }
  private void removeSaved(String host)throws Exception{
-  new AppGrants(context).revokeHost(host);JSONObject records=all();records.remove(host);save(records);
+  JSONObject records=all();records.remove(host);save(records);
  }
  void reconcile()throws Exception{synchronized(LOCK){
   JSONObject records=all();java.util.ArrayList<String> removed=new java.util.ArrayList<>();

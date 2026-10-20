@@ -11,27 +11,10 @@ import java.util.concurrent.*;
 
 /** Independent UID: demonstrates discovery without sharing Wispnet's code or data. */
 public final class MainActivity extends Activity {
- private Messenger discovery;
- private EditText host,service;
+ private EditText host,service,registry;
  private TextView status;
  private String endpoint,credential;
  private final ExecutorService work=Executors.newSingleThreadExecutor();
- private boolean bound;
- private final Messenger replies=new Messenger(new Handler(Looper.getMainLooper()){
-  public void handleMessage(Message message){
-   Bundle result=message.getData();String state=result.getString("status");status.setText(state);
-   if("permission_required".equals(state)){
-    PendingIntent consent=result.getParcelable("consent",PendingIntent.class);
-    try{startIntentSenderForResult(consent.getIntentSender(),1,null,0,0,0,ActivityOptions.makeBasic().setPendingIntentBackgroundActivityStartMode((Build.VERSION.SDK_INT>=36?ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_IF_VISIBLE:ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED)).toBundle());}catch(Exception failure){status.setText("consent_failed");}
-   }else if("ok".equals(state)){
-    endpoint=result.getString("url");credential=result.getString("access_token");fetch();
-   }
-  }
- });
- private final ServiceConnection connection=new ServiceConnection(){
-  public void onServiceConnected(ComponentName name,IBinder binder){discovery=new Messenger(binder);status.setText("connected");if(getIntent().getBooleanExtra("resolve",false))resolve();}
-  public void onServiceDisconnected(ComponentName name){discovery=null;status.setText("disconnected");}
- };
  public void onCreate(Bundle state){
   super.onCreate(state);LinearLayout layout=new LinearLayout(this);layout.setOrientation(1);layout.setPadding(24,48,24,24);setContentView(layout);
   host=new EditText(this);host.setHint("Full host ID");host.setText(getIntent().getStringExtra("host_id"));layout.addView(host);
@@ -39,18 +22,18 @@ public final class MainActivity extends Activity {
   status=new TextView(this);status.setContentDescription("discovery_status");layout.addView(status);
   Button open=new Button(this);open.setText("Resolve service");open.setOnClickListener(v->resolve());layout.addView(open);
   Button again=new Button(this);again.setText("Call saved endpoint");again.setOnClickListener(v->fetch());layout.addView(again);
-  String target=getIntent().getStringExtra("wispnet_package");if(target==null)target="app.wispnet.android";
-  bound=bindService(new Intent().setComponent(new ComponentName(target,"com.biplabs.wispnet.ServiceDiscoveryService")),connection,BIND_AUTO_CREATE);
-  if(!bound)status.setText("Wispnet is not installed");
+  registry=new EditText(this);registry.setHint("Registry URL");registry.setText("http://127.0.0.1:"+getIntent().getIntExtra("registry_port",18400));layout.addView(registry);
+  if(getIntent().getBooleanExtra("resolve",false))resolve();
  }
  private void resolve(){
-  if(discovery==null){status.setText("disconnected");return;}
-  Bundle request=new Bundle();request.putInt("api_version",1);request.putString("request_id","example");request.putString("package_name",getIntent().getStringExtra("claim_package") == null?getPackageName():getIntent().getStringExtra("claim_package"));
-  request.putString("host_id",host.getText().toString());request.putString("service_id",service.getText().toString());
-  Message message=Message.obtain(null,1);message.setData(request);message.replyTo=replies;
-  try{discovery.send(message);}catch(RemoteException failure){status.setText("disconnected");}
+  final String base=registry.getText().toString(),hostId=host.getText().toString(),serviceId=service.getText().toString();status.setText("resolving");
+  work.execute(()->{try{
+   HttpURLConnection connection=(HttpURLConnection)new URL(base+"/v1/resolve").openConnection();connection.setConnectTimeout(5000);connection.setReadTimeout(25000);connection.setRequestMethod("POST");connection.setDoOutput(true);connection.setRequestProperty("Content-Type","application/json");
+   byte[] body=new org.json.JSONObject().put("host_id",hostId).put("service_id",serviceId).toString().getBytes(StandardCharsets.UTF_8);connection.setFixedLengthStreamingMode(body.length);try(OutputStream stream=connection.getOutputStream()){stream.write(body);}
+   try{if(connection.getResponseCode()!=200){runOnUiThread(()->status.setText("service_unavailable"));return;}org.json.JSONObject result=new org.json.JSONObject(new String(connection.getInputStream().readAllBytes(),StandardCharsets.UTF_8));endpoint=result.getString("url");credential=result.getString("access_token");}finally{connection.disconnect();}
+   fetch();
+  }catch(Exception failure){runOnUiThread(()->status.setText("service_unavailable"));}});
  }
- protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(request==1){status.setText(result==RESULT_OK?"approved; resolve again when Wispnet is online":"denied");if(result==RESULT_OK)new Handler(getMainLooper()).postDelayed(this::resolve,1200);}}
  private void fetch(){
   if(endpoint==null)return;
   work.execute(()->{
@@ -68,5 +51,5 @@ public final class MainActivity extends Activity {
    }catch(Exception failure){runOnUiThread(()->status.setText("endpoint_unavailable"));}
   });
  }
- protected void onDestroy(){if(bound)unbindService(connection);work.shutdownNow();super.onDestroy();}
+ protected void onDestroy(){work.shutdownNow();super.onDestroy();}
 }

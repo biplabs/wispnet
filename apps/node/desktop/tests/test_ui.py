@@ -3,7 +3,7 @@ import tempfile
 import time
 from pathlib import Path
 from unittest.mock import patch
-from PySide6.QtWidgets import QApplication, QMessageBox, QTabWidget, QPushButton, QLabel, QLineEdit, QPlainTextEdit
+from PySide6.QtWidgets import QApplication, QMessageBox, QTabWidget, QPushButton, QLabel, QLineEdit, QPlainTextEdit, QDialog, QDialogButtonBox
 from PySide6.QtCore import Qt
 from wispnet_desktop.app import Window, appearance
 
@@ -18,6 +18,32 @@ class DesktopChecks(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
         appearance(cls.app)
+
+    def test_access_settings_preserves_offline_service_ports_and_rejects_invalid_input(self):
+        window = Window(API(), tray=False)
+        window.timer.stop()
+        window.pool.waitForDone()
+        host = "b" * 64
+        settings = {"registry_port": 18400, "allowed_origins": [], "service_ports": [{"host": host, "service": "llama", "port": 18401}]}
+        calls = []
+        window.api.request = lambda **request: calls.append(request) or {}
+        window.submit = lambda fn, done, peer=False: done(fn(), None)
+        def edit(dialog):
+            field = dialog.findChild(QLineEdit, "registryPort")
+            save = dialog.findChild(QDialogButtonBox).button(QDialogButtonBox.StandardButton.Save)
+            field.setText("80")
+            save.click()
+            self.assertEqual(calls, [])
+            field.setText("19400")
+            dialog.findChild(QPlainTextEdit, "allowedOrigins").setPlainText("https://chat.example")
+            self.assertEqual(dialog.findChild(QLineEdit, f"gatewayPort_{host}_llama").text(), "18401")
+            save.click()
+            return QDialog.DialogCode.Accepted
+        with patch.object(QDialog, "exec", edit):
+            window._access_settings_loaded({"settings": settings}, None)
+        self.assertEqual(calls, [{"op": "configure_access", "settings": {**settings, "registry_port": 19400, "allowed_origins": ["https://chat.example"]}}])
+        self.assertEqual(settings["registry_port"], 18400)
+        window.close()
 
     def test_pairing_qr_expiry_clears_image_and_close_allows_regeneration(self):
         window = Window(API(), tray=False)
