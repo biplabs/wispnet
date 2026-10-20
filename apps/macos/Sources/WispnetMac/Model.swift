@@ -131,7 +131,8 @@ struct PeerViewState {
         }
     }
     func open(_ service: Service, host: String) {
-        guard online, !busy, service.kind == "http" else { return }
+        guard online, !busy, service.kind == "http", let status = status else { return }
+        let payload = status.openRequest(for: service, on: host, privateNames: names)
         busy = true
         message = nil
         Task {
@@ -140,8 +141,7 @@ struct PeerViewState {
                 let api = self.api
                 let data = try await Task.detached {
                     _ = try api.request(["op": "enable"])
-                    return try api.request(["op": "open", "host": host, "service": service.id,
-                                            "incarnation": service.incarnation])
+                    return try api.request(payload)
                 }.value
                 let result = try JSONSerialization.jsonObject(with: data) as? [String: Any]
                 let url = try browserURL(result?["url"] as? String ?? "")
@@ -154,7 +154,9 @@ struct PeerViewState {
             self.qr = try JSONDecoder().decode(PairingQR.self, from: data)
         }
     }
-    func peerName(_ host: String) -> String { names[host] ?? String(host.prefix(12)) }
+    func peerName(_ host: String) -> String {
+        status?.hostName(for: host, privateNames: names) ?? String(host.prefix(12))
+    }
     func saveName(_ name: String, host: String) {
         names[host] = name.isEmpty ? nil : name
         UserDefaults.standard.set(names, forKey: "peerNames")

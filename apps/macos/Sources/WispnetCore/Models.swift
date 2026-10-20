@@ -38,6 +38,17 @@ public struct NodeStatus: Decodable, Sendable {
     public let invitations: [Invitation]
     public let relay: String
     public let access_enabled: Bool
+    public func hostName(for peer: String, privateNames: [String: String] = [:]) -> String? {
+        if peer == host.host { return host_name }
+        let candidates = [privateNames[peer], host.clients.first { $0.peer == peer }?.name]
+        return candidates.compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+    }
+    public func openRequest(for service: Service, on peer: String, privateNames: [String: String] = [:]) -> [String: String] {
+        var request = ["op": "open", "host": peer, "service": service.id, "incarnation": service.incarnation]
+        request["host_name"] = hostName(for: peer, privateNames: privateNames)
+        return request
+    }
     public var pending: [Invitation] { invitations.filter { $0.state == "pending" } }
     public var activeClients: Int {
         host.clients.filter { (connected_peers[$0.peer] ?? 0) > 0 || recent_peers[$0.peer] != nil }.count
