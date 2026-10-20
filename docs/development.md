@@ -87,7 +87,11 @@ There is no installed systemd service yet.
 
 ## Configuration and logging
 
-All four TOML fields are required. schema_version must be 1; device_name must
+device_name is optional and defaults to the operating system hostname (Linux).
+Explicit names are preserved; omit the field to follow the machine name on startup.
+Android uses the device name from system settings, falling back to the model name;
+a custom Wispnet name overrides this default.
+The other three TOML fields are required. schema_version must be 1; device_name must
 be nonblank, at most 128 bytes and contain no control characters; state_dir
 must be absolute, non-root and contain no parent traversal; log_level accepts
 error, warn, info or debug. Optional transport/services define static service

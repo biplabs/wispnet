@@ -966,7 +966,7 @@ class Window(QMainWindow):
         count = len(active)
         window = result.get("presence_timeout_seconds", 60)
         raw_name = (result.get("host_name") or "").strip()
-        if not raw_name or raw_name.lower() == "local computer":
+        if not raw_name:
             raw_name = socket.gethostname() or "This Machine"
         host_title = raw_name.upper()
         host_id = result.get("host", {}).get("host", "")

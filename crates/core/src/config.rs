@@ -10,6 +10,7 @@ use std::{
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub schema_version: u16,
+    #[serde(default = "machine_name")]
     pub device_name: String,
     pub state_dir: PathBuf,
     pub log_level: LogLevel,
@@ -21,6 +22,21 @@ pub struct Config {
     pub controller: Option<ControllerConfig>,
     #[serde(default)]
     pub services: Vec<ServiceConfig>,
+}
+
+/// Resolve an omitted device name from the OS, never from a display placeholder.
+fn machine_name() -> String {
+    #[cfg(target_os = "linux")]
+    if let Ok(name) = fs::read_to_string("/proc/sys/kernel/hostname") {
+        return name.trim().to_owned();
+    }
+    std::process::Command::new("hostname")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|name| name.trim().to_owned())
+        .unwrap_or_default()
 }
 
 /// Only a trusted local HTTPS reverse proxy may reach this listener.
@@ -331,6 +347,16 @@ state_dir = '/tmp/wispnet-test'
 log_level = 'info'"
             .into()
     }
+    #[test]
+    fn omitted_device_name_uses_os_name_and_explicit_names_are_preserved() {
+        let text = valid().replace("device_name = 'laptop'\n", "");
+        let config = Config::parse(&text).unwrap();
+        assert_eq!(config.device_name, machine_name());
+        assert!(!config.device_name.is_empty());
+        assert_eq!(Config::parse(&valid()).unwrap().device_name, "laptop");
+        assert!(Config::parse(&valid().replace("'laptop'", "''")).is_err());
+    }
+
     #[test]
     fn rejects_bad_configuration() {
         assert!(Config::parse(&valid()).is_ok());
