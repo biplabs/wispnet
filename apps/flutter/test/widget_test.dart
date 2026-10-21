@@ -208,19 +208,27 @@ void main() {
       await close(tester);
     }
   });
-  testWidgets('both launch states show only a centered entry button', (
+  testWidgets('both launch states show a centered entry and its caption', (
     tester,
   ) async {
     for (final paired in [false, true]) {
       final backend = FakeBackend(paired: paired, enabled: false);
       await mount(tester, backend);
-      expect(find.byType(Text), findsNothing);
+      final caption = find.text(
+        paired ? 'hyperjump to wispnet' : 'establish your wispnet',
+      );
+      expect(caption, findsOneWidget);
+      expect(find.byType(Text), findsOneWidget);
       expect(find.byTooltip('Settings'), findsNothing);
       expect(find.text('Manage'), findsNothing);
       final entry = find.byTooltip(
         paired ? 'Enter wisp space' : 'Establish your wisp network',
       );
-      expect(tester.getCenter(entry), const Offset(195, 422));
+      expect(tester.getCenter(entry).dx, 195);
+      final group = tester
+          .getRect(entry)
+          .expandToInclude(tester.getRect(caption));
+      expect(group.center.dy, closeTo(422, .01));
       await tester.tap(entry);
       await tester.pumpAndSettle();
       expect(

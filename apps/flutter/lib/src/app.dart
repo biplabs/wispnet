@@ -556,15 +556,40 @@ class _WispHomeState extends State<WispHome>
                                     )
                                   : Center(
                                       key: const ValueKey('standby'),
-                                      child: SpaceToggle(
-                                        first: list.isEmpty,
-                                        busy: busy,
-                                        beacons: list.map(stateColor).toList(),
-                                        onPressed: busy
-                                            ? null
-                                            : list.isEmpty
-                                            ? pair
-                                            : toggle,
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          SpaceToggle(
+                                            first: list.isEmpty,
+                                            busy: busy,
+                                            beacons: list
+                                                .map(stateColor)
+                                                .toList(),
+                                            onPressed: busy
+                                                ? null
+                                                : list.isEmpty
+                                                ? pair
+                                                : toggle,
+                                          ),
+                                          const SizedBox(height: 8),
+                                          Text(
+                                            list.isEmpty
+                                                ? 'establish your wispnet'
+                                                : 'hyperjump to wispnet',
+                                            textAlign: TextAlign.center,
+                                            style: const TextStyle(
+                                              fontSize: 21,
+                                              letterSpacing: 1,
+                                              shadows: [
+                                                Shadow(
+                                                  color: Color(0x883868c8),
+                                                  blurRadius: 10,
+                                                  offset: Offset(0, 2),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
                             ),
