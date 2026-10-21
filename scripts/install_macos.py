@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build/install the native macOS app and user launch agents from this checkout."""
+"""Build/install the Tauri macOS app and user launch agents from this checkout."""
 import argparse
 import json
 import os
@@ -58,9 +58,9 @@ def main():
         parser.error("No existing host configuration. Use --init to explicitly create this Mac’s independent identity.")
     if not args.skip_build:
         run("cargo", "build", "--workspace", "--locked", cwd=ROOT)
-        run("swift", "build", "--package-path", ROOT / "apps/macos", "-c", "release")
+        run("cargo", "build", "--manifest-path", ROOT / "apps/macos/src-tauri/Cargo.toml", "--release", "--locked")
     node_source = ROOT / "target/debug/wispnet"
-    app_source = ROOT / "apps/macos/.build/release/Wispnet"
+    app_source = ROOT / "apps/macos/src-tauri/target/release/Wispnet"
     if not config.exists():
         # Never recover missing authority by silently creating a new identity.
         if state.exists():

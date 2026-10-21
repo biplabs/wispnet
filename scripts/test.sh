@@ -32,8 +32,11 @@ if [ "$(uname -s)" = Linux ]; then
     python3 -m unittest discover -s scripts -p test_linux_distribution.py
 fi
 if [ "$(uname -s)" = Darwin ]; then
-    scripts/test_macos_swift.sh
-    swift build --package-path apps/macos -c release
+    cargo fmt --manifest-path apps/macos/src-tauri/Cargo.toml --check
+    cargo clippy --manifest-path apps/macos/src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+    cargo test --manifest-path apps/macos/src-tauri/Cargo.toml --locked
+    node --test apps/macos/tests/*.test.mjs
+    cargo build --manifest-path apps/macos/src-tauri/Cargo.toml --release --locked
     python3 scripts/test_macos.py
 fi
 QT_QPA_PLATFORM=offscreen uv run --project apps/node/desktop --locked python -m unittest discover -s apps/node/desktop/tests

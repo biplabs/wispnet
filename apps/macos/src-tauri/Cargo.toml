@@ -1,0 +1,30 @@
+[package]
+name = "wispnet-macos"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Keep the Mac UI dependencies out of Linux/Android workspace builds.
+[workspace]
+
+[[bin]]
+name = "Wispnet"
+path = "src/main.rs"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[build-dependencies]
+tauri-build = "2"
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-single-instance = "2"
+serde_json = "1"
+toml = "1"
+libc = "0.2"
+url = "2"
+
+[dev-dependencies]
+tempfile = "3"

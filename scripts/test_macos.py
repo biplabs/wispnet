@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the real node integration contract through the native app's IPC client."""
+"""Run the real node integration contract through the Tauri app's IPC client."""
 import json
 from pathlib import Path
 import subprocess
@@ -9,7 +9,7 @@ import unittest
 import test_node_desktop as integration
 
 ROOT = Path(__file__).resolve().parents[1]
-NATIVE = ROOT / "apps/macos/.build/release/Wispnet"
+NATIVE = ROOT / "apps/macos/src-tauri/target/release/Wispnet"
 PythonAPI = integration.module.NodeAPI
 
 
@@ -28,7 +28,7 @@ class NativeAPI(PythonAPI):
 
 if __name__ == "__main__":
     if sys.platform != "darwin":
-        raise SystemExit("Native integration requires macOS")
+        raise SystemExit("Tauri integration requires macOS")
     integration.module.NodeAPI = NativeAPI
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(integration.NodeIntegration)
     raise SystemExit(not unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful())

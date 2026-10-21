@@ -1,6 +1,7 @@
-# Native macOS app
+# macOS app (Tauri)
 
-Wispnet for macOS uses SwiftUI and AppKit, with an always-available menu bar icon.
+Wispnet for macOS uses Tauri 2, a Rust backend and a bundled HTML/CSS/JavaScript
+interface in the system WKWebView, with an always-available menu bar icon.
 It shares the Rust node and protocols with Linux and Android; Qt and Python are
 not part of the installed Mac app. Requires macOS 13 or newer. Build on the Mac
 architecture you intend to run; this checkout has been built on Apple Silicon.
@@ -8,7 +9,8 @@ architecture you intend to run; this checkout has been built on Apple Silicon.
 ## Build and install
 
 Install Xcode Command Line Tools, the pinned Rust toolchain (via rustup), and
-Python 3.11 or newer for the installer. From this checkout:
+Python 3.11 or newer for the installer. Node.js is required for tests only; the
+installed app needs no Node.js, Python, Swift or Qt runtime. From this checkout:
 
 ```sh
 scripts/install-hooks.sh
@@ -29,7 +31,7 @@ Configuration is `~/.config/wispnet-node/host.toml`; default private state is
 `~/.local/state/wispnet-node`. It installs two per-user launch agents:
 
 - `app.wispnet.node`: the independent node, started at graphical login.
-- `app.wispnet.desktop`: the native app, started quietly in the menu bar at login.
+- `app.wispnet.desktop`: the Tauri app, started quietly in the menu bar at login.
 
 Logs are in `~/Library/Logs/Wispnet/`. Open Wispnet from Finder, Spotlight or the
 menu bar. Closing the window hides it and removes the Dock icon; the menu bar
@@ -42,8 +44,8 @@ the node again, just as the enabled Linux user service starts at login.
 The content area follows the Linux desktop's drifting 96-star background and
 blue nebula, with faster motion online and a 0.9-second hyperjump when opening
 local or remote services. The browser opens after the jump finishes; access is
-prepared concurrently. Native controls sit above transparent, outlined panels.
-Animation pauses while the window is hidden, minimized or fully covered, and respects the
+prepared concurrently. Accessible web controls sit above transparent, outlined panels.
+Animation pauses while the window is hidden or minimized, and respects the
 macOS Reduce Motion setting.
 
 ## Services and pairing
@@ -70,24 +72,41 @@ owner's approval. Invalid or expired codes keep a visible error in the dialog.
 Paired hosts awaiting their owner's decision show **Awaiting approval**. **Pairing requests** approves a specific proved request and selected
 service grants together. Mutual machine pairing grants no access to the other
 machine's services automatically. Device revocation and forgetting a paired host
-remain separate owner decisions. The native app does not yet expose the Linux
+remain separate owner decisions. The Mac app does not yet expose the Linux
 combined SSH owner-operations workflow or drag-to-reorder layout.
 
 IPC uses an owner-only Unix socket plus `getpeereid` to authenticate the local
 node. Pairing material stays out of process arguments and logs. Browser handoff
 accepts only the node's token-free `http://*.localhost:PORT/` URL and uses
-`NSWorkspace` to launch the browser. No second identity lease or public management
-listener is introduced.
+the macOS system browser launcher. The webview loads only bundled assets under a restrictive content security policy;
+no shell or filesystem plugin is exposed. No second identity lease or public
+management listener is introduced.
 
 ## Validation
 
-Run `scripts/test.sh` with Node.js, Python 3.11+, uv, Rust, Swift and OpenSSL 3 on
-PATH. macOS runs shared Rust/protocol/browser tests, native Swift tests for IPC
-permissions/protocol limits and browser URL validation, and the real two-node
-integration contract through the native executable's IPC implementation. Linux
-bundle packaging tests run on Linux, where that distribution is supported.
+Run `scripts/test.sh` with Node.js, Python 3.11+, uv, Rust and OpenSSL 3 on
+PATH. macOS runs shared Rust/protocol/browser tests, Tauri Rust tests for IPC
+permissions/protocol limits and browser URL validation, JavaScript state tests,
+and the real two-node integration contract through the Tauri executable’s IPC
+implementation. Linux bundle packaging tests run on Linux, where that distribution is supported.
 The pre-push hook runs this same local suite.
 
 This is a development app signed locally with an ad-hoc signature. App Store
 signing, notarization, universal binaries, and an independent download installer
 are outside this implementation.
+
+## Development
+
+The isolated Cargo package is `apps/macos/src-tauri`; static frontend assets live
+in `apps/macos/ui`. Its separate committed lockfile keeps Tauri dependencies out
+of Linux and Android workspace builds. The Linux Qt app and installer are unchanged.
+
+```sh
+cargo run --manifest-path apps/macos/src-tauri/Cargo.toml --locked
+```
+
+The app reads the existing default host configuration to locate its private node
+socket, including custom absolute state directories. `--background` starts in the
+menu bar; `--request /absolute/node.sock` reads one JSON request from stdin and
+exercises the same IPC transport without starting a GUI. The installer assembles
+the `.app` from the release binary, whose web assets are embedded at compile time.
