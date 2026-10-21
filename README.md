@@ -14,8 +14,8 @@ Wispnet brings your self-hosted services into one directory and makes them acces
 
 - `apps/node/daemon`: running Linux/macOS node and private desktop API.
 - `apps/node/cli`: owner commands and the node executable.
-- `apps/node/desktop`: Qt desktop window and KDE system tray.
-- `apps/macos`: Tauri Mac app and menu bar controls (Rust + system WKWebView).
+- `apps/node/desktop`: shared Python owner/cache helpers and deprecated Qt UI (retained for regression coverage).
+- `apps/macos`: shared Tauri Linux/macOS app, tray controls and bundled web UI.
 - `apps/relay`: separate disposable packet relay server.
 - `apps/android`: Android app, Gradle wrapper and thin Rust JNI adapter in `native/`.
 - `crates/core`, `crates/agent`, `crates/registry`, `crates/client`: shared protocol, peer transport, host-local authority and protected browser client/gateway.

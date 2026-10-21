@@ -19,3 +19,5 @@ apps/node/desktop/wispnet_desktop/build_info.py
 # Isolated macOS Tauri build products.
 /apps/macos/src-tauri/target/
 /apps/macos/src-tauri/gen/
+
+/apps/macos/node_modules/

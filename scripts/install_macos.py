@@ -102,6 +102,33 @@ def main():
     shutil.copy2(app_source, temporary_app)
     temporary_app.chmod(0o755)
     os.replace(temporary_app, executable)
+    # Qt-free helper retains the existing durable owner-operation journals/cache.
+    shutil.copy2(
+        ROOT / "apps/macos/desktop_data.py", executable.parent / "desktop_data.py"
+    )
+    helper_package = executable.parent / "wispnet_desktop"
+    helper_package.mkdir(exist_ok=True)
+    for name in ["__init__.py", "api.py", "combined.py", "catalog_cache.py"]:
+        shutil.copy2(
+            ROOT / "apps/node/desktop/wispnet_desktop" / name, helper_package / name
+        )
+    (executable.parent / "python-path").write_text(str(Path(sys.executable).resolve()))
+    # Provide the same owner automation endpoint when this Mac is an SSH target.
+    shutil.copytree(
+        helper_package, node_binary.parent / "wispnet_desktop", dirs_exist_ok=True
+    )
+    shutil.copy2(
+        ROOT / "scripts/node_request.py", node_binary.parent / "node_request.py"
+    )
+    owner_command = home / ".local/bin/wispnet-node"
+    owner_command.write_text(
+        "#!"
+        + sys.executable
+        + "\nimport os,sys\nos.execv(sys.executable, [sys.executable, "
+        + repr(str(node_binary.parent / "node_request.py"))
+        + ",*sys.argv[1:]])\n"
+    )
+    owner_command.chmod(0o755)
     # macOS icon resources, generated from the project's existing artwork.
     with tempfile.TemporaryDirectory(prefix="wispnet-icons-") as directory:
         iconset = Path(directory) / "Wispnet.iconset"

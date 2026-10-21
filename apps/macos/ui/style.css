@@ -350,3 +350,28 @@ body.warp #stars {
     flex-direction: column
   }
 }
+
+.service-card {
+  display: flex;
+  gap: 0.4rem;
+  align-items: stretch;
+}
+.service-card .tile {
+  flex: 1;
+}
+.order-handle {
+  cursor: grab;
+  padding: 0.3rem;
+  min-width: 1.5rem;
+}
+.dragging {
+  opacity: 0.55;
+}
+.drop-target {
+  outline: 2px solid #72c5ff;
+  outline-offset: 3px;
+}
+#dialog-body {
+  max-height: 70vh;
+  overflow-y: auto;
+}

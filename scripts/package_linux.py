@@ -17,17 +17,20 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def package(binary, output):
+def package(binary, output, desktop_binary=None):
     if platform.system() != "Linux" or platform.machine() != "x86_64":
         raise ValueError("Only native Linux x86_64 bundles are supported")
     subprocess.run([str(binary), "--help"], check=True, stdout=subprocess.DEVNULL)
-    version_info = subprocess.check_output(
-        ["readelf", "--version-info", str(binary)], text=True
-    )
-    glibc = max(
-        re.findall(r"GLIBC_(\d+\.\d+)", version_info),
-        key=lambda v: tuple(map(int, v.split("."))),
-    )
+    versions = []
+    for executable in [
+        binary,
+        *([desktop_binary] if desktop_binary is not None else []),
+    ]:
+        version_info = subprocess.check_output(
+            ["readelf", "--version-info", str(executable)], text=True
+        )
+        versions.extend(re.findall(r"GLIBC_(\d+\.\d+)", version_info))
+    glibc = max(versions, key=lambda v: tuple(map(int, v.split("."))))
     revision = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
     ).strip()
@@ -45,6 +48,7 @@ def package(binary, output):
         files = [
             "scripts/install_node_desktop.py",
             "scripts/node_request.py",
+            "apps/macos/desktop_data.py",
             "deploy/node/wispnet-host.service",
             "deploy/node/wispnet-desktop.service",
             "config/node/host.toml",
@@ -54,26 +58,24 @@ def package(binary, output):
         ]
         desktop = ROOT / "apps/node/desktop"
         files.extend(
-            str((desktop / name).relative_to(ROOT))
-            for name in ["pyproject.toml", "uv.lock", "icon.png", "icon.svg"]
+            str((desktop / name).relative_to(ROOT)) for name in ["icon.png", "icon.svg"]
         )
         files.extend(
-            str(p.relative_to(ROOT)) for p in (desktop / "wispnet_desktop").glob("*.py")
+            str((desktop / "wispnet_desktop" / name).relative_to(ROOT))
+            for name in ["__init__.py", "api.py", "combined.py", "catalog_cache.py"]
         )
-        files.append("apps/node/desktop/wispnet_desktop/icon.png")
         files.extend(str(p.relative_to(ROOT)) for p in (ROOT / "docs").rglob("*.md"))
         files.append("README.md")
         for name in sorted(set(files)):
             target = tree / name
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / name, target)
-        build_label = subprocess.check_output(["python3", str(ROOT / "scripts/build_identity.py")], text=True).strip()
-        (tree / "apps/node/desktop/wispnet_desktop/build_info.py").write_text("DISPLAY_VERSION = " + repr(build_label) + "\n")
         (tree / "bin").mkdir()
         shutil.copy2(binary, tree / "bin/wispnet")
-        subprocess.run(
-            ["strip", "--strip-debug", str(tree / "bin/wispnet")], check=True
-        )
+        if desktop_binary is not None:
+            shutil.copy2(desktop_binary, tree / "bin/Wispnet")
+        for executable in (tree / "bin").iterdir():
+            subprocess.run(["strip", "--strip-debug", str(executable)], check=True)
         hashes = {
             str(p.relative_to(tree)): hashlib.sha256(p.read_bytes()).hexdigest()
             for p in sorted(tree.rglob("*"))
@@ -98,6 +100,7 @@ def package(binary, output):
                     "platform": "linux-x86_64",
                     "minimum_glibc": glibc,
                     "python": ">=3.11",
+                    "desktop": "tauri" if desktop_binary is not None else "headless",
                     "sha256": hashes,
                 },
                 indent=2,
@@ -136,6 +139,12 @@ def main():
     parser.add_argument(
         "--output", type=Path, default=ROOT / "target/dist/wispnet-linux-x86_64.tar.gz"
     )
+    parser.add_argument(
+        "--headless", action="store_true", help="Exclude the Tauri desktop"
+    )
+    parser.add_argument(
+        "--desktop-binary", type=Path, help="Use a prebuilt Tauri binary"
+    )
     args = parser.parse_args()
     if args.binary is None:
         subprocess.run(
@@ -144,7 +153,23 @@ def main():
             check=True,
         )
     binary = (args.binary or ROOT / "target/release/wispnet").resolve()
-    print(package(binary, args.output))
+    desktop_binary = None
+    if not args.headless:
+        desktop_binary = args.desktop_binary
+        if desktop_binary is None:
+            subprocess.run(
+                [
+                    "cargo",
+                    "build",
+                    "--release",
+                    "--locked",
+                    "--manifest-path",
+                    str(ROOT / "apps/macos/src-tauri/Cargo.toml"),
+                ],
+                check=True,
+            )
+            desktop_binary = ROOT / "apps/macos/src-tauri/target/release/Wispnet"
+    print(package(binary, args.output, desktop_binary))
 
 
 if __name__ == "__main__":

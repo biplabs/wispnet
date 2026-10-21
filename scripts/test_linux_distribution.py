@@ -158,6 +158,46 @@ class DistributionTests(unittest.TestCase):
         )
         self.assertFalse((self.state / "host.sqlite3").exists())
 
+    def test_gui_files_stage_native_launcher_without_qt(self):
+        self.install()
+        self.initialize()
+        before = self.status()
+        # Use an inert native ELF for files-only staging; GUI runtime is tested
+        # separately through the actual Tauri executable and browser smoke test.
+        archive = package(self.installed, self.root / "desktop.tar.gz", self.installed)
+        with tarfile.open(archive) as source:
+            source.extractall(self.root, filter="data")
+        tools = self.root / "tools"
+        tools.mkdir()
+        systemctl = tools / "systemctl"
+        systemctl.write_text(
+            '#!/bin/sh\n[ "$*" = "--user is-active --quiet graphical-session.target" ]\n'
+        )
+        systemctl.chmod(0o755)
+        self.env["PATH"] = str(tools) + os.pathsep + self.env["PATH"]
+        self.run_command(
+            sys.executable,
+            str(self.bundle / "scripts/install_node_desktop.py"),
+            "--no-start",
+        )
+        destination = self.home / ".local/libexec/wispnet-desktop"
+        self.assertEqual(
+            (self.home / ".local/bin/wispnet-desktop").resolve(),
+            destination / "Wispnet",
+        )
+        self.assertFalse((destination / ".venv").exists())
+        self.assertFalse((destination / "wispnet_desktop/app.py").exists())
+        self.assertEqual(self.status(), before)
+        result = subprocess.run(
+            [sys.executable, str(destination / "desktop_data.py")],
+            input='{"op":"operations"}',
+            env=self.env,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        self.assertEqual(json.loads(result.stdout), [])
+
     def test_corrupt_payload_is_rejected_before_install_mutation(self):
         self.install()
         self.initialize()
@@ -196,6 +236,8 @@ class DistributionTests(unittest.TestCase):
         manifest = json.loads((self.bundle / "manifest.json").read_text())
         self.assertEqual(manifest["platform"], "linux-x86_64")
         self.assertIn("bin/wispnet", manifest["sha256"])
+        self.assertNotIn("apps/node/desktop/wispnet_desktop/app.py", manifest["sha256"])
+        self.assertNotIn("apps/node/desktop/uv.lock", manifest["sha256"])
         for name, digest in manifest["sha256"].items():
             self.assertEqual(
                 hashlib.sha256((self.bundle / name).read_bytes()).hexdigest(), digest

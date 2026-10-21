@@ -37,11 +37,30 @@ pub fn request(path: &Path, payload: &Value) -> Result<Value, String> {
     stream
         .set_write_timeout(Some(Duration::from_secs(27)))
         .map_err(|e| e.to_string())?;
-    let mut uid = 0;
-    let mut gid = 0;
-    if unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) } != 0
-        || uid != unsafe { libc::geteuid() }
-    {
+    #[cfg(target_os = "macos")]
+    let owner = {
+        let mut uid = 0;
+        let mut gid = 0;
+        unsafe {
+            libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) == 0 && uid == libc::geteuid()
+        }
+    };
+    #[cfg(target_os = "linux")]
+    let owner = {
+        let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
+        let mut len = std::mem::size_of_val(&cred) as libc::socklen_t;
+        unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                &mut cred as *mut _ as *mut libc::c_void,
+                &mut len,
+            ) == 0
+                && cred.uid == libc::geteuid()
+        }
+    };
+    if !owner {
         return Err("Unexpected local node owner.".into());
     }
     stream

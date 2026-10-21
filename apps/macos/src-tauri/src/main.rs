@@ -1,5 +1,3 @@
-#![cfg(target_os = "macos")]
-mod ipc;
 use serde_json::{Value, json};
 use std::{
     io::Read,
@@ -12,6 +10,7 @@ use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
 };
+use wispnet_macos::ipc;
 
 struct Node {
     socket: PathBuf,
@@ -36,6 +35,7 @@ fn socket_path() -> Result<PathBuf, String> {
     }
     Ok(state.join("node.sock"))
 }
+#[cfg(target_os = "macos")]
 fn launchctl(args: &[&str]) -> Result<(), String> {
     let mut child = Command::new("/bin/launchctl")
         .args(args)
@@ -60,6 +60,7 @@ fn launchctl(args: &[&str]) -> Result<(), String> {
         std::thread::sleep(Duration::from_millis(50));
     }
 }
+#[cfg(target_os = "macos")]
 fn lifecycle(online: bool, socket: &std::path::Path) -> Result<(), String> {
     let domain = format!("gui/{}", unsafe { libc::geteuid() });
     let service = format!("{domain}/app.wispnet.node");
@@ -88,6 +89,77 @@ fn lifecycle(online: bool, socket: &std::path::Path) -> Result<(), String> {
         launchctl(&["bootout", &service])?;
     }
     Ok(())
+}
+#[cfg(target_os = "linux")]
+fn lifecycle(online: bool, socket: &std::path::Path) -> Result<(), String> {
+    let result = Command::new("systemctl")
+        .args([
+            "--user",
+            if online { "start" } else { "stop" },
+            "wispnet-host.service",
+        ])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !result.status.success() {
+        return Err(String::from_utf8_lossy(&result.stderr).into_owned());
+    }
+    if online {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while ipc::request(socket, &json!({"op":"status"})).is_err() {
+            if Instant::now() >= deadline {
+                return Err("Node started but its API is not ready.".into());
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+    Ok(())
+}
+#[tauri::command]
+async fn desktop_data(payload: Value) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::io::Write;
+        let installed = std::env::current_exe()
+            .map_err(|e| e.to_string())?
+            .parent()
+            .ok_or("Missing executable directory")?
+            .join("desktop_data.py");
+        let helper = if installed.exists() {
+            installed.clone()
+        } else {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../desktop_data.py")
+        };
+        let interpreter = if installed.exists() {
+            let path = std::fs::read_to_string(installed.with_file_name("python-path"))
+                .map_err(|e| format!("Cannot read desktop Python runtime: {e}"))?;
+            let path = PathBuf::from(path.trim());
+            if !path.is_absolute() {
+                return Err("Desktop Python runtime must be absolute.".into());
+            }
+            path
+        } else {
+            PathBuf::from("python3")
+        };
+        let mut child = Command::new(interpreter)
+            .arg(helper)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        child
+            .stdin
+            .take()
+            .ok_or("Missing helper input")?
+            .write_all(&serde_json::to_vec(&payload).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        let result = child.wait_with_output().map_err(|e| e.to_string())?;
+        if !result.status.success() {
+            return Err(String::from_utf8_lossy(&result.stderr).trim().to_owned());
+        }
+        serde_json::from_slice(&result.stdout).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 #[tauri::command]
 async fn node_request(node: tauri::State<'_, Node>, payload: Value) -> Result<Value, String> {
@@ -119,35 +191,18 @@ async fn open_service(
         let result = ipc::request(&socket, &json!({"op":"open", "host":host, "service":service, "incarnation":incarnation, "host_name":host_name}))?;
         let url = ipc::browser_url(result["url"].as_str().ok_or("Missing browser handoff.")?)?;
         if !reduce_motion { std::thread::sleep(Duration::from_millis(900).saturating_sub(start.elapsed())); }
-        let status = Command::new("/usr/bin/open").arg(url.as_str()).status().map_err(|e| e.to_string())?;
+        let status = Command::new(if cfg!(target_os = "macos") { "/usr/bin/open" } else { "xdg-open" }).arg(url.as_str()).status().map_err(|e| e.to_string())?;
         if status.success() { Ok(()) } else { Err("Could not open your browser.".into()) }
     }).await.map_err(|e| e.to_string())?
 }
 #[tauri::command]
-async fn copy_pairing_code(code: String) -> Result<(), String> {
+async fn copy_pairing_code(app: tauri::AppHandle, code: String) -> Result<(), String> {
     if !code.starts_with("wispnet1:") || code.len() > 8192 {
         return Err("Invalid pairing code.".into());
     }
-    tauri::async_runtime::spawn_blocking(move || {
-        use std::io::Write;
-        let mut child = Command::new("/usr/bin/pbcopy")
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| e.to_string())?;
-        child
-            .stdin
-            .take()
-            .ok_or("Cannot open clipboard.")?
-            .write_all(code.as_bytes())
-            .map_err(|e| e.to_string())?;
-        if child.wait().map_err(|e| e.to_string())?.success() {
-            Ok(())
-        } else {
-            Err("Could not copy pairing code.".into())
-        }
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tauri_plugin_clipboard_manager::ClipboardExt::clipboard(&app)
+        .write_text(code)
+        .map_err(|e| e.to_string())
 }
 // Preserve private labels from the previous Swift app on first Tauri launch.
 #[tauri::command]
@@ -205,6 +260,7 @@ fn tray_status(app: tauri::AppHandle, text: String, online: bool) -> Result<(), 
     Ok(())
 }
 fn reveal(app: &tauri::AppHandle) {
+    #[cfg(target_os = "macos")]
     let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
@@ -248,10 +304,12 @@ fn main() {
         }
     };
     tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_single_instance::init(|app, _, _| reveal(app)))
         .manage(Node { socket })
         .invoke_handler(tauri::generate_handler![
             node_request,
+            desktop_data,
             set_online,
             open_service,
             build_identity,
@@ -270,6 +328,9 @@ fn main() {
             )?;
             let menu = Menu::with_items(app, &[&show, &quit])?;
             TrayIconBuilder::with_id("wispnet")
+                .icon(tauri::image::Image::from_bytes(include_bytes!(
+                    "../../../node/desktop/icon.png"
+                ))?)
                 .title("W")
                 .tooltip("Wispnet")
                 .menu(&menu)
@@ -293,7 +354,11 @@ fn main() {
                     _ => {}
                 })
                 .build(app)?;
-            if args.iter().any(|arg| arg == "--background") {
+            if args
+                .iter()
+                .any(|arg| arg == "--background" || arg == "--tray")
+            {
+                #[cfg(target_os = "macos")]
                 app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             } else {
                 reveal(app.handle());
@@ -304,6 +369,7 @@ fn main() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = window.hide();
+                #[cfg(target_os = "macos")]
                 let _ = window
                     .app_handle()
                     .set_activation_policy(tauri::ActivationPolicy::Accessory);
@@ -311,9 +377,10 @@ fn main() {
         })
         .build(tauri::generate_context!())
         .expect("Cannot start Wispnet")
-        .run(|app, event| {
-            if let tauri::RunEvent::Reopen { .. } = event {
-                reveal(app);
+        .run(|_app, _event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = _event {
+                reveal(_app);
             }
         });
 }

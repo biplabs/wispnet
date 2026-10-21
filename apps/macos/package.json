@@ -1,0 +1,11 @@
+{
+  "name": "wispnet-desktop-ui-tests",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test:ui": "node tests/ui-smoke.cjs"
+  },
+  "devDependencies": {
+    "playwright": "1.56.1"
+  }
+}

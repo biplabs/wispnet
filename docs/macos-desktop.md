@@ -2,15 +2,14 @@
 
 Wispnet for macOS uses Tauri 2, a Rust backend and a bundled HTML/CSS/JavaScript
 interface in the system WKWebView, with an always-available menu bar icon.
-It shares the Rust node and protocols with Linux and Android; Qt and Python are
-not part of the installed Mac app. Requires macOS 13 or newer. Build on the Mac
+It shares the Rust node and protocols with Linux and Android; Qt is not part of the installed Mac app. Requires macOS 13 or newer. Build on the Mac
 architecture you intend to run; this checkout has been built on Apple Silicon.
 
 ## Build and install
 
 Install Xcode Command Line Tools, the pinned Rust toolchain (via rustup), and
 Python 3.11 or newer for the installer. Node.js is required for tests only; the
-installed app needs no Node.js, Python, Swift or Qt runtime. From this checkout:
+installed app uses Python 3.11+ for the existing private catalog and owner-operation helper; it needs no Node.js, Swift or Qt runtime. From this checkout:
 
 ```sh
 scripts/install-hooks.sh
@@ -55,8 +54,7 @@ machines. Each peer reports its own failure; unavailable peers do not block othe
 catalogs. Only a successful live refresh enables its HTTP services. Opening one
 rechecks authority through the shared node and opens the protected local URL in
 your default browser. TCP services use the existing terminal tunnel commands.
-There is no persistent display-catalog cache in the Mac app; the Rust node still
-persists its authenticated catalog high-water evidence.
+Private validated display snapshots now persist using the same cache helper as Linux. Cached entries remain disabled until a successful live refresh; the Rust node independently persists authenticated catalog high-water evidence.
 
 **My services** shares or edits a loopback backend and its selected allowed
 devices. Changes carry the revision captured when the editor opens, so conflicting
@@ -72,10 +70,9 @@ owner's approval. Invalid or expired codes keep a visible error in the dialog.
 Paired hosts awaiting their owner's decision show **Awaiting approval**. **Pairing requests** approves a specific proved request and selected
 service grants together. Mutual machine pairing grants no access to the other
 machine's services automatically. Device revocation and forgetting a paired host
-remain separate owner decisions. The Mac app does not yet expose the Linux
-combined SSH owner-operations workflow or drag-to-reorder layout.
+remain separate owner decisions. The **Owner operations** screen exposes the existing durable SSH owner workflow, including explicit target selection, confirmation, per-host receipts and pending-target retries. Machine and service cards support drag ordering and keyboard arrow ordering; preferences are private to this desktop. **Access settings** configures registry/service gateway ports and allowed website origins. **My services** also controls public access with explicit confirmation.
 
-IPC uses an owner-only Unix socket plus `getpeereid` to authenticate the local
+IPC uses an owner-only Unix socket plus `getpeereid` (macOS) or `SO_PEERCRED` (Linux) to authenticate the local
 node. Pairing material stays out of process arguments and logs. Browser handoff
 accepts only the node's token-free `http://*.localhost:PORT/` URL and uses
 the macOS system browser launcher. The webview loads only bundled assets under a restrictive content security policy;
@@ -99,7 +96,7 @@ are outside this implementation.
 
 The isolated Cargo package is `apps/macos/src-tauri`; static frontend assets live
 in `apps/macos/ui`. Its separate committed lockfile keeps Tauri dependencies out
-of Linux and Android workspace builds. The Linux Qt app and installer are unchanged.
+of Linux and Android workspace builds. Linux uses this same Tauri application and its system WebKitGTK; the default Linux installer now installs Tauri. The Qt UI source is deprecated and retained for regression coverage. The shared stdlib Python helper reuses existing private journals and catalog snapshots without importing Qt.
 
 ```sh
 cargo run --manifest-path apps/macos/src-tauri/Cargo.toml --locked

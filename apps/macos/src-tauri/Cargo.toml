@@ -4,23 +4,26 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
-# Keep the Mac UI dependencies out of Linux/Android workspace builds.
+# Keep desktop webview dependencies out of headless/Android builds.
 [workspace]
 
 [[bin]]
 name = "Wispnet"
 path = "src/main.rs"
+required-features = ["gui"]
 
 [features]
-default = ["custom-protocol"]
-custom-protocol = ["tauri/custom-protocol"]
+default = ["gui", "custom-protocol"]
+gui = ["dep:tauri", "dep:tauri-plugin-single-instance", "dep:tauri-plugin-clipboard-manager"]
+custom-protocol = ["tauri?/custom-protocol"]
 
 [build-dependencies]
 tauri-build = "2"
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
-tauri-plugin-single-instance = "2"
+tauri = { version = "2", optional = true, features = ["tray-icon", "image-png"] }
+tauri-plugin-single-instance = { version = "2", optional = true }
+tauri-plugin-clipboard-manager = { version = "2", optional = true }
 serde_json = "1"
 toml = "1"
 libc = "0.2"

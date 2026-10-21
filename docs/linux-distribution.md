@@ -1,7 +1,7 @@
 # Linux release bundles
 
 The Linux x86_64 bundle contains the native node, dependency-free owner CLI,
-optional Qt desktop, service units, locked Python dependencies and setup guides.
+Tauri desktop, service units, stdlib Python owner helpers and setup guides.
 Installing it requires no Git checkout, Cargo or Rust toolchain. Each computer
 owns its own identity and authority. A headless computer needs no display or Qt.
 
@@ -30,11 +30,12 @@ checksum from a trusted release source. It is not a signed release attestation.
 Only native Linux x86_64/glibc is packaged. The target must meet the binary's
 `minimum_glibc` in the manifest and have libgcc and libm. Other architectures,
 musl, macOS and Windows are unsupported by this bundle. All targets need Python
-3.11+ and a working systemd user manager. GUI targets additionally need `uv`,
-network/cache access for the locked PySide6 6.10.2 dependencies, and the Qt
-Wayland/X11 platform libraries for their desktop. The bundle is not an offline
-Qt dependency installer. Existing validation targets are CachyOS/KDE and headless
-Ubuntu 24.04; a distro-specific graphical dependency installer is not provided.
+3.11+ and a working systemd user manager. GUI targets additionally need WebKitGTK
+4.1, GTK 3, Ayatana AppIndicator and `xdg-open`. No Qt/PySide environment is installed.
+Build hosts need the corresponding development packages and `pkg-config`.
+`--headless` builds a node-only bundle; its installer refuses GUI installation
+before changing installed files. `--desktop-binary /absolute/Wispnet` packages an
+explicit prebuilt Tauri executable. Its provenance must be established separately.
 
 ## Fresh host: initialize explicitly
 

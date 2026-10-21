@@ -38,5 +38,7 @@ fn main() {
             String::from_utf8(output.stdout).unwrap().trim()
         );
     }
-    tauri_build::build();
+    if std::env::var_os("CARGO_FEATURE_GUI").is_some() {
+        tauri_build::build();
+    }
 }

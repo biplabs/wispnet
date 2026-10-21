@@ -16,9 +16,25 @@ python3 scripts/install_node_desktop.py
 wispnet-desktop
 ```
 
-On a graphical host, requires `uv`, an active `graphical-session.target` and Qt's platform dependencies (provided by the target CachyOS/KDE installation). [Qt system-tray support](https://doc.qt.io/qtforpython-6/PySide6/QtWidgets/QSystemTrayIcon.html) provides the KDE StatusNotifier integration. Pinned PySide6 Essentials 6.10.2 is installed into its own user-local virtual environment. The installer atomically updates the development node executable, preserves existing host configuration/identity/grants, restarts the node when its binary changes, installs a desktop launcher and enables the graphical-session tray service. Peer-friendly names are private display metadata saved separately from the durable cryptographic pins. A node restart interrupts current connections; callers explicitly reopen services. Initialization is deliberately separate; the installer does not recreate missing host authority.
+The default desktop is now the shared Tauri app in `apps/macos`, using Rust,
+WebKitGTK 4.1, GTK 3 and Ayatana AppIndicator for the system tray. Build prerequisites
+include the WebKitGTK/GTK/AppIndicator development packages, a C compiler and
+`pkg-config`; runtime packages include those libraries and `xdg-open`. Python
+3.11+ remains required for the existing private cache and durable owner-operation
+helper. Qt, PySide and a Python virtual environment are no longer installed.
+The installer builds the locked Tauri release before changing installed files,
+then preserves the existing node configuration, identity, permissions and pins.
+It requires an active `graphical-session.target` for graphical installation.
 
-Installed GUI files: `~/.local/libexec/wispnet-desktop`, launcher `~/.local/bin/wispnet-desktop`, app entry `~/.local/share/applications/wispnet.desktop`, session service `wispnet-desktop.service`. Existing node service remains `wispnet-host.service`. Quit the existing desktop first, then run `wispnet-desktop --config /absolute/host.toml` for an alternate existing node. Closing the window hides it to the tray. Quit desktop exits the UI while the node and its active access setting remain running. Relaunching opens the existing window rather than starting another tray process.
+Installed GUI files remain `~/.local/libexec/wispnet-desktop`, launcher
+`~/.local/bin/wispnet-desktop`, app entry `~/.local/share/applications/wispnet.desktop`
+and session service `wispnet-desktop.service`. The node remains `wispnet-host.service`.
+Closing the window hides it to the tray; quitting leaves the node running.
+Relaunching reveals the existing window. The app uses the installed default host
+configuration. Alternate-config automation remains available through `wispnet-node --config`.
+Existing Qt peer names and ordering are imported on first use; private catalog
+snapshots and combined-operation journals are reused directly. The Qt UI is
+deprecated and retained in source for regression coverage.
 
 The header’s **Go offline** button stops `wispnet-host.service`, closing the node endpoint, peer connections and local browser routes. The desktop stays running; **Go online** starts the same node and waits for its local API. Identity and grants persist, and the independent relay service is untouched. This lifecycle control uses the installed default node configuration; alternate-config desktops do not control the default service. Browser access has no separate UI switch or success message.
 
@@ -39,7 +55,7 @@ printf '%s\n' '{"op":"catalog","host":"PINNED_HOST_ID"}' | ~/.local/bin/wispnet-
 systemctl --user status wispnet-host.service
 ```
 
-This mode installs/enables the node and preserves its existing configuration, identity and grants. It skips Qt, the desktop launcher and tray service; it does not require a display server or a graphical login. The dependency-free `~/.local/bin/wispnet-node` command reads one bounded JSON request from stdin (an empty request returns status) and talks to the running node's owner-only socket. It verifies socket permissions and OS peer credentials. Pairing capabilities and other request material stay out of process arguments. Use operations such as `catalog`, `pair`, `mutate`, `enable`, `open` and `stop` from headless automation; `open` returns a protected browser bootstrap URL for the caller. Treat that URL as a short-lived secret. This reuses the daemon identity/endpoint; the older standalone `host-catalog`/`pairing-request` transport probes require a separate identity lease and are not the live-node management interface. Run the graphical mode later only if a desktop session is actually wanted. For unattended boot, the user service manager must run without a login (for example, an already enabled user linger setting); the installer does not change that host policy.
+This mode installs/enables the node and preserves its existing configuration, identity and grants. It skips the desktop launcher and tray service; it does not require a display server or a graphical login. The dependency-free `~/.local/bin/wispnet-node` command reads one bounded JSON request from stdin (an empty request returns status) and talks to the running node's owner-only socket. It verifies socket permissions and OS peer credentials. Pairing capabilities and other request material stay out of process arguments. Use operations such as `catalog`, `pair`, `mutate`, `enable`, `open` and `stop` from headless automation; `open` returns a protected browser bootstrap URL for the caller. Treat that URL as a short-lived secret. This reuses the daemon identity/endpoint; the older standalone `host-catalog`/`pairing-request` transport probes require a separate identity lease and are not the live-node management interface. Run the graphical mode later only if a desktop session is actually wanted. For unattended boot, the user service manager must run without a login (for example, an already enabled user linger setting); the installer does not change that host policy.
 
 ## Views and actions
 
@@ -51,6 +67,25 @@ This mode installs/enables the node and preserves its existing configuration, id
 Each remote browser Open rechecks the target's permitted catalog; local Open checks the owner's current registry. Both use the same protected loopback HTTP gateway as Android. A mode-0600 handoff HTML file in the private state directory carries the single-use bootstrap; the browser is launched with its file URI, keeping the bootstrap token out of process arguments. The desktop HTML-file association must point to a web browser (verified on the target CachyOS session). The file is deleted after 60 seconds or normal GUI exit. The gateway validates authority/origin/cookie/bootstrap and expires sessions independently. Taking the node offline closes those local sessions. No shell-interpolated browser command or arbitrary upstream request is accepted.
 
 The tray reports node availability, the active-client total (live connections or approved activity within 60 seconds), approved count, pending requests and configured relay connection state. It never counts saved approvals as activity; recent activity is UI metadata and grants no permissions. This does not inspect a separately operated relay's server process.
+
+## Tauri validation
+
+The shared JavaScript tests, private-helper tests and Rust IPC tests run on both
+platforms through `scripts/test.sh`. With native WebKit development libraries
+present, the suite also builds/tests the Tauri GUI and runs the real two-node
+integration contract through its `--request` transport. Headless hosts can run
+IPC tests without GUI dependencies. For the browser interaction smoke test:
+
+```sh
+cd apps/macos
+npm ci
+npx playwright install chromium
+npm run test:ui
+```
+
+This exercises access settings, service edits, public sharing and the confirmed
+owner-operation plan against a controlled API fixture. It complements real node
+integration; it is not evidence of a physical macOS GUI or remote-host deployment.
 
 ## Tests and current limits
 
@@ -70,7 +105,7 @@ Browser access returned to its original disabled setting on both nodes; temporar
 
 ## Combined owner operations
 
-The **Combined operations** tab adds or revokes a specified client independently on selected hosts and shows one **applied**, **pending** or **rejected** row per host. Adding a client does not grant services automatically. Current service grants and local approvals remain owned by each host. This is an optional owner workflow, not a required controller or delegated mesh-wide administration.
+The **Owner operations** screen adds or revokes a specified client independently on selected hosts and shows one **applied**, **pending** or **rejected** row per host. Adding a client does not grant services automatically. Current service grants and local approvals remain owned by each host. This is an optional owner workflow, not a required controller or delegated mesh-wide administration.
 
 The local host uses its existing private node socket. Other hosts require an explicitly configured, already trusted SSH owner connection; service pairing alone never supplies administrative rights. Store the selected owner routes in the private (mode 0600) `~/.config/wispnet-node/admin-targets.json`, for example:
 
