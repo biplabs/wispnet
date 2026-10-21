@@ -474,6 +474,33 @@ void main() {
     }
     await close(tester);
   });
+  testWidgets('desktop pairing opens the code form without a tab selector', (
+    tester,
+  ) async {
+    await mount(tester, DesktopFake(), size: const Size(1000, 850));
+    await tester.tap(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('remote-sector')),
+            matching: find.byType(OutlinedButton),
+          )
+          .first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('+ Pair another machine'));
+    await tester.pumpAndSettle();
+    expect(find.text('Pair a machine'), findsOneWidget);
+    expect(find.text('Pairing Code'), findsNothing);
+    expect(find.text('QR'), findsNothing);
+    expect(find.byType(TextField), findsOneWidget);
+    final pair = find.widgetWithText(FilledButton, 'Pair');
+    expect(tester.widget<FilledButton>(pair).onPressed, isNull);
+    await tester.enterText(find.byType(TextField), 'wispnet1:samplecode');
+    await tester.pump();
+    expect(tester.widget<FilledButton>(pair).onPressed, isNotNull);
+    await close(tester);
+  });
+
   testWidgets('denied cached services never issue an open request', (
     tester,
   ) async {

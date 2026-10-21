@@ -172,40 +172,42 @@ class _PairingFormState extends State<PairingForm> {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        WispPanel(
-          radius: 14,
-          color: const Color(0xff0d1526),
-          padding: const EdgeInsets.all(4),
-          child: Row(
-            children: [
-              for (final entry in {
-                if (!widget.desktop) 0: 'QR',
-                1: 'Pairing Code',
-              }.entries)
-                Expanded(
-                  child: TextButton(
-                    onPressed: busy
-                        ? null
-                        : () => setState(() => tab = entry.key),
-                    style: TextButton.styleFrom(
-                      foregroundColor: tab == entry.key
-                          ? WispColors.text
-                          : WispColors.muted,
-                      backgroundColor: tab == entry.key
-                          ? const Color(0xff1f3666)
-                          : Colors.transparent,
-                      minimumSize: const Size(0, 44),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10),
+        if (!widget.desktop) ...[
+          WispPanel(
+            radius: 14,
+            color: const Color(0xff0d1526),
+            padding: const EdgeInsets.all(4),
+            child: Row(
+              children: [
+                for (final entry in {
+                  if (!widget.desktop) 0: 'QR',
+                  1: 'Pairing Code',
+                }.entries)
+                  Expanded(
+                    child: TextButton(
+                      onPressed: busy
+                          ? null
+                          : () => setState(() => tab = entry.key),
+                      style: TextButton.styleFrom(
+                        foregroundColor: tab == entry.key
+                            ? WispColors.text
+                            : WispColors.muted,
+                        backgroundColor: tab == entry.key
+                            ? const Color(0xff1f3666)
+                            : Colors.transparent,
+                        minimumSize: const Size(0, 44),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
                       ),
+                      child: Text(entry.value),
                     ),
-                    child: Text(entry.value),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
-        ),
-        const SizedBox(height: 14),
+          const SizedBox(height: 14),
+        ],
         if (tab == 0) ...[
           FilledButton(
             onPressed: busy ? null : () => qr('scanQr'),

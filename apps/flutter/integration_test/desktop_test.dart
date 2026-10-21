@@ -89,6 +89,22 @@ void main() {
         await mouse.moveTo(Offset.zero);
         await mouse.removePointer();
         await tester.tap(
+          find
+              .descendant(
+                of: find.byKey(const ValueKey('remote-sector')),
+                matching: find.byType(OutlinedButton),
+              )
+              .first,
+        );
+        await waitFor(find.text('+ Pair another machine'));
+        await tester.tap(find.text('+ Pair another machine'));
+        await waitFor(find.text('Pair a machine'));
+        expect(find.text('Pairing Code'), findsNothing);
+        expect(find.text('QR'), findsNothing);
+        await capture('pairing');
+        await tester.tap(find.byTooltip('Close'));
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.tap(
           find.descendant(
             of: find.byKey(const ValueKey('local-sector')),
             matching: find.text('Manage'),
