@@ -45,7 +45,8 @@ def write_private(path, value):
 def browser_url(url):
     parsed = urlsplit(url)
     if (parsed.scheme != 'http' or not (parsed.hostname or '').endswith('.localhost')
-        or len(parsed.hostname) <= 10 or not parsed.port or parsed.path != '/'
+        or len(parsed.hostname) <= 10 or not parsed.port
+        or not (parsed.path == '/' or (parsed.hostname == 'registry.wispnet.localhost' and parsed.path == '/v1/services'))
         or parsed.query or parsed.fragment or parsed.username or parsed.password
         or any(ord(c) < 33 for c in url)):
         raise ValueError('Invalid local browser handoff')

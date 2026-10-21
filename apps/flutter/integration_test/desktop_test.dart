@@ -165,9 +165,11 @@ void main() {
         await tester.runAsync(() async {
           final client = HttpClient();
           try {
-            final response = await (await client.getUrl(
-              Uri.parse(backend.launched!),
-            )).close();
+            final uri = Uri.parse(backend.launched!);
+            // The local registry listens on IPv4; this hostname also resolves to ::1.
+            final request = await client.getUrl(uri.replace(host: '127.0.0.1'));
+            request.headers.set(HttpHeaders.hostHeader, uri.authority);
+            final response = await request.close();
             expect(response.statusCode, 200);
             expect(response.headers.contentType?.mimeType, 'application/json');
             final json =
