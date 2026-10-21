@@ -804,10 +804,10 @@ void main() {
     await mount(tester, backend, size: const Size(1000, 850));
     await tester.tap(find.byTooltip('Settings for Other service on HiBreak'));
     await tester.pumpAndSettle();
-    expect(find.text('Edit Other service'), findsOneWidget);
-    expect(find.text('Edit Shared web'), findsNothing);
+    expect(find.text('Edit'), findsOneWidget);
+    expect(find.text('Browser settings'), findsNothing);
     expect(find.text('Add a new service'), findsNothing);
-    await tester.tap(find.text('Edit Other service'));
+    await tester.tap(find.text('Edit'));
     await tester.pumpAndSettle();
     expect(
       tester
@@ -840,19 +840,8 @@ void main() {
     expect(find.text('Device and browser settings'), findsNothing);
     expect(find.text('Add a new service'), findsNothing);
     expect(find.text('Pair this machine'), findsNothing);
-    await tester.tap(find.text('Browser settings'));
-    await tester.pumpAndSettle();
-    expect(
-      find.widgetWithText(TextField, 'Service gateway port'),
-      findsOneWidget,
-    );
-    expect(
-      backend.calls.where((call) => call.$1 == 'settings').last.$2['service'],
-      'web',
-    );
-    await tester.tap(find.byTooltip('Close').last);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Edit Shared web'));
+    expect(find.text('Browser settings'), findsNothing);
+    await tester.tap(find.text('Edit'));
     await tester.pumpAndSettle();
     await tester.enterText(
       find.widgetWithText(TextField, 'Service name'),
@@ -987,7 +976,7 @@ void main() {
     expect(find.text('Pair this machine'), findsOneWidget);
     expect(find.text('Device and browser settings'), findsNothing);
     expect(find.text('Pair with this machine'), findsNothing);
-    expect(find.text('Edit Shared web'), findsNothing);
+    expect(find.text('Edit'), findsNothing);
     expect(find.text('Remove service'), findsNothing);
     expect(find.text('Enable public access'), findsNothing);
     await tester.tap(find.text('Pair this machine'));
@@ -1072,7 +1061,7 @@ void main() {
       expect(tester.getRect(local).top, lessThan(tester.getRect(public).top));
       expect(
         tester.getRect(public).bottom,
-        lessThan(tester.getRect(find.text('Edit Shared web')).top),
+        lessThan(tester.getRect(find.text('Edit')).top),
       );
       expect(find.textContaining('127.0.0.1:8080'), findsNothing);
       expect(
@@ -1168,7 +1157,7 @@ void main() {
       await mount(tester, backend, size: const Size(1000, 850));
       await tester.tap(find.byTooltip('Settings for Shared web on HiBreak'));
       await tester.pumpAndSettle();
-      final edit = find.widgetWithText(OutlinedButton, 'Edit Shared web');
+      final edit = find.widgetWithText(OutlinedButton, 'Edit');
       final remove = find.widgetWithText(OutlinedButton, 'Remove service');
       final publish = find.widgetWithText(
         OutlinedButton,

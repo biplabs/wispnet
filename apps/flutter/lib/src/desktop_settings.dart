@@ -630,10 +630,7 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                       publicService: s['id'] as String,
                     ),
                   const SizedBox(height: 10),
-                  action(
-                    'Edit ${s['display_name']}',
-                    () => run(() => editService(s)),
-                  ),
+                  action('Edit', () => run(() => editService(s))),
                   action(
                     'Remove service',
                     () => run(
@@ -650,10 +647,7 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                     ),
                     danger: true,
                   ),
-                  if (s['kind'] == 'http') ...[
-                    ..._public(s),
-                    action('Browser settings', widget.onAccess),
-                  ],
+                  if (s['kind'] == 'http') ..._public(s),
                 ],
               ),
             ),
