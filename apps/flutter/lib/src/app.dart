@@ -158,7 +158,7 @@ class _WispHomeState extends State<WispHome>
     if (refreshing || snapshot.isEmpty || !mounted) return;
     setState(() => refreshing = true);
     await Future.wait(
-      machines.map((machine) async {
+      machines.where((m) => m.data['local'] != true).map((machine) async {
         try {
           await backend.invoke('refreshHost', {'host': machine.id});
           await poll();
@@ -256,7 +256,8 @@ class _WispHomeState extends State<WispHome>
   }
 
   Future<void> manage() async {
-    if (machines.isEmpty) {
+    final remotes = machines.where((m) => m.data['local'] != true).toList();
+    if (remotes.isEmpty) {
       await pair();
       return;
     }
@@ -277,7 +278,7 @@ class _WispHomeState extends State<WispHome>
                 'Review ${snapshot['pendingRequests']} pairing requests',
               ),
             ),
-          for (final machine in machines)
+          for (final machine in remotes)
             Padding(
               padding: const EdgeInsets.only(bottom: 10),
               child: OutlinedButton(
@@ -356,17 +357,21 @@ class _WispHomeState extends State<WispHome>
     );
   }
 
-  Future<void> deviceSettings({String section = 'My services'}) async {
+  Future<void> deviceSettings({
+    String section = 'My services',
+    bool servicesOnly = false,
+  }) async {
     if (snapshot['desktop'] != true) {
       await settings();
       return;
     }
     await showWispSheet<void>(
       context,
-      title: 'Settings',
+      title: servicesOnly ? 'Local services' : 'Settings',
       child: DesktopSettings(
         backend: backend,
         initialSection: section,
+        servicesOnly: servicesOnly,
         onAccess: () => settings(),
         onChanged: () {
           unawaited(poll());
@@ -440,6 +445,123 @@ class _WispHomeState extends State<WispHome>
     ].join(' · ');
   }
 
+  Widget sectionHeading(String title, List<Widget> actions) => Row(
+    children: [
+      Expanded(
+        child: Text(
+          title,
+          style: const TextStyle(
+            fontSize: 12,
+            color: WispColors.muted,
+            letterSpacing: 1.4,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
+      ...actions,
+    ],
+  );
+
+  Widget directoryCard(Machine machine, {bool local = false}) => MachineCard(
+    machine: machine,
+    showHeader: !local,
+    order: order,
+    telemetry: local ? '' : telemetry(machine),
+    stateColor: stateColor(machine),
+    busy: busy,
+    onManage: () => machineSettings(machine),
+    onOpen: (service) => open(machine, service),
+    onSettings: (service) => settings(machine: machine, service: service),
+    onReorder: reorder,
+  );
+
+  Widget directory() {
+    final local = machines.where((m) => m.data['local'] == true).toList();
+    final remote = machines.where((m) => m.data['local'] != true).toList();
+    final buttonStyle = OutlinedButton.styleFrom(
+      minimumSize: const Size(0, 42),
+      shape: const StadiumBorder(),
+    );
+    return RefreshIndicator(
+      key: const ValueKey('directory'),
+      onRefresh: refresh,
+      child: ListView(
+        padding: const EdgeInsets.only(bottom: 24),
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          if (local.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 24),
+              child: Column(
+                key: const ValueKey('local-sector'),
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  sectionHeading('LOCAL SERVICES', [
+                    OutlinedButton(
+                      onPressed: busy
+                          ? null
+                          : () => deviceSettings(servicesOnly: true),
+                      style: buttonStyle,
+                      child: const Text('Manage'),
+                    ),
+                  ]),
+                  const SizedBox(height: 12),
+                  for (final machine in local)
+                    directoryCard(machine, local: true),
+                ],
+              ),
+            ),
+          Column(
+            key: const ValueKey('remote-sector'),
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              sectionHeading('REMOTE SECTOR', [
+                OutlinedButton(
+                  onPressed: busy ? null : manage,
+                  style: buttonStyle,
+                  child: Text(
+                    snapshot['desktop'] == true &&
+                            (snapshot['pendingRequests'] as int? ?? 0) > 0
+                        ? 'Manage · ${snapshot['pendingRequests']} requests'
+                        : 'Manage',
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Refresh remote services',
+                  onPressed: refreshing ? null : refresh,
+                  icon: refreshing
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.refresh),
+                ),
+              ]),
+              const SizedBox(height: 12),
+              if (remote.isEmpty) const Text('Pair a machine to get started'),
+              for (final machine in remote)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 14),
+                  child: ReorderTile(
+                    group: 'machines',
+                    id: machine.id,
+                    onDrop: (moved) => reorder(
+                      'machines',
+                      remote.map((m) => m.id).toList(),
+                      moved,
+                      machine.id,
+                    ),
+                    child: directoryCard(machine),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final list = machines;
@@ -490,125 +612,7 @@ class _WispHomeState extends State<WispHome>
                                   ? Duration.zero
                                   : const Duration(milliseconds: 220),
                               child: online
-                                  ? Column(
-                                      key: const ValueKey('directory'),
-                                      children: [
-                                        Row(
-                                          children: [
-                                            const Expanded(
-                                              child: Text(
-                                                'PAIRED MACHINES',
-                                                style: TextStyle(
-                                                  fontSize: 12,
-                                                  color: WispColors.muted,
-                                                  letterSpacing: 1.4,
-                                                  fontWeight: FontWeight.bold,
-                                                ),
-                                              ),
-                                            ),
-                                            OutlinedButton(
-                                              onPressed: busy ? null : manage,
-                                              style: OutlinedButton.styleFrom(
-                                                minimumSize: const Size(0, 42),
-                                                shape: const StadiumBorder(),
-                                              ),
-                                              child: Text(
-                                                snapshot['desktop'] == true &&
-                                                        (snapshot['pendingRequests']
-                                                                    as int? ??
-                                                                0) >
-                                                            0
-                                                    ? 'Manage · ${snapshot['pendingRequests']} requests'
-                                                    : 'Manage',
-                                              ),
-                                            ),
-                                            IconButton(
-                                              tooltip: 'Refresh services',
-                                              onPressed: refreshing
-                                                  ? null
-                                                  : refresh,
-                                              icon: refreshing
-                                                  ? const SizedBox(
-                                                      width: 18,
-                                                      height: 18,
-                                                      child:
-                                                          CircularProgressIndicator(
-                                                            strokeWidth: 2,
-                                                          ),
-                                                    )
-                                                  : const Icon(Icons.refresh),
-                                            ),
-                                          ],
-                                        ),
-                                        Expanded(
-                                          child: RefreshIndicator(
-                                            onRefresh: refresh,
-                                            child: ListView(
-                                              padding: const EdgeInsets.only(
-                                                top: 12,
-                                                bottom: 24,
-                                              ),
-                                              physics:
-                                                  const AlwaysScrollableScrollPhysics(),
-                                              children: [
-                                                if (list.isEmpty)
-                                                  const Text(
-                                                    'Pair a machine to get started',
-                                                  ),
-                                                for (final machine in list)
-                                                  Padding(
-                                                    padding:
-                                                        const EdgeInsets.only(
-                                                          bottom: 14,
-                                                        ),
-                                                    child: ReorderTile(
-                                                      group: 'machines',
-                                                      id: machine.id,
-                                                      onDrop: (moved) =>
-                                                          reorder(
-                                                            'machines',
-                                                            list
-                                                                .map(
-                                                                  (m) => m.id,
-                                                                )
-                                                                .toList(),
-                                                            moved,
-                                                            machine.id,
-                                                          ),
-                                                      child: MachineCard(
-                                                        machine: machine,
-                                                        order: order,
-                                                        telemetry: telemetry(
-                                                          machine,
-                                                        ),
-                                                        stateColor: stateColor(
-                                                          machine,
-                                                        ),
-                                                        busy: busy,
-                                                        onManage: () =>
-                                                            machineSettings(
-                                                              machine,
-                                                            ),
-                                                        onOpen: (service) =>
-                                                            open(
-                                                              machine,
-                                                              service,
-                                                            ),
-                                                        onSettings: (service) =>
-                                                            settings(
-                                                              machine: machine,
-                                                              service: service,
-                                                            ),
-                                                        onReorder: reorder,
-                                                      ),
-                                                    ),
-                                                  ),
-                                              ],
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    )
+                                  ? directory()
                                   : Center(
                                       key: const ValueKey('standby'),
                                       child: Column(

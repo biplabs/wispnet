@@ -15,8 +15,10 @@ class DesktopSettings extends StatefulWidget {
     required this.onAccess,
     required this.onChanged,
     this.initialSection = 'My services',
+    this.servicesOnly = false,
   });
   final String initialSection;
+  final bool servicesOnly;
   final WispnetBackend backend;
   final VoidCallback onAccess, onChanged;
   @override
@@ -428,25 +430,27 @@ class _DesktopSettingsState extends State<DesktopSettings> {
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      action('Device and browser settings', widget.onAccess),
-      action('Pair with this machine', () => run(invite)),
-      const SizedBox(height: 12),
-      DropdownButton<String>(
-        isExpanded: true,
-        value: section,
-        items:
-            ['My services', 'Devices', 'Pairing requests', 'Owner operations']
-                .map(
-                  (s) => DropdownMenuItem(
-                    value: s,
-                    child: Text(
-                      s == 'Pairing requests' ? '$s (${requests.length})' : s,
+      if (!widget.servicesOnly) ...[
+        action('Device and browser settings', widget.onAccess),
+        action('Pair with this machine', () => run(invite)),
+        const SizedBox(height: 12),
+        DropdownButton<String>(
+          isExpanded: true,
+          value: section,
+          items:
+              ['My services', 'Devices', 'Pairing requests', 'Owner operations']
+                  .map(
+                    (s) => DropdownMenuItem(
+                      value: s,
+                      child: Text(
+                        s == 'Pairing requests' ? '$s (${requests.length})' : s,
+                      ),
                     ),
-                  ),
-                )
-                .toList(),
-        onChanged: busy ? null : (v) => setState(() => section = v!),
-      ),
+                  )
+                  .toList(),
+          onChanged: busy ? null : (v) => setState(() => section = v!),
+        ),
+      ],
       if (error != null)
         Text(error!, style: const TextStyle(color: WispColors.error)),
       if (status == null)
@@ -580,7 +584,7 @@ class _DesktopSettingsState extends State<DesktopSettings> {
             ),
           ),
       ],
-      action('Refresh', () => run(load)),
+      if (!widget.servicesOnly) action('Refresh', () => run(load)),
     ],
   );
   List<Widget> _public(Map<String, dynamic> service) {

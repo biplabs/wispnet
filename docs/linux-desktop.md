@@ -19,7 +19,8 @@ wispnet-desktop
 The default desktop is the shared Flutter app in `apps/flutter`. It uses the same
 launch screen, typography, machine cards and settings sheets as Android. There is
 no sidebar: the gear next to the device name opens desktop owner tools. Local
-shared services appear in the first machine card; service cards use extra columns
+services have a separate section with service management; remote machines and
+their Manage/refresh controls appear under Remote sector; service cards use extra columns
 when the window is wide.
 
 Build prerequisites are Flutter 3.47.7, Clang, CMake, Ninja, pkg-config, GTK 3 and

@@ -52,11 +52,28 @@ void main() {
             child: WispnetApp(backend: backend),
           ),
         );
-        await waitFor(find.text('PAIRED MACHINES'));
+        await waitFor(find.text('REMOTE SECTOR'));
         await tester.pump(const Duration(seconds: 3));
         await capture('directory');
-        await tester.tap(find.byTooltip('Settings'));
+        await tester.tap(
+          find.descendant(
+            of: find.byKey(const ValueKey('local-sector')),
+            matching: find.text('Manage'),
+          ),
+        );
         await waitFor(find.text('Share a service'));
+        await capture('local-services');
+        expect(find.text('Device and browser settings'), findsNothing);
+        await tester.tap(find.byTooltip('Close'));
+        for (
+          var i = 0;
+          i < 15 && find.byTooltip('Close').evaluate().isNotEmpty;
+          i++
+        ) {
+          await tester.pump(const Duration(milliseconds: 100));
+        }
+        await tester.tap(find.byTooltip('Settings'));
+        await waitFor(find.text('Device and browser settings'));
         await capture('settings');
         await tester.tap(find.text('Device and browser settings'));
         await waitFor(find.widgetWithText(TextField, 'Registry port'));
@@ -89,7 +106,7 @@ void main() {
         expect(find.byTooltip('Settings'), findsNothing);
         await capture('launch');
         await tester.tap(find.byTooltip('Enter wisp space'));
-        await waitFor(find.text('PAIRED MACHINES'));
+        await waitFor(find.text('REMOTE SECTOR'));
         expect((await native.invoke('snapshot'))['peer'], before['peer']);
         for (
           var n = 0;

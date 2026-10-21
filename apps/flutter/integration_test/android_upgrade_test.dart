@@ -71,7 +71,7 @@ void main() {
         await tester.tap(find.byTooltip('Close'));
         await tester.pump(const Duration(milliseconds: 500));
         if ((before['hosts'] as Map).isNotEmpty) {
-          await waitFor(find.text('PAIRED MACHINES'));
+          await waitFor(find.text('REMOTE SECTOR'));
           await tester.pump(const Duration(seconds: 2));
           await capture('flutter-device-directory');
           final button = tester.renderObject<RenderRepaintBoundary>(
@@ -103,7 +103,7 @@ void main() {
           await capture('flutter-device-standby');
           expect((await backend.invoke('snapshot'))['enabled'], false);
           await tester.tap(find.byTooltip('Enter wisp space'));
-          await waitFor(find.text('PAIRED MACHINES'));
+          await waitFor(find.text('REMOTE SECTOR'));
           await tester.pump(const Duration(seconds: 2));
           final current = await backend.invoke('snapshot');
           Map<String, dynamic>? selected;

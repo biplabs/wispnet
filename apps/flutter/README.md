@@ -3,7 +3,9 @@
 Android and Linux desktop use the same Flutter home screen, fonts, machine/service
 cards, launch animation, pairing, and settings sheets. Desktop uses the wider
 service-card grid already shared with Android; there is no persistent sidebar.
-Local shared services appear as the first machine card. The device-name gear
+Local services appear in their own section, without a repeated machine name or
+status badge. Its Manage button opens service sharing and removal. The Remote
+sector has its own pairing management and refresh controls. The device-name gear
 opens desktop owner tools in sheets: service sharing, device grants, incoming
 pairing requests, public links and durable multi-host owner operations.
 

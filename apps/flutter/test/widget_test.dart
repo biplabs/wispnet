@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:wispnet/src/app.dart';
 import 'package:wispnet/src/backend.dart';
 import 'package:wispnet/src/header.dart';
+import 'package:wispnet/src/theme.dart';
 
 final peer = 'a' * 64;
 final incarnation = 'c' * 64;
@@ -151,7 +152,21 @@ class DesktopFake extends FakeBackend {
     }
     final reply = await super.invoke(method, arguments);
     if (method == 'snapshot') {
-      return {...reply, 'desktop': true, 'pendingRequests': 1};
+      return {
+        ...reply,
+        'desktop': true,
+        'pendingRequests': 1,
+        'hosts': {
+          ...reply['hosts'] as Map<String, dynamic>,
+          'd' * 64: {
+            'name': 'HiBreak',
+            'local': true,
+            'state': 'available',
+            'status': 'This machine',
+            'catalog': {'services': status['host']['services']},
+          },
+        },
+      };
     }
     return reply;
   }
@@ -226,7 +241,7 @@ void main() {
     (tester) async {
       final backend = FakeBackend();
       await mount(tester, backend);
-      expect(find.text('PAIRED MACHINES'), findsOneWidget);
+      expect(find.text('REMOTE SECTOR'), findsOneWidget);
       expect(find.text('ONLINE · DIRECT · 15ms'), findsOneWidget);
       await screenshot(tester, 'android-directory');
       await tester.tap(find.textContaining('Website', findRichText: true));
@@ -291,7 +306,7 @@ void main() {
       await tester.tap(entry);
       await tester.pumpAndSettle();
       expect(
-        paired ? find.text('PAIRED MACHINES') : find.text('Pair a machine'),
+        paired ? find.text('REMOTE SECTOR') : find.text('Pair a machine'),
         findsOneWidget,
       );
       await close(tester);
@@ -484,6 +499,64 @@ void main() {
       await close(tester);
     },
   );
+  testWidgets('local services and remote machines have separate controls', (
+    tester,
+  ) async {
+    final backend = DesktopFake();
+    await mount(tester, backend, size: const Size(1000, 850));
+    final local = find.byKey(const ValueKey('local-sector'));
+    final remote = find.byKey(const ValueKey('remote-sector'));
+    expect(
+      find.descendant(of: local, matching: find.text('LOCAL SERVICES')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: local, matching: find.textContaining('HiBreak')),
+      findsNothing,
+    );
+    expect(
+      find.descendant(of: local, matching: find.textContaining('ONLINE')),
+      findsNothing,
+    );
+    expect(
+      find.descendant(of: local, matching: find.byType(WispStatusDot)),
+      findsNothing,
+    );
+    expect(
+      find.descendant(of: local, matching: find.text('Shared web')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: remote,
+        matching: find.byTooltip('Refresh remote services'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      backend.calls
+          .where((c) => c.$1 == 'refreshHost')
+          .every((c) => c.$2['host'] == peer),
+      true,
+    );
+    await tester.tap(find.descendant(of: local, matching: find.text('Manage')));
+    await tester.pumpAndSettle();
+    expect(find.text('Share a service'), findsOneWidget);
+    expect(find.text('Device and browser settings'), findsNothing);
+    expect(find.text('Pair with this machine'), findsNothing);
+    expect(find.text('Edit Shared web'), findsOneWidget);
+    await tester.tap(find.byTooltip('Close'));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.descendant(of: remote, matching: find.byType(OutlinedButton)).first,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Paired machines'), findsOneWidget);
+    expect(find.text('HiBreak · dddddddd'), findsOneWidget);
+    expect(find.text('j-strix · aaaaaaaa'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await close(tester);
+  });
   testWidgets('desktop public access requires explicit confirmation', (
     tester,
   ) async {

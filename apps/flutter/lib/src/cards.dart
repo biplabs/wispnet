@@ -15,8 +15,10 @@ class MachineCard extends StatelessWidget {
     required this.onOpen,
     required this.onSettings,
     required this.onReorder,
+    this.showHeader = true,
   });
   final Machine machine;
+  final bool showHeader;
   final Map<String, dynamic> order;
   final String telemetry;
   final Color stateColor;
@@ -45,12 +47,10 @@ class MachineCard extends StatelessWidget {
         : machine.state == 'host_denied'
         ? 'ACCESS DENIED'
         : 'OFFLINE';
-    return WispPanel(
-      color: const Color(0xd80b1528),
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
+    final content = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (showHeader)
           InkWell(
             onTap: busy ? null : onManage,
             borderRadius: BorderRadius.circular(12),
@@ -111,46 +111,53 @@ class MachineCard extends StatelessWidget {
               ),
             ),
           ),
-          if (services.isEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              child: Text(
-                '${machine.name} · ${machine.data['catalog'] == null
-                    ? machine.state == 'approval_pending'
-                          ? 'Awaiting approval'
-                          : 'Unavailable'
-                    : 'No shared services'}',
-                style: const TextStyle(color: WispColors.muted),
-              ),
+        if (services.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            child: Text(
+              !showHeader
+                  ? 'No local services shared.'
+                  : '${machine.name} · ${machine.data['catalog'] == null
+                        ? machine.state == 'approval_pending'
+                              ? 'Awaiting approval'
+                              : 'Unavailable'
+                        : 'No shared services'}',
+              style: const TextStyle(color: WispColors.muted),
             ),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final columns = constraints.maxWidth >= 520 ? 2 : 1;
-              final width =
-                  (constraints.maxWidth - (columns - 1) * 10) / columns;
-              return Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                children: [
-                  for (final id in ids)
-                    SizedBox(
-                      width: width,
-                      child: ReorderTile(
-                        group: 'services/${machine.id}',
-                        id: id,
-                        onDrop: (moved) =>
-                            onReorder('services/${machine.id}', ids, moved, id),
-                        child: serviceCard(machine, services[id]!),
-                      ),
-                    ),
-                ],
-              );
-            },
           ),
-          const SizedBox(height: 4),
-        ],
-      ),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final columns = constraints.maxWidth >= 520 ? 2 : 1;
+            final width = (constraints.maxWidth - (columns - 1) * 10) / columns;
+            return Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                for (final id in ids)
+                  SizedBox(
+                    width: width,
+                    child: ReorderTile(
+                      group: 'services/${machine.id}',
+                      id: id,
+                      onDrop: (moved) =>
+                          onReorder('services/${machine.id}', ids, moved, id),
+                      child: serviceCard(machine, services[id]!),
+                    ),
+                  ),
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 4),
+      ],
     );
+    return showHeader
+        ? WispPanel(
+            color: const Color(0xd80b1528),
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
+            child: content,
+          )
+        : content;
   }
 
   Widget serviceCard(Machine machine, Map<String, dynamic> service) {
