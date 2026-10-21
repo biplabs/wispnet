@@ -445,23 +445,37 @@ class _WispHomeState extends State<WispHome>
     ].join(' · ');
   }
 
-  Widget sectionHeading(String title, List<Widget> actions) => Row(
-    children: [
-      Flexible(
-        child: Text(
-          title,
-          style: const TextStyle(
-            fontSize: 16,
-            color: WispColors.muted,
-            letterSpacing: 1.4,
-            fontWeight: FontWeight.bold,
+  Widget sectionHeading(
+    String title,
+    List<Widget> actions, {
+    Widget? trailing,
+  }) {
+    final heading = Row(
+      children: [
+        Flexible(
+          child: Text(
+            title,
+            style: const TextStyle(
+              fontSize: 16,
+              color: WispColors.muted,
+              letterSpacing: 1.4,
+              fontWeight: FontWeight.bold,
+            ),
           ),
         ),
-      ),
-      const SizedBox(width: 12),
-      ...actions,
-    ],
-  );
+        const SizedBox(width: 12),
+        ...actions,
+      ],
+    );
+    return trailing == null
+        ? heading
+        : Row(
+            children: [
+              Expanded(child: heading),
+              trailing,
+            ],
+          );
+  }
 
   Widget directoryCard(Machine machine, {bool local = false}) => MachineCard(
     machine: machine,
@@ -516,18 +530,21 @@ class _WispHomeState extends State<WispHome>
             key: const ValueKey('remote-sector'),
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              sectionHeading('REMOTE SECTOR', [
-                OutlinedButton(
-                  onPressed: busy ? null : manage,
-                  style: buttonStyle,
-                  child: Text(
-                    snapshot['desktop'] == true &&
-                            (snapshot['pendingRequests'] as int? ?? 0) > 0
-                        ? 'Manage · ${snapshot['pendingRequests']} requests'
-                        : 'Manage',
+              sectionHeading(
+                'REMOTE SECTOR',
+                [
+                  OutlinedButton(
+                    onPressed: busy ? null : manage,
+                    style: buttonStyle,
+                    child: Text(
+                      snapshot['desktop'] == true &&
+                              (snapshot['pendingRequests'] as int? ?? 0) > 0
+                          ? 'Manage · ${snapshot['pendingRequests']} requests'
+                          : 'Manage',
+                    ),
                   ),
-                ),
-                IconButton(
+                ],
+                trailing: IconButton(
                   tooltip: 'Refresh remote services',
                   onPressed: refreshing ? null : refresh,
                   icon: refreshing
@@ -538,7 +555,7 @@ class _WispHomeState extends State<WispHome>
                         )
                       : const Icon(Icons.refresh),
                 ),
-              ]),
+              ),
               const SizedBox(height: 12),
               if (remote.isEmpty) const Text('Pair a machine to get started'),
               for (final machine in remote)

@@ -579,6 +579,19 @@ void main() {
             closeTo(tester.getRect(title).right + 12, .01),
           );
         }
+        final remote = find.byKey(const ValueKey('remote-sector'));
+        final refresh = find.ancestor(
+          of: find.byTooltip('Refresh remote services'),
+          matching: find.byType(IconButton),
+        );
+        expect(
+          tester.getRect(refresh).right,
+          closeTo(tester.getRect(remote).right, .01),
+        );
+        expect(
+          tester.widget<Text>(find.text('REMOTE SECTOR')).style!.fontSize,
+          16,
+        );
         expect(tester.takeException(), isNull);
         await close(tester);
       }
