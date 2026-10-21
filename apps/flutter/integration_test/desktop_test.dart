@@ -9,6 +9,7 @@ import 'package:wispnet/src/app.dart';
 import 'package:wispnet/src/backend.dart';
 import 'package:wispnet/src/desktop_backend.dart';
 import 'package:wispnet/src/header.dart';
+import 'package:wispnet/src/theme.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -64,6 +65,14 @@ void main() {
         await capture('hover-online');
         await mouse.moveTo(tester.getCenter(find.text('Manage').first));
         await capture('hover-manage');
+        final serviceTile = find
+            .descendant(
+              of: find.byKey(const ValueKey('local-sector')),
+              matching: find.byType(WispInkWell),
+            )
+            .first;
+        await mouse.moveTo(tester.getCenter(serviceTile));
+        await capture('hover-service');
         await mouse.moveTo(Offset.zero);
         await mouse.removePointer();
         await tester.tap(

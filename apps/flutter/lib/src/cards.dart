@@ -178,12 +178,12 @@ class MachineCard extends StatelessWidget {
           color: allowed ? const Color(0xff32518a) : const Color(0xff1d2842),
         ),
       ),
-      child: Row(
-        children: [
-          Expanded(
-            child: WispInkWell(
-              onTap: !busy && allowed ? () => onOpen(service) : null,
-              borderRadius: BorderRadius.circular(16),
+      child: WispInkWell(
+        onTap: !busy && allowed ? () => onOpen(service) : null,
+        borderRadius: BorderRadius.circular(16),
+        child: Row(
+          children: [
+            Expanded(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(12, 8, 0, 8),
                 child: Opacity(
@@ -231,14 +231,18 @@ class MachineCard extends StatelessWidget {
                 ),
               ),
             ),
-          ),
-          IconButton(
-            tooltip:
-                'Settings for ${service['display_name']} on ${machine.name}',
-            onPressed: busy ? null : () => onSettings(service),
-            icon: const Icon(Icons.settings, size: 24, color: WispColors.muted),
-          ),
-        ],
+            IconButton(
+              tooltip:
+                  'Settings for ${service['display_name']} on ${machine.name}',
+              onPressed: busy ? null : () => onSettings(service),
+              icon: const Icon(
+                Icons.settings,
+                size: 24,
+                color: WispColors.muted,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

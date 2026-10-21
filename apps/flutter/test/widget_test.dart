@@ -265,7 +265,8 @@ void main() {
   testWidgets('mouse hover highlights custom controls and clears on exit', (
     tester,
   ) async {
-    await mount(tester, FakeBackend(), size: const Size(1000, 850));
+    final backend = FakeBackend();
+    await mount(tester, backend, size: const Size(1000, 850));
     final mouse = await tester.createGesture(kind: ui.PointerDeviceKind.mouse);
     await mouse.addPointer(location: Offset.zero);
     final controls = [
@@ -304,6 +305,17 @@ void main() {
       await tester.pumpAndSettle();
       expect(overlay(control).a, 0);
     }
+    final service = controls[1];
+    final gear = find.byTooltip('Settings for Website on j-strix');
+    expect(tester.getRect(service).contains(tester.getCenter(gear)), isTrue);
+    await mouse.moveTo(tester.getCenter(gear));
+    await tester.pumpAndSettle();
+    expect(overlay(service).a, greaterThan(.1));
+    await mouse.down(tester.getCenter(gear));
+    await mouse.up();
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Close'), findsOneWidget);
+    expect(backend.calls.where((call) => call.$1 == 'open'), isEmpty);
     await mouse.removePointer();
     await close(tester);
   });
