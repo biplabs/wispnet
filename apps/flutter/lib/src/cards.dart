@@ -51,14 +51,14 @@ class MachineCard extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (showHeader)
-          WispInkWell(
-            onTap: busy ? null : onManage,
-            borderRadius: BorderRadius.circular(12),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 6),
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final title = Text(
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final title = WispInkWell(
+                  onTap: busy ? null : onManage,
+                  borderRadius: BorderRadius.circular(6),
+                  child: Text(
                     '${machine.name.toUpperCase()} · ${machine.id.substring(0, 8)}',
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
@@ -66,49 +66,54 @@ class MachineCard extends StatelessWidget {
                       fontWeight: FontWeight.bold,
                       letterSpacing: 14 * .08,
                     ),
-                  );
-                  final status = Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      WispStatusDot(
-                        color: machine.online
-                            ? WispColors.cyan
-                            : machine.state == 'approval_pending'
-                            ? const Color(0xffe9b65c)
-                            : machine.state == 'host_denied'
-                            ? WispColors.error
-                            : const Color(0xff7a8da8),
-                      ),
-                      const SizedBox(width: 6),
-                      Flexible(
-                        child: Text(
-                          badge,
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: machine.online
-                                ? const Color(0xffedf4ff)
-                                : stateColor,
-                            letterSpacing: 11 * .06,
-                            fontWeight: FontWeight.bold,
-                          ),
+                  ),
+                );
+                final status = Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    WispStatusDot(
+                      color: machine.online
+                          ? WispColors.cyan
+                          : machine.state == 'approval_pending'
+                          ? const Color(0xffe9b65c)
+                          : machine.state == 'host_denied'
+                          ? WispColors.error
+                          : const Color(0xff7a8da8),
+                    ),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        badge,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: machine.online
+                              ? const Color(0xffedf4ff)
+                              : stateColor,
+                          letterSpacing: 11 * .06,
+                          fontWeight: FontWeight.bold,
                         ),
                       ),
-                    ],
-                  );
-                  return constraints.maxWidth < 460
-                      ? Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [title, const SizedBox(height: 6), status],
-                        )
-                      : Row(
-                          children: [
-                            Expanded(child: title),
-                            const SizedBox(width: 12),
-                            status,
-                          ],
-                        );
-                },
-              ),
+                    ),
+                  ],
+                );
+                return constraints.maxWidth < 460
+                    ? Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [title, const SizedBox(height: 6), status],
+                      )
+                    : Row(
+                        children: [
+                          Expanded(
+                            child: Align(
+                              alignment: Alignment.centerLeft,
+                              child: title,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          status,
+                        ],
+                      );
+              },
             ),
           ),
         if (services.isEmpty)

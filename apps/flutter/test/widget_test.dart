@@ -305,6 +305,15 @@ void main() {
       await tester.pumpAndSettle();
       expect(overlay(control).a, 0);
     }
+    final heading = find.textContaining('J-STRIX');
+    expect(
+      tester.getSize(controls[2]).width,
+      closeTo(tester.getSize(heading).width, .01),
+    );
+    final status = find.textContaining('ONLINE · DIRECT');
+    await mouse.moveTo(tester.getCenter(status));
+    await tester.pumpAndSettle();
+    expect(overlay(controls[2]).a, 0);
     final service = controls[1];
     final gear = find.byTooltip('Settings for Website on j-strix');
     expect(tester.getRect(service).contains(tester.getCenter(gear)), isTrue);

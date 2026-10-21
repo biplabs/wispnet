@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:wispnet/src/app.dart';
 import 'package:wispnet/src/backend.dart';
+import 'package:wispnet/src/cards.dart';
 import 'package:wispnet/src/desktop_backend.dart';
 import 'package:wispnet/src/header.dart';
 import 'package:wispnet/src/theme.dart';
@@ -73,6 +74,18 @@ void main() {
             .first;
         await mouse.moveTo(tester.getCenter(serviceTile));
         await capture('hover-service');
+        final machineName = find
+            .descendant(
+              of: find
+                  .byWidgetPredicate(
+                    (widget) => widget is MachineCard && widget.showHeader,
+                  )
+                  .first,
+              matching: find.byType(WispInkWell),
+            )
+            .first;
+        await mouse.moveTo(tester.getCenter(machineName));
+        await capture('hover-machine-name');
         await mouse.moveTo(Offset.zero);
         await mouse.removePointer();
         await tester.tap(
