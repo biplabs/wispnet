@@ -362,12 +362,13 @@ class _MachineSettingsState extends State<MachineSettings> {
           decoration: const InputDecoration(labelText: 'Private display name'),
           enabled: !busy,
         ),
+        const SizedBox(height: 12),
         OutlinedButton(
           onPressed: busy ? null : rename,
           child: const Text('Save name'),
         ),
       ],
-      const SizedBox(height: 16),
+      const SizedBox(height: 12),
       if (confirming) ...[
         Text(
           'Remove ${widget.machine.name} and close its access here? It will learn about removal on its next contact. You can pair again later.',
@@ -377,6 +378,7 @@ class _MachineSettingsState extends State<MachineSettings> {
           onPressed: busy ? null : () => perform('removeHost'),
           child: const Text('Remove machine'),
         ),
+        const SizedBox(height: 12),
         TextButton(
           onPressed: busy ? null : () => setState(() => confirming = false),
           child: const Text('Cancel'),
@@ -386,7 +388,7 @@ class _MachineSettingsState extends State<MachineSettings> {
           onPressed: busy ? null : () => perform('refreshHost'),
           child: const Text('Refresh'),
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: 12),
         OutlinedButton(
           onPressed: busy ? null : () => setState(() => confirming = true),
           child: const Text('Remove'),

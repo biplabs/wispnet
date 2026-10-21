@@ -89,6 +89,11 @@ void main() {
         await capture('hover-machine-name');
         await mouse.moveTo(Offset.zero);
         await mouse.removePointer();
+        await tester.tap(machineName);
+        await waitFor(find.widgetWithText(TextField, 'Private display name'));
+        await capture('machine-settings');
+        await tester.tap(find.byTooltip('Close'));
+        await tester.pump(const Duration(milliseconds: 500));
         await tester.tap(
           find
               .descendant(

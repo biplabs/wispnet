@@ -603,6 +603,28 @@ void main() {
     expect(tester.takeException(), isNull);
     await close(tester);
   });
+  testWidgets('machine settings controls have consistent spacing', (
+    tester,
+  ) async {
+    await mount(tester, DesktopFake(), size: const Size(1000, 850));
+    await tester.tap(find.textContaining('J-STRIX'));
+    await tester.pumpAndSettle();
+    final controls = [
+      find.widgetWithText(TextField, 'Private display name'),
+      find.widgetWithText(OutlinedButton, 'Save name'),
+      find.widgetWithText(OutlinedButton, 'Refresh'),
+      find.widgetWithText(OutlinedButton, 'Remove'),
+    ];
+    for (var i = 1; i < controls.length; i++) {
+      expect(
+        tester.getRect(controls[i]).top -
+            tester.getRect(controls[i - 1]).bottom,
+        closeTo(12, .01),
+      );
+    }
+    expect(tester.takeException(), isNull);
+    await close(tester);
+  });
   testWidgets('desktop device gear opens name and registry settings directly', (
     tester,
   ) async {
