@@ -127,6 +127,31 @@ void main() {
         expect(find.text('Remove service'), findsNothing);
         expect(find.text('Enable public access'), findsNothing);
         await capture('local-services');
+        await tester.tap(find.text('Add a new service'));
+        await waitFor(find.widgetWithText(TextField, 'Service name'));
+        await tester.enterText(
+          find.widgetWithText(TextField, 'Service name'),
+          'Local Model API',
+        );
+        await tester.pump();
+        expect(
+          tester
+              .widget<TextField>(find.widgetWithText(TextField, 'Service ID'))
+              .controller!
+              .text,
+          'local_model_api',
+        );
+        expect(
+          tester
+              .widget<TextField>(find.widgetWithText(TextField, 'Port'))
+              .controller!
+              .text,
+          '8080',
+        );
+        await capture('add-service-form');
+        await tester.tap(find.byTooltip('Close').last);
+        await tester.pump(const Duration(milliseconds: 500));
+
         await tester.tap(find.text('Pair this machine'));
         await waitFor(find.byKey(const ValueKey('pairing-qr')));
         await capture('pair-this-machine-qr');

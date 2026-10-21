@@ -143,9 +143,13 @@ class _DesktopSettingsState extends State<DesktopSettings> {
     final name = TextEditingController(
       text: service?['display_name'] as String?,
     );
-    final backend = TextEditingController(
-      text: service?['backend'] as String? ?? '127.0.0.1:8080',
+    final endpoint = Uri.parse(
+      'tcp://${service?['backend'] ?? '127.0.0.1:8080'}',
     );
+    final portField = TextEditingController(text: endpoint.port.toString());
+    final existingIds = services.map((s) => s['id'] as String).toSet();
+    var customId = false;
+    String suggestedId() => _serviceId(name.text, existingIds);
     var kind = service?['kind'] as String? ?? 'http';
     final allowed = (service?['allow'] as List? ?? []).cast<String>().toSet();
     final devices = List<Map<String, dynamic>>.of(clients);
@@ -153,29 +157,54 @@ class _DesktopSettingsState extends State<DesktopSettings> {
       context,
       title: service == null ? 'Share a service' : 'Edit service',
       child: _ActionForm(
-        controllers: [id, name, backend],
+        controllers: [id, name, portField],
         builder: (context, submit, working, failure) => StatefulBuilder(
           builder: (context, update) => Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               TextField(
-                controller: id,
-                enabled: service == null && !working,
-                decoration: const InputDecoration(labelText: 'Service ID'),
-              ),
-              const SizedBox(height: 12),
-              TextField(
                 controller: name,
                 enabled: !working,
-                decoration: const InputDecoration(labelText: 'Display name'),
+                decoration: const InputDecoration(labelText: 'Service name'),
+                onChanged: (_) {
+                  if (service == null && !customId) id.text = suggestedId();
+                  update(() {});
+                },
               ),
               const SizedBox(height: 12),
               TextField(
-                controller: backend,
-                enabled: !working,
-                decoration: const InputDecoration(
-                  labelText: 'Loopback address',
+                controller: id,
+                enabled: service == null && !working,
+                onChanged: (value) =>
+                    update(() => customId = value != suggestedId()),
+                decoration: InputDecoration(
+                  labelText: 'Service ID',
+                  helperText: service != null
+                      ? 'Kept unchanged when renamed'
+                      : customId
+                      ? 'Custom ID'
+                      : 'Generated from the service name',
+                  suffixIcon: service == null && customId
+                      ? IconButton(
+                          tooltip: 'Generate from service name',
+                          onPressed: working
+                              ? null
+                              : () => update(() {
+                                  customId = false;
+                                  id.text = suggestedId();
+                                }),
+                          icon: const Icon(Icons.refresh),
+                        )
+                      : null,
                 ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: portField,
+                enabled: !working,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                decoration: const InputDecoration(labelText: 'Port'),
               ),
               DropdownButton<String>(
                 value: kind,
@@ -229,10 +258,17 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                             'This ID exists. Edit that service instead.',
                           );
                         }
-                        var address = backend.text.trim();
-                        if (RegExp(r'^:?\d+$').hasMatch(address)) {
-                          address = '127.0.0.1:${address.replaceAll(':', '')}';
+                        final port = int.tryParse(portField.text.trim());
+                        if (port == null || port < 1 || port > 65535) {
+                          throw const FormatException(
+                            'Enter a port between 1 and 65535.',
+                          );
                         }
+                        final host = endpoint.host
+                            .replaceAll('[', '')
+                            .replaceAll(']', '');
+                        final address =
+                            '${host.contains(':') ? '[$host]' : host}:$port';
                         await mutate({
                           'op': 'service',
                           'id': serviceId,
@@ -887,4 +923,30 @@ class _QrPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_QrPainter oldDelegate) => oldDelegate.matrix != matrix;
+}
+
+String _serviceId(String name, Set<String> existingIds) {
+  if (name.trim().isEmpty) return '';
+  var base = name
+      .replaceAllMapped(
+        RegExp(r'([A-Z]+)([A-Z][a-z])'),
+        (m) => '${m[1]}_${m[2]}',
+      )
+      .replaceAllMapped(RegExp(r'([a-z0-9])([A-Z])'), (m) => '${m[1]}_${m[2]}')
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
+      .replaceAll(RegExp(r'^_+|_+$'), '');
+  if (base.isEmpty) base = 'service';
+  if (base.length > 64) {
+    base = base.substring(0, 64).replaceAll(RegExp(r'_+$'), '');
+  }
+  var candidate = base;
+  for (var suffix = 2; existingIds.contains(candidate); suffix++) {
+    final ending = '_$suffix';
+    final prefix = base.length + ending.length > 64
+        ? base.substring(0, 64 - ending.length)
+        : base;
+    candidate = '${prefix.replaceAll(RegExp(r'_+$'), '')}$ending';
+  }
+  return candidate;
 }

@@ -697,6 +697,68 @@ void main() {
     expect(find.byTooltip('Close'), findsNothing);
     await close(tester);
   });
+  testWidgets(
+    'new service suggests editable snake case IDs and saves a numeric port',
+    (tester) async {
+      final backend = DesktopFake();
+      await mount(tester, backend, size: const Size(1000, 850));
+      await tester.tap(
+        find.descendant(
+          of: find.byKey(const ValueKey('local-sector')),
+          matching: find.widgetWithText(OutlinedButton, 'Manage'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add a new service'));
+      await tester.pumpAndSettle();
+      final name = find.widgetWithText(TextField, 'Service name');
+      final id = find.widgetWithText(TextField, 'Service ID');
+      final port = find.widgetWithText(TextField, 'Port');
+      expect(tester.getRect(name).top, lessThan(tester.getRect(id).top));
+      expect(tester.getRect(id).top, lessThan(tester.getRect(port).top));
+      expect(tester.widget<TextField>(port).controller!.text, '8080');
+      for (final entry in {
+        'L': 'l',
+        'Local': 'local',
+        'Local Model!': 'local_model',
+        'HTTPServer': 'http_server',
+        'Web': 'web_2',
+        '🔥': 'service',
+      }.entries) {
+        await tester.enterText(name, entry.key);
+        await tester.pump();
+        expect(tester.widget<TextField>(id).controller!.text, entry.value);
+      }
+      await tester.enterText(name, 'a' * 100);
+      await tester.pump();
+      expect(tester.widget<TextField>(id).controller!.text.length, 64);
+      await tester.enterText(name, 'Local Model');
+      await tester.enterText(id, 'custom_model');
+      await tester.enterText(name, 'Local Model API');
+      await tester.pump();
+      expect(tester.widget<TextField>(id).controller!.text, 'custom_model');
+      await tester.tap(find.byTooltip('Generate from service name'));
+      await tester.pump();
+      expect(tester.widget<TextField>(id).controller!.text, 'local_model_api');
+      for (final invalid in ['0', '65536']) {
+        await tester.enterText(port, invalid);
+        await tester.ensureVisible(find.text('Save service'));
+        await tester.tap(find.text('Save service'));
+        await tester.pumpAndSettle();
+        expect(find.text('Enter a port between 1 and 65535.'), findsOneWidget);
+        expect(backend.ownerCalls, isEmpty);
+      }
+      await tester.enterText(port, '8201');
+      await tester.tap(find.text('Save service'));
+      await tester.pumpAndSettle();
+      final operation = backend.ownerCalls.single['operation'];
+      expect(operation['id'], 'local_model_api');
+      expect(operation['display_name'], 'Local Model API');
+      expect(operation['backend'], '127.0.0.1:8201');
+      await close(tester);
+    },
+  );
+
   testWidgets('each local service gear edits only its own service', (
     tester,
   ) async {
@@ -705,7 +767,7 @@ void main() {
       'id': 'other',
       'display_name': 'Other service',
       'kind': 'http',
-      'backend': '127.0.0.1:8090',
+      'backend': '[::1]:8090',
       'incarnation': incarnation,
       'allow': [],
     });
@@ -717,10 +779,24 @@ void main() {
     expect(find.text('Add a new service'), findsNothing);
     await tester.tap(find.text('Edit Other service'));
     await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<TextField>(find.widgetWithText(TextField, 'Port'))
+          .controller!
+          .text,
+      '8090',
+    );
+    expect(
+      tester
+          .widget<TextField>(find.widgetWithText(TextField, 'Service ID'))
+          .enabled,
+      false,
+    );
     await tester.ensureVisible(find.text('Save service'));
     await tester.tap(find.text('Save service'));
     await tester.pumpAndSettle();
     expect(backend.ownerCalls.single['operation']['id'], 'other');
+    expect(backend.ownerCalls.single['operation']['backend'], '[::1]:8090');
     expect(backend.ownerCalls.single['operation']['allow'], isEmpty);
     await close(tester);
   });
@@ -749,7 +825,7 @@ void main() {
     await tester.tap(find.text('Edit Shared web'));
     await tester.pumpAndSettle();
     await tester.enterText(
-      find.widgetWithText(TextField, 'Display name'),
+      find.widgetWithText(TextField, 'Service name'),
       'Renamed web',
     );
     await tester.ensureVisible(find.text('Save service'));
@@ -757,6 +833,8 @@ void main() {
     await tester.pumpAndSettle();
     final operation = backend.ownerCalls.single['operation'] as Map;
     expect(operation['expected_revision'], 7);
+    expect(operation['id'], 'web');
+    expect(operation['backend'], '127.0.0.1:8080');
     expect(operation['allow'], [peer]);
     expect(operation['display_name'], 'Renamed web');
     expect(tester.takeException(), isNull);
