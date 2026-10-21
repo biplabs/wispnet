@@ -760,13 +760,91 @@ void main() {
     await tester.tap(find.text('Enable public access'));
     await tester.pumpAndSettle();
     expect(backend.ownerCalls, isEmpty);
-    await tester.tap(find.text('Confirm'));
+    expect(
+      find.textContaining('unprotected to the public internet'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining(
+        'without pairing, device approval, or Wispnet authentication',
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(backend.ownerCalls, isEmpty);
+    await tester.tap(find.text('Enable public access'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Enable public access'));
     await tester.pumpAndSettle();
     expect(backend.ownerCalls.single['op'], 'configure_public');
     expect(backend.ownerCalls.single['incarnation'], incarnation);
     expect(backend.ownerCalls.single['enabled'], true);
     await close(tester);
   });
+  testWidgets(
+    'local service danger actions have spacing and removal requires confirmation',
+    (tester) async {
+      final backend = DesktopFake();
+      await mount(tester, backend, size: const Size(1000, 850));
+      await tester.tap(
+        find
+            .descendant(
+              of: find.byKey(const ValueKey('local-sector')),
+              matching: find.byType(OutlinedButton),
+            )
+            .first,
+      );
+      await tester.pumpAndSettle();
+      final edit = find.widgetWithText(OutlinedButton, 'Edit Shared web');
+      final remove = find.widgetWithText(OutlinedButton, 'Remove service');
+      final publish = find.widgetWithText(
+        OutlinedButton,
+        'Enable public access',
+      );
+      expect(
+        tester.getRect(remove).top - tester.getRect(edit).bottom,
+        greaterThanOrEqualTo(8),
+      );
+      expect(
+        tester.getRect(publish).top - tester.getRect(remove).bottom,
+        greaterThanOrEqualTo(8),
+      );
+      for (final button in [remove, publish]) {
+        expect(
+          tester
+              .widget<OutlinedButton>(button)
+              .style!
+              .foregroundColor!
+              .resolve({}),
+          WispColors.error,
+        );
+      }
+      await tester.tap(remove);
+      await tester.pumpAndSettle();
+      expect(backend.ownerCalls, isEmpty);
+      expect(
+        find.textContaining('Paired devices will lose Wispnet access'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining(
+          'does not stop or delete the underlying application',
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(backend.ownerCalls, isEmpty);
+      await tester.tap(remove);
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Remove service'));
+      await tester.pumpAndSettle();
+      expect(backend.ownerCalls.single['op'], 'mutate');
+      expect((backend.ownerCalls.single['operation'] as Map)['op'], 'remove');
+      await close(tester);
+    },
+  );
   testWidgets('desktop pairing approval preserves existing service grants', (
     tester,
   ) async {

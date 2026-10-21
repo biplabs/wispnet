@@ -112,6 +112,22 @@ void main() {
         );
         await waitFor(find.text('Share a service'));
         await capture('local-services');
+        await tester.ensureVisible(find.text('Remove service').first);
+        await tester.tap(find.text('Remove service').first);
+        await waitFor(find.text('Remove service?'));
+        await capture('remove-service-confirmation');
+        await tester.tap(find.text('Cancel'));
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.ensureVisible(find.text('Enable public access').first);
+        await tester.tap(find.text('Enable public access').first);
+        await waitFor(find.text('Expose service to the internet?'));
+        expect(
+          find.textContaining('unprotected to the public internet'),
+          findsOneWidget,
+        );
+        await capture('public-service-confirmation');
+        await tester.tap(find.text('Cancel'));
+        await tester.pump(const Duration(milliseconds: 500));
         expect(find.text('Device and browser settings'), findsNothing);
         await tester.tap(find.byTooltip('Close'));
         for (

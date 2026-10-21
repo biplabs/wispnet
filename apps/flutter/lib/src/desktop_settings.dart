@@ -102,8 +102,10 @@ class _DesktopSettingsState extends State<DesktopSettings> {
   Future<void> confirm(
     String title,
     String detail,
-    Future<void> Function() action,
-  ) async {
+    Future<void> Function() action, {
+    bool danger = false,
+    String confirmLabel = 'Confirm',
+  }) async {
     await showWispSheet<void>(
       context,
       title: title,
@@ -117,7 +119,13 @@ class _DesktopSettingsState extends State<DesktopSettings> {
               Text(failure, style: const TextStyle(color: WispColors.error)),
             FilledButton(
               onPressed: working ? null : () => submit(action),
-              child: const Text('Confirm'),
+              style: danger ? dangerStyle : null,
+              child: Text(confirmLabel),
+            ),
+            const SizedBox(height: 8),
+            TextButton(
+              onPressed: working ? null : () => Navigator.pop(context),
+              child: const Text('Cancel'),
             ),
           ],
         ),
@@ -424,8 +432,20 @@ class _DesktopSettingsState extends State<DesktopSettings> {
     widget.onChanged();
   }
 
-  Widget action(String label, VoidCallback callback) =>
-      OutlinedButton(onPressed: busy ? null : callback, child: Text(label));
+  ButtonStyle get dangerStyle => OutlinedButton.styleFrom(
+    foregroundColor: WispColors.error,
+    side: const BorderSide(color: WispColors.error),
+  ).copyWith(backgroundColor: wispButtonBackground(const Color(0xff401e2a)));
+
+  Widget action(String label, VoidCallback callback, {bool danger = false}) =>
+      Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: OutlinedButton(
+          onPressed: busy ? null : callback,
+          style: danger ? dangerStyle : null,
+          child: Text(label),
+        ),
+      );
   @override
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -459,39 +479,46 @@ class _DesktopSettingsState extends State<DesktopSettings> {
         action('Share a service', () => run(() => editService())),
         if (services.isEmpty) const Text('No local services shared yet.'),
         for (final s in services)
-          WispPanel(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  s['display_name'] as String,
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                SelectableText(
-                  '${s['kind'].toString().toUpperCase()} · ${s['backend']}',
-                ),
-                action(
-                  'Edit ${s['display_name']}',
-                  () => run(() => editService(s)),
-                ),
-                action(
-                  'Remove service',
-                  () => run(
-                    () => confirm(
-                      'Remove service?',
-                      s['display_name'] as String,
-                      () => mutate({
-                        'op': 'remove',
-                        'id': s['id'],
-                      }, status!['host']['revision'] as int),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: WispPanel(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    s['display_name'] as String,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
-                ),
-                if (s['kind'] == 'http') ..._public(s),
-              ],
+                  SelectableText(
+                    '${s['kind'].toString().toUpperCase()} · ${s['backend']}',
+                  ),
+                  const SizedBox(height: 10),
+                  action(
+                    'Edit ${s['display_name']}',
+                    () => run(() => editService(s)),
+                  ),
+                  action(
+                    'Remove service',
+                    () => run(
+                      () => confirm(
+                        'Remove service?',
+                        'Remove “${s['display_name']}” from this machine’s shared services? Paired devices will lose Wispnet access, and its public URL will stop working. This does not stop or delete the underlying application.',
+                        () => mutate({
+                          'op': 'remove',
+                          'id': s['id'],
+                        }, status!['host']['revision'] as int),
+                        danger: true,
+                        confirmLabel: 'Remove service',
+                      ),
+                    ),
+                    danger: true,
+                  ),
+                  if (s['kind'] == 'http') ..._public(s),
+                ],
+              ),
             ),
           ),
       ] else if (section == 'Devices') ...[
@@ -602,8 +629,12 @@ class _DesktopSettingsState extends State<DesktopSettings> {
         enabled ? 'Disable public access' : 'Enable public access',
         () => run(
           () => confirm(
-            'Change public access?',
-            'Anyone with the public URL can connect while enabled. The service’s own login still applies.',
+            enabled
+                ? 'Disable public access?'
+                : 'Expose service to the internet?',
+            enabled
+                ? 'Stop public internet access to “${service['display_name']}”? Its public URL will stop working. Approved paired devices will keep their Wispnet access.'
+                : 'This exposes “${service['display_name']}” unprotected to the public internet. Anyone with the public URL can connect without pairing, device approval, or Wispnet authentication. Wispnet adds no password or access protection; any login must be provided by the service itself.',
             () => request({
               'op': 'configure_public',
               'service': service['id'],
@@ -611,8 +642,13 @@ class _DesktopSettingsState extends State<DesktopSettings> {
               'enabled': !enabled,
               'name': status!['host_name'],
             }),
+            danger: true,
+            confirmLabel: enabled
+                ? 'Disable public access'
+                : 'Enable public access',
           ),
         ),
+        danger: true,
       ),
     ];
   }
