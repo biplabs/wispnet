@@ -76,6 +76,18 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(migrated.preferences['order']['machines'], [PEER, OWN])
         self.assertEqual(path.read_bytes(), original)
 
+    def test_corrupt_display_cache_cannot_prevent_launch_or_fresh_refresh(self):
+        self.bridge.snapshot()
+        self.bridge.refresh(PEER)
+        self.bridge.cache.path(PEER).write_text('{}')
+        next_launch = module.Bridge(self.config)
+        snapshot = next_launch.snapshot()
+        self.assertEqual(snapshot['hosts'][PEER]['state'], 'unverified')
+        self.assertEqual(snapshot['hosts'][PEER]['catalog']['services'], [])
+        self.assertTrue(snapshot['hosts'][OWN]['local'])
+        next_launch.refresh(PEER)
+        self.assertEqual(next_launch.snapshot()['hosts'][PEER]['state'], 'available')
+
     def test_cached_open_always_checks_owner_and_propagates_rejection(self):
         self.bridge.snapshot()
         self.bridge.refresh(PEER)

@@ -145,7 +145,12 @@ class Bridge:
                     continue
                 record = dict(self.records.get(peer, {}))
                 if not record:
-                    cached = self.cache.load(peer)
+                    try:
+                        cached = self.cache.load(peer)
+                    except (OSError, ValueError):
+                        # Display caches are disposable; a bad entry must not hide
+                        # other machines or prevent a fresh owner-authenticated fetch.
+                        cached = None
                     record = {'state': 'unverified', 'status': 'Cached; refresh required',
                               'catalog': cached['catalog'] if cached else {'services': []}}
                 record['name'] = names.get(peer) or clients.get(peer, {}).get('name') or 'Host ' + peer[:8]

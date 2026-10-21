@@ -459,6 +459,31 @@ void main() {
     expect(tester.takeException(), isNull);
     await close(tester);
   });
+  testWidgets(
+    'desktop sharing defaults an empty display name to the service ID',
+    (tester) async {
+      final backend = DesktopFake();
+      await mount(tester, backend, size: const Size(1000, 850));
+      await tester.tap(find.byTooltip('Settings'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Share a service'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Service ID'),
+        'new-service',
+      );
+      await tester.ensureVisible(find.text('Save service'));
+      await tester.tap(find.text('Save service'));
+      await tester.pumpAndSettle();
+      expect(
+        backend.ownerCalls.single['operation']['display_name'],
+        'new-service',
+      );
+      expect(backend.ownerCalls.single['operation']['allow'], isEmpty);
+      expect(tester.takeException(), isNull);
+      await close(tester);
+    },
+  );
   testWidgets('desktop public access requires explicit confirmation', (
     tester,
   ) async {

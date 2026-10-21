@@ -224,7 +224,9 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                         await mutate({
                           'op': 'service',
                           'id': serviceId,
-                          'display_name': name.text.trim(),
+                          'display_name': name.text.trim().isEmpty
+                              ? serviceId
+                              : name.text.trim(),
                           'backend': address,
                           'kind': kind,
                           'allow': allowed.toList(),
