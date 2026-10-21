@@ -169,6 +169,9 @@ void main() {
             // The local registry listens on IPv4; this hostname also resolves to ::1.
             final request = await client.getUrl(uri.replace(host: '127.0.0.1'));
             request.headers.set(HttpHeaders.hostHeader, uri.authority);
+            request.headers.set('Sec-Fetch-Site', 'none');
+            request.headers.set('Sec-Fetch-Mode', 'navigate');
+            request.headers.set('Sec-Fetch-Dest', 'document');
             final response = await request.close();
             expect(response.statusCode, 200);
             expect(response.headers.contentType?.mimeType, 'application/json');

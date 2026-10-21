@@ -176,7 +176,19 @@ async fn handle(client: Arc<Client>, mut socket: TcpStream, port: u16) -> Result
     let settings = Settings::load(&client.state).map_err(|_| ())?;
     let cors = if let Some(origin) = request.allowed_website(&settings) {
         format!("Access-Control-Allow-Origin: {origin}\r\nVary: Origin\r\n")
-    } else if request.native() {
+    } else if request.native()
+        || (request.method == "GET"
+            && request.values("origin").is_empty()
+            && matches!(
+                request.one("sec-fetch-site"),
+                Some("none" | "same-origin" | "same-site" | "cross-site")
+            )
+            && request.one("sec-fetch-mode") == Some("navigate")
+            && request.one("sec-fetch-dest") == Some("document")
+            && ["sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest"]
+                .iter()
+                .all(|header| request.values(header).len() == 1))
+    {
         String::new()
     } else {
         return response(
@@ -319,6 +331,22 @@ mod tests {
         client.command(&json!({"op":"enable"})).await.unwrap();
         let list = call(registry, "GET", "/v1/services", "", "").await;
         assert!(list.contains("llama"));
+        for site in ["none", "same-origin", "same-site", "cross-site"] {
+            let navigation = format!(
+                "Sec-Fetch-Site: {site}\r\nSec-Fetch-Mode: navigate\r\nSec-Fetch-Dest: document\r\n"
+            );
+            let reply = call(registry, "GET", "/v1/services", &navigation, "").await;
+            assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+            assert!(reply.contains("Content-Type: application/json"));
+            assert!(reply.contains("llama"));
+        }
+        let duplicate = "Sec-Fetch-Site: none\r\nSec-Fetch-Site: cross-site\r\nSec-Fetch-Mode: navigate\r\nSec-Fetch-Dest: document\r\n";
+        assert!(
+            call(registry, "GET", "/v1/services", duplicate, "")
+                .await
+                .starts_with("HTTP/1.1 403")
+        );
+
         assert!(!list.contains(&address.to_string()));
         assert!(
             call(
