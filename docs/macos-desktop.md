@@ -70,7 +70,7 @@ owner's approval. Invalid or expired codes keep a visible error in the dialog.
 Paired hosts awaiting their owner's decision show **Awaiting approval**. **Pairing requests** approves a specific proved request and selected
 service grants together. Mutual machine pairing grants no access to the other
 machine's services automatically. Device revocation and forgetting a paired host
-remain separate owner decisions. The **Owner operations** screen exposes the existing durable SSH owner workflow, including explicit target selection, confirmation, per-host receipts and pending-target retries. Machine and service cards support drag ordering and keyboard arrow ordering; preferences are private to this desktop. **Access settings** configures registry/service gateway ports and allowed website origins. **My services** also controls public access with explicit confirmation.
+remain separate owner decisions. The **Owner operations** screen exposes the existing durable SSH owner workflow, including explicit target selection, confirmation, per-host receipts and pending-target retries. Machine and service cards support drag ordering and keyboard arrow ordering; preferences are private to this desktop. **Settings** configures registry/service gateway ports. **My services** also controls public access with explicit confirmation.
 
 IPC uses an owner-only Unix socket plus `getpeereid` (macOS) or `SO_PEERCRED` (Linux) to authenticate the local
 node. Pairing material stays out of process arguments and logs. Browser handoff

@@ -463,7 +463,7 @@ impl Request {
     }
     pub(crate) fn allowed_website<'a>(
         &'a self,
-        settings: &crate::access_settings::Settings,
+        _settings: &crate::access_settings::Settings,
     ) -> Option<&'a str> {
         if [
             "origin",
@@ -476,8 +476,12 @@ impl Request {
         {
             return None;
         }
-        self.one("origin")
-            .filter(|o| settings.allowed_origins.iter().any(|s| s == o))
+        self.one("origin").filter(|o| {
+            *o == "null"
+                || url::Url::parse(o).is_ok_and(|u| {
+                    matches!(u.scheme(), "http" | "https") && u.origin().ascii_serialization() == *o
+                })
+        })
     }
     fn same_origin(&self, origin: &str) -> bool {
         self.values("origin").iter().all(|v| *v == origin)
@@ -1622,10 +1626,10 @@ mod tests {
                 &url,
                 "GET",
                 "/",
-                &format!("{auth}Origin: https://evil.example\r\n")
+                &format!("{auth}Origin: https://unlisted.example\r\n")
             )
             .await
-            .starts_with("HTTP/1.1 403")
+            .starts_with("HTTP/1.1 200")
         );
         let parsed = url::Url::parse(&url).unwrap();
         let mut stream = TcpStream::connect(("127.0.0.1", parsed.port().unwrap()))

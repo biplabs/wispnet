@@ -228,8 +228,7 @@ Explicit Android release-publishing version overrides remain available.
 
 ## Registry and service gateway ports
 
-**Access settings** configures the local registry port, allowed website origins
-and each known HTTP service's gateway port. The same HTTP API is available on
+**Settings** configures the local registry port and each known HTTP service's gateway port. The same HTTP API is available on
 Android; see the [registry contract and examples](service-registry.md).
 
 ## Public access

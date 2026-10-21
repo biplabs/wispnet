@@ -234,8 +234,7 @@ Earlier emulator UI runs passed before the final fullscreen change. Final API-35
 The [shared HTTP registry](service-registry.md) resolves a full host ID and
 service ID to a local endpoint without an access token. Android and Linux use the same
 configurable registry port and optional fixed service gateway ports. Native apps
-use the phone's existing host/service grants without per-app approval. Websites
-require an explicitly allowed origin. A separate example app and physical HTTP
+use the phone's existing host/service grants without per-app approval. All website origins are allowed. A separate example app and physical HTTP
 registry tests cover independent-app access and host grant withdrawal.
 
 ## Pairing removal in both directions

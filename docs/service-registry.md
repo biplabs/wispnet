@@ -6,22 +6,21 @@ without separate per-app approval. Owning-host pairing and service grants still
 apply to every request. This replaces Android's Messenger discovery/consent API.
 No Android package queries, Binder connection or app permission prompt is needed.
 
-## Configure ports and websites
+## Configure ports
 
-Open **Access settings** in either app. The registry defaults to port **18400**:
+Open **Settings** in either app. The registry defaults to port **18400**:
 
 ```
 http://registry.wispnet.localhost:18400
 ```
 
 `http://127.0.0.1:18400` and `http://localhost:18400` are also accepted. It binds
-only to IPv4 loopback, never the LAN. Website callers must add their exact origin
-(e.g. `https://chat.example`, or `http://localhost:18765`) under **Allowed websites**.
-There are no wildcard origins. Native clients without browser Origin/Fetch
-Metadata headers use device-level access. This is discovery/access only; the
+only to IPv4 loopback, never the LAN. All website origins are allowed without
+an origin list. Native clients without browser Origin/Fetch Metadata headers use
+device-level access. This is discovery/access only; the
 registry never exposes pairing, policy changes or settings commands.
 
-On Linux, Access settings lists each known HTTP service's **gateway port**.
+On Linux, Settings lists each known HTTP service's **gateway port**.
 On Android, use the service card's gear to set that device's gateway port.
 These ports are separate from the owning machine's backend port. For example,
 llama.cpp can run at backend port 8201 while the phone and Linux gateway both use
@@ -46,7 +45,6 @@ helper. `{"op":"gateway_settings"}` returns `settings`, saved `routes` and
 ```json
 {
   "registry_port": 18400,
-  "allowed_origins": ["https://chat.example"],
   "service_ports": [
     {"host":"FULL_HOST_ID", "service":"llama", "port":18401}
   ]
@@ -105,13 +103,12 @@ Some Android Java clients cannot resolve wildcard `.localhost`. Connect to
 Do not substitute `Host: 127.0.0.1` on service routes. The independent Android
 `discovery-example` uses the registry over HTTP and demonstrates this fallback.
 
-Browser callers need an exact allowed origin on both the registry and service
-route. Unknown, null or duplicate Origin headers are rejected before forwarding,
-including simple cross-origin POSTs and requests whose Fetch Metadata shows a
-cross-site caller but omits Origin. Allowed websites need no token or cookie for
-API calls. Native clients send no browser Origin/Fetch Metadata headers and use
+Browser callers from any origin (including opaque `null` origins) can use both
+the registry and service routes, without a token or cookie for API calls.
+Duplicate or malformed Origin headers and cross-site requests that omit Origin
+are rejected. Native clients send no browser Origin/Fetch Metadata headers and use
 the device's host/service grants directly. Retired `X-Wispnet-Access` headers are
-ignored and stripped upstream; they cannot bypass origin checks.
+ignored and stripped upstream. Legacy saved `allowed_origins` lists are ignored.
 
 Browser localhost/network permissions and secure-context rules can impose
 additional restrictions. Existing browser navigation retains its single-use

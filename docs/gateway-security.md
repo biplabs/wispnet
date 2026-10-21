@@ -18,9 +18,9 @@ browser credentials are never persisted in this file.
 
 Native Android and Linux apps resolve URLs through the [shared registry](service-registry.md)
 and call them directly using device-level access. No API access token, per-app
-consent or credential renewal is required. Websites must have an exact allowed
-origin configured on the device; unauthorized website requests are rejected
-before forwarding, including simple POSTs and opaque/malformed origins. A service's
+consent or credential renewal is required. All website origins are allowed,
+including opaque origins serialized as `null`; duplicate or malformed Origin
+headers are rejected before forwarding. A service's
 own Authorization/API-key requirements remain unchanged. Host revocation still
 terminates access. Browser navigation retains its separate session-cookie and
 single-use handoff behavior. Native apps share the device's trust boundary.

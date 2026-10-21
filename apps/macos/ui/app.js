@@ -483,7 +483,7 @@ function render() {
     info.append(avatar, text);
     const actions = el('div', undefined, 'actions');
     actions.append(
-      button('Access settings', accessEditor),
+      button('Settings', accessEditor),
       button('Pair a machine', pairMachine),
       button('Pair this machine', pairThis, 'primary')
     );
@@ -831,10 +831,9 @@ function renamePeer(host) {
 
 async function accessEditor() {
   const { settings } = await request({ op: 'gateway_settings' });
-  modal('Access settings', 'Save settings', async () => {
+  modal('Settings', 'Save settings', async () => {
     const updated = accessSettings(
       registry.value,
-      origins.value,
       routes.map(r => ({
         host: r.host,
         service: r.service,
@@ -845,11 +844,6 @@ async function accessEditor() {
     closeDialog();
   });
   const registry = field('Registry port', settings.registry_port, 'number');
-  const origins = field(
-    'Allowed websites (one exact origin per line)',
-    settings.allowed_origins.join('\n'),
-    'textarea'
-  );
   const services = new Map();
   const add = (host, service, title) =>
     services.set(JSON.stringify([host, service]), { host, service, title });

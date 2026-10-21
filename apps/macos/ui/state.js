@@ -46,7 +46,7 @@ export function moveBefore(ids, source, target) {
   next.splice(next.indexOf(target), 0, source);
   return next;
 }
-export function accessSettings(registry, origins, routes) {
+export function accessSettings(registry, routes) {
   const port = value => {
     if (!/^\d+$/.test(String(value).trim()) || +value < 1024 || +value > 65535)
       throw Error('Ports must be between 1024 and 65535.');
@@ -54,10 +54,6 @@ export function accessSettings(registry, origins, routes) {
   };
   return {
     registry_port: port(registry),
-    allowed_origins: origins
-      .split(/\r?\n/)
-      .map(s => s.trim())
-      .filter(Boolean),
     service_ports: routes
       .filter(r => String(r.port).trim())
       .map(r => ({ ...r, port: port(r.port) }))

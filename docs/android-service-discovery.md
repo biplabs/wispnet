@@ -4,8 +4,7 @@ Android now uses the same [local HTTP registry and configurable service
 ports](service-registry.md) as Linux. The former exported Messenger service,
 per-app consent activity and package-specific grants have been removed.
 
-Native apps use the device's existing host/service grants. Websites require an
-explicitly allowed origin. Browser navigation retains its existing handoff.
+Native apps use the device's existing host/service grants. All website origins are allowed. Browser navigation retains its existing handoff.
 The independent `apps/android/discovery-example` application demonstrates the
 HTTP API without sharing Wispnet's UID, code or private data.
 

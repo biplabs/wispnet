@@ -101,20 +101,19 @@ test('saved order drops missing cards and appends newly discovered ones', () => 
   assert.deepEqual(moveBefore(['a', 'b', 'c'], 'c', 'a'), ['c', 'a', 'b']);
   assert.deepEqual(moveBefore(['a', 'b'], 'other-machine', 'a'), ['a', 'b']);
 });
-test('access settings keep exact website origins and automatic service ports', () => {
+test('access settings keep registry and automatic service ports', () => {
   assert.deepEqual(
-    accessSettings('21543', ' https://example.com\n\nhttps://other.test ', [
+    accessSettings('21543', [
       { host: 'a', service: 'web', port: '' },
       { host: 'b', service: 'web', port: '9000' }
     ]),
     {
       registry_port: 21543,
-      allowed_origins: ['https://example.com', 'https://other.test'],
       service_ports: [{ host: 'b', service: 'web', port: 9000 }]
     }
   );
   for (const port of ['1023', '65536', '1e4', '', 'bad'])
-    assert.throws(() => accessSettings(port, '', []));
+    assert.throws(() => accessSettings(port, []));
 });
 test('connection telemetry is separate from activity and permissions', () => {
   const status = {

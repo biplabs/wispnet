@@ -17,6 +17,7 @@ pub struct ServicePort {
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
     pub registry_port: u16,
+    /// Legacy preference retained for saved-settings compatibility; all websites are allowed.
     pub allowed_origins: Vec<String>,
     pub service_ports: Vec<ServicePort>,
 }

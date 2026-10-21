@@ -1,4 +1,4 @@
-//! Loopback-only discovery for native clients and explicitly allowed websites.
+//! Loopback-only discovery for native clients and websites.
 use crate::{
     Client,
     access_settings::Settings,
@@ -325,16 +325,16 @@ mod tests {
                 registry,
                 "GET",
                 "/v1/services",
-                "Origin: https://evil.example\r\n",
+                "Origin: https://unlisted.example\r\n",
                 ""
             )
             .await
-            .starts_with("HTTP/1.1 403")
+            .starts_with("HTTP/1.1 200")
         );
         assert!(
             call(registry, "GET", "/v1/services", "Origin: null\r\n", "")
                 .await
-                .starts_with("HTTP/1.1 403")
+                .starts_with("HTTP/1.1 200")
         );
         let preflight = call(
             registry,
@@ -400,7 +400,7 @@ mod tests {
         assert!(
             service(service_port, &authority, "Origin: https://evil.example\r\n")
                 .await
-                .starts_with("HTTP/1.1 403")
+                .starts_with("HTTP/1.1 200")
         );
         assert!(
             request_service(service_port, &authority, "POST", "")
@@ -412,10 +412,17 @@ mod tests {
                 .await
                 .ends_with("ok")
         );
+        for origin in ["https://unlisted.example", "http://localhost:18765", "null"] {
+            let headers = format!("Origin: {origin}\r\n");
+            let reply = request_service(service_port, &authority, "POST", &headers).await;
+            assert!(reply.ends_with("ok"), "{origin}: {reply}");
+            assert!(reply.contains(&format!("Access-Control-Allow-Origin: {origin}\r\n")));
+            let preflight = call(registry, "OPTIONS", "/v1/resolve", &headers, "").await;
+            assert!(preflight.starts_with("HTTP/1.1 204"), "{preflight}");
+            assert!(preflight.contains(&format!("Access-Control-Allow-Origin: {origin}\r\n")));
+        }
         let before = hits.load(std::sync::atomic::Ordering::SeqCst);
         for extra in [
-            "Origin: https://evil.example\r\n",
-            "Origin: null\r\n",
             "Origin: https://chat.example\r\nOrigin: https://evil.example\r\n",
             "Sec-Fetch-Site: cross-site\r\nSec-Fetch-Mode: no-cors\r\n",
             "Origin: https://chat.example\r\nSec-Fetch-Site: cross-site\r\nSec-Fetch-Site: same-origin\r\n",

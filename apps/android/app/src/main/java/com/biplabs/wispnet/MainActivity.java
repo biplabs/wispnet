@@ -45,10 +45,12 @@ public class MainActivity extends Activity {
   root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);screen=new FrameLayout(this);screen.setBackgroundColor(0xff070b14);stars=new StarJump(this);screen.addView(stars,new FrameLayout.LayoutParams(-1,-1));View statusScrim=new View(this);statusScrim.setBackgroundColor(0x66070b14);screen.addView(statusScrim,new FrameLayout.LayoutParams(-1,0,Gravity.TOP));screen.addView(root,new FrameLayout.LayoutParams(-1,-1));setContentView(screen);configureSystemBars();
   getWindow().setDecorFitsSystemWindows(false);root.setOnApplyWindowInsetsListener((view,insets)->{android.graphics.Insets bars=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout()|WindowInsets.Type.ime());view.setPadding(dp(20)+bars.left,bars.top,dp(20)+bars.right,bars.bottom);if(status!=null){FrameLayout.LayoutParams notice=(FrameLayout.LayoutParams)status.getLayoutParams();notice.setMargins(dp(20)+bars.left,0,dp(20)+bars.right,dp(20)+bars.bottom);status.setLayoutParams(notice);}int top=insets.getInsets(WindowInsets.Type.statusBars()|WindowInsets.Type.displayCutout()).top;ViewGroup.LayoutParams shade=statusScrim.getLayoutParams();if(shade.height!=top){shade.height=top;statusScrim.setLayoutParams(shade);}return insets;});
   header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL|Gravity.LEFT);root.addView(header,new LinearLayout.LayoutParams(-1,dp(64)));
+  LinearLayout deviceHeader=null;
   if(!managesHosts()){
-   LinearLayout deviceHeader=new LinearLayout(this);deviceHeader.setOrientation(LinearLayout.VERTICAL);deviceHeader.setPadding(0,dp(12),0,dp(4));
+   deviceHeader=new LinearLayout(this);deviceHeader.setOrientation(LinearLayout.HORIZONTAL);deviceHeader.setGravity(Gravity.CENTER_VERTICAL);deviceHeader.setPadding(0,dp(12),0,dp(4));
    deviceHeading=new TextView(this);deviceHeading.setText(DeviceProfile.name(this));deviceHeading.setTextColor(0xffedf2ff);deviceHeading.setTextSize(21);deviceHeading.setTypeface(null,android.graphics.Typeface.BOLD);deviceHeading.setSingleLine(true);deviceHeading.setEllipsize(android.text.TextUtils.TruncateAt.END);deviceHeading.setContentDescription("Device name: "+DeviceProfile.name(this));deviceHeading.setOnClickListener(v->renameDevice());
-   deviceHeader.addView(deviceHeading,new LinearLayout.LayoutParams(-1,-2));
+   deviceHeader.addView(deviceHeading,new LinearLayout.LayoutParams(-2,-2));
+   deviceHeader.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->deviceHeading.setMaxWidth(Math.max(0,r-l-dp(44))));
    header.addView(deviceHeader,new LinearLayout.LayoutParams(0,-2,1));
   }
   machinesPill=button(managesHosts()?header:new LinearLayout(this),managesHosts()?"‹":"Manage",()->{if(managesHosts())finish();else showPairing(pairingScroll.getVisibility()!=View.VISIBLE);});machinesPill.setContentDescription(managesHosts()?"Back to space":"Manage paired machines");machinesPill.setBackground(card(0xd8101c34,0xff2b4373,21));machinesPill.setPadding(dp(managesHosts()?0:16),0,dp(managesHosts()?0:16),0);machinesPill.setTextSize(managesHosts()?18:14);LinearLayout.LayoutParams mlp=new LinearLayout.LayoutParams(managesHosts()?dp(44):-2,dp(42));mlp.rightMargin=dp(12);machinesPill.setLayoutParams(mlp);
@@ -63,7 +65,7 @@ public class MainActivity extends Activity {
   View scrim=new View(this);scrim.setMinimumHeight(dp(56));scrim.setOnClickListener(v->{if(managesHosts())finish();else showPairing(false);});sheetWrap.addView(scrim,new LinearLayout.LayoutParams(-1,0,1));
   pairingForm=new LinearLayout(this);pairingForm.setOrientation(LinearLayout.VERTICAL);pairingForm.setBackground(card(0xee0b1324,0xff294270,24));pairingForm.setPadding(dp(20),dp(12),dp(20),dp(24));LinearLayout.LayoutParams pflp=new LinearLayout.LayoutParams(-1,-2);pflp.bottomMargin=dp(12);sheetWrap.addView(pairingForm,pflp);pairingScroll.addView(sheetWrap);root.addView(pairingScroll,new LinearLayout.LayoutParams(-1,0,1));
   relayLabel=new TextView(this);relayLabel.setText("● Relay: connecting…");relayLabel.setTextColor(0xff94a6c4);relayLabel.setTextSize(12);relayLabel.setPadding(0,dp(6),0,dp(2));root.addView(relayLabel,new LinearLayout.LayoutParams(-1,-2));
-  button(header,"⚙",()->ServiceSettings.show(this,null,null,"Access settings")).setContentDescription("Access settings");
+  ImageButton settings=new ImageButton(this);settings.setImageResource(R.drawable.ic_service_settings);settings.setContentDescription("Settings");settings.setPadding(dp(10),dp(10),dp(10),dp(10));settings.setBackground(null);settings.setOnClickListener(v->ServiceSettings.show(this,null,null,"Settings"));(deviceHeader==null?header:deviceHeader).addView(settings,new LinearLayout.LayoutParams(dp(44),dp(44)));
   TextView versionLabel=new TextView(this);versionLabel.setText("v"+getVersionName());versionLabel.setTextColor(0xff94a6c4);versionLabel.setTextSize(12);versionLabel.setGravity(Gravity.START);versionLabel.setPadding(0,0,0,dp(6));root.addView(versionLabel,new LinearLayout.LayoutParams(-1,-2));
   View handle=new View(this);handle.setBackground(card(0x668fa3c4,0x00000000,2));LinearLayout.LayoutParams hdlp=new LinearLayout.LayoutParams(dp(40),dp(4));hdlp.gravity=Gravity.CENTER_HORIZONTAL;hdlp.bottomMargin=dp(12);pairingForm.addView(handle,hdlp);
   LinearLayout sheetHeader=new LinearLayout(this);sheetHeader.setGravity(Gravity.CENTER_VERTICAL);LinearLayout.LayoutParams shlp=new LinearLayout.LayoutParams(-1,-2);shlp.bottomMargin=dp(12);pairingForm.addView(sheetHeader,shlp);
@@ -269,7 +271,7 @@ public class MainActivity extends Activity {
    ViewGroup oldParent=(ViewGroup)machinesPill.getParent();if(oldParent!=null)oldParent.removeView(machinesPill);
    heading.addView(machinesPill);
   }
-  Button reload=button(heading,"↻",this::refresh);reload.setContentDescription("Refresh services");reload.setTag("Refresh all hosts");reload.setPadding(0,0,0,0);reload.setTextSize(18);reload.setLayoutParams(new LinearLayout.LayoutParams(dp(44),dp(44)));
+  Button reload=button(heading,"↻",this::refresh);reload.setContentDescription("Refresh services");reload.setTag("Refresh all hosts");reload.setPadding(0,0,0,0);reload.setTextSize(18);reload.setBackground(null);reload.setLayoutParams(new LinearLayout.LayoutParams(dp(44),dp(44)));
   try{JSONObject records=store.all();if(!managesHosts()&&!spaceShown&&!starting&&!jumping)dockToggle(AccessService.enabled);
    boolean hasRecords=records.length()>0;
    updatePairingMode(hasRecords);
