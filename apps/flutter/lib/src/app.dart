@@ -447,7 +447,7 @@ class _WispHomeState extends State<WispHome>
 
   Widget sectionHeading(String title, List<Widget> actions) => Row(
     children: [
-      Expanded(
+      Flexible(
         child: Text(
           title,
           style: const TextStyle(
@@ -458,6 +458,7 @@ class _WispHomeState extends State<WispHome>
           ),
         ),
       ),
+      const SizedBox(width: 12),
       ...actions,
     ],
   );

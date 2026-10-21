@@ -522,6 +522,32 @@ void main() {
       await close(tester);
     },
   );
+  testWidgets(
+    'section Manage buttons follow their titles at phone and desktop widths',
+    (tester) async {
+      for (final width in [390.0, 1000.0]) {
+        await mount(tester, DesktopFake(), size: Size(width, 850));
+        for (final section in ['local', 'remote']) {
+          final container = find.byKey(ValueKey('$section-sector'));
+          final title = find.descendant(
+            of: container,
+            matching: find.text(
+              section == 'local' ? 'LOCAL SERVICES' : 'REMOTE SECTOR',
+            ),
+          );
+          final manage = find
+              .descendant(of: container, matching: find.byType(OutlinedButton))
+              .first;
+          expect(
+            tester.getRect(manage).left,
+            closeTo(tester.getRect(title).right + 12, .01),
+          );
+        }
+        expect(tester.takeException(), isNull);
+        await close(tester);
+      }
+    },
+  );
   testWidgets('local services and remote machines have separate controls', (
     tester,
   ) async {
