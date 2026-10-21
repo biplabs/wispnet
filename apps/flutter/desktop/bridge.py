@@ -138,8 +138,16 @@ class Bridge:
             self.status = status
             own = status['host']['host']
             names = self.preferences['names']
+            publications = {p['service']: p for p in status.get('public_access', {}).get('services', [])}
+            owned_services = []
+            for service in status['host']['services']:
+                item = dict(service)
+                publication = publications.get(service['id'])
+                if publication and publication.get('incarnation') == service.get('incarnation'):
+                    item['public_access'] = dict(publication)
+                owned_services.append(item)
             hosts = {own: {'name': status['host_name'], 'state': 'available', 'status': 'This machine',
-                          'local': True, 'catalog': {'services': status['host']['services']}}}
+                          'local': True, 'catalog': {'services': owned_services}}}
             clients = {c['peer']: c for c in status['host']['clients']}
             for peer in dict.fromkeys([*status['peer_pins'], *clients]):
                 if peer == own:
@@ -223,6 +231,21 @@ class Bridge:
             # Desktop uses the token-free local route, as the previous desktop did.
             # The Android bootstrap URL is intentionally not exposed to this runner.
             return {'url': browser_url(result['url'])}
+        if method == 'launchPublic':
+            status = self.api.request(op='status')
+            publication = next((p for p in status.get('public_access', {}).get('services', [])
+                                if p['service'] == args['service'] and p.get('enabled') is True), None)
+            if not publication or not isinstance(publication.get('url'), str):
+                raise ValueError('Public URL unavailable')
+            url = publication['url']
+            parsed = urlsplit(url)
+            if (parsed.scheme != 'https' or not parsed.hostname or parsed.port not in (None, 443)
+                or parsed.path != '/' or parsed.query or parsed.fragment or parsed.username or parsed.password
+                or any(ord(c) < 33 for c in url)):
+                raise ValueError('Invalid public browser handoff')
+            subprocess.run(['/usr/bin/open' if sys.platform == 'darwin' else 'xdg-open', url],
+                           check=True, timeout=15, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return {'url': url}
         if method == 'launch':
             url = browser_url(args['url'])
             subprocess.run(['/usr/bin/open' if sys.platform == 'darwin' else 'xdg-open', url],

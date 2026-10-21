@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'backend.dart';
 import 'theme.dart';
@@ -146,7 +147,7 @@ class MachineCard extends StatelessWidget {
                       id: id,
                       onDrop: (moved) =>
                           onReorder('services/${machine.id}', ids, moved, id),
-                      child: serviceCard(machine, services[id]!),
+                      child: serviceCard(context, machine, services[id]!),
                     ),
                   ),
               ],
@@ -165,8 +166,18 @@ class MachineCard extends StatelessWidget {
         : content;
   }
 
-  Widget serviceCard(Machine machine, Map<String, dynamic> service) {
+  Widget serviceCard(
+    BuildContext context,
+    Machine machine,
+    Map<String, dynamic> service,
+  ) {
     final allowed = machine.canOpen(service);
+    final publication = service['public_access'] as Map?;
+    final publicEnabled =
+        machine.data['local'] == true && publication?['enabled'] == true;
+    final publicOnline = publication?['state'] == 'online';
+    final publicUrl = publication?['url'] as String?;
+
     final subtitle = machine.online
         ? (service['kind'] as String).toUpperCase()
         : '${machine.name} · ${machine.state == 'unreachable'
@@ -224,18 +235,72 @@ class MachineCard extends StatelessWidget {
                         ],
                       ),
                       const SizedBox(height: 2),
-                      Text(
-                        subtitle,
-                        style: const TextStyle(
-                          fontSize: 13,
-                          color: WispColors.muted,
-                        ),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 4,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          Text(
+                            subtitle,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: WispColors.muted,
+                            ),
+                          ),
+                          if (publicEnabled)
+                            Tooltip(
+                              message: publicOnline
+                                  ? 'Public access enabled and online'
+                                  : 'Public access enabled but offline',
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color:
+                                      (publicOnline
+                                              ? WispColors.green
+                                              : WispColors.error)
+                                          .withValues(alpha: .12),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Text(
+                                  publicOnline
+                                      ? 'Public · Online'
+                                      : 'Public · Offline',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    color: publicOnline
+                                        ? WispColors.green
+                                        : WispColors.error,
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
                     ],
                   ),
                 ),
               ),
             ),
+            if (publicEnabled && publicUrl != null && publicUrl.isNotEmpty)
+              IconButton(
+                tooltip: 'Copy public URL for ${service['display_name']}',
+                onPressed: busy
+                    ? null
+                    : () async {
+                        await Clipboard.setData(ClipboardData(text: publicUrl));
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Public URL copied')),
+                          );
+                        }
+                      },
+                icon: const Icon(Icons.copy, size: 20, color: WispColors.cyan),
+              ),
             IconButton(
               tooltip:
                   'Settings for ${service['display_name']} on ${machine.name}',

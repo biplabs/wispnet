@@ -123,6 +123,32 @@ class BridgeTests(unittest.TestCase):
         self.assertIsNone(self.bridge.cache.load(PEER))
         with self.assertRaises(ValueError): self.bridge.dispatch('removeHost', dict(host=OWN))
 
+    def test_owned_service_public_state_and_authoritative_public_browser_handoff(self):
+        self.status['host']['services'] = [dict(id='web', kind='http', incarnation=INCARNATION)]
+        publication = dict(service='web', incarnation=INCARNATION, enabled=True,
+                           state='online', url='https://web.wispnet.test/')
+        self.status['public_access'] = dict(services=[publication])
+        self.bridge.records[PEER] = dict(state='available', catalog=catalog())
+        snapshot = self.bridge.snapshot()
+        owned = snapshot['hosts'][OWN]['catalog']['services'][0]
+        self.assertEqual(owned['public_access']['state'], 'online')
+        self.assertNotIn('public_access', snapshot['hosts'][PEER]['catalog']['services'][0])
+        publication['state'] = 'offline'
+        self.assertEqual(self.bridge.snapshot()['hosts'][OWN]['catalog']['services'][0]['public_access']['state'], 'offline')
+        with patch.object(module.subprocess, 'run') as launch:
+            self.assertEqual(self.bridge.dispatch('launchPublic', dict(service='web', url='https://ignored.example/')), dict(url=publication['url']))
+            self.assertEqual(launch.call_args.args[0][-1], publication['url'])
+            original = publication['url']
+            for invalid in ['http://web.wispnet.test/', 'https://user@web.wispnet.test/', 'https://web.wispnet.test/?token=x', 'https://web.wispnet.test:8443/']:
+                publication['url'] = invalid
+                with self.assertRaises(ValueError): self.bridge.dispatch('launchPublic', dict(service='web'))
+            publication['url'] = original
+            publication['enabled'] = False
+            with self.assertRaises(ValueError): self.bridge.dispatch('launchPublic', dict(service='web'))
+            self.assertEqual(launch.call_count, 1)
+        publication['incarnation'] = 'e' * 64
+        self.assertNotIn('public_access', self.bridge.snapshot()['hosts'][OWN]['catalog']['services'][0])
+
     def test_handoff_only_accepts_local_service_roots_and_registry_json(self):
         self.assertEqual(module.browser_url('http://web.localhost:18000/'), 'http://web.localhost:18000/')
         registry = 'http://registry.wispnet.localhost:18400/v1/services'

@@ -9,6 +9,7 @@ import 'package:wispnet/src/app.dart';
 import 'package:wispnet/src/backend.dart';
 import 'package:wispnet/src/cards.dart';
 import 'package:wispnet/src/header.dart';
+import 'package:wispnet/src/desktop_settings.dart';
 import 'package:wispnet/src/theme.dart';
 
 final peer = 'a' * 64;
@@ -137,6 +138,10 @@ class DesktopFake extends FakeBackend {
     String method, [
     Map<String, dynamic> arguments = const {},
   ]) async {
+    if (method == 'settings' && arguments['host'] == 'd' * 64) {
+      calls.add((method, arguments));
+      return {'port': '', 'url': 'http://shared-web.localhost:18000/'};
+    }
     if (method == 'desktopStatus') return status;
     if (method == 'desktopData') {
       return {
@@ -176,7 +181,18 @@ class DesktopFake extends FakeBackend {
             'local': true,
             'state': 'available',
             'status': 'This machine',
-            'catalog': {'services': status['host']['services']},
+            'catalog': {
+              'services': [
+                for (final service in status['host']['services'])
+                  {
+                    ...service as Map<String, dynamic>,
+                    for (final p in status['public_access']['services'])
+                      if (p['service'] == service['id'] &&
+                          p['incarnation'] == service['incarnation'])
+                        'public_access': p,
+                  },
+              ],
+            },
           },
         },
       };
@@ -1002,6 +1018,113 @@ void main() {
     expect(find.text('Paired machines'), findsOneWidget);
     expect(find.text('HiBreak · dddddddd'), findsOneWidget);
     expect(find.text('j-strix · aaaaaaaa'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await close(tester);
+  });
+  testWidgets(
+    'public service links, status and copy action reflect publication state',
+    (tester) async {
+      final backend = DesktopFake();
+      final publication = {
+        'service': 'web',
+        'incarnation': incarnation,
+        'enabled': true,
+        'state': 'online',
+        'url': 'https://shared-web.wispnet.test/',
+      };
+      backend.status['public_access']['services'] = [publication];
+      String? copied;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copied = call.arguments['text'] as String;
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
+      await mount(tester, backend, size: const Size(1000, 850));
+      expect(find.text('Public · Online'), findsOneWidget);
+      final copy = find.byTooltip('Copy public URL for Shared web');
+      final gear = find.byTooltip('Settings for Shared web on HiBreak');
+      expect(
+        tester.getRect(copy).right,
+        lessThanOrEqualTo(tester.getRect(gear).left),
+      );
+      await tester.tap(copy);
+      await tester.pumpAndSettle();
+      expect(copied, publication['url']);
+      expect(backend.calls.where((call) => call.$1 == 'open'), isEmpty);
+      publication['state'] = 'offline';
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+      expect(find.text('Public · Offline'), findsOneWidget);
+      await tester.tap(gear);
+      await tester.pumpAndSettle();
+      final local = find.text('http://shared-web.localhost:18000/');
+      final public = find.text(publication['url'] as String);
+      expect(tester.getRect(local).top, lessThan(tester.getRect(public).top));
+      expect(
+        tester.getRect(public).bottom,
+        lessThan(tester.getRect(find.text('Edit Shared web')).top),
+      );
+      expect(find.textContaining('127.0.0.1:8080'), findsNothing);
+      expect(
+        find.descendant(
+          of: find.byType(DesktopSettings),
+          matching: find.textContaining('Public ·'),
+        ),
+        findsNothing,
+      );
+      await tester.tap(local);
+      await tester.pumpAndSettle();
+      expect(
+        backend.calls.where((call) => call.$1 == 'launch').single.$2['url'],
+        'http://shared-web.localhost:18000/',
+      );
+      await tester.tap(public);
+      await tester.pumpAndSettle();
+      expect(
+        backend.calls
+            .where((call) => call.$1 == 'launchPublic')
+            .single
+            .$2['service'],
+        'web',
+      );
+      expect(backend.ownerCalls, isEmpty);
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      backend.status['public_access']['services'] = [];
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+      expect(find.text('Public · Online'), findsNothing);
+      expect(find.text('Public · Offline'), findsNothing);
+      expect(find.byTooltip('Copy public URL for Shared web'), findsNothing);
+      await close(tester);
+    },
+  );
+  testWidgets('public status and copy controls fit a narrow service tile', (
+    tester,
+  ) async {
+    final backend = DesktopFake();
+    backend.status['public_access']['services'] = [
+      {
+        'service': 'web',
+        'incarnation': incarnation,
+        'enabled': true,
+        'state': 'online',
+        'url': 'https://shared-web.wispnet.test/',
+      },
+    ];
+    await mount(tester, backend, size: const Size(360, 844));
+    expect(find.text('Public · Online'), findsOneWidget);
+    expect(find.byTooltip('Copy public URL for Shared web'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await close(tester);
   });

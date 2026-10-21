@@ -185,26 +185,94 @@ void main() {
           find
               .descendant(
                 of: find.byKey(const ValueKey('local-sector')),
-                matching: find.byType(IconButton),
+                matching: find.byWidgetPredicate(
+                  (widget) =>
+                      widget is IconButton &&
+                      (widget.tooltip?.startsWith('Settings for ') ?? false),
+                ),
               )
               .first,
         );
         await waitFor(find.text('Remove service'));
         expect(find.text('Add a new service'), findsNothing);
         await capture('local-service-controls');
+        expect(find.textContaining('127.0.0.1:'), findsNothing);
+        backend.launched = null;
+        await tester.tap(find.byTooltip('Open local service'));
+        for (var i = 0; i < 100 && backend.launched == null; i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 100)),
+          );
+        }
+        expect(Uri.parse(backend.launched!).host, endsWith('.localhost'));
+        backend.launched = null;
+        if (find.byTooltip('Open public service').evaluate().isNotEmpty) {
+          final publicLink = find.descendant(
+            of: find.byTooltip('Open public service'),
+            matching: find.byType(WispInkWell),
+          );
+          for (
+            var i = 0;
+            i < 100 && tester.widget<WispInkWell>(publicLink).onTap == null;
+            i++
+          ) {
+            await tester.pump(const Duration(milliseconds: 100));
+            await tester.runAsync(
+              () => Future<void>.delayed(const Duration(milliseconds: 100)),
+            );
+          }
+          expect(tester.widget<WispInkWell>(publicLink).onTap, isNotNull);
+          await tester.tap(publicLink);
+          for (var i = 0; i < 100 && backend.launched == null; i++) {
+            await tester.pump(const Duration(milliseconds: 100));
+            await tester.runAsync(
+              () => Future<void>.delayed(const Duration(milliseconds: 100)),
+            );
+          }
+          expect(backend.launched, startsWith('https://'));
+          backend.launched = null;
+        }
+
+        final remove = find.widgetWithText(OutlinedButton, 'Remove service');
+        for (
+          var i = 0;
+          i < 100 && tester.widget<OutlinedButton>(remove).onPressed == null;
+          i++
+        ) {
+          await tester.pump(const Duration(milliseconds: 100));
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 100)),
+          );
+        }
         await tester.ensureVisible(find.text('Remove service').first);
         await tester.tap(find.text('Remove service').first);
         await waitFor(find.text('Remove service?'));
         await capture('remove-service-confirmation');
         await tester.tap(find.text('Cancel'));
         await tester.pump(const Duration(milliseconds: 500));
-        await tester.ensureVisible(find.text('Enable public access').first);
-        await tester.tap(find.text('Enable public access').first);
-        await waitFor(find.text('Expose service to the internet?'));
-        expect(
-          find.textContaining('unprotected to the public internet'),
-          findsOneWidget,
+        final disabling = find
+            .text('Disable public access')
+            .evaluate()
+            .isNotEmpty;
+        final publicAction = disabling
+            ? 'Disable public access'
+            : 'Enable public access';
+        await tester.ensureVisible(find.text(publicAction).first);
+        await tester.tap(find.text(publicAction).first);
+        await waitFor(
+          find.text(
+            disabling
+                ? 'Disable public access?'
+                : 'Expose service to the internet?',
+          ),
         );
+        if (!disabling) {
+          expect(
+            find.textContaining('unprotected to the public internet'),
+            findsOneWidget,
+          );
+        }
         await capture('public-service-confirmation');
         await tester.tap(find.text('Cancel'));
         await tester.pump(const Duration(milliseconds: 500));
@@ -374,6 +442,7 @@ class _ObservedBackend implements WispnetBackend {
     calls.add(method);
     final result = await native.invoke(method, arguments);
     if (method == 'launch') launched = arguments['url'] as String;
+    if (method == 'launchPublic') launched = result['url'] as String;
     return result;
   }
 }

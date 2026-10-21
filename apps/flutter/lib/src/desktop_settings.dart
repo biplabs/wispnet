@@ -32,7 +32,8 @@ class _DesktopSettingsState extends State<DesktopSettings> {
   List<dynamic> operations = [];
   late String section = widget.initialSection;
   String? error;
-  bool busy = false;
+  String localUrl = '';
+  bool busy = false, openingAddress = false;
   Timer? timer;
   List<Map<String, dynamic>> get services =>
       (status?['host']['services'] as List? ?? []).cast<Map<String, dynamic>>();
@@ -64,11 +65,37 @@ class _DesktopSettingsState extends State<DesktopSettings> {
       final journal = await widget.backend.invoke('desktopData', {
         'op': 'operations',
       });
+      var address = '';
+      String? addressError;
+      final selected = (next['host']['services'] as List)
+          .cast<Map<String, dynamic>>()
+          .where((s) => s['id'] == widget.serviceId && s['kind'] == 'http')
+          .firstOrNull;
+      if (selected != null) {
+        try {
+          final args = {
+            'host': next['host']['host'],
+            'service': selected['id'],
+          };
+          final route = await widget.backend.invoke('settings', args);
+          address = route['url'] as String? ?? '';
+          if (address.isEmpty) {
+            final opened = await widget.backend.invoke('open', {
+              ...args,
+              'incarnation': selected['incarnation'],
+            });
+            address = opened['url'] as String? ?? '';
+          }
+        } catch (e) {
+          addressError = failureMessage(e);
+        }
+      }
       if (mounted) {
         setState(() {
+          localUrl = address;
           status = next;
           operations = journal['value'] as List;
-          error = null;
+          error = addressError;
         });
       }
     } catch (e) {
@@ -473,6 +500,62 @@ class _DesktopSettingsState extends State<DesktopSettings> {
     widget.onChanged();
   }
 
+  Map<String, dynamic>? publication(Map<String, dynamic> service) =>
+      ((status?['public_access']?['services'] as List?) ?? [])
+          .cast<Map<String, dynamic>>()
+          .where(
+            (p) =>
+                p['service'] == service['id'] &&
+                p['incarnation'] == service['incarnation'],
+          )
+          .firstOrNull;
+
+  Future<void> openAddress(String url, String? publicService) async {
+    if (busy || openingAddress) return;
+    setState(() {
+      openingAddress = true;
+      error = null;
+    });
+    try {
+      await widget.backend.invoke(
+        publicService == null ? 'launch' : 'launchPublic',
+        publicService == null ? {'url': url} : {'service': publicService},
+      );
+    } catch (e) {
+      if (mounted) setState(() => error = failureMessage(e));
+    } finally {
+      if (mounted) setState(() => openingAddress = false);
+    }
+  }
+
+  Widget addressLink(String url, {String? publicService}) => Padding(
+    padding: const EdgeInsets.only(bottom: 8),
+    child: Align(
+      alignment: Alignment.centerLeft,
+      child: Semantics(
+        link: true,
+        child: Tooltip(
+          message: publicService == null
+              ? 'Open local service'
+              : 'Open public service',
+          child: WispInkWell(
+            onTap: busy || openingAddress
+                ? null
+                : () => openAddress(url, publicService),
+            child: Text(
+              url,
+              style: const TextStyle(
+                color: WispColors.cyan,
+                decoration: TextDecoration.underline,
+                decorationColor: WispColors.cyan,
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+
   ButtonStyle get dangerStyle => OutlinedButton.styleFrom(
     foregroundColor: WispColors.error,
     side: const BorderSide(color: WispColors.error),
@@ -537,9 +620,15 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                       fontWeight: FontWeight.bold,
                     ),
                   ),
-                  SelectableText(
-                    '${s['kind'].toString().toUpperCase()} · ${s['backend']}',
-                  ),
+                  Text(s['kind'].toString().toUpperCase()),
+                  const SizedBox(height: 8),
+                  if (localUrl.isNotEmpty) addressLink(localUrl),
+                  if (publication(s)?['enabled'] == true &&
+                      publication(s)?['url'] is String)
+                    addressLink(
+                      publication(s)!['url'] as String,
+                      publicService: s['id'] as String,
+                    ),
                   const SizedBox(height: 10),
                   action(
                     'Edit ${s['display_name']}',
@@ -663,16 +752,8 @@ class _DesktopSettingsState extends State<DesktopSettings> {
     ],
   );
   List<Widget> _public(Map<String, dynamic> service) {
-    final entries = status?['public_access']?['services'] as List? ?? [];
-    final publication = entries
-        .cast<Map<String, dynamic>>()
-        .where((p) => p['service'] == service['id'])
-        .firstOrNull;
-    final enabled = publication?['enabled'] == true;
+    final enabled = publication(service)?['enabled'] == true;
     return [
-      if (publication?['url'] != null)
-        SelectableText(publication!['url'] as String),
-      if (enabled) Text('Public · ${publication?['state']}'),
       action(
         enabled ? 'Disable public access' : 'Enable public access',
         () => run(
