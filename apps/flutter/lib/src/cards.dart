@@ -210,7 +210,7 @@ class MachineCard extends StatelessWidget {
                       Row(
                         children: [
                           const Icon(
-                            Icons.auto_awesome,
+                            Icons.north_east,
                             size: 16,
                             color: WispColors.cyan,
                           ),
@@ -225,12 +225,6 @@ class MachineCard extends StatelessWidget {
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
-                          ),
-                          const SizedBox(width: 8),
-                          const Icon(
-                            Icons.north_east,
-                            size: 16,
-                            color: WispColors.cyan,
                           ),
                         ],
                       ),
