@@ -606,13 +606,13 @@ void main() {
   testWidgets('machine settings controls have consistent spacing', (
     tester,
   ) async {
-    await mount(tester, DesktopFake(), size: const Size(1000, 850));
+    final backend = DesktopFake();
+    await mount(tester, backend, size: const Size(1000, 850));
     await tester.tap(find.textContaining('J-STRIX'));
     await tester.pumpAndSettle();
     final controls = [
       find.widgetWithText(TextField, 'Private display name'),
       find.widgetWithText(OutlinedButton, 'Save name'),
-      find.widgetWithText(OutlinedButton, 'Refresh'),
       find.widgetWithText(OutlinedButton, 'Remove'),
     ];
     for (var i = 1; i < controls.length; i++) {
@@ -622,6 +622,38 @@ void main() {
         closeTo(12, .01),
       );
     }
+    expect(find.widgetWithText(OutlinedButton, 'Refresh'), findsNothing);
+    expect(find.byTooltip('Refresh remote services'), findsOneWidget);
+    final remove = find.widgetWithText(OutlinedButton, 'Remove');
+    expect(
+      tester.widget<OutlinedButton>(remove).style!.foregroundColor!.resolve({}),
+      WispColors.error,
+    );
+    await tester.tap(remove);
+    await tester.pumpAndSettle();
+    expect(find.text('Remove machine?'), findsOneWidget);
+    expect(
+      find.textContaining(
+        'forget the pairing and close its local service routes',
+      ),
+      findsOneWidget,
+    );
+    expect(backend.calls.where((call) => call.$1 == 'removeHost'), isEmpty);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(backend.calls.where((call) => call.$1 == 'removeHost'), isEmpty);
+    await tester.tap(remove);
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Remove machine'));
+    await tester.pumpAndSettle();
+    expect(
+      backend.calls.where((call) => call.$1 == 'removeHost').single.$2['host'],
+      peer,
+    );
+    expect(
+      find.widgetWithText(TextField, 'Private display name'),
+      findsNothing,
+    );
     expect(tester.takeException(), isNull);
     await close(tester);
   });

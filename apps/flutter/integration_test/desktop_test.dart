@@ -92,6 +92,12 @@ void main() {
         await tester.tap(machineName);
         await waitFor(find.widgetWithText(TextField, 'Private display name'));
         await capture('machine-settings');
+        expect(find.widgetWithText(OutlinedButton, 'Refresh'), findsNothing);
+        await tester.tap(find.widgetWithText(OutlinedButton, 'Remove'));
+        await waitFor(find.text('Remove machine?'));
+        await capture('remove-machine-confirmation');
+        await tester.tap(find.text('Cancel'));
+        await tester.pump(const Duration(milliseconds: 500));
         await tester.tap(find.byTooltip('Close'));
         await tester.pump(const Duration(milliseconds: 500));
         await tester.tap(

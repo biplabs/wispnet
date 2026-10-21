@@ -304,7 +304,7 @@ class MachineSettings extends StatefulWidget {
 }
 
 class _MachineSettingsState extends State<MachineSettings> {
-  bool confirming = false, busy = false;
+  bool busy = false;
   String? error;
   late final label = TextEditingController(text: widget.machine.name);
   @override
@@ -345,6 +345,38 @@ class _MachineSettingsState extends State<MachineSettings> {
     }
   }
 
+  ButtonStyle get dangerStyle => OutlinedButton.styleFrom(
+    foregroundColor: WispColors.error,
+    side: const BorderSide(color: WispColors.error),
+  ).copyWith(backgroundColor: wispButtonBackground(const Color(0xff401e2a)));
+
+  Future<void> confirmRemove() async {
+    final confirmed = await showWispSheet<bool>(
+      context,
+      title: 'Remove machine?',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Remove ${widget.machine.name} and close its Wispnet access on this computer? This computer will forget the pairing and close its local service routes. The other machine will learn about removal on its next contact. You can pair again later.',
+          ),
+          const SizedBox(height: 16),
+          FilledButton(
+            style: dangerStyle,
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Remove machine'),
+          ),
+          const SizedBox(height: 12),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) await perform('removeHost');
+  }
+
   @override
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -369,31 +401,11 @@ class _MachineSettingsState extends State<MachineSettings> {
         ),
       ],
       const SizedBox(height: 12),
-      if (confirming) ...[
-        Text(
-          'Remove ${widget.machine.name} and close its access here? It will learn about removal on its next contact. You can pair again later.',
-        ),
-        const SizedBox(height: 12),
-        FilledButton(
-          onPressed: busy ? null : () => perform('removeHost'),
-          child: const Text('Remove machine'),
-        ),
-        const SizedBox(height: 12),
-        TextButton(
-          onPressed: busy ? null : () => setState(() => confirming = false),
-          child: const Text('Cancel'),
-        ),
-      ] else ...[
-        OutlinedButton(
-          onPressed: busy ? null : () => perform('refreshHost'),
-          child: const Text('Refresh'),
-        ),
-        const SizedBox(height: 12),
-        OutlinedButton(
-          onPressed: busy ? null : () => setState(() => confirming = true),
-          child: const Text('Remove'),
-        ),
-      ],
+      OutlinedButton(
+        style: dangerStyle,
+        onPressed: busy ? null : confirmRemove,
+        child: const Text('Remove'),
+      ),
       if (error != null)
         Padding(
           padding: const EdgeInsets.only(top: 12),
