@@ -170,7 +170,7 @@ class MachineCard extends StatelessWidget {
               ? 'Pending'
               : 'Unavailable'}';
     return Container(
-      constraints: const BoxConstraints(minHeight: 88),
+      constraints: const BoxConstraints(minHeight: 64),
       decoration: BoxDecoration(
         color: WispColors.tile,
         borderRadius: BorderRadius.circular(16),
@@ -185,7 +185,7 @@ class MachineCard extends StatelessWidget {
               onTap: !busy && allowed ? () => onOpen(service) : null,
               borderRadius: BorderRadius.circular(16),
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 18, 0, 18),
+                padding: const EdgeInsets.fromLTRB(12, 8, 0, 8),
                 child: Opacity(
                   opacity: allowed ? 1 : .45,
                   child: Column(
