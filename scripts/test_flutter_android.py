@@ -70,7 +70,7 @@ def main():
                 raise RuntimeError('Installed Flutter test did not start')
             run([str(flutter), 'drive', '--use-existing-app=' + url,
                  '--driver=test_driver/integration_test.dart'], cwd=ROOT / 'apps/flutter', timeout=180)
-            for name in ['directory', 'machines', 'settings', 'offline-control']:
+            for name in ['directory', 'machines', 'settings', 'offline-control', 'standby']:
                 (args.output / ('device-' + name + '.png')).write_bytes(private('cache/flutter-device-' + name + '.png'))
             assert preserved() == before, 'Upgrade changed identity, device profile or saved host IDs'
             print('PASS: Flutter installed-app checks and identity/host preservation')

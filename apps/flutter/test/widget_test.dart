@@ -186,37 +186,50 @@ void main() {
       await close(tester);
     },
   );
-  testWidgets(
-    'settings follows the device label in online and offline headers',
-    (tester) async {
-      for (final online in [true, false]) {
-        for (final width in [320.0, 390.0, 1440.0]) {
-          await mount(
-            tester,
-            FakeBackend(enabled: online),
-            size: Size(width, 844),
-          );
-          final label = tester.getRect(
-            find.byKey(const ValueKey('device-heading')),
-          );
-          final settings = tester.getRect(find.byTooltip('Settings'));
-          expect(settings.left, closeTo(label.right, .01));
-          expect(settings.width, 44);
-          if (online) {
-            final button = tester.getRect(find.byType(GoOfflineButton));
-            expect(button.height, 44);
-            expect(button.center.dy, closeTo(settings.center.dy + 2, .01));
-            await tester.tap(find.byTooltip('Go offline'));
-            await tester.pump();
-            await tester.pump(const Duration(milliseconds: 300));
-            expect(find.byType(GoOfflineButton), findsNothing);
-          }
-          expect(tester.takeException(), isNull);
-          await close(tester);
-        }
-      }
-    },
-  );
+  testWidgets('settings follows the device label in the directory', (
+    tester,
+  ) async {
+    for (final width in [320.0, 390.0, 1440.0]) {
+      await mount(tester, FakeBackend(), size: Size(width, 844));
+      final label = tester.getRect(
+        find.byKey(const ValueKey('device-heading')),
+      );
+      final settings = tester.getRect(find.byTooltip('Settings'));
+      expect(settings.left, closeTo(label.right, .01));
+      expect(settings.width, 44);
+      final button = tester.getRect(find.byType(GoOfflineButton));
+      expect(button.height, 44);
+      expect(button.center.dy, closeTo(settings.center.dy + 2, .01));
+      await tester.tap(find.byTooltip('Go offline'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.byType(GoOfflineButton), findsNothing);
+      expect(tester.takeException(), isNull);
+      await close(tester);
+    }
+  });
+  testWidgets('both launch states show only a centered entry button', (
+    tester,
+  ) async {
+    for (final paired in [false, true]) {
+      final backend = FakeBackend(paired: paired, enabled: false);
+      await mount(tester, backend);
+      expect(find.byType(Text), findsNothing);
+      expect(find.byTooltip('Settings'), findsNothing);
+      expect(find.text('Manage'), findsNothing);
+      final entry = find.byTooltip(
+        paired ? 'Enter wisp space' : 'Establish your wisp network',
+      );
+      expect(tester.getCenter(entry), const Offset(195, 422));
+      await tester.tap(entry);
+      await tester.pumpAndSettle();
+      expect(
+        paired ? find.text('PAIRED MACHINES') : find.text('Pair a machine'),
+        findsOneWidget,
+      );
+      await close(tester);
+    }
+  });
   testWidgets('docked control renders at the native phone pixel density', (
     tester,
   ) async {

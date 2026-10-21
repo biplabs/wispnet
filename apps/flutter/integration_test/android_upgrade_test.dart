@@ -42,6 +42,11 @@ void main() {
             child: WispnetApp(backend: backend),
           ),
         );
+        if (!originalEnabled && (before['hosts'] as Map).isNotEmpty) {
+          await waitFor(find.byTooltip('Enter wisp space'));
+          await capture('flutter-device-standby');
+          await tester.tap(find.byTooltip('Enter wisp space'));
+        }
         await waitFor(find.byTooltip('Settings'));
         for (
           var n = 0;
@@ -65,9 +70,6 @@ void main() {
         expect(tester.takeException(), isNull);
         await tester.tap(find.byTooltip('Close'));
         await tester.pump(const Duration(milliseconds: 500));
-        if (!originalEnabled && (before['hosts'] as Map).isNotEmpty) {
-          await tester.tap(find.byTooltip('Enter wisp space'));
-        }
         if ((before['hosts'] as Map).isNotEmpty) {
           await waitFor(find.text('PAIRED MACHINES'));
           await tester.pump(const Duration(seconds: 2));
@@ -98,6 +100,7 @@ void main() {
         if ((before['hosts'] as Map).isNotEmpty) {
           await tester.tap(find.byTooltip('Go offline'));
           await waitFor(find.byTooltip('Enter wisp space'));
+          await capture('flutter-device-standby');
           expect((await backend.invoke('snapshot'))['enabled'], false);
           await tester.tap(find.byTooltip('Enter wisp space'));
           await waitFor(find.text('PAIRED MACHINES'));

@@ -410,13 +410,14 @@ class _WispHomeState extends State<WispHome>
                 padding: const EdgeInsets.symmetric(horizontal: 20),
                 child: Column(
                   children: [
-                    WispHeader(
-                      label:
-                          '${snapshot['name'] ?? 'Wispnet'}${snapshot['peer'] == null ? '' : ' · ${shortId(snapshot['peer'] as String)}'}',
-                      online: online,
-                      onSettings: snapshot.isEmpty ? null : () => settings(),
-                      onToggle: busy ? null : toggle,
-                    ),
+                    if (online)
+                      WispHeader(
+                        label:
+                            '${snapshot['name'] ?? 'Wispnet'}${snapshot['peer'] == null ? '' : ' · ${shortId(snapshot['peer'] as String)}'}',
+                        online: online,
+                        onSettings: snapshot.isEmpty ? null : () => settings(),
+                        onToggle: busy ? null : toggle,
+                      ),
                     Expanded(
                       child: initializationError != null
                           ? Center(
@@ -553,84 +554,49 @@ class _WispHomeState extends State<WispHome>
                                         ),
                                       ],
                                     )
-                                  : Stack(
+                                  : Center(
                                       key: const ValueKey('standby'),
-                                      children: [
-                                        Center(
-                                          child: Column(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              SpaceToggle(
-                                                first: list.isEmpty,
-                                                busy: busy,
-                                                beacons: list
-                                                    .map(stateColor)
-                                                    .toList(),
-                                                onPressed: busy
-                                                    ? null
-                                                    : list.isEmpty
-                                                    ? pair
-                                                    : toggle,
-                                              ),
-                                              const SizedBox(height: 8),
-                                              Text(
-                                                list.isEmpty
-                                                    ? 'establish your wisp network'
-                                                    : 'jump to wisp space',
-                                                textAlign: TextAlign.center,
-                                                style: const TextStyle(
-                                                  fontSize: 21,
-                                                  letterSpacing: 1,
-                                                  shadows: [
-                                                    Shadow(
-                                                      color: Color(0x883868c8),
-                                                      blurRadius: 10,
-                                                      offset: Offset(0, 2),
-                                                    ),
-                                                  ],
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                        if (list.isNotEmpty)
-                                          Align(
-                                            alignment: Alignment.topRight,
-                                            child: OutlinedButton(
-                                              onPressed: manage,
-                                              child: const Text('Manage'),
-                                            ),
-                                          ),
-                                      ],
+                                      child: SpaceToggle(
+                                        first: list.isEmpty,
+                                        busy: busy,
+                                        beacons: list.map(stateColor).toList(),
+                                        onPressed: busy
+                                            ? null
+                                            : list.isEmpty
+                                            ? pair
+                                            : toggle,
+                                      ),
                                     ),
                             ),
                     ),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Padding(
-                        padding: const EdgeInsets.only(top: 6, bottom: 2),
-                        child: Text(
-                          'Relay: ${snapshot['relay'] ?? 'connecting…'}',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: WispColors.muted,
+                    if (online)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Padding(
+                          padding: const EdgeInsets.only(top: 6, bottom: 2),
+                          child: Text(
+                            'Relay: ${snapshot['relay'] ?? 'connecting…'}',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: WispColors.muted,
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Padding(
-                        padding: const EdgeInsets.only(bottom: 6),
-                        child: Text(
-                          'v${snapshot['version'] ?? ''}',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: WispColors.muted,
+                    if (online)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Padding(
+                          padding: const EdgeInsets.only(bottom: 6),
+                          child: Text(
+                            'v${snapshot['version'] ?? ''}',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: WispColors.muted,
+                            ),
                           ),
                         ),
                       ),
-                    ),
                   ],
                 ),
               ),
