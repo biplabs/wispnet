@@ -371,10 +371,30 @@ function serviceGrid(services, host, enabled = true) {
   services = ordered(services, orders[group] || [], s => s.id);
   for (const s of services) {
     const tile = button('', () => openService(s, host), 'tile');
-    tile.append(
-      el('h3', s.display_name || s.id),
-      el('span', s.kind === 'http' ? '↗ Open in browser' : 'TCP · use the terminal client')
+    const top = el('div', undefined, 'tile-top');
+    const kindBadge = el(
+      'span',
+      (s.kind || 'http').toUpperCase(),
+      `badge badge-${s.kind || 'http'}`
     );
+    top.append(kindBadge);
+    if (!enabled) {
+      top.append(el('span', 'Offline', 'badge badge-offline'));
+    }
+    const tileBody = el('div', undefined, 'tile-body');
+    const title = el('h3', s.display_name || s.id);
+    const desc = el(
+      'div',
+      s.kind === 'http' ? 'Protected localhost' : 'Network port tunnel',
+      'tile-desc'
+    );
+    tileBody.append(title, desc);
+    const action = el(
+      'span',
+      s.kind === 'http' ? '↗ Open in browser' : 'TCP · use the terminal client',
+      'tile-action'
+    );
+    tile.append(top, tileBody, action);
     tile.disabled = busy || !enabled || s.kind !== 'http';
     const wrapper = el('div', undefined, 'service-card');
     wrapper.append(
@@ -392,22 +412,35 @@ function serviceGrid(services, host, enabled = true) {
   return grid;
 }
 
+function renderConnection() {
+  const conn = $('#connection');
+  conn.replaceChildren();
+  const statusRow = el('div', undefined, 'connection-status');
+  const dot = el('span', '', `status-dot ${status ? 'online' : 'offline'}`);
+  statusRow.append(dot, el('strong', status ? '● Online' : '○ Offline'));
+  const relay = el('div', status ? `Relay: ${status.relay}` : 'Node unavailable', 'connection-relay');
+  conn.append(statusRow, relay);
+  if (status) {
+    const metrics = el('div', undefined, 'connection-metrics');
+    metrics.append(
+      el('span', `${activeClients(status)} active`, 'metric-pill'),
+      el('span', `${status.host.clients.length} approved`, 'metric-pill')
+    );
+    conn.append(metrics);
+  }
+}
+
 function render() {
   if (dragging) return;
   $('#heading').textContent = section;
   $('#online').textContent = status ? 'Go offline' : 'Go online';
-  $('#connection').replaceChildren(
-    el('strong', status ? '● Online' : '○ Offline'),
-    el('div', status ? `Relay: ${status.relay}` : 'Node unavailable'),
-    el(
-      'small',
-      status ? `${activeClients(status)} active · ${status.host.clients.length} approved` : ''
-    )
-  );
+  renderConnection();
   document.querySelectorAll('nav button').forEach(b => {
     b.setAttribute('aria-current', b.dataset.section === section ? 'page' : 'false');
-    if (b.dataset.section === 'Pairing requests')
-      b.textContent = `Pairing requests${status ? ' · ' + status.invitations.filter(i => i.state === 'pending').length : ''}`;
+    if (b.dataset.section === 'Pairing requests') {
+      const pendingCount = status ? status.invitations.filter(i => i.state === 'pending').length : 0;
+      b.textContent = `Pairing requests${pendingCount ? ' · ' + pendingCount : ''}`;
+    }
   });
   content.replaceChildren();
   if (!status) {
@@ -431,7 +464,7 @@ function render() {
     content.append(empty);
     for (const [host, peer] of peers) {
       if (!peer.catalog) continue;
-      const panel = el('div', undefined, 'panel');
+      const panel = el('div', undefined, 'panel peer-panel');
       panel.append(
         el('h2', name(host)),
         el('p', 'Cached; node offline', 'muted'),
@@ -441,18 +474,22 @@ function render() {
     }
     return;
   }
-  const machine = el('div', undefined, 'panel machine'),
-    info = el('div');
-  info.append(el('h2', status.host_name), el('span', 'Your services. Any device.', 'muted'));
-  const actions = el('div', undefined, 'actions');
-  actions.append(
-    button('Access settings', accessEditor),
-    button('Pair a machine', pairMachine),
-    button('Pair this machine', pairThis, 'primary')
-  );
-  machine.append(info, actions);
-  content.append(machine);
   if (section === 'Services') {
+    const machine = el('div', undefined, 'panel machine-banner'),
+      info = el('div', undefined, 'machine-info'),
+      avatar = el('div', '💻', 'machine-avatar'),
+      text = el('div');
+    text.append(el('h2', status.host_name), el('span', 'Your services. Any device.', 'muted'));
+    info.append(avatar, text);
+    const actions = el('div', undefined, 'actions');
+    actions.append(
+      button('Access settings', accessEditor),
+      button('Pair a machine', pairMachine),
+      button('Pair this machine', pairThis, 'primary')
+    );
+    machine.append(info, actions);
+    content.append(machine);
+
     content.append(
       el('h2', 'On this machine'),
       serviceGrid(status.host.services, status.host.host)
@@ -460,8 +497,9 @@ function render() {
     const machineIds = [...new Set([...status.peer_pins, ...status.host.clients.map(c => c.peer)])];
     for (const host of ordered(status.peer_pins, orders.machines || [])) {
       const peer = peers.get(host),
-        panel = el('div', undefined, 'panel'),
-        row = el('div', undefined, 'row'),
+        panel = el('div', undefined, 'panel peer-panel'),
+        row = el('div', undefined, 'peer-header'),
+        titleGroup = el('div', undefined, 'peer-title-group'),
         tools = el('div', undefined, 'actions');
       const revision = status.host.revision;
       tools.append(
@@ -483,20 +521,35 @@ function render() {
           'danger'
         )
       );
-      row.append(orderHandle('machines', host, machineIds), el('h2', name(host)), tools);
+      titleGroup.append(
+        el('h2', name(host)),
+        el('span', peer?.error ? 'Unavailable' : 'Live', peer?.error ? 'badge badge-error' : 'badge badge-online')
+      );
+      const leftGroup = el('div', undefined, 'peer-header-left');
+      leftGroup.append(orderHandle('machines', host, machineIds), titleGroup);
+      row.append(leftGroup, tools);
       panel.dataset.machine = host;
       dropTarget(panel, 'machines', host);
-      panel.append(row, el('p', host, 'identity'));
-      panel.append(el('p', telemetry(status, host), 'muted'));
+      panel.append(row);
+
+      const meta = el('div', undefined, 'peer-meta');
+      meta.append(el('p', host, 'identity'));
+      meta.append(el('p', telemetry(status, host), 'muted badge-pill'));
       if (peer?.fetched)
-        panel.append(
+        meta.append(
           el(
             'p',
             `Last refreshed ${Math.max(0, Math.floor(Date.now() / 1000 - peer.fetched))}s ago`,
-            'muted'
+            'muted badge-pill'
           )
         );
-      if (peer?.error) panel.append(el('p', peer.error, 'muted'));
+      panel.append(meta);
+
+      if (peer?.error) {
+        const errBox = el('div', undefined, 'card-alert error');
+        errBox.append(el('p', peer.error));
+        panel.append(errBox);
+      }
       if (peer?.catalog)
         panel.append(serviceGrid(peer.catalog.services, host, peer.live && !peer.refreshing));
       else panel.append(el('p', 'Fetching services…', 'muted'));
@@ -524,15 +577,24 @@ function render() {
     if (!status.peer_pins.length && !status.host.clients.length)
       content.append(el('p', 'Pair another machine to see its shared services here.', 'muted'));
   } else if (section === 'My services') {
-    content.append(button('Share a service', () => serviceEditor(), 'primary'));
+    const topBar = el('div', undefined, 'panel row');
+    topBar.append(
+      el('span', 'Share local loopback servers securely with permitted devices.', 'muted'),
+      button('Share a service', () => serviceEditor(), 'primary')
+    );
+    content.append(topBar);
+
     for (const s of status.host.services) {
       const row = el('div', undefined, 'panel row'),
         info = el('div'),
         actions = el('div', undefined, 'actions');
-      info.append(
+      const titleRow = el('div', undefined, 'peer-title-group');
+      titleRow.append(
         el('h3', s.display_name || s.id),
-        el('p', `${s.kind.toUpperCase()} · ${s.backend}`, 'muted')
+        el('span', (s.kind || 'http').toUpperCase(), `badge badge-${s.kind || 'http'}`),
+        el('span', s.backend, 'identity')
       );
+      info.append(titleRow);
       const revision = status.host.revision;
       actions.append(
         button('Edit', () => serviceEditor(s)),
@@ -575,22 +637,37 @@ function render() {
       row.append(info, actions);
       content.append(row);
     }
+    if (!status.host.services.length)
+      content.append(el('p', 'No local services shared yet. Click "Share a service" above to add one.', 'muted'));
   } else if (section === 'Devices') {
-    content.append(
+    const summary = el('div', undefined, 'panel row');
+    summary.append(
       el(
         'p',
         `${status.host.clients.length} approved · ${activeClients(status)} active. Active means connected now or seen within the last 60 seconds.`,
         'muted'
-      )
+      ),
+      el('div', undefined, 'actions')
     );
+    summary.querySelector('.actions').append(
+      button('Pair a machine', pairMachine),
+      button('Pair this machine', pairThis, 'primary')
+    );
+    content.append(summary);
+
     for (const c of status.host.clients) {
       const row = el('div', undefined, 'panel row'),
         info = el('div'),
         revision = status.host.revision;
-      info.append(
+      const deviceTitle = el('div', undefined, 'peer-title-group');
+      const act = activity(status, c.peer);
+      deviceTitle.append(
         el('h3', c.name),
-        el('p', c.peer, 'identity'),
-        el('small', activity(status, c.peer))
+        el('span', act, act === 'Connected' ? 'badge badge-online' : 'badge badge-offline')
+      );
+      info.append(
+        deviceTitle,
+        el('p', c.peer, 'identity')
       );
       row.append(
         info,
@@ -614,7 +691,9 @@ function render() {
       );
       content.append(row);
     }
-    content.append(el('h3', 'This machine’s identity'), el('p', status.host.host, 'identity'));
+    const myId = el('div', undefined, 'panel');
+    myId.append(el('h3', 'This machine’s identity'), el('p', status.host.host, 'identity'));
+    content.append(myId);
   } else if (section === 'Owner operations') {
     renderOperations();
   } else {
