@@ -179,6 +179,9 @@ void main() {
                 jsonDecode(await utf8.decoder.bind(response).join()) as Map;
             expect(json['api_version'], 1);
             expect(json['services'], isA<List>());
+            for (final service in json['services'] as List) {
+              expect(service['url'], isA<String>(), reason: service.toString());
+            }
           } finally {
             client.close(force: true);
           }

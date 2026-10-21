@@ -92,6 +92,36 @@ impl Client {
                 .map(|r| r["url"].clone())
                 .unwrap_or(Value::Null);
         }
+        let slots = Arc::new(tokio::sync::Semaphore::new(4));
+        let mut pending = tokio::task::JoinSet::new();
+        for (index, service) in services
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s["url"].is_null())
+        {
+            let client = self.clone();
+            let slots = slots.clone();
+            let request = json!({"host":service["host_id"], "service":service["service_id"], "incarnation":service["incarnation"]});
+            pending.spawn(async move {
+                let route = tokio::time::timeout(Duration::from_secs(6), async {
+                    let _permit = slots
+                        .acquire()
+                        .await
+                        .map_err(|_| "Route queue closed".to_owned())?;
+                    client.open_route(&request).await
+                })
+                .await
+                .unwrap_or_else(|_| Err("Browser route creation timed out".into()));
+                (index, route)
+            });
+        }
+        while let Some(result) = pending.join_next().await {
+            let (index, route) = result.map_err(|_| "Browser route task failed")?;
+            match route {
+                Ok(url) => services[index]["url"] = json!(url),
+                Err(error) => services[index]["error"] = json!(error),
+            }
+        }
         Ok(json!({"api_version":1,"services":services,"errors":errors}))
     }
     pub(crate) async fn service_incarnation(
@@ -331,6 +361,16 @@ mod tests {
         client.command(&json!({"op":"enable"})).await.unwrap();
         let list = call(registry, "GET", "/v1/services", "", "").await;
         assert!(list.contains("llama"));
+        let directory: Value =
+            serde_json::from_str(list.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        let listed_url = directory["services"][0]["url"]
+            .as_str()
+            .expect("Listing must create the route without an earlier open or resolve");
+        assert_eq!(
+            url::Url::parse(listed_url).unwrap().port(),
+            Some(service_port)
+        );
+
         for site in ["none", "same-origin", "same-site", "cross-site"] {
             let navigation = format!(
                 "Sec-Fetch-Site: {site}\r\nSec-Fetch-Mode: navigate\r\nSec-Fetch-Dest: document\r\n"

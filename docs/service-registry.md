@@ -64,17 +64,21 @@ only this device; they never change the remote host's backend or permissions.
   "api_version": 1,
   "services": [
     {"host_id":"FULL_HOST_ID", "service_id":"llama", "display_name":"Llama",
-     "kind":"http", "incarnation":"SERVICE_INCARNATION", "url":null}
+     "kind":"http", "incarnation":"SERVICE_INCARNATION", "url":"http://HOST_SERVICE.localhost:PORT/"}
   ],
   "errors": []
 }
 ```
 
-`url` is a saved address when already opened, otherwise null. Listing never
-returns backend addresses, browser login links, or access tokens. Offline or
-denied remote hosts are reported separately in `errors`; cached catalogs do not
-authorize access. Use `POST /v1/resolve` to recheck authority, start a route and
-obtain its URL:
+Listing creates a local browser route for each newly discovered permitted HTTP
+service, so `url` is usable without first opening it in the app or calling resolve.
+Existing saved addresses remain stable. If route creation fails (for example,
+all saved browser-service slots are used), `url` is null and the record includes
+an `error` explaining why. Discovery and route creation use fresh owner checks;
+listing never changes service grants or publishes a service to the internet. URLs never expose backend addresses, browser login links, or access tokens.
+Offline or denied remote hosts are reported separately in `errors`; cached
+catalogs do not authorize access. `POST /v1/resolve` remains available to recheck
+authority and obtain a route explicitly:
 
 ```js
 const registry = 'http://127.0.0.1:18400';
