@@ -1,0 +1,337 @@
+#!/usr/bin/env python3
+"""Private stdio adapter for the shared Flutter UI; reuses the installed node API.
+
+No listener, key import or alternate identity. Cached data is display-only.
+"""
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
+import errno
+import json
+import os
+from pathlib import Path
+import re
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import tomllib
+from urllib.parse import urlsplit
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[2]
+sys.path.insert(0, str(ROOT / 'apps/node/desktop') if (ROOT / 'apps/node/desktop').exists() else str(HERE))
+sys.path.insert(0, str(ROOT / 'apps/macos') if (ROOT / 'apps/macos').exists() else str(HERE))
+from wispnet_desktop.api import NodeAPI, NodeRejected
+from wispnet_desktop.catalog_cache import CatalogCache
+from wispnet_desktop.combined import Combined
+from desktop_data import dispatch as desktop_data
+
+
+def write_private(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix='.flutter-')
+    try:
+        with os.fdopen(fd, 'w') as output:
+            json.dump(value, output)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def browser_url(url):
+    parsed = urlsplit(url)
+    if (parsed.scheme != 'http' or not (parsed.hostname or '').endswith('.localhost')
+        or len(parsed.hostname) <= 10 or not parsed.port or parsed.path != '/'
+        or parsed.query or parsed.fragment or parsed.username or parsed.password
+        or any(ord(c) < 33 for c in url)):
+        raise ValueError('Invalid local browser handoff')
+    return url
+
+
+class Bridge:
+    def __init__(self, config=None):
+        self.config = Path(config or Path.home() / '.config/wispnet-node/host.toml')
+        self.api = NodeAPI(self.config)
+        self.cache = CatalogCache(self.api.state)
+        self.lock = threading.RLock()
+        self.records = {}
+        self.status = None
+        self.path = self.api.state / 'desktop-flutter.json'
+        self.preferences = desktop_data({'op': 'preferences'}, self.config)
+        self.display = {}
+        if self.path.exists():
+            saved = Combined.read_private(self.path)
+            self.preferences = saved.get('preferences', self.preferences)
+            self.display = saved.get('display', {})
+        else:
+            self.migrate_webkit()
+
+    def migrate_webkit(self):
+        # Read only; never alter the previous runtime's database or WAL.
+        directory = Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local/share'))
+        candidates = [directory / 'app.wispnet.desktop/localstorage/tauri_localhost_0.localstorage',
+                      Path.home() / 'Library/WebKit/app.wispnet.desktop/WebsiteData/LocalStorage/tauri_localhost_0.localstorage']
+        for path in candidates:
+            if not path.is_file():
+                continue
+            try:
+                with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as db:
+                    for key, raw in db.execute('SELECT key,value FROM ItemTable'):
+                        if key not in ('peerNames', 'cardOrder'):
+                            continue
+                        value = json.loads(raw.decode('utf-16-le') if isinstance(raw, bytes) else raw)
+                        if isinstance(value, dict):
+                            self.preferences['names' if key == 'peerNames' else 'order'].update(value)
+            except (sqlite3.Error, ValueError, UnicodeError):
+                # Existing private preferences remain usable if WebKit storage is unavailable.
+                continue
+
+    def save(self):
+        with self.lock:
+            display = {**self.display, 'hosts': {peer: {k: v for k, v in row.items() if k in ('name', 'local')} for peer, row in self.display.get('hosts', {}).items()}}
+            write_private(self.path, {'preferences': self.preferences, 'display': display})
+
+    def lifecycle(self, enabled):
+        expected = Path.home() / '.config/wispnet-node/host.toml'
+        if self.config.resolve() != expected.resolve():
+            raise ValueError('Lifecycle requires the installed node configuration')
+        if sys.platform == 'darwin':
+            domain = f'gui/{os.getuid()}'
+            service = domain + '/app.wispnet.node'
+            loaded = subprocess.run(['/bin/launchctl', 'print', service], capture_output=True, timeout=30).returncode == 0
+            command = (['/bin/launchctl', 'kickstart', service] if loaded else
+                       ['/bin/launchctl', 'bootstrap', domain, str(Path.home() / 'Library/LaunchAgents/app.wispnet.node.plist')]) if enabled else ['/bin/launchctl', 'bootout', service]
+            if not enabled and not loaded:
+                return
+        else:
+            command = ['systemctl', '--user', 'start' if enabled else 'stop', 'wispnet-host.service']
+        result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+        if result.returncode:
+            raise ValueError(result.stderr.strip() or 'Cannot change node state')
+        if enabled:
+            deadline = time.monotonic() + 12
+            while True:
+                try:
+                    self.api.request(op='status')
+                    return
+                except (OSError, ValueError):
+                    if time.monotonic() >= deadline:
+                        raise ValueError('Node started but its API is not ready')
+                    time.sleep(.1)
+
+    def snapshot(self):
+        try:
+            status = self.api.request(op='status', refresh_clients=True)
+        except OSError as error:
+            if error.errno not in (errno.ENOENT, errno.ECONNREFUSED):
+                raise
+            with self.lock:
+                return {**self.display, 'enabled': False, 'desktop': True,
+                        'order': self.preferences['order'], 'hosts': self.display.get('hosts', {}),
+                        'network': 'Node offline', 'version': self.version()}
+        with self.lock:
+            self.status = status
+            own = status['host']['host']
+            names = self.preferences['names']
+            hosts = {own: {'name': status['host_name'], 'state': 'available', 'status': 'This machine',
+                          'local': True, 'catalog': {'services': status['host']['services']}}}
+            clients = {c['peer']: c for c in status['host']['clients']}
+            for peer in dict.fromkeys([*status['peer_pins'], *clients]):
+                if peer == own:
+                    continue
+                record = dict(self.records.get(peer, {}))
+                if not record:
+                    cached = self.cache.load(peer)
+                    record = {'state': 'unverified', 'status': 'Cached; refresh required',
+                              'catalog': cached['catalog'] if cached else {'services': []}}
+                record['name'] = names.get(peer) or clients.get(peer, {}).get('name') or 'Host ' + peer[:8]
+                hosts[peer] = record
+            self.display = {'name': status['host_name'], 'peer': own, 'hosts': hosts,
+                            'relay': status['relay'], 'telemetry': {'peers': status['peer_telemetry']}}
+            self.save()
+            return {**self.display, 'enabled': True, 'desktop': True, 'order': self.preferences['order'],
+                    'network': 'Network available', 'version': self.version(),
+                    'pendingRequests': sum(i['state'] == 'pending' for i in status['invitations']),
+                    'activeClients': sum(status.get('connected_peers', {}).get(c['peer'], 0) > 0 or c['peer'] in status.get('recent_peers', {}) for c in status['host']['clients'])}
+
+    def version(self):
+        path = HERE / 'build-identity'
+        return path.read_text().strip() if path.exists() else 'development'
+
+    def refresh(self, peer):
+        with self.lock:
+            if peer == self.display.get('peer'):
+                return {}
+            if peer not in self.display.get('hosts', {}):
+                raise ValueError('Machine was removed')
+        try:
+            catalog = self.api.request(op='catalog', host=peer)
+            if catalog['host'] != peer:
+                raise ValueError('Wrong catalog host')
+            self.cache.save(peer, {'catalog': catalog, 'fetched': time.time()})
+            record = {'state': 'available', 'status': 'Available', 'catalog': catalog}
+        except (OSError, ValueError) as error:
+            text = str(error)
+            with self.lock:
+                previous = self.records.get(peer, self.display.get('hosts', {}).get(peer, {}))
+            record = {**previous, 'state': 'host_denied' if 'forbidden' in text.lower() or 'denied' in text.lower() else 'unreachable', 'status': text}
+        with self.lock:
+            if peer in self.display.get('hosts', {}):
+                self.records[peer] = record
+        return {}
+
+    def dispatch(self, method, args):
+        if method == 'snapshot':
+            return self.snapshot()
+        if method == 'takeInvitation':
+            return {}
+        if method == 'setAccess':
+            self.lifecycle(args['enabled'])
+            if args['enabled']:
+                self.api.request(op='enable')
+            return {}
+        if method == 'refreshHost':
+            return self.refresh(args['host'])
+        if method in ('preview', 'pair'):
+            code = re.sub(r'\s+', '', args['code'])
+            if not code.startswith('wispnet1:') or len(code.encode()) > 8192:
+                raise ValueError('Paste a complete Wispnet pairing code')
+            self.lifecycle(True)
+            preview = self.api.request(op='preview_invitation', invitation=code)
+            if method == 'preview':
+                return preview
+            result = self.api.request(op='pair', host=preview['host'], invitation=code)
+            with self.lock:
+                self.preferences['names'][preview['host']] = preview.get('host_name') or 'Host ' + preview['host'][:8]
+                self.records[preview['host']] = {'state': 'approval_pending', 'status': 'Pending owner approval'}
+                self.save()
+            return result
+        if method == 'open':
+            self.api.request(op='enable')
+            result = self.api.request(op='open', host=args['host'], service=args['service'], incarnation=args['incarnation'],
+                                      host_name=self.preferences['names'].get(args['host']))
+            # Desktop uses the token-free local route, as the previous desktop did.
+            # The Android bootstrap URL is intentionally not exposed to this runner.
+            return {'url': browser_url(result['url'])}
+        if method == 'launch':
+            url = browser_url(args['url'])
+            subprocess.run(['/usr/bin/open' if sys.platform == 'darwin' else 'xdg-open', url],
+                           check=True, timeout=15, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return {}
+        if method == 'removeHost':
+            status = self.api.request(op='status')
+            if args['host'] == status['host']['host']:
+                raise ValueError('This is the local machine; manage its shared services in Settings')
+            self.api.request(op='unpair', host=args['host'], expected_revision=status['host']['revision'])
+            with self.lock:
+                self.records.pop(args['host'], None)
+                self.preferences['names'].pop(args['host'], None)
+                self.display.get('hosts', {}).pop(args['host'], None)
+                self.cache.remove(args['host'])
+                self.save()
+            return {}
+        if method == 'renameHost':
+            name = args['name'].strip()
+            if not name or len(name.encode()) > 128 or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in name):
+                raise ValueError('Enter a name up to 128 UTF-8 bytes without control characters')
+            with self.lock:
+                self.preferences['names'][args['host']] = name
+                self.save()
+            return {}
+        if method == 'saveOrder':
+            group, ids = args['group'], args['ids']
+            if not (group == 'machines' or re.fullmatch(r'services/[0-9a-f]{64}', group)) or not isinstance(ids, list) or len(ids) > 128 or not all(isinstance(i, str) for i in ids):
+                raise ValueError('Invalid card order')
+            with self.lock:
+                self.preferences['order'][group] = ids
+                self.save()
+            return {}
+        if method in ('settings', 'saveSettings'):
+            data = self.api.request(op='gateway_settings')
+            settings = data['settings']
+            host, service = args.get('host'), args.get('service')
+            if method == 'settings':
+                if host is None:
+                    return {'port': settings['registry_port'], 'url': f"http://registry.wispnet.localhost:{settings['registry_port']}"}
+                row = next((p for p in settings['service_ports'] if p['host'] == host and p['service'] == service), {})
+                route = next((p for p in data['routes'] if p['host'] == host and p['service'] == service), {})
+                return {'port': row.get('port', ''), 'url': route.get('url', '')}
+            port = args['port']
+            if type(port) is not int or (port != 0 or host is None) and not 1024 <= port <= 65535:
+                raise ValueError('Port must be between 1024 and 65535')
+            if host is None:
+                # Desktop device names are node configuration, changed explicitly by the owner.
+                name = args['name'].strip()
+                if not name or len(name.encode()) > 128 or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in name):
+                    raise ValueError('Invalid device name')
+                settings['registry_port'] = port
+            else:
+                settings['service_ports'] = [p for p in settings['service_ports'] if (p['host'], p['service']) != (host, service)]
+                if port:
+                    settings['service_ports'].append({'host': host, 'service': service, 'port': port})
+            self.api.request(op='configure_access', settings=settings)
+            if host is None and name != self.api.request(op='status')['host_name']:
+                self.rename_device(name)
+            return {}
+        if method == 'desktopStatus':
+            return self.api.request(op='status', refresh_clients=True)
+        if method == 'desktopRequest':
+            payload = args['payload']
+            if payload.get('op') not in ('mutate', 'invite_qr', 'configure_public'):
+                raise ValueError('Unsupported owner operation')
+            return self.api.request(**payload)
+        if method == 'desktopData':
+            return {'value': desktop_data(args, self.config)}
+        if method in ('scanQr', 'importQr'):
+            raise ValueError('Paste a pairing code on desktop; camera scanning is available on Android')
+        raise ValueError('Unsupported desktop UI operation')
+
+    def rename_device(self, name):
+        if self.config.resolve() != (Path.home() / '.config/wispnet-node/host.toml').resolve():
+            raise ValueError('Rename requires the installed node configuration')
+        text = self.config.read_text()
+        section = re.search(r'^\s*\[', text, re.M)
+        index = section.start() if section else len(text)
+        top, rest = text[:index], text[index:]
+        top = re.sub(r'^device_name\s*=.*\n?', '', top, flags=re.M)
+        updated = 'device_name=' + json.dumps(name, ensure_ascii=True) + '\n' + top + rest
+        tomllib.loads(updated)
+        fd, temporary = tempfile.mkstemp(dir=self.config.parent, prefix='.rename-')
+        try:
+            with os.fdopen(fd, 'w') as out:
+                out.write(updated)
+                out.flush()
+                os.fsync(out.fileno())
+            os.replace(temporary, self.config)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+        self.lifecycle(False)
+        self.lifecycle(True)
+
+
+def main():
+    bridge = Bridge()
+    output_lock = threading.Lock()
+    def respond(payload):
+        try:
+            value = {'id': payload['id'], 'result': bridge.dispatch(payload['method'], payload.get('arguments', {}))}
+        except Exception as error:
+            value = {'id': payload.get('id'), 'error': str(error)}
+        with output_lock:
+            print(json.dumps(value), flush=True)
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        while True:
+            line = sys.stdin.buffer.readline(65537)
+            if not line:
+                break
+            if len(line) > 65536:
+                raise ValueError('Oversized desktop request')
+            executor.submit(respond, json.loads(line))
+
+
+if __name__ == '__main__':
+    main()

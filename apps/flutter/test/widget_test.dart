@@ -98,6 +98,65 @@ class FakeBackend implements WispnetBackend {
   }
 }
 
+class DesktopFake extends FakeBackend {
+  final ownerCalls = <Map<String, dynamic>>[];
+  final status = <String, dynamic>{
+    'host': {
+      'host': 'd' * 64,
+      'revision': 7,
+      'services': [
+        {
+          'id': 'web',
+          'display_name': 'Shared web',
+          'kind': 'http',
+          'backend': '127.0.0.1:8080',
+          'incarnation': incarnation,
+          'allow': [peer],
+        },
+      ],
+      'clients': [
+        {'peer': peer, 'name': 'Existing device'},
+      ],
+    },
+    'host_name': 'Desktop',
+    'connected_peers': {},
+    'invitations': [
+      {
+        'name': 'New device',
+        'peer': peer,
+        'invitation': 'request-id',
+        'state': 'pending',
+      },
+    ],
+    'public_access': {'services': []},
+  };
+  @override
+  Future<Map<String, dynamic>> invoke(
+    String method, [
+    Map<String, dynamic> arguments = const {},
+  ]) async {
+    if (method == 'desktopStatus') return status;
+    if (method == 'desktopData') {
+      return {
+        'value': arguments['op'] == 'targets'
+            ? [
+                {'host': 'd' * 64},
+              ]
+            : [],
+      };
+    }
+    if (method == 'desktopRequest') {
+      ownerCalls.add(arguments['payload'] as Map<String, dynamic>);
+      return {};
+    }
+    final reply = await super.invoke(method, arguments);
+    if (method == 'snapshot') {
+      return {...reply, 'desktop': true, 'pendingRequests': 1};
+    }
+    return reply;
+  }
+}
+
 Future<void> mount(
   WidgetTester tester,
   FakeBackend backend, {
@@ -374,6 +433,76 @@ void main() {
     await tester.tap(find.byTooltip('Settings'));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
+    await close(tester);
+  });
+  testWidgets('desktop owner tools use sheets and retain service grants', (
+    tester,
+  ) async {
+    final backend = DesktopFake();
+    await mount(tester, backend, size: const Size(1000, 850));
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    expect(find.text('Device and browser settings'), findsOneWidget);
+    await tester.tap(find.text('Edit Shared web'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Display name'),
+      'Renamed web',
+    );
+    await tester.ensureVisible(find.text('Save service'));
+    await tester.tap(find.text('Save service'));
+    await tester.pumpAndSettle();
+    final operation = backend.ownerCalls.single['operation'] as Map;
+    expect(operation['expected_revision'], 7);
+    expect(operation['allow'], [peer]);
+    expect(operation['display_name'], 'Renamed web');
+    expect(tester.takeException(), isNull);
+    await close(tester);
+  });
+  testWidgets('desktop public access requires explicit confirmation', (
+    tester,
+  ) async {
+    final backend = DesktopFake();
+    await mount(tester, backend, size: const Size(1000, 850));
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Enable public access'));
+    await tester.tap(find.text('Enable public access'));
+    await tester.pumpAndSettle();
+    expect(backend.ownerCalls, isEmpty);
+    await tester.tap(find.text('Confirm'));
+    await tester.pumpAndSettle();
+    expect(backend.ownerCalls.single['op'], 'configure_public');
+    expect(backend.ownerCalls.single['incarnation'], incarnation);
+    expect(backend.ownerCalls.single['enabled'], true);
+    await close(tester);
+  });
+  testWidgets('desktop pairing approval preserves existing service grants', (
+    tester,
+  ) async {
+    final backend = DesktopFake();
+    await mount(tester, backend, size: const Size(1000, 850));
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(DropdownButton<String>).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Pairing requests (1)').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Approve device'));
+    await tester.pumpAndSettle();
+    final grant = tester.widget<CheckboxListTile>(
+      find.byType(CheckboxListTile),
+    );
+    expect(grant.value, true);
+    expect(grant.onChanged, isNull);
+    await tester.tap(find.text('Approve device').last);
+    await tester.pumpAndSettle();
+    expect(backend.ownerCalls.single['operation'], {
+      'op': 'approve_invitation',
+      'invitation': 'request-id',
+      'services': ['web'],
+      'expected_revision': 7,
+    });
     await close(tester);
   });
   test('saved order ignores missing and duplicate entries', () {

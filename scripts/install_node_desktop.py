@@ -8,6 +8,7 @@ import filecmp
 import shutil
 import subprocess
 import time
+import tempfile
 import hashlib
 import json
 import sys
@@ -53,16 +54,11 @@ graphical = (
 )
 desktop_source = ROOT / "bin/Wispnet"
 if graphical and not desktop_source.exists():
-    manifest = ROOT / "apps/macos/src-tauri/Cargo.toml"
-    if not manifest.exists():
-        raise SystemExit(
-            "This is a headless bundle. Install a desktop bundle to run the GUI."
-        )
-    subprocess.run(
-        ["cargo", "build", "--release", "--locked", "--manifest-path", str(manifest)],
-        check=True,
-    )
-    desktop_source = manifest.parent / "target/release/Wispnet"
+    build_script = ROOT / "scripts/build_flutter_desktop.sh"
+    if not build_script.exists():
+        raise SystemExit("This is a headless bundle. Install a desktop bundle to run the GUI.")
+    subprocess.run([str(build_script)], check=True)
+    desktop_source = ROOT / "apps/flutter/build/linux/x64/release/bundle/Wispnet"
 home = Path.home()
 # Upgrade the misspelled installation without moving or recreating identity/state.
 # The copied configuration deliberately retains its original state_dir.
@@ -165,8 +161,19 @@ destination = home / ".local/libexec/wispnet-desktop"
 destination.mkdir(parents=True, exist_ok=True)
 shutil.copy2(ROOT / "apps/node/desktop/icon.png", destination / "icon.png")
 temporary_desktop = destination / "Wispnet.installing"
-shutil.copy2(desktop_source, temporary_desktop)
-temporary_desktop.chmod(0o755)
+if (desktop_source.parent / "lib/libflutter_linux_gtk.so").exists():
+    # Stage the complete engine/assets bundle before switching the launcher.
+    # Running processes keep their old runtime until the service restart succeeds.
+    runtime = Path(tempfile.mkdtemp(prefix="flutter-", dir=destination))
+    shutil.copytree(desktop_source.parent, runtime, dirs_exist_ok=True)
+    (runtime / "python-path").write_text(str(Path(sys.executable).resolve()))
+    temporary_desktop.unlink(missing_ok=True)
+    temporary_desktop.symlink_to(runtime / "Wispnet")
+else:
+    shutil.copy2(desktop_source, temporary_desktop)
+    temporary_desktop.chmod(0o755)
+if (destination / "Wispnet").is_file() and not (destination / "Wispnet").is_symlink():
+    shutil.copy2(destination / "Wispnet", destination / "Wispnet.previous")
 os.replace(temporary_desktop, destination / "Wispnet")
 shutil.copy2(ROOT / "apps/macos/desktop_data.py", destination / "desktop_data.py")
 (destination / "python-path").write_text(str(Path(sys.executable).resolve()))
@@ -212,5 +219,5 @@ for name in [".venv", "pyproject.toml", "uv.lock", "wispnet_desktop/app.py",
     else:
         legacy.unlink(missing_ok=True)
 print(
-    "Installed Tauri desktop and session tray; identity/configuration/grants preserved."
+    "Installed Flutter desktop and session tray; identity/configuration/grants preserved."
 )

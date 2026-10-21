@@ -9,6 +9,7 @@ import 'theme.dart';
 import 'sheets.dart';
 import 'cards.dart';
 import 'header.dart';
+import 'desktop_settings.dart';
 
 class WispnetApp extends StatelessWidget {
   const WispnetApp({super.key, required this.backend});
@@ -84,7 +85,9 @@ class _WispHomeState extends State<WispHome>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    foreground = state == AppLifecycleState.resumed;
+    foreground =
+        state == AppLifecycleState.resumed ||
+        snapshot['desktop'] == true && state == AppLifecycleState.inactive;
     if (foreground) {
       unawaited(poll());
       unawaited(refresh());
@@ -129,6 +132,11 @@ class _WispHomeState extends State<WispHome>
       lastNetwork = network;
       setState(() {
         snapshot = next;
+        if (next['desktop'] == true &&
+            WidgetsBinding.instance.lifecycleState ==
+                AppLifecycleState.inactive) {
+          foreground = true;
+        }
         initializationError = null;
       });
       if (pairingSheet) return;
@@ -236,6 +244,7 @@ class _WispHomeState extends State<WispHome>
       child: PairingForm(
         backend: backend,
         initialCode: code,
+        desktop: snapshot['desktop'] == true,
         onPaired: () {
           Navigator.pop(context);
           notice('Pending owner approval');
@@ -257,6 +266,17 @@ class _WispHomeState extends State<WispHome>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (snapshot['desktop'] == true &&
+              (snapshot['pendingRequests'] as int? ?? 0) > 0)
+            OutlinedButton(
+              onPressed: () {
+                Navigator.pop(context);
+                deviceSettings(section: 'Pairing requests');
+              },
+              child: Text(
+                'Review ${snapshot['pendingRequests']} pairing requests',
+              ),
+            ),
           for (final machine in machines)
             Padding(
               padding: const EdgeInsets.only(bottom: 10),
@@ -317,12 +337,37 @@ class _WispHomeState extends State<WispHome>
   }
 
   Future<void> machineSettings(Machine machine) async {
+    if (snapshot['desktop'] == true && machine.data['local'] == true) {
+      await deviceSettings();
+      return;
+    }
     await showWispSheet<void>(
       context,
       title: machine.name,
       child: MachineSettings(
         machine: machine,
         backend: backend,
+        desktop: snapshot['desktop'] == true,
+        onChanged: () {
+          unawaited(poll());
+          unawaited(refresh());
+        },
+      ),
+    );
+  }
+
+  Future<void> deviceSettings({String section = 'My services'}) async {
+    if (snapshot['desktop'] != true) {
+      await settings();
+      return;
+    }
+    await showWispSheet<void>(
+      context,
+      title: 'Settings',
+      child: DesktopSettings(
+        backend: backend,
+        initialSection: section,
+        onAccess: () => settings(),
         onChanged: () {
           unawaited(poll());
           unawaited(refresh());
@@ -415,7 +460,9 @@ class _WispHomeState extends State<WispHome>
                         label:
                             '${snapshot['name'] ?? 'Wispnet'}${snapshot['peer'] == null ? '' : ' · ${shortId(snapshot['peer'] as String)}'}',
                         online: online,
-                        onSettings: snapshot.isEmpty ? null : () => settings(),
+                        onSettings: snapshot.isEmpty
+                            ? null
+                            : () => deviceSettings(),
                         onToggle: busy ? null : toggle,
                       ),
                     Expanded(
@@ -465,7 +512,15 @@ class _WispHomeState extends State<WispHome>
                                                 minimumSize: const Size(0, 42),
                                                 shape: const StadiumBorder(),
                                               ),
-                                              child: const Text('Manage'),
+                                              child: Text(
+                                                snapshot['desktop'] == true &&
+                                                        (snapshot['pendingRequests']
+                                                                    as int? ??
+                                                                0) >
+                                                            0
+                                                    ? 'Manage · ${snapshot['pendingRequests']} requests'
+                                                    : 'Manage',
+                                              ),
                                             ),
                                             IconButton(
                                               tooltip: 'Refresh services',

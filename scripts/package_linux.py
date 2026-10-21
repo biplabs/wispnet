@@ -22,9 +22,11 @@ def package(binary, output, desktop_binary=None):
         raise ValueError("Only native Linux x86_64 bundles are supported")
     subprocess.run([str(binary), "--help"], check=True, stdout=subprocess.DEVNULL)
     versions = []
+    flutter_bundle = desktop_binary is not None and (desktop_binary.parent / "lib/libflutter_linux_gtk.so").exists()
     for executable in [
         binary,
         *([desktop_binary] if desktop_binary is not None else []),
+        *(list((desktop_binary.parent / "lib").glob("*.so")) if flutter_bundle else []),
     ]:
         version_info = subprocess.check_output(
             ["readelf", "--version-info", str(executable)], text=True
@@ -72,9 +74,11 @@ def package(binary, output, desktop_binary=None):
             shutil.copy2(ROOT / name, target)
         (tree / "bin").mkdir()
         shutil.copy2(binary, tree / "bin/wispnet")
-        if desktop_binary is not None:
+        if flutter_bundle:
+            shutil.copytree(desktop_binary.parent, tree / "bin", dirs_exist_ok=True)
+        elif desktop_binary is not None:
             shutil.copy2(desktop_binary, tree / "bin/Wispnet")
-        for executable in (tree / "bin").iterdir():
+        for executable in [tree / "bin/wispnet", *([tree / "bin/Wispnet"] if desktop_binary is not None else [])]:
             subprocess.run(["strip", "--strip-debug", str(executable)], check=True)
         hashes = {
             str(p.relative_to(tree)): hashlib.sha256(p.read_bytes()).hexdigest()
@@ -100,7 +104,7 @@ def package(binary, output, desktop_binary=None):
                     "platform": "linux-x86_64",
                     "minimum_glibc": glibc,
                     "python": ">=3.11",
-                    "desktop": "tauri" if desktop_binary is not None else "headless",
+                    "desktop": "flutter" if flutter_bundle else "native" if desktop_binary is not None else "headless",
                     "sha256": hashes,
                 },
                 indent=2,
@@ -140,10 +144,10 @@ def main():
         "--output", type=Path, default=ROOT / "target/dist/wispnet-linux-x86_64.tar.gz"
     )
     parser.add_argument(
-        "--headless", action="store_true", help="Exclude the Tauri desktop"
+        "--headless", action="store_true", help="Exclude the Flutter desktop"
     )
     parser.add_argument(
-        "--desktop-binary", type=Path, help="Use a prebuilt Tauri binary"
+        "--desktop-binary", type=Path, help="Use a prebuilt desktop binary (Flutter bundle siblings are included)"
     )
     args = parser.parse_args()
     if args.binary is None:
@@ -157,18 +161,8 @@ def main():
     if not args.headless:
         desktop_binary = args.desktop_binary
         if desktop_binary is None:
-            subprocess.run(
-                [
-                    "cargo",
-                    "build",
-                    "--release",
-                    "--locked",
-                    "--manifest-path",
-                    str(ROOT / "apps/macos/src-tauri/Cargo.toml"),
-                ],
-                check=True,
-            )
-            desktop_binary = ROOT / "apps/macos/src-tauri/target/release/Wispnet"
+            subprocess.run([str(ROOT / "scripts/build_flutter_desktop.sh")], check=True)
+            desktop_binary = ROOT / "apps/flutter/build/linux/x64/release/bundle/Wispnet"
     print(package(binary, args.output, desktop_binary))
 
 

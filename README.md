@@ -15,14 +15,15 @@ Wispnet brings your self-hosted services into one directory and makes them acces
 - `apps/node/daemon`: running Linux/macOS node and private desktop API.
 - `apps/node/cli`: owner commands and the node executable.
 - `apps/node/desktop`: stdlib Python owner/cache helpers and their tests (no GUI runtime).
-- `apps/macos`: shared Tauri Linux/macOS app, tray controls and bundled web UI.
+- `apps/flutter`: shared Android/desktop Flutter UI and native Linux/macOS runners.
+- `apps/macos`: legacy Tauri regression UI and shared desktop owner/cache helper.
 - `apps/relay`: separate disposable packet relay server.
 - `apps/android`: Android app, Gradle wrapper and thin Rust JNI adapter in `native/`.
 - `crates/core`, `crates/agent`, `crates/registry`, `crates/client`: shared protocol, peer transport, host-local authority and protected browser client/gateway.
 - `deploy/node`, `deploy/relay`, `config/node`: deployment and example configuration.
 - `experiments/`: browser and Sites compatibility investigations.
 
-[Linux desktop/tray setup](docs/linux-desktop.md) · [macOS app (Tauri)](docs/macos-desktop.md). Installed service names, state paths and Android package ID stay unchanged by the source reorganization.
+[Linux desktop/tray setup](docs/linux-desktop.md) · [macOS app](docs/macos-desktop.md). Installed service names, state paths and Android package ID stay unchanged by the source reorganization.
 
 ## Why Wispnet?
 

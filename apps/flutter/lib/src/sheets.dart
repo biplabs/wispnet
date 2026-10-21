@@ -27,10 +27,12 @@ class PairingForm extends StatefulWidget {
     required this.backend,
     required this.onPaired,
     this.initialCode,
+    this.desktop = false,
   });
   final WispnetBackend backend;
   final VoidCallback onPaired;
   final String? initialCode;
+  final bool desktop;
   @override
   State<PairingForm> createState() => _PairingFormState();
 }
@@ -40,7 +42,7 @@ class _PairingFormState extends State<PairingForm> {
     text: widget.initialCode,
   )..addListener(changed);
   bool busy = false, error = false;
-  late int tab = widget.initialCode == null ? 0 : 1;
+  late int tab = widget.initialCode == null && !widget.desktop ? 0 : 1;
   String feedback = '';
   Map<String, dynamic>? preview;
   @override
@@ -176,7 +178,10 @@ class _PairingFormState extends State<PairingForm> {
           padding: const EdgeInsets.all(4),
           child: Row(
             children: [
-              for (final entry in const {0: 'QR', 1: 'Pairing Code'}.entries)
+              for (final entry in {
+                if (!widget.desktop) 0: 'QR',
+                1: 'Pairing Code',
+              }.entries)
                 Expanded(
                   child: TextButton(
                     onPressed: busy
@@ -286,8 +291,10 @@ class MachineSettings extends StatefulWidget {
     required this.machine,
     required this.backend,
     required this.onChanged,
+    this.desktop = false,
   });
   final Machine machine;
+  final bool desktop;
   final WispnetBackend backend;
   final VoidCallback onChanged;
   @override
@@ -297,6 +304,29 @@ class MachineSettings extends StatefulWidget {
 class _MachineSettingsState extends State<MachineSettings> {
   bool confirming = false, busy = false;
   String? error;
+  late final label = TextEditingController(text: widget.machine.name);
+  @override
+  void dispose() {
+    label.dispose();
+    super.dispose();
+  }
+
+  Future<void> rename() async {
+    setState(() => busy = true);
+    try {
+      await widget.backend.invoke('renameHost', {
+        'host': widget.machine.id,
+        'name': label.text,
+      });
+      widget.onChanged();
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      if (mounted) setState(() => error = failureMessage(e));
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
   Future<void> perform(String method) async {
     setState(() {
       busy = true;
@@ -323,6 +353,18 @@ class _MachineSettingsState extends State<MachineSettings> {
       ),
       const SizedBox(height: 16),
       Text(widget.machine.status),
+      if (widget.desktop) ...[
+        const SizedBox(height: 16),
+        TextField(
+          controller: label,
+          decoration: const InputDecoration(labelText: 'Private display name'),
+          enabled: !busy,
+        ),
+        OutlinedButton(
+          onPressed: busy ? null : rename,
+          child: const Text('Save name'),
+        ),
+      ],
       const SizedBox(height: 16),
       if (confirming) ...[
         Text(

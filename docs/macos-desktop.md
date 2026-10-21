@@ -1,3 +1,9 @@
+> Flutter migration: the default installer now builds `apps/flutter/macos` and
+> uses the Android/shared directory and settings sheets, with a native menu bar.
+> Native macOS build and runtime verification must be performed on a Mac; Linux
+> desktop verification does not establish macOS coverage. The older Tauri source
+> described below remains for regression comparison.
+
 # macOS app (Tauri)
 
 Wispnet for macOS uses Tauri 2, a Rust backend and a bundled HTML/CSS/JavaScript

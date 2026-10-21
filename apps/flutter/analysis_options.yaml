@@ -3,3 +3,5 @@ analyzer:
   exclude:
     - build/**
     - android/**
+    - macos/**
+    - linux/**

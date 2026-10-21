@@ -1,9 +1,14 @@
 # Wispnet Flutter UI
 
-Android is the first supported runner. The shared Flutter widgets reproduce the
-Android app's dark space interface, machine/service cards, pairing and settings
-sheets, status feedback, ordering, and starfield. Desktop will adopt these widgets
-in a subsequent migration; there are no placeholder desktop/iOS adapters.
+Android and Linux desktop use the same Flutter home screen, fonts, machine/service
+cards, launch animation, pairing, and settings sheets. Desktop uses the wider
+service-card grid already shared with Android; there is no persistent sidebar.
+Local shared services appear as the first machine card. The device-name gear
+opens desktop owner tools in sheets: service sharing, device grants, incoming
+pairing requests, public links and durable multi-host owner operations.
+
+The macOS runner and installer use these widgets too, but require native build
+and runtime validation on a Mac. Windows/iOS node adapters are not implemented.
 
 ## Build and run
 
@@ -57,10 +62,49 @@ cd apps/flutter
 WISPNET_SCREENSHOTS=/tmp/wispnet-flutter ../../scripts/flutter.sh test
 ```
 
-The shared interface includes an Android implementation only at this stage.
-Desktop owner sockets, host administration, platform packaging, and iOS lifecycle
-integration remain separate migration work; rendering a wide widget test is not a
-desktop runtime verification.
+## Desktop
+
+```sh
+scripts/build_flutter_desktop.sh
+python3 scripts/install_node_desktop.py   # existing initialized Linux node
+# On a Mac: python3 scripts/install_macos.py
+```
+
+Flutter desktop bundles include the engine, assets and the private Python adapter.
+`desktop/bridge.py` uses the existing `NodeAPI`, `CatalogCache` and `Combined`
+operations through private stdin/stdout pipes. It creates no management listener
+and never imports the node key. The adapter keeps polling independent of bounded
+network operations, checks the socket's owner/permissions and preserves the
+existing lifecycle (Go offline stops the node; quitting the UI leaves it running).
+
+Private labels and ordering are imported read-only from Tauri WebKit local storage
+and the earlier desktop preference files. New display preferences live in
+owner-only `desktop-flutter.json` in the existing state directory; cached catalogs
+remain display-only. Opening any service asks its current owner again with the
+exact incarnation. The installer stages complete runtimes and switches the
+launcher only after the replacement builds, retaining previous Flutter runtimes for recovery.
+The old Tauri source remains available for regression comparison, not the default
+installed desktop.
+
+Linux build prerequisites: Flutter, Clang, CMake, Ninja, pkg-config, GTK 3 and
+Ayatana AppIndicator development libraries. Runtime also requires Python 3.11+
+and xdg-open. macOS uses its existing Python runtime, launch agents and menu bar.
+
+`integration_test/desktop_test.dart` runs the actual native Linux window against
+an already online node, checks sheets and registry settings, captures review
+images, and opens an existing local HTTP service in the real browser. Stop the
+installed desktop UI before running (the runner is single-instance), then restart
+it afterwards:
+
+```sh
+systemctl --user stop wispnet-desktop.service
+(cd apps/flutter && ../../scripts/flutter.sh drive -d linux \
+  --driver=test_driver/integration_test.dart --target=integration_test/desktop_test.dart)
+systemctl --user start wispnet-desktop.service
+```
+
+Run fixture-only adapter and widget checks with `scripts/test_flutter.sh`.
+Live native coverage is distinct from a wide widget rendering.
 
 For the connected paired debug app, run the upgrade-only device checks:
 
@@ -83,7 +127,7 @@ layered cyan indicator, and original fill/border colors. Its fixed caption uses
 the native measured advance and baseline because Android's hinted text metrics
 differ from Flutter's fractional layout. The reference phone (density 1.875)
 renders the control at 222 × 83 pixels. Widget checks cover this reference size,
-settings adjacency online/offline, and narrow/wide layouts. The installed-app
+settings adjacency in the online directory, and narrow/wide layouts. The installed-app
 check also captures the isolated control for comparison.
 
 `SpaceChecks.buttonLayout` in the existing Android instrumentation runner renders

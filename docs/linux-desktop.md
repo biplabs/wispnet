@@ -16,14 +16,21 @@ python3 scripts/install_node_desktop.py
 wispnet-desktop
 ```
 
-The default desktop is now the shared Tauri app in `apps/macos`, using Rust,
-WebKitGTK 4.1, GTK 3 and Ayatana AppIndicator for the system tray. Build prerequisites
-include the WebKitGTK/GTK/AppIndicator development packages, a C compiler and
-`pkg-config`; runtime packages include those libraries and `xdg-open`. Python
-3.11+ remains required for the existing private cache and durable owner-operation
-helper. Qt, PySide and a Python virtual environment are no longer installed.
-The installer builds the locked Tauri release before changing installed files,
-then preserves the existing node configuration, identity, permissions and pins.
+The default desktop is the shared Flutter app in `apps/flutter`. It uses the same
+launch screen, typography, machine cards and settings sheets as Android. There is
+no sidebar: the gear next to the device name opens desktop owner tools. Local
+shared services appear in the first machine card; service cards use extra columns
+when the window is wide.
+
+Build prerequisites are Flutter 3.47.7, Clang, CMake, Ninja, pkg-config, GTK 3 and
+Ayatana AppIndicator development libraries. Runtime needs GTK/AppIndicator,
+`xdg-open`, and Python 3.11+ for the existing private node/cache/owner-operation
+adapter. WebKitGTK, Tauri, Qt and PySide are not used by the installed Flutter UI.
+The installer builds and stages the complete Flutter release bundle before
+switching the launcher. Identity, configuration, grants, pairings, catalog cache,
+private machine names and card ordering are retained. Tauri preferences are read
+without modifying the old WebKit database. Previous runtime files are retained
+for recovery; they are not started alongside Flutter.
 It requires an active `graphical-session.target` for graphical installation.
 
 Installed GUI files remain `~/.local/libexec/wispnet-desktop`, launcher
@@ -67,7 +74,19 @@ Each remote browser Open rechecks the target's permitted catalog; local Open che
 
 The tray reports node availability, the active-client total (live connections or approved activity within 60 seconds), approved count, pending requests and configured relay connection state. It never counts saved approvals as activity; recent activity is UI metadata and grants no permissions. This does not inspect a separately operated relay's server process.
 
-## Tauri validation
+## Flutter validation
+
+`scripts/test_flutter.sh` checks shared narrow/wide layouts, owner sheets,
+explicit grants/public-link confirmation, input retention, preference migration,
+cache provenance, stale-incarnation rejection, and a real isolated-node HTTP route.
+`apps/flutter/integration_test/desktop_test.dart` exercises the native window,
+settings, online/offline lifecycle and a real browser handoff using the installed
+node. It does not grant, remove or recreate any existing service or device.
+The release installer is checked with the existing identity and authority data,
+registered tray, single-instance reopening and engine loaded from its installed
+bundle. See `apps/flutter/README.md` for the native test command.
+
+## Legacy Tauri regression validation
 
 The shared JavaScript tests, private-helper tests and Rust IPC tests run on both
 platforms through `scripts/test.sh`. With native WebKit development libraries

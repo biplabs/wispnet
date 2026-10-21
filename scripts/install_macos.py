@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build/install the Tauri macOS app and user launch agents from this checkout."""
+"""Build/install the Flutter macOS app and user launch agents from this checkout."""
 import argparse
 import json
 import os
@@ -58,9 +58,9 @@ def main():
         parser.error("No existing host configuration. Use --init to explicitly create this Mac’s independent identity.")
     if not args.skip_build:
         run("cargo", "build", "--workspace", "--locked", cwd=ROOT)
-        run("cargo", "build", "--manifest-path", ROOT / "apps/macos/src-tauri/Cargo.toml", "--release", "--locked")
+        run(ROOT / "scripts/build_flutter_desktop.sh")
     node_source = ROOT / "target/debug/wispnet"
-    app_source = ROOT / "apps/macos/src-tauri/target/release/Wispnet"
+    app_source = ROOT / "apps/flutter/build/macos/Build/Products/Release/Wispnet.app"
     if not config.exists():
         # Never recover missing authority by silently creating a new identity.
         if state.exists():
@@ -93,15 +93,19 @@ def main():
     os.replace(temporary_cli, cli)
 
     app = home / "Applications/Wispnet.app"
+    staged = app.with_name("Wispnet.installing.app")
+    if staged.exists():
+        shutil.rmtree(staged)
+    shutil.copytree(app_source, staged)
+    if app.exists():
+        old = app.with_name("Wispnet.previous.app")
+        if old.exists():
+            shutil.rmtree(old)
+        os.replace(app, old)
+    os.replace(staged, app)
     contents = app / "Contents"
-    (contents / "MacOS").mkdir(parents=True, exist_ok=True)
     resources = contents / "Resources"
-    resources.mkdir(exist_ok=True)
     executable = contents / "MacOS/Wispnet"
-    temporary_app = executable.with_suffix(".installing")
-    shutil.copy2(app_source, temporary_app)
-    temporary_app.chmod(0o755)
-    os.replace(temporary_app, executable)
     # Qt-free helper retains the existing durable owner-operation journals/cache.
     shutil.copy2(
         ROOT / "apps/macos/desktop_data.py", executable.parent / "desktop_data.py"
@@ -141,7 +145,10 @@ def main():
         run("iconutil", "-c", "icns", iconset, "-o", resources / "Wispnet.icns")
     version = subprocess.check_output([sys.executable, str(ROOT / "scripts/build_identity.py")], text=True).strip()
     build_number = subprocess.check_output(["git", "rev-list", "--count", "HEAD"], cwd=ROOT, text=True).strip()
+    with (contents / "Info.plist").open("rb") as source:
+        app_info = plistlib.load(source)
     write_plist(contents / "Info.plist", {
+        **app_info,
         "CFBundleIdentifier": "app.wispnet.desktop", "CFBundleName": "Wispnet",
         "CFBundleDisplayName": "Wispnet", "CFBundleExecutable": "Wispnet",
         "CFBundlePackageType": "APPL", "CFBundleShortVersionString": "0.1.0",
@@ -180,8 +187,7 @@ def main():
     bootstrap(domain, agents / f"{LABEL}.plist")
     deadline = time.monotonic() + 15
     while True:
-        result = subprocess.run([str(executable), "--request", str(state / "node.sock")],
-                                input='{"op":"status"}', text=True, capture_output=True, timeout=30)
+        result = subprocess.run([str(owner_command)], text=True, capture_output=True, timeout=30)
         if result.returncode == 0:
             break
         if time.monotonic() >= deadline:

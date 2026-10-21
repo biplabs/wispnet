@@ -1,0 +1,186 @@
+import 'dart:io';
+import 'dart:ui' as ui;
+
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:integration_test/integration_test.dart';
+import 'package:wispnet/src/app.dart';
+import 'package:wispnet/src/backend.dart';
+import 'package:wispnet/src/desktop_backend.dart';
+import 'package:wispnet/src/header.dart';
+
+void main() {
+  IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+  testWidgets(
+    'desktop uses shared directory, owner sheets and real browser handoff',
+    (tester) async {
+      final native = DesktopBackend();
+      final backend = _ObservedBackend(native);
+      final before = await native.invoke('snapshot');
+      expect(
+        before['enabled'],
+        true,
+        reason: 'Run with the existing node online',
+      );
+      final key = GlobalKey();
+      Future<void> waitFor(Finder finder) async {
+        for (var n = 0; n < 150 && finder.evaluate().isEmpty; n++) {
+          await tester.pump(const Duration(milliseconds: 200));
+        }
+        expect(finder, findsWidgets);
+      }
+
+      Future<void> capture(String name) async {
+        await tester.pump(const Duration(milliseconds: 300));
+        final image =
+            await (key.currentContext!.findRenderObject()!
+                    as RenderRepaintBoundary)
+                .toImage();
+        final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+        final directory = Directory('/tmp/wispnet-flutter-desktop-review')
+          ..createSync(recursive: true);
+        await File('${directory.path}/$name.png')
+            .writeAsBytes(bytes!.buffer.asUint8List());
+        image.dispose();
+      }
+
+      try {
+        await tester.pumpWidget(
+          RepaintBoundary(
+            key: key,
+            child: WispnetApp(backend: backend),
+          ),
+        );
+        await waitFor(find.text('PAIRED MACHINES'));
+        await tester.pump(const Duration(seconds: 3));
+        await capture('directory');
+        await tester.tap(find.byTooltip('Settings'));
+        await waitFor(find.text('Share a service'));
+        await capture('settings');
+        await tester.tap(find.text('Device and browser settings'));
+        await waitFor(find.widgetWithText(TextField, 'Registry port'));
+        await tester.pump(const Duration(seconds: 1));
+        expect(
+          tester
+              .widget<TextField>(
+                find.widgetWithText(TextField, 'Registry port'),
+              )
+              .controller!
+              .text,
+          isNotEmpty,
+        );
+        await capture('browser-settings');
+        Future<void> closeSheet(int remaining) async {
+          await tester.tap(find.byTooltip('Close').last);
+          for (var i = 0; i < 15; i++) {
+            await tester.pump(const Duration(milliseconds: 100));
+            if (find.byTooltip('Close').evaluate().length == remaining) break;
+          }
+          expect(find.byTooltip('Close').evaluate().length, remaining);
+        }
+
+        await closeSheet(1);
+        await closeSheet(0);
+        await tester.tap(find.byTooltip('Go offline'));
+        await waitFor(find.byTooltip('Enter wisp space'));
+        expect((await native.invoke('snapshot'))['enabled'], false);
+        expect(find.text('hyperjump to wispnet'), findsOneWidget);
+        expect(find.byTooltip('Settings'), findsNothing);
+        await capture('launch');
+        await tester.tap(find.byTooltip('Enter wisp space'));
+        await waitFor(find.text('PAIRED MACHINES'));
+        expect((await native.invoke('snapshot'))['peer'], before['peer']);
+        for (
+          var n = 0;
+          n < 100 &&
+              tester
+                      .widget<GoOfflineButton>(find.byType(GoOfflineButton))
+                      .onPressed ==
+                  null;
+          n++
+        ) {
+          await tester.pump(const Duration(milliseconds: 100));
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 20)),
+          );
+        }
+        expect(
+          tester
+              .widget<GoOfflineButton>(find.byType(GoOfflineButton))
+              .onPressed,
+          isNotNull,
+        );
+        final local = (before['hosts'] as Map)[before['peer']] as Map;
+        final services = (local['catalog']['services'] as List)
+            .where((s) => s['kind'] == 'http')
+            .toList();
+        expect(
+          services,
+          isNotEmpty,
+          reason: 'A running HTTP service is required for live handoff',
+        );
+        tester.binding.handleAppLifecycleStateChanged(
+          AppLifecycleState.resumed,
+        );
+        await tester.tap(
+          find
+              .textContaining(
+                services.first['display_name'] as String,
+                findRichText: true,
+              )
+              .first,
+        );
+        for (var i = 0; i < 100 && backend.launched == null; i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 100)),
+          );
+        }
+        expect(backend.launched, isNotNull, reason: backend.calls.join(', '));
+        await tester.runAsync(() async {
+          final client = HttpClient();
+          try {
+            final response = await (await client.getUrl(
+              Uri.parse(backend.launched!),
+            )).close();
+            expect(response.statusCode, lessThan(500));
+            await response.drain<void>();
+          } finally {
+            client.close(force: true);
+          }
+        });
+        final after = await native.invoke('snapshot');
+        expect(after['peer'], before['peer']);
+        expect(
+          (after['hosts'] as Map).keys.toSet(),
+          (before['hosts'] as Map).keys.toSet(),
+        );
+        expect(tester.takeException(), isNull);
+      } finally {
+        await tester.pumpWidget(const SizedBox());
+        if ((await native.invoke('snapshot'))['enabled'] != before['enabled']) {
+          await native.invoke('setAccess', {'enabled': before['enabled']});
+        }
+        await native.close();
+      }
+    },
+  );
+}
+
+class _ObservedBackend implements WispnetBackend {
+  _ObservedBackend(this.native);
+  final DesktopBackend native;
+  String? launched;
+  final calls = <String>[];
+  @override
+  Future<Map<String, dynamic>> invoke(
+    String method, [
+    Map<String, dynamic> arguments = const {},
+  ]) async {
+    calls.add(method);
+    final result = await native.invoke(method, arguments);
+    if (method == 'launch') launched = arguments['url'] as String;
+    return result;
+  }
+}
