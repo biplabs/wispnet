@@ -615,6 +615,16 @@ void main() {
     expect(find.text('Device and browser settings'), findsNothing);
     expect(find.text('Share a service'), findsNothing);
     expect(find.byType(DropdownButton<String>), findsNothing);
+    expect(
+      find.text('http://registry.wispnet.localhost:18400/v1/services'),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const ValueKey('settings-address')));
+    await tester.pumpAndSettle();
+    expect(
+      backend.calls.where((call) => call.$1 == 'launch').single.$2['url'],
+      'http://registry.wispnet.localhost:18400/v1/services',
+    );
     expect(find.byTooltip('Close'), findsOneWidget);
     await tester.tap(find.byTooltip('Close'));
     await tester.pumpAndSettle();

@@ -421,7 +421,7 @@ class SettingsForm extends StatefulWidget {
 class _SettingsFormState extends State<SettingsForm> {
   late final name = TextEditingController(text: widget.deviceName);
   final port = TextEditingController();
-  bool loading = true, saving = false;
+  bool loading = true, saving = false, opening = false;
   String? error;
   String address = '';
   bool get global => widget.host == null;
@@ -457,6 +457,25 @@ class _SettingsFormState extends State<SettingsForm> {
           error = failureMessage(e);
         });
       }
+    }
+  }
+
+  String get browserAddress => global
+      ? Uri.parse(address).replace(path: '/v1/services').toString()
+      : address;
+
+  Future<void> openAddress() async {
+    if (opening || address.isEmpty) return;
+    setState(() {
+      opening = true;
+      error = null;
+    });
+    try {
+      await widget.backend.invoke('launch', {'url': browserAddress});
+    } catch (e) {
+      if (mounted) setState(() => error = failureMessage(e));
+    } finally {
+      if (mounted) setState(() => opening = false);
     }
   }
 
@@ -530,9 +549,28 @@ class _SettingsFormState extends State<SettingsForm> {
       if (address.isNotEmpty)
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 12),
-          child: SelectableText(
-            address,
-            style: const TextStyle(color: WispColors.muted),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Semantics(
+              link: true,
+              child: Tooltip(
+                message: global
+                    ? 'Open registry JSON in browser'
+                    : 'Open service in browser',
+                child: WispInkWell(
+                  key: const ValueKey('settings-address'),
+                  onTap: opening || saving ? null : openAddress,
+                  child: Text(
+                    browserAddress,
+                    style: const TextStyle(
+                      color: WispColors.cyan,
+                      decoration: TextDecoration.underline,
+                      decorationColor: WispColors.cyan,
+                    ),
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
       if (error != null)

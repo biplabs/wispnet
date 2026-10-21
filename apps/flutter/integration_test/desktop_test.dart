@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -153,6 +154,32 @@ void main() {
           isNotEmpty,
         );
         await capture('browser-settings');
+        await tester.tap(find.byKey(const ValueKey('settings-address')));
+        for (var i = 0; i < 100 && backend.launched == null; i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 100)),
+          );
+        }
+        expect(backend.launched, endsWith('/v1/services'));
+        await tester.runAsync(() async {
+          final client = HttpClient();
+          try {
+            final response = await (await client.getUrl(
+              Uri.parse(backend.launched!),
+            )).close();
+            expect(response.statusCode, 200);
+            expect(response.headers.contentType?.mimeType, 'application/json');
+            final json =
+                jsonDecode(await utf8.decoder.bind(response).join()) as Map;
+            expect(json['api_version'], 1);
+            expect(json['services'], isA<List>());
+          } finally {
+            client.close(force: true);
+          }
+        });
+        backend.launched = null;
+
         Future<void> closeSheet(int remaining) async {
           await tester.tap(find.byTooltip('Close').last);
           for (var i = 0; i < 15; i++) {
