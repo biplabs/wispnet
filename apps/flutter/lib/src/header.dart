@@ -29,7 +29,7 @@ class WispHeader extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Flexible(
-                    child: InkWell(
+                    child: WispInkWell(
                       onTap: onSettings,
                       child: Text(
                         label,
@@ -113,7 +113,7 @@ class OnlineButton extends StatelessWidget {
       child: ExcludeSemantics(
         child: Tooltip(
           message: 'Online',
-          child: InkWell(
+          child: WispInkWell(
             onTap: onPressed,
             customBorder: const StadiumBorder(),
             child: RepaintBoundary(

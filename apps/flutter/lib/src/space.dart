@@ -161,9 +161,9 @@ class SpaceToggle extends StatelessWidget {
     label: first ? 'Establish your wisp network' : 'Enter wisp space',
     child: Tooltip(
       message: first ? 'Establish your wisp network' : 'Enter wisp space',
-      child: InkResponse(
+      child: WispInkWell(
         onTap: onPressed,
-        radius: 56,
+        customBorder: const CircleBorder(),
         child: SizedBox(
           width: 108,
           height: 108,

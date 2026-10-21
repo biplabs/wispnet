@@ -22,15 +22,35 @@ ThemeData wispTheme() => ThemeData(
     surface: WispColors.sheet,
     error: WispColors.error,
   ),
+  hoverColor: const Color(0x3065ceff),
+  focusColor: const Color(0x3065ceff),
+  iconButtonTheme: IconButtonThemeData(
+    style: ButtonStyle(
+      backgroundColor: WidgetStateProperty.resolveWith(
+        (states) =>
+            !states.contains(WidgetState.disabled) &&
+                (states.contains(WidgetState.hovered) ||
+                    states.contains(WidgetState.focused))
+            ? const Color(0x3065ceff)
+            : null,
+      ),
+    ),
+  ),
   fontFamily: 'Roboto',
   textTheme: const TextTheme(
     bodyMedium: TextStyle(color: WispColors.text),
     bodySmall: TextStyle(color: WispColors.muted),
   ),
+  textButtonTheme: TextButtonThemeData(
+    style: TextButton.styleFrom(
+      overlayColor: WispColors.cyan.withValues(alpha: .22),
+    ),
+  ),
   filledButtonTheme: FilledButtonThemeData(
     style: FilledButton.styleFrom(
       backgroundColor: const Color(0xff1f3666),
       foregroundColor: WispColors.text,
+      overlayColor: WispColors.cyan.withValues(alpha: .22),
       minimumSize: const Size(48, 48),
       side: const BorderSide(color: Color(0xff4b73c2)),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
@@ -39,6 +59,7 @@ ThemeData wispTheme() => ThemeData(
   outlinedButtonTheme: OutlinedButtonThemeData(
     style: OutlinedButton.styleFrom(
       foregroundColor: WispColors.text,
+      overlayColor: WispColors.cyan.withValues(alpha: .22),
       backgroundColor: const Color(0xff142038),
       minimumSize: const Size(48, 48),
       side: const BorderSide(color: Color(0xff283b60)),
@@ -187,4 +208,52 @@ class _StatusDotPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_StatusDotPainter old) => old.color != color;
+}
+
+/// Paint feedback above opaque tiles and custom-painted controls.
+class WispInkWell extends StatefulWidget {
+  const WispInkWell({
+    super.key,
+    required this.onTap,
+    required this.child,
+    this.borderRadius,
+    this.customBorder,
+  });
+  final VoidCallback? onTap;
+  final Widget child;
+  final BorderRadius? borderRadius;
+  final ShapeBorder? customBorder;
+  @override
+  State<WispInkWell> createState() => _WispInkWellState();
+}
+
+class _WispInkWellState extends State<WispInkWell> {
+  bool hovered = false, focused = false, pressed = false;
+  @override
+  Widget build(BuildContext context) {
+    final active = widget.onTap != null;
+    return InkWell(
+      onTap: widget.onTap,
+      borderRadius: widget.borderRadius,
+      customBorder: widget.customBorder,
+      onHover: (value) => setState(() => hovered = value),
+      onFocusChange: (value) => setState(() => focused = value),
+      onHighlightChanged: (value) => setState(() => pressed = value),
+      overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 120),
+        foregroundDecoration: ShapeDecoration(
+          color: active && (hovered || focused || pressed)
+              ? WispColors.cyan.withValues(alpha: pressed ? .24 : .16)
+              : Colors.transparent,
+          shape:
+              widget.customBorder ??
+              RoundedRectangleBorder(
+                borderRadius: widget.borderRadius ?? BorderRadius.circular(8),
+              ),
+        ),
+        child: widget.child,
+      ),
+    );
+  }
 }

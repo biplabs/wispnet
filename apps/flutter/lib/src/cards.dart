@@ -51,7 +51,7 @@ class MachineCard extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (showHeader)
-          InkWell(
+          WispInkWell(
             onTap: busy ? null : onManage,
             borderRadius: BorderRadius.circular(12),
             child: Padding(
@@ -181,7 +181,7 @@ class MachineCard extends StatelessWidget {
       child: Row(
         children: [
           Expanded(
-            child: InkWell(
+            child: WispInkWell(
               onTap: !busy && allowed ? () => onOpen(service) : null,
               borderRadius: BorderRadius.circular(16),
               child: Padding(

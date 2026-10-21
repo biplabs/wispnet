@@ -262,6 +262,52 @@ void main() {
     expect(tester.getSize(find.byType(MachineCard)).height, lessThan(80));
   });
 
+  testWidgets('mouse hover highlights custom controls and clears on exit', (
+    tester,
+  ) async {
+    await mount(tester, FakeBackend(), size: const Size(1000, 850));
+    final mouse = await tester.createGesture(kind: ui.PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    final controls = [
+      find.descendant(
+        of: find.byType(OnlineButton),
+        matching: find.byType(WispInkWell),
+      ),
+      find.ancestor(
+        of: find.text('Website'),
+        matching: find.byType(WispInkWell),
+      ),
+      find.ancestor(
+        of: find.textContaining('J-STRIX'),
+        matching: find.byType(WispInkWell),
+      ),
+    ];
+    Color overlay(Finder control) =>
+        (tester
+                    .widget<AnimatedContainer>(
+                      find
+                          .descendant(
+                            of: control,
+                            matching: find.byType(AnimatedContainer),
+                          )
+                          .first,
+                    )
+                    .foregroundDecoration!
+                as ShapeDecoration)
+            .color!;
+    for (final control in controls) {
+      expect(overlay(control).a, 0);
+      await mouse.moveTo(tester.getCenter(control));
+      await tester.pumpAndSettle();
+      expect(overlay(control).a, greaterThan(.1));
+      await mouse.moveTo(Offset.zero);
+      await tester.pumpAndSettle();
+      expect(overlay(control).a, 0);
+    }
+    await mouse.removePointer();
+    await close(tester);
+  });
+
   setUpAll(() async {
     final loader = FontLoader('Roboto');
     loader.addFont(rootBundle.load('assets/fonts/Roboto-Regular.ttf'));

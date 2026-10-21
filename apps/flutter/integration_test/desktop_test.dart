@@ -55,6 +55,16 @@ void main() {
         await waitFor(find.text('REMOTE SECTOR'));
         await tester.pump(const Duration(seconds: 3));
         await capture('directory');
+        final mouse = await tester.createGesture(
+          kind: ui.PointerDeviceKind.mouse,
+        );
+        await mouse.addPointer(location: Offset.zero);
+        await mouse.moveTo(tester.getCenter(find.byType(OnlineButton)));
+        await capture('hover-online');
+        await mouse.moveTo(tester.getCenter(find.text('Manage').first));
+        await capture('hover-manage');
+        await mouse.moveTo(Offset.zero);
+        await mouse.removePointer();
         await tester.tap(
           find.descendant(
             of: find.byKey(const ValueKey('local-sector')),
