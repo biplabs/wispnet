@@ -381,6 +381,26 @@ class _WispHomeState extends State<WispHome>
     );
   }
 
+  Future<void> localServiceSettings(
+    Machine machine,
+    Map<String, dynamic> service,
+  ) async {
+    await showWispSheet<void>(
+      context,
+      title: service['display_name'] as String,
+      child: DesktopSettings(
+        backend: backend,
+        servicesOnly: true,
+        serviceId: service['id'] as String,
+        onAccess: () => settings(machine: machine, service: service),
+        onChanged: () {
+          unawaited(poll());
+          unawaited(refresh());
+        },
+      ),
+    );
+  }
+
   Future<void> settings({
     Machine? machine,
     Map<String, dynamic>? service,
@@ -486,7 +506,9 @@ class _WispHomeState extends State<WispHome>
     busy: busy,
     onManage: () => machineSettings(machine),
     onOpen: (service) => open(machine, service),
-    onSettings: (service) => settings(machine: machine, service: service),
+    onSettings: (service) => local && snapshot['desktop'] == true
+        ? localServiceSettings(machine, service)
+        : settings(machine: machine, service: service),
     onReorder: reorder,
   );
 

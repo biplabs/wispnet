@@ -149,6 +149,18 @@ class DesktopFake extends FakeBackend {
     }
     if (method == 'desktopRequest') {
       ownerCalls.add(arguments['payload'] as Map<String, dynamic>);
+      if (arguments['payload']['op'] == 'invite_qr') {
+        return {
+          'host': 'd' * 64,
+          'code': 'wispnet1:generated-code',
+          'matrix': [
+            [1, 0],
+            [0, 1],
+          ],
+          'invitation': 'issued-id',
+          'expires_at': DateTime.now().millisecondsSinceEpoch ~/ 1000 + 60,
+        };
+      }
       return {};
     }
     final reply = await super.invoke(method, arguments);
@@ -685,21 +697,55 @@ void main() {
     expect(find.byTooltip('Close'), findsNothing);
     await close(tester);
   });
+  testWidgets('each local service gear edits only its own service', (
+    tester,
+  ) async {
+    final backend = DesktopFake();
+    (backend.status['host']['services'] as List).add({
+      'id': 'other',
+      'display_name': 'Other service',
+      'kind': 'http',
+      'backend': '127.0.0.1:8090',
+      'incarnation': incarnation,
+      'allow': [],
+    });
+    await mount(tester, backend, size: const Size(1000, 850));
+    await tester.tap(find.byTooltip('Settings for Other service on HiBreak'));
+    await tester.pumpAndSettle();
+    expect(find.text('Edit Other service'), findsOneWidget);
+    expect(find.text('Edit Shared web'), findsNothing);
+    expect(find.text('Add a new service'), findsNothing);
+    await tester.tap(find.text('Edit Other service'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Save service'));
+    await tester.tap(find.text('Save service'));
+    await tester.pumpAndSettle();
+    expect(backend.ownerCalls.single['operation']['id'], 'other');
+    expect(backend.ownerCalls.single['operation']['allow'], isEmpty);
+    await close(tester);
+  });
   testWidgets('desktop owner tools use sheets and retain service grants', (
     tester,
   ) async {
     final backend = DesktopFake();
     await mount(tester, backend, size: const Size(1000, 850));
-    await tester.tap(
-      find
-          .descendant(
-            of: find.byKey(const ValueKey('local-sector')),
-            matching: find.byType(OutlinedButton),
-          )
-          .first,
-    );
+    await tester.tap(find.byTooltip('Settings for Shared web on HiBreak'));
     await tester.pumpAndSettle();
     expect(find.text('Device and browser settings'), findsNothing);
+    expect(find.text('Add a new service'), findsNothing);
+    expect(find.text('Pair this machine'), findsNothing);
+    await tester.tap(find.text('Browser settings'));
+    await tester.pumpAndSettle();
+    expect(
+      find.widgetWithText(TextField, 'Service gateway port'),
+      findsOneWidget,
+    );
+    expect(
+      backend.calls.where((call) => call.$1 == 'settings').last.$2['service'],
+      'web',
+    );
+    await tester.tap(find.byTooltip('Close').last);
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Edit Shared web'));
     await tester.pumpAndSettle();
     await tester.enterText(
@@ -730,7 +776,7 @@ void main() {
             .first,
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Share a service'));
+      await tester.tap(find.text('Add a new service'));
       await tester.pumpAndSettle();
       await tester.enterText(
         find.widgetWithText(TextField, 'Service ID'),
@@ -829,10 +875,27 @@ void main() {
     );
     await tester.tap(find.descendant(of: local, matching: find.text('Manage')));
     await tester.pumpAndSettle();
-    expect(find.text('Share a service'), findsOneWidget);
+    expect(find.text('Add a new service'), findsOneWidget);
+    expect(find.text('Pair this machine'), findsOneWidget);
     expect(find.text('Device and browser settings'), findsNothing);
     expect(find.text('Pair with this machine'), findsNothing);
-    expect(find.text('Edit Shared web'), findsOneWidget);
+    expect(find.text('Edit Shared web'), findsNothing);
+    expect(find.text('Remove service'), findsNothing);
+    expect(find.text('Enable public access'), findsNothing);
+    await tester.tap(find.text('Pair this machine'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('pairing-qr')), findsOneWidget);
+    await tester.tap(find.text('Pairing code'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('pairing-code')), findsOneWidget);
+    expect(find.text('wispnet1:generated-code'), findsOneWidget);
+    expect(
+      backend.ownerCalls.where((call) => call['op'] == 'invite_qr'),
+      hasLength(1),
+    );
+    expect(find.text('Copy pairing code'), findsOneWidget);
+    await tester.tap(find.byTooltip('Close').last);
+    await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Close'));
     await tester.pumpAndSettle();
     await tester.tap(
@@ -850,14 +913,7 @@ void main() {
   ) async {
     final backend = DesktopFake();
     await mount(tester, backend, size: const Size(1000, 850));
-    await tester.tap(
-      find
-          .descendant(
-            of: find.byKey(const ValueKey('local-sector')),
-            matching: find.byType(OutlinedButton),
-          )
-          .first,
-    );
+    await tester.tap(find.byTooltip('Settings for Shared web on HiBreak'));
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('Enable public access'));
     await tester.tap(find.text('Enable public access'));
@@ -890,14 +946,7 @@ void main() {
     (tester) async {
       final backend = DesktopFake();
       await mount(tester, backend, size: const Size(1000, 850));
-      await tester.tap(
-        find
-            .descendant(
-              of: find.byKey(const ValueKey('local-sector')),
-              matching: find.byType(OutlinedButton),
-            )
-            .first,
-      );
+      await tester.tap(find.byTooltip('Settings for Shared web on HiBreak'));
       await tester.pumpAndSettle();
       final edit = find.widgetWithText(OutlinedButton, 'Edit Shared web');
       final remove = find.widgetWithText(OutlinedButton, 'Remove service');

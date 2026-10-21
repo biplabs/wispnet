@@ -122,8 +122,40 @@ void main() {
             matching: find.text('Manage'),
           ),
         );
-        await waitFor(find.text('Share a service'));
+        await waitFor(find.text('Add a new service'));
+        expect(find.text('Pair this machine'), findsOneWidget);
+        expect(find.text('Remove service'), findsNothing);
+        expect(find.text('Enable public access'), findsNothing);
         await capture('local-services');
+        await tester.tap(find.text('Pair this machine'));
+        await waitFor(find.byKey(const ValueKey('pairing-qr')));
+        await capture('pair-this-machine-qr');
+        await tester.tap(find.text('Pairing code'));
+        await waitFor(find.byKey(const ValueKey('pairing-code')));
+        expect(
+          tester
+              .widget<SelectableText>(
+                find.byKey(const ValueKey('pairing-code')),
+              )
+              .data,
+          startsWith('wispnet1:'),
+        );
+        await capture('pair-this-machine-code');
+        await tester.tap(find.byTooltip('Close').last);
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.tap(find.byTooltip('Close'));
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.tap(
+          find
+              .descendant(
+                of: find.byKey(const ValueKey('local-sector')),
+                matching: find.byType(IconButton),
+              )
+              .first,
+        );
+        await waitFor(find.text('Remove service'));
+        expect(find.text('Add a new service'), findsNothing);
+        await capture('local-service-controls');
         await tester.ensureVisible(find.text('Remove service').first);
         await tester.tap(find.text('Remove service').first);
         await waitFor(find.text('Remove service?'));

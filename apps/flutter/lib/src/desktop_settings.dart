@@ -16,9 +16,11 @@ class DesktopSettings extends StatefulWidget {
     required this.onChanged,
     this.initialSection = 'My services',
     this.servicesOnly = false,
+    this.serviceId,
   });
   final String initialSection;
   final bool servicesOnly;
+  final String? serviceId;
   final WispnetBackend backend;
   final VoidCallback onAccess, onChanged;
   @override
@@ -314,7 +316,7 @@ class _DesktopSettingsState extends State<DesktopSettings> {
   Future<void> invite() async {
     await showWispSheet<void>(
       context,
-      title: 'Pair with this machine',
+      title: 'Pair this machine',
       child: _Invitation(backend: widget.backend),
     );
     await load();
@@ -452,7 +454,7 @@ class _DesktopSettingsState extends State<DesktopSettings> {
     children: [
       if (!widget.servicesOnly) ...[
         action('Device and browser settings', widget.onAccess),
-        action('Pair with this machine', () => run(invite)),
+        action('Pair this machine', () => run(invite)),
         const SizedBox(height: 12),
         DropdownButton<String>(
           isExpanded: true,
@@ -476,9 +478,13 @@ class _DesktopSettingsState extends State<DesktopSettings> {
       if (status == null)
         const LinearProgressIndicator()
       else if (section == 'My services') ...[
-        action('Share a service', () => run(() => editService())),
-        if (services.isEmpty) const Text('No local services shared yet.'),
-        for (final s in services)
+        if (widget.serviceId == null) ...[
+          action('Add a new service', () => run(() => editService())),
+          if (widget.servicesOnly)
+            action('Pair this machine', () => run(invite)),
+        ] else if (!services.any((s) => s['id'] == widget.serviceId))
+          const Text('This service is no longer shared.'),
+        for (final s in services.where((s) => s['id'] == widget.serviceId))
           Padding(
             padding: const EdgeInsets.only(bottom: 12),
             child: WispPanel(
@@ -516,7 +522,10 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                     ),
                     danger: true,
                   ),
-                  if (s['kind'] == 'http') ..._public(s),
+                  if (s['kind'] == 'http') ...[
+                    ..._public(s),
+                    action('Browser settings', widget.onAccess),
+                  ],
                 ],
               ),
             ),
@@ -715,7 +724,7 @@ class _Invitation extends StatefulWidget {
 class _InvitationState extends State<_Invitation> {
   Map<String, dynamic>? qr;
   String? error;
-  bool expired = false;
+  bool expired = false, showQr = true;
   Timer? timer;
   @override
   void initState() {
@@ -787,15 +796,49 @@ class _InvitationState extends State<_Invitation> {
         ),
         SelectableText(qr!['host'] as String),
         const SizedBox(height: 16),
-        Center(
-          child: SizedBox(
-            width: 240,
-            height: 240,
-            child: CustomPaint(painter: _QrPainter(matrix)),
+        WispPanel(
+          radius: 14,
+          padding: const EdgeInsets.all(4),
+          child: Row(
+            children: [
+              for (final entry in {
+                true: 'QR code',
+                false: 'Pairing code',
+              }.entries)
+                Expanded(
+                  child: TextButton(
+                    onPressed: () => setState(() => showQr = entry.key),
+                    style: TextButton.styleFrom(
+                      backgroundColor: showQr == entry.key
+                          ? const Color(0xff1f3666)
+                          : Colors.transparent,
+                      foregroundColor: showQr == entry.key
+                          ? WispColors.text
+                          : WispColors.muted,
+                      minimumSize: const Size(0, 44),
+                    ),
+                    child: Text(entry.value),
+                  ),
+                ),
+            ],
           ),
         ),
         const SizedBox(height: 16),
-        SelectableText(qr!['code'] as String),
+        if (showQr)
+          Center(
+            child: SizedBox(
+              key: const ValueKey('pairing-qr'),
+              width: 240,
+              height: 240,
+              child: CustomPaint(painter: _QrPainter(matrix)),
+            ),
+          )
+        else
+          SelectableText(
+            qr!['code'] as String,
+            key: const ValueKey('pairing-code'),
+          ),
+        const SizedBox(height: 16),
         Text(
           'Expires in ${((qr!['expires_at'] as num) - DateTime.now().millisecondsSinceEpoch / 1000).ceil()}s',
         ),
