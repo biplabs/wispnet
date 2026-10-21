@@ -5,7 +5,7 @@ import FlutterMacOS
 class AppDelegate: FlutterAppDelegate {
   private var item: NSStatusItem?
   private let status = NSMenuItem(title: "Wispnet", action: nil, keyEquivalent: "")
-  private let toggle = NSMenuItem(title: "Go online", action: #selector(toggleNode), keyEquivalent: "")
+  private let toggle = NSMenuItem(title: "Offline", action: #selector(toggleNode), keyEquivalent: "")
   override func applicationDidFinishLaunching(_ notification: Notification) {
     item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     item?.button?.title = "W"
@@ -24,7 +24,7 @@ class AppDelegate: FlutterAppDelegate {
   func updateStatus(_ args: [String: Any]) {
     status.title = args["text"] as? String ?? "Wispnet"
     item?.button?.toolTip = status.title
-    toggle.title = args["online"] as? Bool == true ? "Go offline" : "Go online"
+    toggle.title = args["online"] as? Bool == true ? "Online" : "Offline"
   }
   @objc private func toggleNode() {
     (mainFlutterWindow as? MainFlutterWindow)?.shell?.invokeMethod("toggle", arguments: nil) { result in

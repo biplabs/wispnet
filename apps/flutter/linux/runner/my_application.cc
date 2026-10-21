@@ -50,7 +50,7 @@ static void shell_call(FlMethodChannel*, FlMethodCall* call, gpointer data) {
     FlValue* enabled = fl_value_lookup_string(args, "online");
     FlValue* text = fl_value_lookup_string(args, "text");
     self->online = enabled && fl_value_get_bool(enabled);
-    gtk_menu_item_set_label(GTK_MENU_ITEM(self->toggle), self->online ? "Go offline" : "Go online");
+    gtk_menu_item_set_label(GTK_MENU_ITEM(self->toggle), self->online ? "Online" : "Offline");
     gtk_menu_item_set_label(GTK_MENU_ITEM(self->status), text ? fl_value_get_string(text) : "Wispnet");
     app_indicator_set_title(self->tray, text ? fl_value_get_string(text) : "Wispnet");
     fl_method_call_respond_success(call, nullptr, nullptr);
@@ -85,7 +85,7 @@ static void my_application_activate(GApplication* application) {
   GtkWidget* show = gtk_menu_item_new_with_label("Show Wispnet");
   g_signal_connect(show, "activate", G_CALLBACK(show_window), self);
   gtk_menu_shell_append(GTK_MENU_SHELL(menu), show);
-  self->toggle = gtk_menu_item_new_with_label("Go online");
+  self->toggle = gtk_menu_item_new_with_label("Offline");
   g_signal_connect(self->toggle, "activate", G_CALLBACK(toggle_node), self);
   gtk_menu_shell_append(GTK_MENU_SHELL(menu), self->toggle);
   GtkWidget* quit = gtk_menu_item_new_with_label("Quit Wispnet (node keeps running)");

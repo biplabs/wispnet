@@ -99,7 +99,7 @@ void main() {
 
         await closeSheet(1);
         await closeSheet(0);
-        await tester.tap(find.byTooltip('Go offline'));
+        await tester.tap(find.byTooltip('Online'));
         await waitFor(find.byTooltip('Enter wisp space'));
         expect((await native.invoke('snapshot'))['enabled'], false);
         expect(find.text('hyperjump to wispnet'), findsOneWidget);
@@ -112,7 +112,7 @@ void main() {
           var n = 0;
           n < 100 &&
               tester
-                      .widget<GoOfflineButton>(find.byType(GoOfflineButton))
+                      .widget<OnlineButton>(find.byType(OnlineButton))
                       .onPressed ==
                   null;
           n++
@@ -123,9 +123,7 @@ void main() {
           );
         }
         expect(
-          tester
-              .widget<GoOfflineButton>(find.byType(GoOfflineButton))
-              .onPressed,
+          tester.widget<OnlineButton>(find.byType(OnlineButton)).onPressed,
           isNotNull,
         );
         final local = (before['hosts'] as Map)[before['peer']] as Map;

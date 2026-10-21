@@ -98,7 +98,7 @@ void main() {
           await tester.pump(const Duration(milliseconds: 500));
         }
         if ((before['hosts'] as Map).isNotEmpty) {
-          await tester.tap(find.byTooltip('Go offline'));
+          await tester.tap(find.byTooltip('Online'));
           await waitFor(find.byTooltip('Enter wisp space'));
           await capture('flutter-device-standby');
           expect((await backend.invoke('snapshot'))['enabled'], false);

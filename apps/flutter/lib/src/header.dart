@@ -68,28 +68,23 @@ class WispHeader extends StatelessWidget {
         if (online)
           Transform.translate(
             offset: const Offset(0, 6),
-            child: GoOfflineButton(onPressed: onToggle),
+            child: OnlineButton(onPressed: onToggle),
           ),
       ],
     ),
   );
 }
 
-/// Direct port of SpaceToggle.onDraw's selected/docked branch. A Material
-/// OutlinedButton changes its padding, fill, border and indicator geometry.
-class GoOfflineButton extends StatelessWidget {
-  const GoOfflineButton({super.key, required this.onPressed});
+/// Shared online status pill. Clicking it switches access off.
+class OnlineButton extends StatelessWidget {
+  const OnlineButton({super.key, required this.onPressed});
   final VoidCallback? onPressed;
 
-  // SpaceChecks.buttonLayout measures 70.4 dp for the fixed caption on the
-  // original Android renderer. Keep that advance across renderers: Android's
-  // hinted glyph advances differ from Flutter's fractional text layout.
-  static const labelAdvance = 70.4;
   static const labelBaselineOffset = 11.5 * (1900 - 500) / (2 * 2048);
 
   static TextPainter labelPainter() => TextPainter(
     text: const TextSpan(
-      text: 'GO OFFLINE',
+      text: 'Online',
       style: TextStyle(
         fontFamily: 'Roboto',
         fontSize: 11.5,
@@ -105,16 +100,19 @@ class GoOfflineButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final density = MediaQuery.devicePixelRatioOf(context);
-    final width = ((labelAdvance + 48) * density).ceil() / density;
+    final label = labelPainter();
+    final width = ((label.width + 48) * density).ceil() / density;
+    label.dispose();
     final height = (44 * density).round() / density;
     return Semantics(
-      label: 'Go offline',
+      label: 'Online',
+      hint: 'Switch offline',
       toggled: true,
       enabled: onPressed != null,
       onTap: onPressed,
       child: ExcludeSemantics(
         child: Tooltip(
-          message: 'Go offline',
+          message: 'Online',
           child: InkWell(
             onTap: onPressed,
             customBorder: const StadiumBorder(),
@@ -158,8 +156,8 @@ class _OfflinePill extends CustomPainter {
       ..strokeWidth = 1.4
       ..color = const Color(0xff5b9cf7);
     canvas.drawRRect(pill, paint);
-    final text = GoOfflineButton.labelPainter();
-    const contentWidth = 8.4 + 8 + GoOfflineButton.labelAdvance;
+    final text = OnlineButton.labelPainter();
+    final contentWidth = 8.4 + 8 + text.width;
     final bx = (size.width - contentWidth) / 2 + 4.2, by = y + height / 2;
     paint
       ..style = PaintingStyle.fill
@@ -173,10 +171,9 @@ class _OfflinePill extends CustomPainter {
     canvas.translate(
       bx + 12.2,
       by +
-          GoOfflineButton.labelBaselineOffset -
+          OnlineButton.labelBaselineOffset -
           text.computeDistanceToActualBaseline(TextBaseline.alphabetic),
     );
-    canvas.scale(GoOfflineButton.labelAdvance / text.width, 1);
     text.paint(canvas, Offset.zero);
     canvas.restore();
     text.dispose();

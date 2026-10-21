@@ -271,14 +271,30 @@ void main() {
       final settings = tester.getRect(find.byTooltip('Settings'));
       expect(settings.left, closeTo(label.right, .01));
       expect(settings.width, 44);
-      final button = tester.getRect(find.byType(GoOfflineButton));
+      final button = tester.getRect(find.byType(OnlineButton));
       expect(button.height, 44);
       expect(button.center.dy, closeTo(settings.center.dy + 2, .01));
-      await tester.tap(find.byTooltip('Go offline'));
+      await tester.tap(find.byTooltip('Online'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
-      expect(find.byType(GoOfflineButton), findsNothing);
+      expect(find.byType(OnlineButton), findsNothing);
       expect(tester.takeException(), isNull);
+      await close(tester);
+    }
+  });
+  testWidgets('Android and desktop use the same directory and status labels', (
+    tester,
+  ) async {
+    for (final backend in [FakeBackend(), DesktopFake()]) {
+      await mount(tester, backend, size: const Size(1000, 850));
+      expect(find.text('REMOTE SECTOR'), findsOneWidget);
+      expect(find.text('PAIRED MACHINES'), findsNothing);
+      expect(find.byTooltip('Online'), findsOneWidget);
+      expect(find.byTooltip('Go offline'), findsNothing);
+      await tester.tap(find.byTooltip('Online'));
+      await tester.pumpAndSettle();
+      expect(backend.enabled, false);
+      expect(find.byTooltip('Enter wisp space'), findsOneWidget);
       await close(tester);
     }
   });
@@ -312,7 +328,7 @@ void main() {
       await close(tester);
     }
   });
-  testWidgets('docked control renders at the native phone pixel density', (
+  testWidgets('Online status caption uses natural width at phone density', (
     tester,
   ) async {
     tester.view.devicePixelRatio = 1.875;
@@ -324,13 +340,20 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: Material(
-          child: Center(child: GoOfflineButton(onPressed: () {})),
+          child: Center(child: OnlineButton(onPressed: () {})),
         ),
       ),
     );
     await tester.pump();
-    final bounds = tester.getSize(find.byType(GoOfflineButton));
-    expect((bounds.width * 1.875).round(), 222);
+    final bounds = tester.getSize(find.byType(OnlineButton));
+    final caption = OnlineButton.labelPainter();
+    expect(caption.text!.toPlainText(), 'Online');
+    expect(
+      (bounds.width * 1.875).round(),
+      ((caption.width + 48) * 1.875).ceil(),
+    );
+    caption.dispose();
+    expect(find.byTooltip('Online'), findsOneWidget);
     expect((bounds.height * 1.875).round(), 83);
     final folder = Platform.environment['WISPNET_SCREENSHOTS'];
     if (folder != null) {

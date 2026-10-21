@@ -77,7 +77,7 @@ Flutter desktop bundles include the engine, assets and the private Python adapte
 operations through private stdin/stdout pipes. It creates no management listener
 and never imports the node key. The adapter keeps polling independent of bounded
 network operations, checks the socket's owner/permissions and preserves the
-existing lifecycle (Go offline stops the node; quitting the UI leaves it running).
+existing lifecycle (switching Online off stops the node; quitting the UI leaves it running).
 
 Private labels and ordering are imported read-only from Tauri WebKit local storage
 and the earlier desktop preference files. New display preferences live in
@@ -122,15 +122,13 @@ Flutter's uninstall-on-install-failure fallback.
 
 ## Android visual reference
 
-The header ports `MainActivity.deviceHeader` and the docked branch of
-`SpaceToggle.onDraw`: settings follows the intrinsic device-label width; the
-control has the native 6 dp downward offset, 38 dp pill within a 44 dp control,
-layered cyan indicator, and original fill/border colors. Its fixed caption uses
-the native measured advance and baseline because Android's hinted text metrics
-differ from Flutter's fractional layout. The reference phone (density 1.875)
-renders the control at 222 × 83 pixels. Widget checks cover this reference size,
-settings adjacency in the online directory, and narrow/wide layouts. The installed-app
-check also captures the isolated control for comparison.
+The header retains `MainActivity.deviceHeader` geometry: settings follows the
+intrinsic device-label width. The docked control retains the native 6 dp downward
+offset, 38 dp pill within a 44 dp control, layered cyan indicator, and fill/border
+colors. Its caption is now **Online**, measured at its natural text width using
+the shared bundled font on Android and desktop. Clicking it still switches access
+off. Widget checks cover shared labels, toggling, phone density, settings adjacency,
+and narrow/wide layouts. The installed-app check captures the isolated control.
 
 `SpaceChecks.buttonLayout` in the existing Android instrumentation runner renders
 the original control to private `files/button-layout.png` and reports its metrics
