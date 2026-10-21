@@ -748,6 +748,19 @@ void main() {
         expect(find.text('Enter a port between 1 and 65535.'), findsOneWidget);
         expect(backend.ownerCalls, isEmpty);
       }
+      expect(
+        tester
+            .widget<DropdownButtonFormField<String>>(
+              find.byType(DropdownButtonFormField<String>),
+            )
+            .decoration
+            .labelText,
+        'Protocol',
+      );
+      await tester.tap(find.byType(DropdownButtonFormField<String>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('TCP').last);
+      await tester.pumpAndSettle();
       await tester.enterText(port, '8201');
       await tester.tap(find.text('Save service'));
       await tester.pumpAndSettle();
@@ -755,6 +768,7 @@ void main() {
       expect(operation['id'], 'local_model_api');
       expect(operation['display_name'], 'Local Model API');
       expect(operation['backend'], '127.0.0.1:8201');
+      expect(operation['kind'], 'tcp');
       await close(tester);
     },
   );

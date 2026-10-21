@@ -206,8 +206,10 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                 inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                 decoration: const InputDecoration(labelText: 'Port'),
               ),
-              DropdownButton<String>(
-                value: kind,
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: kind,
+                decoration: const InputDecoration(labelText: 'Protocol'),
                 items: ['http', 'tcp']
                     .map(
                       (k) => DropdownMenuItem(
@@ -218,6 +220,7 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                     .toList(),
                 onChanged: working ? null : (v) => update(() => kind = v!),
               ),
+              const SizedBox(height: 12),
               const Text(
                 'Only selected devices can access this service. Saving replaces the complete allowlist.',
               ),

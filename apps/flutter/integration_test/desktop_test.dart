@@ -148,6 +148,15 @@ void main() {
               .text,
           '8080',
         );
+        expect(
+          tester
+              .widget<DropdownButtonFormField<String>>(
+                find.byType(DropdownButtonFormField<String>),
+              )
+              .decoration
+              .labelText,
+          'Protocol',
+        );
         await capture('add-service-form');
         await tester.tap(find.byTooltip('Close').last);
         await tester.pump(const Duration(milliseconds: 500));
