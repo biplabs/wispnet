@@ -223,6 +223,18 @@ class NodeIntegration(unittest.TestCase):
                     self.assertEqual(result.stdout, "")
 
                 self.assertIn(pa, bapi.request(op="status")["recent_peers"])
+                # Keep the fixture independent of an installed node's registry.
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as registry:
+                    registry.bind(("127.0.0.1", 0))
+                    registry_port = registry.getsockname()[1]
+                api.request(
+                    op="configure_access",
+                    settings={
+                        "registry_port": registry_port,
+                        "allowed_origins": [],
+                        "service_ports": [],
+                    },
+                )
                 api.request(op="enable")
                 url = api.request(
                     op="open",

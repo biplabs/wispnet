@@ -141,7 +141,15 @@ class TerminalManagement(unittest.TestCase):
             self.assertIsNone(daemon.poll())
             self.assertLess(time.monotonic(), deadline)
             time.sleep(.03)
-        return config, module.NodeAPI(config), peer, port
+        api = module.NodeAPI(config)
+        # Terminal Open enables browser access; never compete with the live node.
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as registry:
+            registry.bind(('127.0.0.1', 0))
+            registry_port = registry.getsockname()[1]
+        api.request(op='configure_access', settings={
+            'registry_port': registry_port, 'allowed_origins': [], 'service_ports': [],
+        })
+        return config, api, peer, port
 
     def terminal(self, config):
         term = Terminal(config)
