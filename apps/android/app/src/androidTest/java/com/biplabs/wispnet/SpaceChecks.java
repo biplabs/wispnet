@@ -78,6 +78,9 @@ final class SpaceChecks {
    SpaceToggle button=new SpaceToggle(t.getTargetContext());button.setSelected(true);
    float density=button.getResources().getDisplayMetrics().density;
    int width=button.dockedWidth(),height=(int)Math.ceil(44*density);
+   button.offlineText(density);android.graphics.Paint.FontMetrics metrics=button.paint.getFontMetrics();
+   android.os.Bundle values=new android.os.Bundle();values.putFloat("density",density);values.putFloat("text_width",button.paint.measureText("GO OFFLINE")/density);values.putFloat("text_ascent",metrics.ascent/density);values.putFloat("text_descent",metrics.descent/density);values.putInt("width",width);values.putInt("height",height);
+   t.sendStatus(0,values);
    button.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(height,View.MeasureSpec.EXACTLY));
    button.layout(0,0,width,height);
    bitmap[0]=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);button.draw(new Canvas(bitmap[0]));

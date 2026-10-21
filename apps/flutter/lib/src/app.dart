@@ -8,6 +8,7 @@ import 'space.dart';
 import 'theme.dart';
 import 'sheets.dart';
 import 'cards.dart';
+import 'header.dart';
 
 class WispnetApp extends StatelessWidget {
   const WispnetApp({super.key, required this.backend});
@@ -288,7 +289,11 @@ class _WispHomeState extends State<WispHome>
                           ],
                         ),
                       ),
-                      const Icon(Icons.settings_outlined, size: 22),
+                      const Icon(
+                        Icons.settings,
+                        size: 24,
+                        color: WispColors.muted,
+                      ),
                     ],
                   ),
                 ),
@@ -405,58 +410,12 @@ class _WispHomeState extends State<WispHome>
                 padding: const EdgeInsets.symmetric(horizontal: 20),
                 child: Column(
                   children: [
-                    SizedBox(
-                      height: 64,
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: TextButton(
-                              onPressed: snapshot.isEmpty
-                                  ? null
-                                  : () => settings(),
-                              style: TextButton.styleFrom(
-                                alignment: Alignment.centerLeft,
-                                padding: EdgeInsets.zero,
-                                foregroundColor: WispColors.text,
-                              ),
-                              child: Text(
-                                '${snapshot['name'] ?? 'Wispnet'}${snapshot['peer'] == null ? '' : ' · ${shortId(snapshot['peer'] as String)}'}',
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontSize: 21,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ),
-                          IconButton(
-                            tooltip: 'Settings',
-                            onPressed: snapshot.isEmpty
-                                ? null
-                                : () => settings(),
-                            icon: const Icon(Icons.settings_outlined, size: 24),
-                          ),
-                          if (online)
-                            OutlinedButton(
-                              onPressed: busy ? null : toggle,
-                              style: OutlinedButton.styleFrom(
-                                minimumSize: const Size(0, 42),
-                                side: const BorderSide(
-                                  color: Color(0xff5b9cf7),
-                                ),
-                                shape: const StadiumBorder(),
-                              ),
-                              child: const Text(
-                                'GO OFFLINE',
-                                style: TextStyle(
-                                  fontSize: 11.5,
-                                  letterSpacing: .8,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
+                    WispHeader(
+                      label:
+                          '${snapshot['name'] ?? 'Wispnet'}${snapshot['peer'] == null ? '' : ' · ${shortId(snapshot['peer'] as String)}'}',
+                      online: online,
+                      onSettings: snapshot.isEmpty ? null : () => settings(),
+                      onToggle: busy ? null : toggle,
                     ),
                     Expanded(
                       child: initializationError != null

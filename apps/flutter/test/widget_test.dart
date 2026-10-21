@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wispnet/src/app.dart';
 import 'package:wispnet/src/backend.dart';
+import 'package:wispnet/src/header.dart';
 
 final peer = 'a' * 64;
 final incarnation = 'c' * 64;
@@ -154,6 +155,7 @@ void main() {
   setUpAll(() async {
     final loader = FontLoader('Roboto');
     loader.addFont(rootBundle.load('assets/fonts/Roboto-Regular.ttf'));
+    loader.addFont(rootBundle.load('assets/fonts/Roboto-Medium.ttf'));
     loader.addFont(rootBundle.load('assets/fonts/Roboto-Bold.ttf'));
     await loader.load();
     await (FontLoader(
@@ -184,6 +186,73 @@ void main() {
       await close(tester);
     },
   );
+  testWidgets(
+    'settings follows the device label in online and offline headers',
+    (tester) async {
+      for (final online in [true, false]) {
+        for (final width in [320.0, 390.0, 1440.0]) {
+          await mount(
+            tester,
+            FakeBackend(enabled: online),
+            size: Size(width, 844),
+          );
+          final label = tester.getRect(
+            find.byKey(const ValueKey('device-heading')),
+          );
+          final settings = tester.getRect(find.byTooltip('Settings'));
+          expect(settings.left, closeTo(label.right, .01));
+          expect(settings.width, 44);
+          if (online) {
+            final button = tester.getRect(find.byType(GoOfflineButton));
+            expect(button.height, 44);
+            expect(button.center.dy, closeTo(settings.center.dy + 2, .01));
+            await tester.tap(find.byTooltip('Go offline'));
+            await tester.pump();
+            await tester.pump(const Duration(milliseconds: 300));
+            expect(find.byType(GoOfflineButton), findsNothing);
+          }
+          expect(tester.takeException(), isNull);
+          await close(tester);
+        }
+      }
+    },
+  );
+  testWidgets('docked control renders at the native phone pixel density', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1.875;
+    tester.view.physicalSize = const Size(1072, 1448);
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Material(
+          child: Center(child: GoOfflineButton(onPressed: () {})),
+        ),
+      ),
+    );
+    await tester.pump();
+    final bounds = tester.getSize(find.byType(GoOfflineButton));
+    expect((bounds.width * 1.875).round(), 222);
+    expect((bounds.height * 1.875).round(), 83);
+    final folder = Platform.environment['WISPNET_SCREENSHOTS'];
+    if (folder != null) {
+      await tester.runAsync(() async {
+        final boundary = tester.renderObject<RenderRepaintBoundary>(
+          find.byKey(const ValueKey('offline-control')),
+        );
+        final image = await boundary.toImage(pixelRatio: 1.875);
+        final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+        Directory(folder).createSync(recursive: true);
+        File('$folder/flutter-offline-toggle.png')
+            .writeAsBytesSync(bytes!.buffer.asUint8List());
+        image.dispose();
+      });
+    }
+    await close(tester);
+  });
   testWidgets('denied cached services never issue an open request', (
     tester,
   ) async {

@@ -64,17 +64,36 @@ class MachineCard extends StatelessWidget {
                     style: const TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.bold,
-                      letterSpacing: .8,
+                      letterSpacing: 14 * .08,
                     ),
                   );
-                  final status = Text(
-                    badge,
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: machine.online ? WispColors.cyan : stateColor,
-                      letterSpacing: .6,
-                      fontWeight: FontWeight.bold,
-                    ),
+                  final status = Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      WispStatusDot(
+                        color: machine.online
+                            ? WispColors.cyan
+                            : machine.state == 'approval_pending'
+                            ? const Color(0xffe9b65c)
+                            : machine.state == 'host_denied'
+                            ? WispColors.error
+                            : const Color(0xff7a8da8),
+                      ),
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: Text(
+                          badge,
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: machine.online
+                                ? const Color(0xffedf4ff)
+                                : stateColor,
+                            letterSpacing: 11 * .06,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
                   );
                   return constraints.maxWidth < 460
                       ? Column(
@@ -210,7 +229,7 @@ class MachineCard extends StatelessWidget {
             tooltip:
                 'Settings for ${service['display_name']} on ${machine.name}',
             onPressed: busy ? null : () => onSettings(service),
-            icon: const Icon(Icons.settings_outlined, size: 22),
+            icon: const Icon(Icons.settings, size: 24, color: WispColors.muted),
           ),
         ],
       ),

@@ -72,6 +72,17 @@ void main() {
           await waitFor(find.text('PAIRED MACHINES'));
           await tester.pump(const Duration(seconds: 2));
           await capture('flutter-device-directory');
+          final button = tester.renderObject<RenderRepaintBoundary>(
+            find.byKey(const ValueKey('offline-control')),
+          );
+          final image = await button.toImage(
+            pixelRatio: tester.view.devicePixelRatio,
+          );
+          final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+          await File(
+            '/data/data/app.wispnet.android/cache/flutter-device-offline-control.png',
+          ).writeAsBytes(bytes!.buffer.asUint8List());
+          image.dispose();
           await tester.tap(find.text('Manage'));
           await waitFor(find.text('Paired machines'));
           await capture('flutter-device-machines');
@@ -85,7 +96,7 @@ void main() {
           await tester.pump(const Duration(milliseconds: 500));
         }
         if ((before['hosts'] as Map).isNotEmpty) {
-          await tester.tap(find.text('GO OFFLINE'));
+          await tester.tap(find.byTooltip('Go offline'));
           await waitFor(find.byTooltip('Enter wisp space'));
           expect((await backend.invoke('snapshot'))['enabled'], false);
           await tester.tap(find.byTooltip('Enter wisp space'));

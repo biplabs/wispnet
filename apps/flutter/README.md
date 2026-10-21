@@ -29,7 +29,7 @@ for regression comparison. Never uninstall/clear the app to migrate it.
 ## Boundaries and upgrade compatibility
 
 - `lib/src/backend.dart`: UI-facing platform interface, without Android imports.
-- `lib/src/theme.dart`, `cards.dart`, `space.dart`, `sheets.dart`: shared visual components.
+- `lib/src/theme.dart`, `header.dart`, `cards.dart`, `space.dart`, `sheets.dart`: shared visual components.
 - `lib/src/app.dart`: responsive directory and orchestration.
 - `android/.../FlutterMainActivity.java`: Android platform adapter. Reuses the
   existing `Native`, `HostStore`, `DeviceProfile`, `AccessService`, and bounded QR
@@ -73,3 +73,23 @@ controls, real catalogs, and browser handoff. It captures the Flutter layer for
 visual review and restores the normal app in a `finally` block. It uses explicit
 `adb install -r` and attaches a test driver to the installed app; it never invokes
 Flutter's uninstall-on-install-failure fallback.
+
+## Android visual reference
+
+The header ports `MainActivity.deviceHeader` and the docked branch of
+`SpaceToggle.onDraw`: settings follows the intrinsic device-label width; the
+control has the native 6 dp downward offset, 38 dp pill within a 44 dp control,
+layered cyan indicator, and original fill/border colors. Its fixed caption uses
+the native measured advance and baseline because Android's hinted text metrics
+differ from Flutter's fractional layout. The reference phone (density 1.875)
+renders the control at 222 × 83 pixels. Widget checks cover this reference size,
+settings adjacency online/offline, and narrow/wide layouts. The installed-app
+check also captures the isolated control for comparison.
+
+`SpaceChecks.buttonLayout` in the existing Android instrumentation runner renders
+the original control to private `files/button-layout.png` and reports its metrics
+without changing pairings or services. This is a native reference, not a Flutter
+coverage claim. Bundled Roboto 3.005 (2022) Regular/Medium/Bold are static instances
+of the reference Android system font (weight 400/500/700, width 100, italic 0),
+under the included Apache 2.0 license. Bundling them keeps that typography shared
+across future desktop targets.

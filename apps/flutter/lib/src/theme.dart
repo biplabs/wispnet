@@ -158,3 +158,33 @@ Future<T?> showWispSheet<T>(
     ),
   ),
 );
+
+/// Same three-layer shape as Android's StatusDot drawable.
+class WispStatusDot extends StatelessWidget {
+  const WispStatusDot({super.key, required this.color});
+  final Color color;
+  @override
+  Widget build(BuildContext context) => SizedBox.square(
+    dimension: 16,
+    child: CustomPaint(painter: _StatusDotPainter(color)),
+  );
+}
+
+class _StatusDotPainter extends CustomPainter {
+  const _StatusDotPainter(this.color);
+  final Color color;
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..isAntiAlias = true;
+    final center = size.center(Offset.zero), unit = size.shortestSide / 16;
+    paint.color = color.withAlpha(68);
+    canvas.drawCircle(center, 7.5 * unit, paint);
+    paint.color = color;
+    canvas.drawCircle(center, 4.2 * unit, paint);
+    paint.color = const Color(0xfff4fcff);
+    canvas.drawCircle(center, 1.8 * unit, paint);
+  }
+
+  @override
+  bool shouldRepaint(_StatusDotPainter old) => old.color != color;
+}
