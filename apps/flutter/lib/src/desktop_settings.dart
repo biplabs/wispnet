@@ -878,17 +878,18 @@ class _InvitationState extends State<_Invitation> {
         Text(
           'Expires in ${((qr!['expires_at'] as num) - DateTime.now().millisecondsSinceEpoch / 1000).ceil()}s',
         ),
-        OutlinedButton(
-          onPressed: () async {
-            await check();
-            if (!expired) {
-              await Clipboard.setData(
-                ClipboardData(text: qr!['code'] as String),
-              );
-            }
-          },
-          child: const Text('Copy pairing code'),
-        ),
+        if (!showQr)
+          OutlinedButton(
+            onPressed: () async {
+              await check();
+              if (!expired) {
+                await Clipboard.setData(
+                  ClipboardData(text: qr!['code'] as String),
+                );
+              }
+            },
+            child: const Text('Copy pairing code'),
+          ),
       ],
     );
   }

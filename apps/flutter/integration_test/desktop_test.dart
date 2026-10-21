@@ -154,9 +154,11 @@ void main() {
 
         await tester.tap(find.text('Pair this machine'));
         await waitFor(find.byKey(const ValueKey('pairing-qr')));
+        expect(find.text('Copy pairing code'), findsNothing);
         await capture('pair-this-machine-qr');
         await tester.tap(find.text('Pairing code'));
         await waitFor(find.byKey(const ValueKey('pairing-code')));
+        expect(find.text('Copy pairing code'), findsOneWidget);
         expect(
           tester
               .widget<SelectableText>(

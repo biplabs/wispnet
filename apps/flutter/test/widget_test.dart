@@ -963,6 +963,7 @@ void main() {
     await tester.tap(find.text('Pair this machine'));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('pairing-qr')), findsOneWidget);
+    expect(find.text('Copy pairing code'), findsNothing);
     await tester.tap(find.text('Pairing code'));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('pairing-code')), findsOneWidget);
@@ -972,6 +973,10 @@ void main() {
       hasLength(1),
     );
     expect(find.text('Copy pairing code'), findsOneWidget);
+    await tester.tap(find.text('QR code'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('pairing-qr')), findsOneWidget);
+    expect(find.text('Copy pairing code'), findsNothing);
     await tester.tap(find.byTooltip('Close').last);
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Close'));
