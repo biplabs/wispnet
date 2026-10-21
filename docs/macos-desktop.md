@@ -96,7 +96,7 @@ are outside this implementation.
 
 The isolated Cargo package is `apps/macos/src-tauri`; static frontend assets live
 in `apps/macos/ui`. Its separate committed lockfile keeps Tauri dependencies out
-of Linux and Android workspace builds. Linux uses this same Tauri application and its system WebKitGTK; the default Linux installer now installs Tauri. The Qt UI source is deprecated and retained for regression coverage. The shared stdlib Python helper reuses existing private journals and catalog snapshots without importing Qt.
+of Linux and Android workspace builds. Linux uses this same Tauri application and its system WebKitGTK; the default Linux installer now installs Tauri. The Qt UI and its runtime dependency have been removed. The shared stdlib Python helper reuses existing private journals and catalog snapshots without importing Qt.
 
 ```sh
 cargo run --manifest-path apps/macos/src-tauri/Cargo.toml --locked

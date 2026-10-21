@@ -137,6 +137,54 @@ const path = require('path');
   await page.getByLabel('Private display name', { exact: true }).fill('Renamed peer');
   await page.getByRole('button', { name: 'Save name', exact: true }).click();
   await page.getByRole('heading', { name: 'Renamed peer', exact: true }).waitFor();
+  // Approval must preserve the request and revision captured when its dialog opens.
+  await page.evaluate(() => {
+    const peer = 'b'.repeat(64);
+    window.fixture.invitations = [
+      { invitation: 'e'.repeat(64), peer, name: 'Test phone', state: 'pending' }
+    ];
+    window.fixture.host.services.push({
+      id: 'beta',
+      display_name: 'Beta',
+      kind: 'http',
+      backend: '127.0.0.1:8081',
+      incarnation: 'f'.repeat(64),
+      allow: []
+    });
+  });
+  await page.getByRole('button', { name: /^Pairing requests/ }).click();
+  await page.getByRole('button', { name: 'Approve…', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Approve…', exact: true }).click();
+  const existingGrant = page.getByLabel('Website', { exact: true });
+  if (!(await existingGrant.isChecked()) || !(await existingGrant.isDisabled()))
+    throw Error('Existing grant not preserved');
+  await page.getByLabel('Beta', { exact: true }).check();
+  await page.evaluate(() => {
+    window.fixture.host.revision = 8;
+    window.fixture.invitations = [];
+  });
+  await page.waitForTimeout(3100);
+  await page.getByRole('button', { name: 'Approve device', exact: true }).click();
+  const approval = await page.evaluate(
+    () =>
+      window.calls.find(c => c.payload?.operation?.op === 'approve_invitation')?.payload.operation
+  );
+  if (
+    approval?.expected_revision !== 7 ||
+    approval.invitation !== 'e'.repeat(64) ||
+    JSON.stringify(approval.services) !== JSON.stringify(['web', 'beta'])
+  )
+    throw Error('Approval lost captured request/revision or selected grants');
+  // Exercise keyboard ordering; service cards cannot move between machine groups.
+  await page.getByRole('button', { name: 'Services', exact: true }).click();
+  await page
+    .getByRole('button', { name: 'Reorder web; use arrow keys to move', exact: true })
+    .press('ArrowRight');
+  const order = await page.evaluate(
+    () => JSON.parse(localStorage.getItem('cardOrder'))['services/' + 'a'.repeat(64)]
+  );
+  if (JSON.stringify(order) !== JSON.stringify(['beta', 'web']))
+    throw Error('Service ordering not persisted');
   if (process.env.WISPNET_UI_SCREENSHOT)
     await page.screenshot({
       path: process.env.WISPNET_UI_SCREENSHOT,

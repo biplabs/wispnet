@@ -32,6 +32,9 @@ if [ "$(uname -s)" = Linux ]; then
     python3 -m unittest discover -s scripts -p test_linux_distribution.py
 fi
 node --test apps/macos/tests/*.test.mjs
+npm --prefix apps/macos ci --ignore-scripts
+npm --prefix apps/macos exec -- playwright install chromium
+npm --prefix apps/macos run test:ui
 python3 -m unittest discover -s apps/macos/tests -p "test_*.py"
 cargo test --manifest-path apps/macos/src-tauri/Cargo.toml --no-default-features --locked
 if [ "$(uname -s)" = Darwin ] || pkg-config --exists webkit2gtk-4.1; then
@@ -41,7 +44,7 @@ if [ "$(uname -s)" = Darwin ] || pkg-config --exists webkit2gtk-4.1; then
     cargo build --manifest-path apps/macos/src-tauri/Cargo.toml --release --locked
     python3 scripts/test_macos.py
 fi
-QT_QPA_PLATFORM=offscreen uv run --project apps/node/desktop --locked python -m unittest discover -s apps/node/desktop/tests
+PYTHONPATH=apps/node/desktop python3 -m unittest discover -s apps/node/desktop/tests
 python3 -m unittest discover -s scripts -p test_android_release.py
 python3 -m unittest discover -s scripts -p test_android_publish.py
 uv run --with qrcode==8.2 --with zxing-cpp==2.3.0 --with pillow==11.3.0 python -m unittest discover -s scripts -p test_pairing_qr.py

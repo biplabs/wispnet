@@ -202,6 +202,15 @@ subprocess.run(
     ["systemctl", "--user", "is-active", "--quiet", "wispnet-desktop.service"],
     check=True,
 )
+# The native replacement is running; retire only Wispnet's former Qt runtime.
+for name in [".venv", "pyproject.toml", "uv.lock", "wispnet_desktop/app.py",
+             "wispnet_desktop/icon.png", "wispnet_desktop/build_info.py",
+             "wispnet_desktop/__pycache__"]:
+    legacy = destination / name
+    if legacy.is_dir() and not legacy.is_symlink():
+        shutil.rmtree(legacy)
+    else:
+        legacy.unlink(missing_ok=True)
 print(
     "Installed Tauri desktop and session tray; identity/configuration/grants preserved."
 )
