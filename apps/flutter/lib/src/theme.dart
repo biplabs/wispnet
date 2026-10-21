@@ -14,6 +14,19 @@ abstract final class WispColors {
   static const error = Color(0xffff9aa8);
 }
 
+WidgetStateProperty<Color?> wispButtonBackground(Color base) =>
+    WidgetStateProperty.resolveWith((states) {
+      if (states.contains(WidgetState.disabled)) return null;
+      if (states.contains(WidgetState.pressed)) {
+        return Color.alphaBlend(const Color(0x4065ceff), base);
+      }
+      if (states.contains(WidgetState.hovered) ||
+          states.contains(WidgetState.focused)) {
+        return Color.alphaBlend(const Color(0x3065ceff), base);
+      }
+      return base;
+    });
+
 ThemeData wispTheme() => ThemeData(
   brightness: Brightness.dark,
   scaffoldBackgroundColor: WispColors.background,
@@ -44,7 +57,7 @@ ThemeData wispTheme() => ThemeData(
   textButtonTheme: TextButtonThemeData(
     style: TextButton.styleFrom(
       overlayColor: WispColors.cyan.withValues(alpha: .22),
-    ),
+    ).copyWith(backgroundColor: wispButtonBackground(Colors.transparent)),
   ),
   filledButtonTheme: FilledButtonThemeData(
     style: FilledButton.styleFrom(
@@ -54,7 +67,7 @@ ThemeData wispTheme() => ThemeData(
       minimumSize: const Size(48, 48),
       side: const BorderSide(color: Color(0xff4b73c2)),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-    ),
+    ).copyWith(backgroundColor: wispButtonBackground(const Color(0xff1f3666))),
   ),
   outlinedButtonTheme: OutlinedButtonThemeData(
     style: OutlinedButton.styleFrom(
@@ -64,7 +77,7 @@ ThemeData wispTheme() => ThemeData(
       minimumSize: const Size(48, 48),
       side: const BorderSide(color: Color(0xff283b60)),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-    ),
+    ).copyWith(backgroundColor: wispButtonBackground(const Color(0xff142038))),
   ),
   inputDecorationTheme: InputDecorationTheme(
     filled: true,

@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:wispnet/src/app.dart';
 import 'package:wispnet/src/backend.dart';
+import 'package:wispnet/src/header.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -105,6 +106,21 @@ void main() {
           await tester.tap(find.byTooltip('Enter wisp space'));
           await waitFor(find.text('REMOTE SECTOR'));
           await tester.pump(const Duration(seconds: 2));
+          for (
+            var n = 0;
+            n < 100 &&
+                tester
+                        .widget<OnlineButton>(find.byType(OnlineButton))
+                        .onPressed ==
+                    null;
+            n++
+          ) {
+            await tester.pump(const Duration(milliseconds: 100));
+          }
+          expect(
+            tester.widget<OnlineButton>(find.byType(OnlineButton)).onPressed,
+            isNotNull,
+          );
           final current = await backend.invoke('snapshot');
           Map<String, dynamic>? selected;
           for (final record in (current['hosts'] as Map).values) {
