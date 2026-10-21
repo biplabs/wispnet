@@ -55,7 +55,7 @@ class MachineCard extends StatelessWidget {
             onTap: busy ? null : onManage,
             borderRadius: BorderRadius.circular(12),
             child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 10),
+              padding: const EdgeInsets.symmetric(vertical: 6),
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   final title = Text(
@@ -113,15 +113,15 @@ class MachineCard extends StatelessWidget {
           ),
         if (services.isEmpty)
           Padding(
-            padding: const EdgeInsets.symmetric(vertical: 14),
+            padding: const EdgeInsets.only(top: 2, bottom: 4),
             child: Text(
               !showHeader
                   ? 'No local services shared.'
-                  : '${machine.name} · ${machine.data['catalog'] == null
-                        ? machine.state == 'approval_pending'
-                              ? 'Awaiting approval'
-                              : 'Unavailable'
-                        : 'No shared services'}',
+                  : machine.data['catalog'] == null
+                  ? machine.state == 'approval_pending'
+                        ? 'Awaiting approval'
+                        : 'Unavailable'
+                  : 'No shared services',
               style: const TextStyle(color: WispColors.muted),
             ),
           ),
@@ -148,13 +148,13 @@ class MachineCard extends StatelessWidget {
             );
           },
         ),
-        const SizedBox(height: 4),
+        if (services.isNotEmpty) const SizedBox(height: 4),
       ],
     );
     return showHeader
         ? WispPanel(
             color: const Color(0xd80b1528),
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
+            padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
             child: content,
           )
         : content;

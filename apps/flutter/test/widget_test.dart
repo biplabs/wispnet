@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wispnet/src/app.dart';
 import 'package:wispnet/src/backend.dart';
+import 'package:wispnet/src/cards.dart';
 import 'package:wispnet/src/header.dart';
 import 'package:wispnet/src/theme.dart';
 
@@ -226,6 +227,41 @@ Future<void> screenshot(WidgetTester tester, String name) async {
 }
 
 void main() {
+  testWidgets('empty remote card is compact and names the device once', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: SizedBox(
+              width: 900,
+              child: MachineCard(
+                machine: Machine(peer, {
+                  'name': 'Pixel 10 Pro',
+                  'state': 'available',
+                  'catalog': {'services': []},
+                }),
+                order: const {},
+                telemetry: 'DIRECT · 8ms',
+                stateColor: Colors.white,
+                busy: false,
+                onManage: () {},
+                onOpen: (_) {},
+                onSettings: (_) {},
+                onReorder: (_, _, _, _) {},
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    expect(find.text('No shared services'), findsOneWidget);
+    expect(find.textContaining('Pixel 10 Pro'), findsNothing);
+    expect(find.textContaining('PIXEL 10 PRO'), findsOneWidget);
+    expect(tester.getSize(find.byType(MachineCard)).height, lessThan(80));
+  });
+
   setUpAll(() async {
     final loader = FontLoader('Roboto');
     loader.addFont(rootBundle.load('assets/fonts/Roboto-Regular.ttf'));
