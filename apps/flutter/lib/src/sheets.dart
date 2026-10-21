@@ -1,0 +1,512 @@
+import 'dart:convert';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import 'backend.dart';
+import 'theme.dart';
+
+String failureMessage(Object error) {
+  final message = error is FormatException
+      ? error.message
+      : error is PlatformException
+      ? error.message ?? error.code
+      : error.toString();
+  if (error is PlatformException && error.code == 'invitation_denied') {
+    return 'This host did not accept the pairing code. Generate a new code on your computer.';
+  }
+  if (message.toLowerCase().contains('expired')) {
+    return 'Pairing code expired or invalid. Generate a new code on your computer.';
+  }
+  return message;
+}
+
+class PairingForm extends StatefulWidget {
+  const PairingForm({
+    super.key,
+    required this.backend,
+    required this.onPaired,
+    this.initialCode,
+  });
+  final WispnetBackend backend;
+  final VoidCallback onPaired;
+  final String? initialCode;
+  @override
+  State<PairingForm> createState() => _PairingFormState();
+}
+
+class _PairingFormState extends State<PairingForm> {
+  late final TextEditingController code = TextEditingController(
+    text: widget.initialCode,
+  )..addListener(changed);
+  bool busy = false, error = false;
+  late int tab = widget.initialCode == null ? 0 : 1;
+  String feedback = '';
+  Map<String, dynamic>? preview;
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initialCode != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => review());
+    }
+  }
+
+  @override
+  void dispose() {
+    code.dispose();
+    super.dispose();
+  }
+
+  void changed() {
+    setState(() {
+      preview = null;
+      feedback = '';
+    });
+  }
+
+  String normalized() {
+    final value = code.text.replaceAll(RegExp(r'\s+'), '');
+    if (!value.startsWith('wispnet1:') || utf8.encode(value).length > 8192) {
+      throw const FormatException(
+        'Paste the complete Wispnet pairing code or scan its QR.',
+      );
+    }
+    return value;
+  }
+
+  Future<void> review() async {
+    if (busy) return;
+    setState(() {
+      busy = true;
+      error = false;
+      feedback = 'Checking pairing code…';
+    });
+    try {
+      final result = await widget.backend.invoke('preview', {
+        'code': normalized(),
+      });
+      if (mounted) {
+        setState(() {
+          preview = result;
+          feedback = 'Pairing code ready. Request pairing, then approve it on your computer.';
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          error = true;
+          feedback = failureMessage(e);
+        });
+      }
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<void> pair() async {
+    if (busy) return;
+    FocusManager.instance.primaryFocus?.unfocus();
+    setState(() {
+      busy = true;
+      error = false;
+      feedback = 'Requesting pairing… This may take up to a minute.';
+    });
+    try {
+      await widget.backend.invoke('pair', {'code': normalized()});
+      if (mounted) widget.onPaired();
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          error = true;
+          feedback = failureMessage(e);
+        });
+      }
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<void> qr(String method) async {
+    if (busy) return;
+    setState(() {
+      busy = true;
+      error = false;
+      feedback = method == 'scanQr'
+          ? 'Opening camera…'
+          : 'Choose a pairing QR image…';
+    });
+    try {
+      final result = await widget.backend.invoke(method);
+      if (!mounted) return;
+      final scanned = result['code'] as String?;
+      if (scanned == null) {
+        setState(() {
+          busy = false;
+          feedback =
+              'Scan cancelled. Import a QR image or paste a pairing code.';
+        });
+        return;
+      }
+      code.text = scanned;
+      setState(() {
+        busy = false;
+        tab = 1;
+      });
+      await pair();
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          busy = false;
+          error = true;
+          feedback = failureMessage(e);
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => PopScope(
+    canPop: !busy,
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        WispPanel(
+          radius: 14,
+          color: const Color(0xff0d1526),
+          padding: const EdgeInsets.all(4),
+          child: Row(
+            children: [
+              for (final entry in const {0: 'QR', 1: 'Pairing Code'}.entries)
+                Expanded(
+                  child: TextButton(
+                    onPressed: busy
+                        ? null
+                        : () => setState(() => tab = entry.key),
+                    style: TextButton.styleFrom(
+                      foregroundColor: tab == entry.key
+                          ? WispColors.text
+                          : WispColors.muted,
+                      backgroundColor: tab == entry.key
+                          ? const Color(0xff1f3666)
+                          : Colors.transparent,
+                      minimumSize: const Size(0, 44),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                    child: Text(entry.value),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        if (tab == 0) ...[
+          FilledButton(
+            onPressed: busy ? null : () => qr('scanQr'),
+            child: const Text('Scan with camera'),
+          ),
+          const SizedBox(height: 10),
+          OutlinedButton(
+            onPressed: busy ? null : () => qr('importQr'),
+            child: const Text('Import from photos'),
+          ),
+        ] else ...[
+          const Text(
+            'Paste the pairing code from your computer.',
+            style: TextStyle(color: WispColors.muted),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: code,
+            enabled: !busy,
+            minLines: 4,
+            maxLines: 6,
+            autocorrect: false,
+            enableSuggestions: false,
+            decoration: const InputDecoration(
+              hintText: 'Pairing code',
+              labelText: 'Pairing code',
+            ),
+          ),
+          const SizedBox(height: 10),
+          FilledButton(
+            onPressed: busy || code.text.trim().isEmpty ? null : pair,
+            child: Text(busy ? 'Pairing…' : 'Pair'),
+          ),
+        ],
+        if (feedback.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Semantics(
+              liveRegion: true,
+              child: Text(
+                feedback,
+                style: TextStyle(
+                  color: error ? WispColors.error : const Color(0xffb8d4ff),
+                ),
+              ),
+            ),
+          ),
+        if (preview != null)
+          WispPanel(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text('Pair with this machine'),
+                const SizedBox(height: 8),
+                Text(
+                  preview!['host_name'] as String? ?? 'Host',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SelectableText(
+                  preview!['host'] as String,
+                  style: const TextStyle(fontSize: 12, color: WispColors.muted),
+                ),
+                const SizedBox(height: 12),
+                FilledButton(
+                  onPressed: busy ? null : pair,
+                  child: const Text('Request pairing'),
+                ),
+              ],
+            ),
+          ),
+      ],
+    ),
+  );
+}
+
+class MachineSettings extends StatefulWidget {
+  const MachineSettings({
+    super.key,
+    required this.machine,
+    required this.backend,
+    required this.onChanged,
+  });
+  final Machine machine;
+  final WispnetBackend backend;
+  final VoidCallback onChanged;
+  @override
+  State<MachineSettings> createState() => _MachineSettingsState();
+}
+
+class _MachineSettingsState extends State<MachineSettings> {
+  bool confirming = false, busy = false;
+  String? error;
+  Future<void> perform(String method) async {
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    try {
+      await widget.backend.invoke(method, {'host': widget.machine.id});
+      widget.onChanged();
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      if (mounted) setState(() => error = failureMessage(e));
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      SelectableText(
+        'Host ID\n${widget.machine.id}',
+        style: const TextStyle(color: WispColors.muted),
+      ),
+      const SizedBox(height: 16),
+      Text(widget.machine.status),
+      const SizedBox(height: 16),
+      if (confirming) ...[
+        Text(
+          'Remove ${widget.machine.name} and close its access here? It will learn about removal on its next contact. You can pair again later.',
+        ),
+        const SizedBox(height: 12),
+        FilledButton(
+          onPressed: busy ? null : () => perform('removeHost'),
+          child: const Text('Remove machine'),
+        ),
+        TextButton(
+          onPressed: busy ? null : () => setState(() => confirming = false),
+          child: const Text('Cancel'),
+        ),
+      ] else ...[
+        OutlinedButton(
+          onPressed: busy ? null : () => perform('refreshHost'),
+          child: const Text('Refresh'),
+        ),
+        const SizedBox(height: 10),
+        OutlinedButton(
+          onPressed: busy ? null : () => setState(() => confirming = true),
+          child: const Text('Remove'),
+        ),
+      ],
+      if (error != null)
+        Padding(
+          padding: const EdgeInsets.only(top: 12),
+          child: Text(error!, style: const TextStyle(color: WispColors.error)),
+        ),
+    ],
+  );
+}
+
+class SettingsForm extends StatefulWidget {
+  const SettingsForm({
+    super.key,
+    required this.backend,
+    required this.deviceName,
+    required this.onSaved,
+    this.host,
+    this.service,
+  });
+  final WispnetBackend backend;
+  final String deviceName;
+  final String? host, service;
+  final VoidCallback onSaved;
+  @override
+  State<SettingsForm> createState() => _SettingsFormState();
+}
+
+class _SettingsFormState extends State<SettingsForm> {
+  late final name = TextEditingController(text: widget.deviceName);
+  final port = TextEditingController();
+  bool loading = true, saving = false;
+  String? error;
+  String address = '';
+  bool get global => widget.host == null;
+  @override
+  void initState() {
+    super.initState();
+    load();
+  }
+
+  @override
+  void dispose() {
+    name.dispose();
+    port.dispose();
+    super.dispose();
+  }
+
+  Future<void> load() async {
+    try {
+      final result = await widget.backend.invoke('settings', {
+        'host': widget.host,
+        'service': widget.service,
+      });
+      if (!mounted) return;
+      port.text = '${result['port'] ?? ''}';
+      setState(() {
+        loading = false;
+        address = result['url'] as String? ?? '';
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          loading = false;
+          error = failureMessage(e);
+        });
+      }
+    }
+  }
+
+  Future<void> save() async {
+    final raw = port.text.trim();
+    final number = raw.isEmpty && !global ? 0 : int.tryParse(raw);
+    if (number == null ||
+        (number != 0 || global) && (number < 1024 || number > 65535)) {
+      setState(() => error = 'Port must be between 1024 and 65535.');
+      return;
+    }
+    final value = name.text.trim();
+    if (global &&
+        (value.isEmpty ||
+            utf8.encode(value).length > 128 ||
+            value.runes.any((c) => c < 32 || c >= 127 && c <= 159))) {
+      setState(
+        () => error =
+            'Enter a name up to 128 UTF-8 bytes, without control characters.',
+      );
+      return;
+    }
+    setState(() {
+      saving = true;
+      error = null;
+    });
+    try {
+      await widget.backend.invoke('saveSettings', {
+        'host': widget.host,
+        'service': widget.service,
+        'port': number,
+        if (global) 'name': value,
+      });
+      if (mounted) widget.onSaved();
+    } catch (e) {
+      if (mounted) setState(() => error = failureMessage(e));
+    } finally {
+      if (mounted) setState(() => saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      if (global) ...[
+        TextField(
+          controller: name,
+          enabled: !saving,
+          decoration: const InputDecoration(labelText: 'Device name'),
+        ),
+        const SizedBox(height: 12),
+      ],
+      Text(
+        global
+            ? 'Registry port on this device. Changes reconnect active sessions.'
+            : 'Gateway port on this device. Leave blank to keep an automatically assigned port. Changes reconnect active sessions.',
+        style: const TextStyle(color: WispColors.muted),
+      ),
+      const SizedBox(height: 16),
+      TextField(
+        controller: port,
+        enabled: !loading && !saving,
+        keyboardType: TextInputType.number,
+        decoration: InputDecoration(
+          floatingLabelBehavior: FloatingLabelBehavior.always,
+          labelText: global ? 'Registry port' : 'Service gateway port',
+          hintText: global ? null : 'Automatic',
+        ),
+      ),
+      if (address.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: SelectableText(
+            address,
+            style: const TextStyle(color: WispColors.muted),
+          ),
+        ),
+      if (error != null)
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Text(error!, style: const TextStyle(color: WispColors.error)),
+        ),
+      const SizedBox(height: 12),
+      FilledButton(
+        onPressed: loading || saving ? null : save,
+        child: Text(
+          loading
+              ? 'Loading…'
+              : saving
+              ? 'Saving…'
+              : 'Save',
+        ),
+      ),
+    ],
+  );
+}

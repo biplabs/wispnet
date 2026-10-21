@@ -14,9 +14,14 @@ scripts/build_android_release.sh
 python3 scripts/check_android_release.py apps/android/app/build/outputs/bundle/release/app-release.aab
 ```
 
-Output: `apps/android/app/build/outputs/bundle/release/app-release.aab`. Unsigned output is for inspection, not Play upload. The builder uses Cargo's release profile, target API 36, a non-debuggable Java application, backup disabled, and optional camera hardware. Per-build version overrides are `WISPNET_ANDROID_VERSION_CODE` and `WISPNET_ANDROID_VERSION_NAME`; the defaults are `1` and `0.1.0`. Increase the version code for every new Play upload.
+Output: `apps/android/app/build/outputs/bundle/release/app-release.aab`. Unsigned output is for inspection, not Play upload. The builder uses Cargo's release profile, target API 36, a non-debuggable Flutter application with the existing Java/Rust backend, backup disabled, and optional camera hardware. Per-build version overrides are `WISPNET_ANDROID_VERSION_CODE` and `WISPNET_ANDROID_VERSION_NAME`; the defaults derive from the shared Wispnet version (`1000` and `0.1.0` for version 0.1.0). Increase the version code for every new Play upload.
 
-The build uses both NDK r27 linker flags for 16 KB LOAD and RELRO alignment, and uncompressed native-library packaging. The checker downloads checksum-pinned Google bundletool 1.18.3 into ignored `target/android-tools`, validates the AAB, reads its actual protobuf manifest/config, and checks the expected application ID, release flags, API target, optional camera, native ABI, ELF LOAD/RELRO boundaries and bundle ZIP-alignment request. It rejects unexpected native libraries and verifies any present bundle signature. Unit regressions for unsafe manifest/alignment/signing cases run through `scripts/test.sh` and the pre-push hook.
+The build uses both NDK r27 linker flags for 16 KB LOAD and RELRO alignment, and uncompressed native-library packaging. The checker downloads checksum-pinned Google bundletool 1.18.3 into ignored `target/android-tools`, validates the AAB, reads its actual protobuf manifest/config, and checks the expected application ID, release flags, API target, optional camera, native ABI, ELF LOAD/RELRO boundaries and bundle ZIP-alignment request. It rejects unexpected native libraries and verifies any present bundle signature.
+The Flutter bundle contains exactly the selected ABI's Rust library, Flutter engine,
+and Dart AOT snapshot. The snapshot can omit RELRO; the engine's separate RELRO
+LOAD segment is accepted only when page rounding cannot overlap another writable
+segment, following Android's documented separate-segment rule. Unsafe shared
+RELRO/data pages remain rejected. Unit regressions for unsafe manifest/alignment/signing cases run through `scripts/test.sh` and the pre-push hook.
 
 Policy references: [Play target API requirements](https://support.google.com/googleplay/android-developer/answer/11926878), [16 KB native alignment and testing](https://developer.android.com/guide/practices/page-sizes), and [bundletool](https://developer.android.com/tools/bundletool). Structural alignment is separate from runtime compatibility.
 

@@ -30,22 +30,31 @@ def bundletool(*arguments):
     return subprocess.run([java,'-jar',jar,*map(str,arguments)],capture_output=True,text=True,check=True).stdout
 
 
-def check_elf(data,abi):
+def check_elf(data,abi,require_relro=True):
     if data[:6]!=b'\x7fELF\x02\x01':raise ValueError('Expected little-endian ELF64')
     expected={'arm64-v8a':183,'x86_64':62}[abi]
     if struct.unpack_from('<H',data,18)[0]!=expected:raise ValueError('Native ABI mismatch')
     start=struct.unpack_from('<Q',data,32)[0];size,count=struct.unpack_from('<HH',data,54)
     if size!=56 or not count or start+size*count>len(data):raise ValueError('Invalid ELF program headers')
-    loads=0;relro=0
+    loads=[];relros=[]
     for i in range(count):
         kind,flags,offset,address,physical,file_size,memory_size,alignment=struct.unpack_from('<IIQQQQQQ',data,start+i*size)
         if kind==1:
-            loads+=1
+            loads.append((address,memory_size,flags))
             if alignment<16384 or alignment&(alignment-1) or offset%16384!=address%16384:raise ValueError('Native LOAD segment is not 16 KB aligned')
         if kind==0x6474e552:
-            relro+=1
-            if (address+memory_size)%16384:raise ValueError('Native RELRO boundary is not 16 KB aligned')
-    if not loads or not relro:raise ValueError('Native LOAD/RELRO segments missing')
+            relros.append((address,memory_size))
+    if not loads or (require_relro and not relros):raise ValueError('Native LOAD/RELRO segments missing')
+    for address,memory_size in relros:
+        end=address+memory_size
+        if end%16384==0:continue
+        # Android also permits a complete, separate RELRO LOAD segment when
+        # rounding protection up cannot cover subsequent writable data:
+        # https://developer.android.com/guide/practices/page-sizes#relro
+        own_segment=any(a==address and size==memory_size for a,size,flags in loads)
+        protected_start=address//16384*16384;protected_end=(end+16383)//16384*16384
+        overlap=any(flags&2 and (a,size)!=(address,memory_size) and a<protected_end and a+size>protected_start for a,size,flags in loads)
+        if not own_segment or overlap:raise ValueError('Native RELRO boundary is not 16 KB aligned')
 
 
 def check_manifest(text):
@@ -59,6 +68,13 @@ def check_manifest(text):
     return manifest.get(ANDROID+'versionCode')
 
 
+def check_libraries(libraries,abi):
+    native={f'base/lib/{abi}/libwispnet_android.so'}
+    flutter=native|{f'base/lib/{abi}/libflutter.so',f'base/lib/{abi}/libapp.so'}
+    if set(libraries) not in (native,flutter) or len(libraries)!=len(set(libraries)):
+        raise ValueError('Unexpected native bundle contents')
+
+
 def check(path,abi='arm64-v8a',require_signed=False):
     bundletool('validate','--bundle',path)
     version=check_manifest(bundletool('dump','manifest','--bundle',path,'--module','base'))
@@ -67,8 +83,11 @@ def check(path,abi='arm64-v8a',require_signed=False):
     if not native.get('enabled') or native.get('alignment')!='PAGE_ALIGNMENT_16K':raise ValueError('Bundle must request 16 KB native ZIP alignment')
     with zipfile.ZipFile(path) as archive:
         libraries=[name for name in archive.namelist() if name.endswith('.so')]
-        if libraries!=[f'base/lib/{abi}/libwispnet_android.so']:raise ValueError('Unexpected native bundle contents')
-        for name in libraries:check_elf(archive.read(name),abi)
+        check_libraries(libraries,abi)
+        for name in libraries:
+            # Dart's generated AOT snapshot has no GNU_RELRO segment. Its LOAD
+            # alignment is still checked; Rust and the engine must retain RELRO.
+            check_elf(archive.read(name),abi,require_relro=not name.endswith('/libapp.so'))
         signed=any(name.startswith('META-INF/') and name.endswith(('.RSA','.EC','.DSA')) for name in archive.namelist())
     if require_signed and not signed:raise ValueError('Upload-signed bundle required; refusing unsigned artifact')
     if signed:

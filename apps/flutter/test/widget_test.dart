@@ -1,0 +1,292 @@
+import 'dart:io';
+import 'dart:ui' as ui;
+
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:wispnet/src/app.dart';
+import 'package:wispnet/src/backend.dart';
+
+final peer = 'a' * 64;
+final incarnation = 'c' * 64;
+
+class FakeBackend implements WispnetBackend {
+  FakeBackend({
+    this.paired = true,
+    this.enabled = true,
+    this.state = 'available',
+  });
+  bool paired, enabled;
+  final String state;
+  final calls = <(String, Map<String, dynamic>)>[];
+  bool failPairing = false;
+  @override
+  Future<Map<String, dynamic>> invoke(
+    String method, [
+    Map<String, dynamic> arguments = const {},
+  ]) async {
+    calls.add((method, arguments));
+    switch (method) {
+      case 'snapshot':
+        return {
+          'name': 'HiBreak',
+          'peer': 'd' * 64,
+          'enabled': enabled,
+          'relay': 'connected',
+          'network': 'Network available',
+          'version': '0.1.0',
+          'order': {},
+          'hosts': {
+            if (paired)
+              peer: {
+                'name': 'j-strix',
+                'state': state,
+                'status': state == 'available'
+                    ? 'Available'
+                    : 'Access denied by this host',
+                'catalog': {
+                  'services': [
+                    {
+                      'id': 'website',
+                      'display_name': 'Website',
+                      'kind': 'http',
+                      'incarnation': incarnation,
+                    },
+                    {
+                      'id': 'llama',
+                      'display_name': 'Local model',
+                      'kind': 'http',
+                      'incarnation': incarnation,
+                    },
+                  ],
+                },
+              },
+          },
+          'telemetry': {
+            'peers': {
+              peer: {'path': 'direct', 'rtt_ms': 15},
+            },
+          },
+        };
+      case 'setAccess':
+        enabled = arguments['enabled'] as bool;
+        return {};
+      case 'open':
+        return {'url': 'http://website.wispnet.localhost:18300'};
+      case 'settings':
+        return {
+          'port': 18400,
+          'url': 'http://registry.wispnet.localhost:18400',
+        };
+      case 'pair':
+        if (failPairing) {
+          throw PlatformException(
+            code: 'invitation_denied',
+            message: 'Invalid invitation',
+          );
+        }
+        paired = true;
+        return {};
+      case 'removeHost':
+        paired = false;
+        return {};
+      default:
+        return {};
+    }
+  }
+}
+
+Future<void> mount(
+  WidgetTester tester,
+  FakeBackend backend, {
+  Size size = const Size(390, 844),
+  double scale = 1,
+}) async {
+  tester.view.devicePixelRatio = 1;
+  tester.view.physicalSize = size;
+  tester.platformDispatcher.accessibilityFeaturesTestValue =
+      const FakeAccessibilityFeatures(disableAnimations: true);
+  addTearDown(() {
+    tester.view.resetPhysicalSize();
+    tester.view.resetDevicePixelRatio();
+    tester.platformDispatcher.clearAccessibilityFeaturesTestValue();
+  });
+  await tester.pumpWidget(
+    RepaintBoundary(
+      key: const ValueKey('capture'),
+      child: MediaQuery(
+        data: MediaQueryData(
+          size: size,
+          textScaler: TextScaler.linear(scale),
+          disableAnimations: true,
+        ),
+        child: WispnetApp(backend: backend),
+      ),
+    ),
+  );
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 300));
+}
+
+Future<void> close(WidgetTester tester) async {
+  await tester.pumpWidget(const SizedBox());
+  await tester.pump();
+}
+
+Future<void> screenshot(WidgetTester tester, String name) async {
+  final folder = Platform.environment['WISPNET_SCREENSHOTS'];
+  if (folder == null) return;
+  await tester.runAsync(() async {
+    final boundary = tester.firstRenderObject<RenderObject>(
+      find.byKey(const ValueKey('capture')),
+    ) as RenderRepaintBoundary;
+    final image = await boundary.toImage();
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+    final directory = Directory(folder)..createSync(recursive: true);
+    File('${directory.path}/$name.png')
+        .writeAsBytesSync(bytes!.buffer.asUint8List());
+    image.dispose();
+  });
+}
+
+void main() {
+  setUpAll(() async {
+    final loader = FontLoader('Roboto');
+    loader.addFont(rootBundle.load('assets/fonts/Roboto-Regular.ttf'));
+    loader.addFont(rootBundle.load('assets/fonts/Roboto-Bold.ttf'));
+    await loader.load();
+    await (FontLoader(
+      'MaterialIcons',
+    )..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'))).load();
+  });
+  testWidgets(
+    'existing machines and service handoff keep host and incarnation',
+    (tester) async {
+      final backend = FakeBackend();
+      await mount(tester, backend);
+      expect(find.text('PAIRED MACHINES'), findsOneWidget);
+      expect(find.text('ONLINE · DIRECT · 15ms'), findsOneWidget);
+      await screenshot(tester, 'android-directory');
+      await tester.tap(find.textContaining('Website', findRichText: true));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 1000));
+      final opened = backend.calls.where((c) => c.$1 == 'open').single.$2;
+      expect(opened, {
+        'host': peer,
+        'service': 'website',
+        'incarnation': incarnation,
+      });
+      expect(
+        backend.calls.where((c) => c.$1 == 'launch').single.$2['url'],
+        contains('website.wispnet.localhost'),
+      );
+      await close(tester);
+    },
+  );
+  testWidgets('denied cached services never issue an open request', (
+    tester,
+  ) async {
+    final backend = FakeBackend(state: 'host_denied');
+    await mount(tester, backend);
+    await tester.tap(find.textContaining('Website', findRichText: true));
+    await tester.pump();
+    expect(backend.calls.where((c) => c.$1 == 'open'), isEmpty);
+    await close(tester);
+  });
+  testWidgets(
+    'pairing disables blank input and retains failed code and feedback',
+    (tester) async {
+      final backend = FakeBackend(paired: false, enabled: false)
+        ..failPairing = true;
+      await mount(tester, backend);
+      await screenshot(tester, 'android-standby');
+      await tester.tap(find.byTooltip('Establish your wisp network'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Pairing Code'));
+      await tester.pumpAndSettle();
+      final pair = find.widgetWithText(FilledButton, 'Pair');
+      expect(tester.widget<FilledButton>(pair).onPressed, isNull);
+      await tester.enterText(find.byType(TextField), '   \n ');
+      await tester.pump();
+      expect(tester.widget<FilledButton>(pair).onPressed, isNull);
+      await tester.enterText(find.byType(TextField), 'wispnet1:sample\ncode');
+      await tester.pump();
+      await tester.tap(pair);
+      await tester.pumpAndSettle();
+      expect(find.textContaining('This host did not accept'), findsOneWidget);
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller!.text,
+        'wispnet1:sample\ncode',
+      );
+      await screenshot(tester, 'android-pairing');
+      await close(tester);
+    },
+  );
+  testWidgets('dragging a service saves its order within its machine', (
+    tester,
+  ) async {
+    final backend = FakeBackend();
+    await mount(tester, backend);
+    final gesture = await tester.startGesture(
+      tester.getCenter(find.text('Website')),
+    );
+    await tester.pump(const Duration(milliseconds: 650));
+    await gesture.moveTo(tester.getCenter(find.text('Local model')));
+    await tester.pump();
+    await gesture.up();
+    await tester.pump();
+    final saved = backend.calls.where((c) => c.$1 == 'saveOrder').single.$2;
+    expect(saved, {
+      'group': 'services/$peer',
+      'ids': ['llama', 'website'],
+    });
+    await close(tester);
+  });
+  testWidgets('settings validate before changing native state', (tester) async {
+    final backend = FakeBackend();
+    await mount(tester, backend);
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Registry port'),
+      '80',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await tester.pump();
+    expect(find.text('Port must be between 1024 and 65535.'), findsOneWidget);
+    expect(backend.calls.where((c) => c.$1 == 'saveSettings'), isEmpty);
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Registry port'),
+      '18401',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await tester.pumpAndSettle();
+    expect(
+      backend.calls.where((c) => c.$1 == 'saveSettings').single.$2['port'],
+      18401,
+    );
+    await close(tester);
+  });
+  for (final size in [const Size(320, 640), const Size(1440, 900)]) {
+    testWidgets('shared components fit $size', (tester) async {
+      await mount(tester, FakeBackend(), size: size);
+      expect(tester.takeException(), isNull);
+      if (size.width > 1000) await screenshot(tester, 'desktop-components');
+      await close(tester);
+    });
+  }
+  testWidgets('phone layout supports large text and a settings sheet', (
+    tester,
+  ) async {
+    await mount(tester, FakeBackend(), size: const Size(360, 780), scale: 2);
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    await close(tester);
+  });
+  test('saved order ignores missing and duplicate entries', () {
+    expect(orderedIds(['a', 'b', 'c'], ['b', 'gone', 'b']), ['b', 'a', 'c']);
+  });
+}

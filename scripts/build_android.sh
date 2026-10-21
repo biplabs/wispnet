@@ -37,5 +37,26 @@ cp "target/$native_target/$android_profile/libwispnet_android.so" "apps/android/
 "$ndk_bin/llvm-strip" --strip-debug "apps/android/app/src/main/jniLibs/$android_abi/libwispnet_android.so"
 shared_version="$(python3 -c 'import runpy; print(runpy.run_path("apps/node/desktop/wispnet_desktop/version.py")["VERSION"])')"
 shared_code="$(python3 -c 'import sys; a,b,c=map(int,sys.argv[1].split(".")); print(a*1000000+b*1000+c)' "$shared_version")"
+# Flutter is the default UI; the native runner remains for migration regression checks.
+if [[ "${WISPNET_ANDROID_UI:-flutter}" == flutter ]]; then
+  case "$android_abi" in arm64-v8a) flutter_target=android-arm64 ;; x86_64) flutter_target=android-x64 ;; esac
+  case "$android_artifact" in apk) flutter_artifact=apk ;; bundle) flutter_artifact=appbundle ;; esac
+  flutter_name="${WISPNET_ANDROID_VERSION_NAME:-$shared_version}"
+  flutter_code="${WISPNET_ANDROID_VERSION_CODE:-$shared_code}"
+  (cd apps/flutter && ../../scripts/flutter.sh build "$flutter_artifact" "--$android_profile" --target-platform "$flutter_target" --build-name "$flutter_name" --build-number "$flutter_code")
+  # Keep existing release/publishing scripts' artifact locations stable.
+  if [[ "$android_artifact" == apk ]]; then
+    mkdir -p "apps/android/app/build/outputs/apk/$android_profile"
+    cp -a "apps/flutter/build/app/outputs/apk/$android_profile/." "apps/android/app/build/outputs/apk/$android_profile/"
+  else
+    mkdir -p apps/android/app/build/outputs/bundle/release
+    cp -a apps/flutter/build/app/outputs/bundle/release/. apps/android/app/build/outputs/bundle/release/
+  fi
+  exit 0
+fi
+if [[ "$WISPNET_ANDROID_UI" != native ]]; then
+  echo 'WISPNET_ANDROID_UI must be flutter or native' >&2
+  exit 1
+fi
 cd apps/android
 ./gradlew --no-daemon "$gradle_task" "-PwispnetAndroidAbi=$android_abi" "-PwispnetVersionCode=${WISPNET_ANDROID_VERSION_CODE:-$shared_code}" "-PwispnetVersionName=${WISPNET_ANDROID_VERSION_NAME:-$shared_version}"

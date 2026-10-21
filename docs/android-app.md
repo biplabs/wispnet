@@ -1,6 +1,21 @@
 # Android app development build
 
-The native Android app pairs independently with each hosting computer, displays its permitted services, and opens them in Chrome through an app-owned loopback proxy. It does not require a VPN profile. This is a development APK, not a completed v1 release.
+The Android app pairs independently with each hosting computer, displays its permitted services, and opens them in Chrome through an app-owned loopback proxy. It does not require a VPN profile. This is a development APK, not a completed v1 release.
+
+## Flutter migration (2026-10-21)
+
+The default build now uses the shared Flutter UI in `apps/flutter`, reproducing
+the Android space interface. It retains the existing Java/Rust identity, catalog,
+QR and foreground-service implementations and upgrades the same application ID.
+Install with `adb install -r`; do not uninstall or clear app data. The current
+stage supports Android; desktop adoption of the shared widgets is subsequent work.
+See [Flutter development and verification](../apps/flutter/README.md).
+
+Flutter 3.47.7 (Dart 3.13.5) is required in addition to the Android prerequisites.
+The Flutter SDK's NDK is used for its runner; Rust continues to use NDK 27 below.
+The local test hook includes Flutter analysis and widget tests. Existing Java-view
+instrumentation describes the legacy UI; use `scripts/test_flutter_android.py`
+for the Flutter runner. `WISPNET_ANDROID_UI=native` selects the legacy build.
 
 ## Build and install
 
