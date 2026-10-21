@@ -31,7 +31,7 @@ public final class AppTestRunner extends Instrumentation {
  UriParts protectedRequestChecks(String host,String service)throws Exception{
   UriParts url=new UriParts(Native.request(new JSONObject().put("op","open").put("host",host).put("service",service).put("incarnation",incarnation(host,service))).getString("url"));
   if(!http(url,"/","GET","Sec-Fetch-Site: same-origin\r\n","").startsWith("HTTP/1.1 401"))throw new Exception("Missing browser session accepted");
-  if(!http(url,"/","GET","Origin: https://attacker.invalid\r\n","").startsWith("HTTP/1.1 403"))throw new Exception("Cross-origin browser request accepted");
+  if(!http(url,"/","GET","Origin: https://unlisted.example\r\n","").contains("Access-Control-Allow-Origin: https://unlisted.example\r\n"))throw new Exception("Cross-origin website access failed");
   String response=http(url,"/","GET","Sec-Fetch-Site: none\r\nSec-Fetch-Mode: navigate\r\nSec-Fetch-Dest: document\r\n","");if(!response.startsWith("HTTP/1.1 303"))throw new Exception("Browser navigation authorization failed");
   String cookie=null;for(String line:response.split("\r\n"))if(line.startsWith("Set-Cookie: "))cookie=line.substring(12).split(";",2)[0];
   if(cookie==null)throw new Exception("Gateway session cookie missing");

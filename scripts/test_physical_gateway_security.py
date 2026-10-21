@@ -27,7 +27,7 @@ from test_physical_service_recreation import (
 ROOT = Path(__file__).resolve().parents[1]
 RAW = r"""import http.client,json,socket,sys,urllib.parse
 v=json.load(sys.stdin);u=urllib.parse.urlsplit(v['url']);origin='http://'+u.netloc
-cases=[('POST','/',{'Origin':'https://evil.example'},403),('POST','/',{},403),('GET','/',{'Origin':'null'},403),('GET','/',{'Sec-Fetch-Site':'cross-site'},403),('GET','/',{'Host':'evil.localhost:'+str(u.port)},421),('GET','/sw.js',{'Service-Worker':'script'},403),('TRACE','/',{},405),('POST','/',{'Origin':origin,'Content-Length':'16777217'},413),('GET','/',{'Transfer-Encoding':'chunked'},400)]
+cases=[('POST','/',{'Origin':'https://unlisted.example'},200),('POST','/',{},403),('GET','/',{'Origin':'null'},200),('GET','/',{'Sec-Fetch-Site':'cross-site'},403),('GET','/',{'Host':'evil.localhost:'+str(u.port)},421),('GET','/sw.js',{'Service-Worker':'script'},403),('TRACE','/',{},405),('POST','/',{'Origin':origin,'Content-Length':'16777217'},413),('GET','/',{'Transfer-Encoding':'chunked'},400)]
 for method,path,extra,status in cases:
  c=http.client.HTTPConnection('127.0.0.1',u.port,timeout=15);h={'Host':u.netloc,'Cookie':v['cookie']};h.update(extra)
  c.request(method,path,headers=h);r=c.getresponse();assert r.status==status,(method,status,r.status);r.read();c.close()

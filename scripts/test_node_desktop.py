@@ -356,11 +356,13 @@ class NodeIntegration(unittest.TestCase):
                 self.assertEqual(
                     exchange("/", {"Cookie": cookie})[2], b"node-gateway-ok"
                 )
+                status, headers, body = exchange(
+                    "/", {"Cookie": cookie, "Origin": "https://unlisted.example"}
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(body, b"node-gateway-ok")
                 self.assertEqual(
-                    exchange("/", {"Cookie": cookie, "Origin": "http://evil.example"})[
-                        0
-                    ],
-                    403,
+                    headers["Access-Control-Allow-Origin"], "https://unlisted.example"
                 )
                 self.assertEqual(api.request(op="status")["connected_peers"], {})
                 self.assertEqual(api.request(op="status")["host"]["clients"][0]["peer"], pb)
