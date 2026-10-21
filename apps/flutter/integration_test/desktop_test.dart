@@ -32,6 +32,7 @@ void main() {
       }
 
       Future<void> capture(String name) async {
+        await tester.pump();
         await tester.pump(const Duration(milliseconds: 300));
         final image =
             await (key.currentContext!.findRenderObject()!
