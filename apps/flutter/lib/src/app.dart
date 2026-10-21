@@ -339,7 +339,7 @@ class _WispHomeState extends State<WispHome>
 
   Future<void> machineSettings(Machine machine) async {
     if (snapshot['desktop'] == true && machine.data['local'] == true) {
-      await deviceSettings();
+      await deviceSettings(servicesOnly: true);
       return;
     }
     await showWispSheet<void>(
@@ -600,9 +600,7 @@ class _WispHomeState extends State<WispHome>
                         label:
                             '${snapshot['name'] ?? 'Wispnet'}${snapshot['peer'] == null ? '' : ' · ${shortId(snapshot['peer'] as String)}'}',
                         online: online,
-                        onSettings: snapshot.isEmpty
-                            ? null
-                            : () => deviceSettings(),
+                        onSettings: snapshot.isEmpty ? null : () => settings(),
                         onToggle: busy ? null : toggle,
                       ),
                     Expanded(

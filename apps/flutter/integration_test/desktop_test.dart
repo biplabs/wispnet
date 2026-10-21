@@ -138,10 +138,10 @@ void main() {
           await tester.pump(const Duration(milliseconds: 100));
         }
         await tester.tap(find.byTooltip('Settings'));
-        await waitFor(find.text('Device and browser settings'));
-        await capture('settings');
-        await tester.tap(find.text('Device and browser settings'));
         await waitFor(find.widgetWithText(TextField, 'Registry port'));
+        expect(find.text('Device and browser settings'), findsNothing);
+        expect(find.byTooltip('Close'), findsOneWidget);
+        await capture('settings');
         await tester.pump(const Duration(seconds: 1));
         expect(
           tester
@@ -162,7 +162,6 @@ void main() {
           expect(find.byTooltip('Close').evaluate().length, remaining);
         }
 
-        await closeSheet(1);
         await closeSheet(0);
         await tester.tap(find.byTooltip('Online'));
         await waitFor(find.byTooltip('Enter wisp space'));

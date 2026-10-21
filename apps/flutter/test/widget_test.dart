@@ -603,14 +603,39 @@ void main() {
     expect(tester.takeException(), isNull);
     await close(tester);
   });
-  testWidgets('desktop owner tools use sheets and retain service grants', (
+  testWidgets('desktop device gear opens name and registry settings directly', (
     tester,
   ) async {
     final backend = DesktopFake();
     await mount(tester, backend, size: const Size(1000, 850));
     await tester.tap(find.byTooltip('Settings'));
     await tester.pumpAndSettle();
-    expect(find.text('Device and browser settings'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Device name'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Registry port'), findsOneWidget);
+    expect(find.text('Device and browser settings'), findsNothing);
+    expect(find.text('Share a service'), findsNothing);
+    expect(find.byType(DropdownButton<String>), findsNothing);
+    expect(find.byTooltip('Close'), findsOneWidget);
+    await tester.tap(find.byTooltip('Close'));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Close'), findsNothing);
+    await close(tester);
+  });
+  testWidgets('desktop owner tools use sheets and retain service grants', (
+    tester,
+  ) async {
+    final backend = DesktopFake();
+    await mount(tester, backend, size: const Size(1000, 850));
+    await tester.tap(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('local-sector')),
+            matching: find.byType(OutlinedButton),
+          )
+          .first,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Device and browser settings'), findsNothing);
     await tester.tap(find.text('Edit Shared web'));
     await tester.pumpAndSettle();
     await tester.enterText(
@@ -632,7 +657,14 @@ void main() {
     (tester) async {
       final backend = DesktopFake();
       await mount(tester, backend, size: const Size(1000, 850));
-      await tester.tap(find.byTooltip('Settings'));
+      await tester.tap(
+        find
+            .descendant(
+              of: find.byKey(const ValueKey('local-sector')),
+              matching: find.byType(OutlinedButton),
+            )
+            .first,
+      );
       await tester.pumpAndSettle();
       await tester.tap(find.text('Share a service'));
       await tester.pumpAndSettle();
@@ -754,7 +786,14 @@ void main() {
   ) async {
     final backend = DesktopFake();
     await mount(tester, backend, size: const Size(1000, 850));
-    await tester.tap(find.byTooltip('Settings'));
+    await tester.tap(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('local-sector')),
+            matching: find.byType(OutlinedButton),
+          )
+          .first,
+    );
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('Enable public access'));
     await tester.tap(find.text('Enable public access'));
@@ -850,11 +889,16 @@ void main() {
   ) async {
     final backend = DesktopFake();
     await mount(tester, backend, size: const Size(1000, 850));
-    await tester.tap(find.byTooltip('Settings'));
+    await tester.tap(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('remote-sector')),
+            matching: find.byType(OutlinedButton),
+          )
+          .first,
+    );
     await tester.pumpAndSettle();
-    await tester.tap(find.byType(DropdownButton<String>).first);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Pairing requests (1)').last);
+    await tester.tap(find.text('Review 1 pairing requests'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Approve device'));
     await tester.pumpAndSettle();
