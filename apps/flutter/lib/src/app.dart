@@ -451,7 +451,7 @@ class _WispHomeState extends State<WispHome>
         child: Text(
           title,
           style: const TextStyle(
-            fontSize: 12,
+            fontSize: 16,
             color: WispColors.muted,
             letterSpacing: 1.4,
             fontWeight: FontWeight.bold,
