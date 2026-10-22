@@ -1,0 +1,24 @@
+[Unit]
+Description=Wispnet verified UDP firewall rules
+After=network.target ufw.service
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I /opt/wispnet/scripts/firewall_helper.py
+Restart=on-failure
+RestartSec=2
+RuntimeDirectory=wispnet-firewall
+RuntimeDirectoryMode=0755
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_DAC_READ_SEARCH CAP_SYS_PTRACE
+UMask=0077
+TimeoutStopSec=30
+[Install]
+WantedBy=multi-user.target

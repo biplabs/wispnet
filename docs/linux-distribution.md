@@ -99,12 +99,21 @@ does not implement recovery or promise arbitrary downgrade compatibility.
 To remove program files while retaining private state:
 
 ```sh
-systemctl --user disable --now wispnet-desktop.service  # graphical installs only
-systemctl --user disable --now wispnet-host.service
-rm -f ~/.config/systemd/user/wispnet-desktop.service ~/.config/systemd/user/wispnet-host.service
-rm -f ~/.local/bin/wispnet-desktop ~/.local/bin/wispnet-node ~/.local/share/applications/wispnet.desktop
-rm -rf ~/.local/libexec/wispnet-desktop ~/.local/libexec/wispnet-node
-systemctl --user daemon-reload
+python3 scripts/uninstall_node_desktop.py
+```
+
+Run from the extracted bundle as your regular user. The uninstaller stops and
+disables the user services and requests sudo only if the system firewall helper
+is installed. It unregisters this user's firewall access. When no users remain,
+it disables the helper, removes its rules/chains and installed system files, and
+reloads systemd. A shared helper remains installed for other configured users.
+Failures stop the uninstall before program files are removed so it can be retried.
+No unrelated UFW rules are deleted.
+
+To remove only this user's automatic firewall integration:
+
+```sh
+sudo python3 scripts/uninstall_firewall_helper.py --uid "$(id -u)"
 ```
 
 These commands leave config and state in place. To reinstall, use the same config
@@ -130,3 +139,11 @@ installer. It requires one administrator authorization and installs the
 socket-verified `wispnet-firewall.service`; the Wispnet node stays unprivileged.
 See [relay connectivity](relay-connectivity.md#linux-local-firewall-helper) for
 verification, migration of old manual rules, and removal behavior.
+
+## Arch Linux / AUR
+
+The `wispnet-bin` package tooling is documented in
+[packaging/arch/README.md](../packaging/arch/README.md). It uses pacman-owned files
+and an abortable removal hook, rather than running the standalone per-user
+installer from package scriptlets. A public versioned binary release, real
+distribution terms, and an AUR maintainer account are required before publication.

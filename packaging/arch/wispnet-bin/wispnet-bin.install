@@ -1,0 +1,13 @@
+post_install() {
+    echo 'Run wispnet-setup as your regular user to initialize and start your node.'
+    echo 'Optional automatic firewall setup: sudo wispnet-setup --firewall-uid YOUR_UID'
+    echo 'Identity, pairing and user configuration are never created by pacman.'
+}
+
+post_upgrade() {
+    # Restart only a previously enabled/running helper; never enable on upgrade.
+    if systemctl is-active --quiet wispnet-firewall.service; then
+        systemctl restart wispnet-firewall.service || return 1
+    fi
+    echo 'Restart your Wispnet user services to load the updated binaries.'
+}

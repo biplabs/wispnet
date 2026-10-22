@@ -1,0 +1,10 @@
+[Trigger]
+Operation = Remove
+Type = Package
+Target = wispnet-bin
+
+[Action]
+Description = Stop Wispnet and remove its managed firewall rules
+When = PreTransaction
+Exec = /usr/bin/python3 -I /opt/wispnet/scripts/package_system.py --remove
+AbortOnFail

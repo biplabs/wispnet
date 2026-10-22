@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Wispnet
+Comment=Your services and connected devices
+Exec=wispnet-desktop
+Icon=wispnet
+Categories=Network;
+Terminal=false
