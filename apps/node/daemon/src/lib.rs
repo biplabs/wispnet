@@ -148,6 +148,14 @@ impl State {
                 let revision = self.owner(Some(operation)).await?.0;
                 Ok(json!({"revision":revision}))
             }
+            "open" => {
+                // Local routes use the node's configured computer name, even when
+                // a caller omits the name or retains an old display label.
+                if value["host"].as_str() == Some(&self.client.endpoint.id().to_string()) {
+                    value["host_name"] = json!(self.device_name);
+                }
+                self.client.command(&value).await
+            }
             "pair" => {
                 value["name"] = json!(self.device_name);
                 self.client.command(&value).await
@@ -162,7 +170,6 @@ impl State {
             | "preview_invitation"
             | "catalog"
             | "telemetry"
-            | "open"
             | "enable"
             | "stop"
             | "access_status" => self.client.command(&value).await,

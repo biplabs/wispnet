@@ -339,7 +339,15 @@ class NodeIntegration(unittest.TestCase):
                         host=pa,
                         service="website",
                         incarnation=local_incarnation,
+                        host_name="Local computer",
                     )["url"]
+                )
+                self.assertEqual(parsed.hostname, f"a-{pa[:12]}-website.localhost")
+                self.assertEqual(
+                    urlsplit(api.request(
+                        op="open", host=pa, service="website", incarnation=local_incarnation
+                    )["url"]).netloc,
+                    parsed.netloc,
                 )
                 self.assertEqual(exchange("/")[0], 200)
                 self.assertEqual(exchange("/", {"Host": "other.localhost"})[0], 421)

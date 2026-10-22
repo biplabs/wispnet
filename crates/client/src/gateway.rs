@@ -263,13 +263,7 @@ impl Gateways {
         let old = index.map(|i| &saved[i]);
         let id_component = format!("-{}-", &peer.to_string()[..12]);
         let hostname = match old {
-            Some(binding)
-                if binding.hostname.contains(&id_component)
-                    && !(system_name.is_some()
-                        && binding
-                            .hostname
-                            .starts_with(&format!("system{id_component}"))) =>
-            {
+            Some(binding) if system_name.is_none() && binding.hostname.contains(&id_component) => {
                 binding.hostname.clone()
             }
             _ => {
@@ -1033,7 +1027,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            url,
+            url.replace("j-strix-", "renamed-"),
             c.gateway
                 .open_named(
                     c.clone(),
@@ -1046,7 +1040,7 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(
-            other,
+            other.replace("j-strix-", "renamed-"),
             c.gateway
                 .open_named(
                     c.clone(),

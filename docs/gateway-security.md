@@ -7,7 +7,8 @@ Each client installation saves one readable address such as
 `desktop-183296aa35df-llama.localhost:<port>` per pinned system and service.
 Names contain a lowercase system slug, the first 12 hexadecimal characters of
 its host ID, and a service slug. Collisions receive a saved numeric suffix
-(`-2`, `-3`). Saved names survive display-name changes and reconnect order.
+(`-2`, `-3`). Names follow the current computer display name when a service is opened;
+reconnect order does not affect them. Local services use the node computer name.
 Opening a service with an older address replaces its name without keeping an alias;
 the reserved port stays unchanged. Open returns the stable root URL, with no capability
 in its path, query or fragment. Repeated opens reuse the listener; going online
