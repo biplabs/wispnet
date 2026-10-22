@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'theme.dart';
 
-/// Matches MainActivity's deviceHeader and dockToggle geometry.
+/// Shared device header and browser-access toggle geometry.
 class WispHeader extends StatelessWidget {
   const WispHeader({
     super.key,

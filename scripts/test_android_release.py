@@ -47,7 +47,7 @@ class ReleaseChecks(unittest.TestCase):
         for invalid in [flutter[:-1],flutter+['base/lib/arm64-v8a/unexpected.so'],flutter+native,[p.replace('arm64-v8a','x86_64') for p in flutter]]:
             with self.assertRaises(ValueError):check_libraries(invalid,'arm64-v8a')
     def test_private_state_excluded_from_cloud_and_device_transfer(self):
-        root=Path(__file__).resolve().parents[1]/'apps/android/app/src/main'
+        root=Path(__file__).resolve().parents[1]/'apps/flutter/android/app/src/main'
         android='{http://schemas.android.com/apk/res/android}'
         app=ET.parse(root/'AndroidManifest.xml').getroot().find('application')
         self.assertEqual(app.get(android+'allowBackup'),'false')

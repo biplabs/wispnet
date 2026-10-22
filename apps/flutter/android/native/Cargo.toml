@@ -8,7 +8,7 @@ publish.workspace = true
 name = "wispnet_android"
 crate-type = ["cdylib", "rlib"]
 [dependencies]
-wispnet-client = { path = "../../../crates/client" }
+wispnet-client = { path = "../../../../crates/client" }
 zeroize.workspace = true
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "=0.21.1"

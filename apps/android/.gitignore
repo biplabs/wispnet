@@ -1,9 +1,0 @@
-.gradle/
-**/build/
-local.properties
-app/src/main/jniLibs/
-
-# Upload signing material stays outside version control.
-*.jks
-*.keystore
-keystore.properties

@@ -87,28 +87,9 @@ The release installer is checked with the existing identity and authority data,
 registered tray, single-instance reopening and engine loaded from its installed
 bundle. See `apps/flutter/README.md` for the native test command.
 
-## Legacy Tauri regression validation
-
-The shared JavaScript tests, private-helper tests and Rust IPC tests run on both
-platforms through `scripts/test.sh`. With native WebKit development libraries
-present, the suite also builds/tests the Tauri GUI and runs the real two-node
-integration contract through its `--request` transport. Headless hosts can run
-IPC tests without GUI dependencies. For the browser interaction smoke test:
-
-```sh
-cd apps/macos
-npm ci
-npx playwright install chromium
-npm run test:ui
-```
-
-This exercises access settings, service edits, public sharing and the confirmed
-owner-operation plan against a controlled API fixture. It complements real node
-integration; it is not evidence of a physical macOS GUI or remote-host deployment.
-
 ## Tests and current limits
 
-`scripts/test.sh` includes real two-node local-socket tests for pairing/pins, target-owner approval, permissions, conflict rejection, browser bootstrap/service access, live connection increase/decrease, recent-activity refresh/expiry and revocation filtering, and native Stop, plus real owner-local HTTP/bootstrap/origin/removal/Stop checks with no self-pin or self-grant, and Tauri browser interaction tests for selected approval grants, revision capture, settings, service edits, public access and stale Open blocking. Cache regressions cover corrupt/oversized/foreign-host files, permissions, symlinks and deletion independent of pins. All original Rust/relay/browser tests remain local; the pre-push hook runs them. The remaining Python tests exercise the stdlib owner/cache helpers without Qt. Native installation is checked against KDE's registered StatusNotifierItem and actual node services/client records.
+`scripts/test.sh` includes real two-node local-socket tests for pairing/pins, target-owner approval, permissions, conflict rejection, browser bootstrap/service access, live connection increase/decrease, recent-activity refresh/expiry and revocation filtering, and native Stop, plus real owner-local HTTP/bootstrap/origin/removal/Stop checks with no self-pin or self-grant. Flutter widget and adapter tests cover selected approval grants, revision capture, settings, service edits, public access and stale Open blocking. Cache regressions cover corrupt/oversized/foreign-host files, permissions, symlinks and deletion independent of pins. All original Rust/relay/browser tests remain local; the pre-push hook runs them. The remaining Python tests exercise the stdlib owner/cache helpers without Qt. Native installation is checked against KDE's registered StatusNotifierItem and actual node services/client records.
 
 The version-1 catalog supplies complete sorted records with service IDs, incarnations, bounded display names and explicit HTTP/TCP types; see [catalog snapshots](catalog-snapshots.md). This desktop uses the existing HTTP browser gateway. Own-service local browsing and persistent desktop catalog caching are implemented. The broader full-power-off/rebuild acceptance under #11 remains separate work. Combined multi-host operation status is implemented below. The second physical computer can be headless; it does not require another desktop GUI. Service incarnation IDs now distinguish removal/recreation even at the identical backend address; see [service lifecycle safety](service-lifecycle.md). Versioned complete snapshots and native durable high-water checks are implemented. A checkout-independent Linux x86_64 bundle and installer are available; see
 [distribution](linux-distribution.md). Full release distribution acceptance remains #15. This checkpoint does not close those issues.

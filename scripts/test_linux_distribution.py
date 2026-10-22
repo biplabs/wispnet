@@ -163,7 +163,7 @@ class DistributionTests(unittest.TestCase):
         self.initialize()
         before = self.status()
         # Use an inert native ELF for files-only staging; GUI runtime is tested
-        # separately through the actual Tauri executable and browser smoke test.
+        # separately through Flutter adapter/widget and native integration checks.
         archive = package(self.installed, self.root / "desktop.tar.gz", self.installed)
         with tarfile.open(archive) as source:
             source.extractall(self.root, filter="data")

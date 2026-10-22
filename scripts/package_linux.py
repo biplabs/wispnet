@@ -50,7 +50,7 @@ def package(binary, output, desktop_binary=None):
         files = [
             "scripts/install_node_desktop.py",
             "scripts/node_request.py",
-            "apps/macos/desktop_data.py",
+            "apps/flutter/desktop/desktop_data.py",
             "deploy/node/wispnet-host.service",
             "deploy/node/wispnet-desktop.service",
             "config/node/host.toml",

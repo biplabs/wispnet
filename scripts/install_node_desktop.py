@@ -175,7 +175,7 @@ else:
 if (destination / "Wispnet").is_file() and not (destination / "Wispnet").is_symlink():
     shutil.copy2(destination / "Wispnet", destination / "Wispnet.previous")
 os.replace(temporary_desktop, destination / "Wispnet")
-shutil.copy2(ROOT / "apps/macos/desktop_data.py", destination / "desktop_data.py")
+shutil.copy2(ROOT / "apps/flutter/desktop/desktop_data.py", destination / "desktop_data.py")
 (destination / "python-path").write_text(str(Path(sys.executable).resolve()))
 shutil.copytree(api_package, destination / "wispnet_desktop", dirs_exist_ok=True)
 binpath = home / ".local/bin/wispnet-desktop"

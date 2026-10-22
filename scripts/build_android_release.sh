@@ -14,4 +14,4 @@ case "${1:-}" in
 esac
 export WISPNET_ANDROID_PROFILE=release WISPNET_ANDROID_ARTIFACT=bundle
 scripts/build_android.sh
-python3 scripts/check_android_release.py apps/android/app/build/outputs/bundle/release/app-release.aab --abi "${WISPNET_ANDROID_ABI:-arm64-v8a}" "${check_args[@]}"
+python3 scripts/check_android_release.py apps/flutter/build/app/outputs/bundle/release/app-release.aab --abi "${WISPNET_ANDROID_ABI:-arm64-v8a}" "${check_args[@]}"

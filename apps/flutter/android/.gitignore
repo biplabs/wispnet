@@ -1,7 +1,5 @@
-gradle-wrapper.jar
 /.gradle
 /captures/
-/gradlew
 /gradlew.bat
 /local.properties
 GeneratedPluginRegistrant.java
@@ -12,3 +10,7 @@ GeneratedPluginRegistrant.java
 key.properties
 **/*.keystore
 **/*.jks
+
+**/build/
+app/src/main/jniLibs/
+keystore.properties

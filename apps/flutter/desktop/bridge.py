@@ -22,7 +22,7 @@ from urllib.parse import urlsplit
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 sys.path.insert(0, str(ROOT / 'apps/node/desktop') if (ROOT / 'apps/node/desktop').exists() else str(HERE))
-sys.path.insert(0, str(ROOT / 'apps/macos') if (ROOT / 'apps/macos').exists() else str(HERE))
+sys.path.insert(0, str(HERE))
 from wispnet_desktop.api import NodeAPI, NodeRejected
 from wispnet_desktop.catalog_cache import CatalogCache
 from wispnet_desktop.combined import Combined

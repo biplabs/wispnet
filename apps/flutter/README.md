@@ -23,15 +23,14 @@ From the repository root:
 
 ```sh
 scripts/build_android.sh
-adb install -r apps/android/app/build/outputs/apk/debug/app-debug.apk
+adb install -r apps/flutter/build/app/outputs/apk/debug/app-debug.apk
 adb shell am start -n app.wispnet.android/com.biplabs.wispnet.FlutterMainActivity
 scripts/test_flutter.sh
 ```
 
-The standard Android build/release scripts now build Flutter by default, retaining
-existing artifact paths, version identity, upload signing variables, and release
-checks. `WISPNET_ANDROID_UI=native scripts/build_android.sh` builds the legacy UI
-for regression comparison. Never uninstall/clear the app to migrate it.
+The Android build/release scripts build the Flutter UI with the existing version
+identity, upload signing variables and release checks. Artifacts live under
+`apps/flutter/build/app/outputs`. Never uninstall/clear the app to migrate it.
 
 ## Boundaries and upgrade compatibility
 
@@ -40,18 +39,16 @@ for regression comparison. Never uninstall/clear the app to migrate it.
 - `lib/src/app.dart`: responsive directory and orchestration.
 - `android/.../FlutterMainActivity.java`: Android platform adapter. Reuses the
   existing `Native`, `HostStore`, `DeviceProfile`, `AccessService`, and bounded QR
-  decoder directly from `apps/android`; the Rust core is unchanged.
+  decoder from the same Android runner; the Rust core is unchanged.
 
 The application ID remains `app.wispnet.android`, with the same signing settings,
 Keystore alias, private state paths, preferences, host validation, card ordering,
-and backup exclusions. Notification taps resolve the package launcher so both
-runners work. Flutter never receives the device key. Opening cached services still
+and backup exclusions. Notification taps resolve the Flutter launcher. Flutter never receives the device key. Opening cached services still
 requires the Rust client's fresh owner/permission/incarnation check.
 
-The old Java UI remains available inside the legacy runner while parity is
-validated. The new launcher and text-share entry point use Flutter; its legacy
-activities are not exported. Existing Java-view instrumentation targets the old UI
-and does not establish Flutter UI coverage.
+The legacy Java UI and its instrumentation harness have been removed. Flutter
+is the only launcher and text-share entry point. Native Android services and
+resources live in `android/app/src/main`; the JNI crate lives in `android/native`.
 
 ## Verification
 
@@ -85,8 +82,8 @@ owner-only `desktop-flutter.json` in the existing state directory; cached catalo
 remain display-only. Opening any service asks its current owner again with the
 exact incarnation. The installer stages complete runtimes and switches the
 launcher only after the replacement builds, retaining previous Flutter runtimes for recovery.
-The old Tauri source remains available for regression comparison, not the default
-installed desktop.
+The retired Tauri app has been removed. The private desktop persistence helper
+and its tests live beside the bridge in `apps/flutter/desktop`.
 
 Linux build prerequisites: Flutter, Clang, CMake, Ninja, pkg-config, GTK 3 and
 Ayatana AppIndicator development libraries. Runtime also requires Python 3.11+
@@ -122,7 +119,7 @@ Flutter's uninstall-on-install-failure fallback.
 
 ## Android visual reference
 
-The header retains `MainActivity.deviceHeader` geometry: settings follows the
+The header retains the established device-header geometry: settings follows the
 intrinsic device-label width. The docked control retains the native 6 dp downward
 offset, 38 dp pill within a 44 dp control, layered cyan indicator, and fill/border
 colors. Its caption is now **Online**, measured at its natural text width using

@@ -5,7 +5,7 @@ val nativeAbis = providers.gradleProperty("target-platform").orElse("android-arm
     when (it) { "android-arm64" -> "arm64-v8a"; "android-x64" -> "x86_64"; else -> error("Supported Android targets: android-arm64, android-x64") }
 }
 val stageWispnetNative = tasks.register<Sync>("stageWispnetNative") {
-    val nativeRoot = rootProject.file("../../android/app/src/main/jniLibs")
+    val nativeRoot = file("src/main/jniLibs")
     from(nativeRoot) { nativeAbis.forEach { include("$it/libwispnet_android.so") } }
     into(layout.buildDirectory.dir("wispnet-jni"))
     doFirst {
@@ -17,11 +17,9 @@ android {
     compileSdk = 36
     ndkVersion = flutter.ndkVersion
     sourceSets.getByName("main") {
-        java.srcDir("../../../android/app/src/main/java")
-        res.srcDir("../../../android/app/src/main/res")
-        jniLibs.srcDir(layout.buildDirectory.dir("wispnet-jni").get().asFile)
+        jniLibs.setSrcDirs(listOf(layout.buildDirectory.dir("wispnet-jni").get().asFile))
     }
-    defaultConfig { applicationId = "app.wispnet.android"; minSdk = 34; targetSdk = 36; versionCode = flutter.versionCode; versionName = flutter.versionName; testInstrumentationRunner = "com.biplabs.wispnet.AppTestRunner"; ndk { abiFilters += nativeAbis } }
+    defaultConfig { applicationId = "app.wispnet.android"; minSdk = 34; targetSdk = 36; versionCode = flutter.versionCode; versionName = flutter.versionName; ndk { abiFilters += nativeAbis } }
     val uploadEnvironment = listOf("WISPNET_UPLOAD_KEYSTORE", "WISPNET_UPLOAD_STORE_PASSWORD", "WISPNET_UPLOAD_KEY_ALIAS", "WISPNET_UPLOAD_KEY_PASSWORD")
     val supplied = uploadEnvironment.map { providers.environmentVariable(it).orNull }
     require(supplied.all { it == null } || supplied.all { !it.isNullOrBlank() }) { "Supply all upload signing environment variables, or none for an unsigned build" }
@@ -41,7 +39,6 @@ android {
         }
         create("peercheck") { initWith(getByName("debug")); applicationIdSuffix = ".peercheck"; signingConfig = signingConfigs.getByName("debug") }
     }
-    testBuildType = providers.gradleProperty("wispnetTestBuildType").orElse("debug").get()
     packaging { jniLibs { useLegacyPackaging = false } }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
 }

@@ -11,10 +11,10 @@ Requirements: the Android build prerequisites in [Android app](android-app.md), 
 # Produce an explicitly unsigned, optimized release AAB:
 scripts/build_android_release.sh
 # Independent validation of an existing bundle:
-python3 scripts/check_android_release.py apps/android/app/build/outputs/bundle/release/app-release.aab
+python3 scripts/check_android_release.py apps/flutter/build/app/outputs/bundle/release/app-release.aab
 ```
 
-Output: `apps/android/app/build/outputs/bundle/release/app-release.aab`. Unsigned output is for inspection, not Play upload. The builder uses Cargo's release profile, target API 36, a non-debuggable Flutter application with the existing Java/Rust backend, backup disabled, and optional camera hardware. Per-build version overrides are `WISPNET_ANDROID_VERSION_CODE` and `WISPNET_ANDROID_VERSION_NAME`; the defaults derive from the shared Wispnet version (`1000` and `0.1.0` for version 0.1.0). Increase the version code for every new Play upload.
+Output: `apps/flutter/build/app/outputs/bundle/release/app-release.aab`. Unsigned output is for inspection, not Play upload. The builder uses Cargo's release profile, target API 36, a non-debuggable Flutter application with the existing Java/Rust backend, backup disabled, and optional camera hardware. Per-build version overrides are `WISPNET_ANDROID_VERSION_CODE` and `WISPNET_ANDROID_VERSION_NAME`; the defaults derive from the shared Wispnet version (`1000` and `0.1.0` for version 0.1.0). Increase the version code for every new Play upload.
 
 The build uses both NDK r27 linker flags for 16 KB LOAD and RELRO alignment, and uncompressed native-library packaging. The checker downloads checksum-pinned Google bundletool 1.18.3 into ignored `target/android-tools`, validates the AAB, reads its actual protobuf manifest/config, and checks the expected application ID, release flags, API target, optional camera, native ABI, ELF LOAD/RELRO boundaries and bundle ZIP-alignment request. It rejects unexpected native libraries and verifies any present bundle signature.
 The Flutter bundle contains exactly the selected ABI's Rust library, Flutter engine,
@@ -38,7 +38,7 @@ Then run:
 
 ```sh
 WISPNET_ANDROID_VERSION_CODE=2 scripts/build_android_release.sh --signed
-python3 scripts/check_android_release.py apps/android/app/build/outputs/bundle/release/app-release.aab --require-signed
+python3 scripts/check_android_release.py apps/flutter/build/app/outputs/bundle/release/app-release.aab --require-signed
 ```
 
 The signed builder fails before compilation if credentials are missing; partial signing configuration is rejected by Gradle. It never falls back to a debug key. Keystores and signing properties are ignored, but keep real credentials outside the checkout. The initial release-preparation checkpoint did not create a permanent key. The subsequent signing setup below provisions a separate Wispnet upload key; Console access remains user-managed. See [Play App Signing and upload keys](https://developer.android.com/studio/publish/app-signing).
@@ -67,7 +67,7 @@ The rebuilt API 36-targeted debug APK, using byte-for-byte the optimized ARM nat
 
 A separate Wispnet upload key is now configured locally at `~/.config/wispnet/play-upload-keystore.p12`, with a private mode-0600 `~/.config/wispnet/play-upload.env`. WispShell's key and workflows were inspected but not changed. Wispnet's four signing secrets are configured in `biplabs/wispnet`; the Google publisher credential still needs to be supplied. Keep a private backup of the keystore and its environment file together.
 
-A preserved copy at `target/play-internal/wispnet-app.wispnet.android-v1-signed.aab` (also in `apps/android/app/build/outputs/bundle/release/app-release.aab`) is **signed**, version code **1**, package **app.wispnet.android**, and passed the signature/native/bundle checks. Earlier unsigned artifacts described above were the preceding checkpoint.
+A preserved copy at `target/play-internal/wispnet-app.wispnet.android-v1-signed.aab` (also in `apps/flutter/build/app/outputs/bundle/release/app-release.aab`) is **signed**, version code **1**, package **app.wispnet.android**, and passed the signature/native/bundle checks. Earlier unsigned artifacts described above were the preceding checkpoint.
 
 To rebuild with this key:
 
@@ -109,10 +109,10 @@ Local upload also works with a private service-account JSON file:
 
 ```sh
 # Default is dry-run: validates the signed artifact without any Play API calls.
-uv run scripts/publish_android_internal.py apps/android/app/build/outputs/bundle/release/app-release.aab
+uv run scripts/publish_android_internal.py apps/flutter/build/app/outputs/bundle/release/app-release.aab
 # Once the app/account setup is complete, publish a new unused-version bundle:
 GOOGLE_APPLICATION_CREDENTIALS=/private/play-service-account.json \
-  uv run scripts/publish_android_internal.py apps/android/app/build/outputs/bundle/release/app-release.aab --publish
+  uv run scripts/publish_android_internal.py apps/flutter/build/app/outputs/bundle/release/app-release.aab --publish
 ```
 
 The uploader creates an edit, uploads the bundle, updates only the internal track, validates, commits, then checks the committed version/status in a fresh edit. Failed pre-commit work attempts to discard its edit. A commit timeout or failed post-commit verification is reported as uncertain, with no automatic retry. Inspect the Console before retrying such an outcome. Local regressions cover success, draft bootstrap status, aborted upload cleanup, unsupported statuses, uncertain commit and post-commit verification failure. Signed dry-run passed; live upload awaits the user's Console/credential setup.

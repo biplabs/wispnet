@@ -13,7 +13,7 @@ import sys
 import time
 
 installed = Path(__file__).resolve().parent
-source = installed.parents[1] / "apps/node/desktop"
+source = installed.parents[2] / "apps/node/desktop"
 sys.path.insert(0, str(source if source.exists() else installed))
 from wispnet_desktop.api import NodeAPI
 from wispnet_desktop.catalog_cache import CatalogCache

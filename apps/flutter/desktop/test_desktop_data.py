@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[3]
 spec = importlib.util.spec_from_file_location(
-    "desktop_data", ROOT / "apps/macos/desktop_data.py"
+    "desktop_data", ROOT / "apps/flutter/desktop/desktop_data.py"
 )
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)

@@ -108,7 +108,7 @@ def main():
     executable = contents / "MacOS/Wispnet"
     # Qt-free helper retains the existing durable owner-operation journals/cache.
     shutil.copy2(
-        ROOT / "apps/macos/desktop_data.py", executable.parent / "desktop_data.py"
+        ROOT / "apps/flutter/desktop/desktop_data.py", executable.parent / "desktop_data.py"
     )
     helper_package = executable.parent / "wispnet_desktop"
     helper_package.mkdir(exist_ok=True)

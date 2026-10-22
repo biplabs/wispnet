@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/core", "crates/agent", "crates/registry", "apps/node/cli", "apps/relay", "apps/public-gateway", "apps/android/native", "crates/client", "apps/node/daemon"]
+members = ["crates/core", "crates/agent", "crates/registry", "apps/node/cli", "apps/relay", "apps/public-gateway", "apps/flutter/android/native", "crates/client", "apps/node/daemon"]
 resolver = "3"
 
 [workspace.package]
