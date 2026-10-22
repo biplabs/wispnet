@@ -50,6 +50,9 @@ def package(binary, output, desktop_binary=None):
         files = [
             "scripts/install_node_desktop.py",
             "scripts/node_request.py",
+            "scripts/firewall_helper.py",
+            "scripts/install_firewall_helper.py",
+            "deploy/node/wispnet-firewall.service",
             "apps/flutter/desktop/desktop_data.py",
             "deploy/node/wispnet-host.service",
             "deploy/node/wispnet-desktop.service",

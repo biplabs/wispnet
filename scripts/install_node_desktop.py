@@ -24,7 +24,12 @@ parser.add_argument(
     action="store_true",
     help="Install only the node; skip desktop launcher and tray",
 )
+parser.add_argument("--configure-firewall", action="store_true",
+                    help="Request one-time administrator installation of the UDP firewall helper")
 args = parser.parse_args()
+if args.configure_firewall and args.no_start:
+    parser.error("--configure-firewall cannot be combined with --no-start")
+
 ROOT = Path(__file__).resolve().parents[1]
 node_source = ROOT / "bin/wispnet"
 if node_source.exists():
@@ -60,6 +65,13 @@ if graphical and not desktop_source.exists():
     subprocess.run([str(build_script)], check=True)
     desktop_source = ROOT / "apps/flutter/build/linux/x64/release/bundle/Wispnet"
 home = Path.home()
+if args.configure_firewall:
+    helper = ROOT / "scripts/install_firewall_helper.py"
+    command = [sys.executable, str(helper), "--uid", str(os.getuid())]
+    if os.geteuid() != 0:
+        command.insert(0, "pkexec" if graphical and shutil.which("pkexec") else "sudo")
+    subprocess.run(command, check=True)
+
 # Upgrade the misspelled installation without moving or recreating identity/state.
 # The copied configuration deliberately retains its original state_dir.
 legacy_config = home / ".config/wipsnet-node/host.toml"

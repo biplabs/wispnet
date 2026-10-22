@@ -689,6 +689,10 @@ void main() {
     expect(find.textContaining('Phone discovery observations'), findsOneWidget);
     expect(find.textContaining('• ? UDP response IPv4'), findsOneWidget);
     expect(
+      find.textContaining('Automatic router mapping status unavailable'),
+      findsOneWidget,
+    );
+    expect(
       backend.calls
           .where((c) => c.$1 == 'connectionDiagnostics')
           .single
@@ -743,6 +747,26 @@ void main() {
         'reason': 'UDP discovery works; direct peer connectivity failed during this test.',
         'local': side(true),
         'remote': side(false),
+        'router_mapping': {
+          'local': {
+            'enabled': true,
+            'active': true,
+            'external_port': 54321,
+            'public_address': true,
+            'upnp': true,
+            'pcp': false,
+            'nat_pmp': null,
+          },
+          'remote': {
+            'enabled': true,
+            'active': false,
+            'external_port': null,
+            'public_address': null,
+            'upnp': true,
+            'pcp': false,
+            'nat_pmp': null,
+          },
+        },
       },
     );
     await mount(tester, backend);
@@ -753,6 +777,12 @@ void main() {
     final text = tester
         .widget<SelectableText>(find.byType(SelectableText))
         .data!;
+    expect(text, contains('✓ Automatic router mapping enabled'));
+    expect(text, contains('UPnP ✓ · PCP ✗ · NAT-PMP ?'));
+    expect(text, contains('✓ Router mapping granted · UDP 54321'));
+    expect(text, contains('✗ Router mapping granted'));
+    expect(text, contains('A granted mapping does not prove reachability'));
+
     expect(text, contains('Phone observations'));
     expect(text, contains('Target computer observations'));
     expect(text, contains('network report updated during this test'));

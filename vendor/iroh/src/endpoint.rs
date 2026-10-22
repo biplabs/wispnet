@@ -119,7 +119,10 @@ pub use self::{
 #[cfg(not(wasm_browser))]
 use crate::socket::transports::IpConfig;
 use crate::socket::transports::TransportConfig;
-pub use crate::{net_report::NetReportConfig, portmapper::PortmapperConfig};
+pub use crate::{
+    net_report::NetReportConfig,
+    portmapper::{PortMappingProtocols, PortMappingStatus, PortmapperConfig},
+};
 
 /// Builder for [`Endpoint`].
 ///
@@ -1386,6 +1389,12 @@ impl Endpoint {
                 }
             }
         }
+    }
+
+    /// Reports automatic router mapping and probes protocol support for up to three seconds.
+    /// A granted mapping does not prove reachability from the Internet.
+    pub async fn port_mapping_status(&self) -> PortMappingStatus {
+        self.inner.port_mapping_status().await
     }
 
     /// Snapshots connection status for all configured relays, including standby sessions.

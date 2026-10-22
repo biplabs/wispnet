@@ -20,6 +20,7 @@ cargo test --workspace --locked
 cargo test -p wispnet-cli --example external_network_probe --locked
 cargo build --workspace --locked
 cargo build -p wispnet-cli --example relay_fixture --locked
+python3 -m unittest discover -s scripts -p test_firewall_helper.py
 python3 -m unittest discover -s scripts -p test_relay_network_audit.py
 python3 scripts/standalone_relay_smoke.py
 python3 scripts/smoke.py

@@ -312,3 +312,85 @@ The idle fixture checks both sessions past 60 seconds, retains two different
 QUIC-observed NAT mappings, and verifies relay-only bootstrap upgrades to direct.
 A delayed-primary fixture proves relay preference beats RTT, tests primary loss,
 and verifies failback on the same peer connection.
+
+## Automatic router mapping
+
+The shared transport enables Iroh's `portmapper` feature on desktop and Android.
+It requests a UDP mapping using the gateway's available PCP, NAT-PMP or UPnP
+service, advertises the granted address alongside discovery/LAN candidates,
+and renews leases through Iroh's mapping service. Hosts can keep
+`bind_addr='0.0.0.0:0'`: a fixed port or manual router rule is not required when
+this succeeds. Graceful endpoint close requests mapping release.
+
+Diagnostic shows the mapping service's enabled state, gateway protocol probe
+responses, and whether there is a current granted mapping, including its UDP
+port and whether the address is public. Protocol detection does not identify
+which protocol created a lease. Probe timeouts/errors are unavailable, not a
+negative result. Lease-renewal details are not exposed by the upstream API and
+are not reported as verified. A granted mapping is not proof of outside
+reachability: the actual direct-path result is reported separately.
+
+The optional, approved-peer-only `router_mapping` control operation returns a
+versioned address-free summary. Existing `diagnostic` snapshots remain unchanged
+for older clients. An older host rejecting the mapping query does not invalidate
+the normal diagnostic; updated clients display mapping status as unavailable.
+Owner-local `transport_status` exposes the same summary. No gateway or public
+IP addresses are included in either response.
+
+For a real test, remove the manual forwarding rule, restart the host on a dynamic
+port, and run Diagnostic from cellular or a hotspot outside the home network.
+Router mapping must be enabled/supported by the gateway; a local firewall must
+also allow the resulting peer traffic. Upstream CGNAT can still prevent direct
+connectivity despite a successful mapping on the nearest router. Relay fallback
+continues to work when mapping is unavailable. A LAN-only direct test does not
+prove that automatic WAN mapping works.
+
+Each address-discovery cycle also probes mapping protocols before retrying lease
+acquisition. This prevents a failed initial UPnP attempt from hiding available
+PCP/NAT-PMP service. A major network change replaces the mapping client and its
+protocol cache, removes the old mapped candidate, and maps the current UDP port
+on the new gateway. A lease from home Wi-Fi is not treated as a hotspot lease.
+
+## Linux local firewall helper
+
+`python3 scripts/install_node_desktop.py --configure-firewall` requests one-time
+administrator setup. Headless installs use sudo; graphical installs use pkexec
+when available. The standalone setup command is:
+
+```sh
+sudo python3 scripts/install_firewall_helper.py --uid "$(id -u)"
+```
+
+The root-owned system service follows only the configured user's
+`wispnet-host.service`. The node remains unprivileged and publishes its PID,
+process start time and actual bound UDP ports under `/run/user/<uid>/` with
+private permissions. The helper treats this report as untrusted. It validates
+UIDs, exact systemd cgroup, process generation, network namespace, open socket
+inodes and the UDP table before allowing at most one port per family (two entries
+maximum). It never accepts ports below 1024, TCP rules, addresses, commands or a
+caller-supplied firewall rule. Manually launched nodes outside the installed
+host unit are not authorized by the helper.
+
+Only the `WISPNET-UDP` chains and their INPUT jumps are managed. New socket ports
+are added, old ones removed, and UFW hook reordering is repaired on the one-second
+reconciliation cycle. Other UFW rules are preserved. Stopped or invalid node
+reports lose their rules; stopping the helper normally removes its chains.
+Administrator firewall policy can override/disable this integration by stopping
+and disabling `wispnet-firewall.service`. A backend error is reported as unhealthy
+and cleanup is attempted; do not assume a failed firewall command took effect.
+
+The helper has no listening socket or general privileged command interface.
+Its systemd capability set permits netfilter operations and inspection of the
+configured process's descriptors (`CAP_SYS_PTRACE`/`CAP_DAC_READ_SEARCH`); the
+service sandbox makes system/home configuration read-only. Python runs isolated
+from user module paths. Root configuration limits which user services qualify.
+The installer copies the helper to root-owned storage; no user-writable code runs
+privileged after installation. Updates to the installed helper require another
+administrator installation.
+
+For migration, `--remove-legacy-port 41088` removes that explicit manual UFW UDP
+rule only after a healthy helper has verified a running node's socket. No router
+forwarding rule is created by this helper: router mapping remains the separate
+UPnP/PCP/NAT-PMP operation. Linux distribution archives include both installers,
+the helper and its systemd unit. The host socket is not changed to a fixed port
+or constrained port range.

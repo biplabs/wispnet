@@ -124,3 +124,9 @@ Physical GUI/headless browser and restart evidence is recorded in the desktop
 guide. Full clean-OS distribution validation, signed public release delivery,
 independent relay replacement and protected host recovery remain separate release
 acceptance; this document does not claim they were exercised by the package test.
+
+Automatic local firewall setup is available with `--configure-firewall` on the
+installer. It requires one administrator authorization and installs the
+socket-verified `wispnet-firewall.service`; the Wispnet node stays unprivileged.
+See [relay connectivity](relay-connectivity.md#linux-local-firewall-helper) for
+verification, migration of old manual rules, and removal behavior.

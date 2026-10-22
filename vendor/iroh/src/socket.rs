@@ -360,6 +360,7 @@ pub(crate) struct Socket {
     local_addrs_watch: LocalAddrsWatch,
     home_relay_watch: HomeRelayWatcher,
     relay_connections: Arc<std::sync::Mutex<BTreeMap<RelayUrl, RelayStatus>>>,
+    port_mapper: RwLock<portmapper::Client>,
     /// Currently bound IP addresses of all sockets
     #[cfg(not(wasm_browser))]
     ip_bind_addrs: Vec<SocketAddr>,
@@ -499,6 +500,11 @@ impl Socket {
                 })
                 .collect()
         })
+    }
+
+    pub(crate) async fn port_mapping_status(&self) -> portmapper::PortMappingStatus {
+        let mapper = self.port_mapper.read().expect("portmapper lock").clone();
+        mapper.status().await
     }
 
     pub(crate) fn relay_connections(&self) -> Vec<RelayStatus> {
@@ -814,16 +820,21 @@ impl DirectAddrUpdateState {
         let sock = self.sock.clone();
 
         let run_done = self.run_done.clone();
+        let port_mapper = self.port_mapper.clone();
 
         // Ensure that reports are cancelled when we shutdown
         let token = self.shutdown_token.child_token();
         let inner_token = token.child_token();
         task::spawn(
             async move {
-                let fut = token.run_until_cancelled(time::timeout(
-                    NET_REPORT_TIMEOUT,
-                    net_reporter.get_report(if_state, why.is_major(), inner_token),
-                ));
+                let report = async {
+                    let (_, report) = tokio::join!(
+                        port_mapper.probe_and_procure(),
+                        net_reporter.get_report(if_state, why.is_major(), inner_token),
+                    );
+                    report
+                };
+                let fut = token.run_until_cancelled(time::timeout(NET_REPORT_TIMEOUT, report));
 
                 match fut.await {
                     Some(Ok(report)) => {
@@ -1022,6 +1033,7 @@ impl EndpointInner {
             local_addrs_watch: transports.local_addrs_watch(),
             home_relay_watch,
             relay_connections,
+            port_mapper: RwLock::new(port_mapper.clone()),
             #[cfg(not(wasm_browser))]
             ip_bind_addrs: transports.ip_bind_addrs(),
             tls_config: tls_config.clone(),
@@ -1158,6 +1170,13 @@ impl EndpointInner {
 
         // Cancel at_close_start token, which cancels running netreports.
         self.sock.shutdown.at_close_start.cancel();
+
+        // Release any automatically created router mapping while connections drain.
+        self.sock
+            .port_mapper
+            .read()
+            .expect("portmapper lock")
+            .deactivate();
 
         // Remove address lookup services
         self.sock.address_lookup().clear();
@@ -1525,6 +1544,14 @@ impl Actor {
         self.sock.publish_my_addr();
 
         while !shutdown_token.is_cancelled() {
+            let current_mapping = self
+                .direct_addr_update_state
+                .port_mapper
+                .watch_external_address();
+            if !portmap_watcher.same_channel(&current_mapping) {
+                portmap_watcher = current_mapping;
+                portmap_watcher_closed = false;
+            }
             self.sock.metrics.socket.actor_tick_main.inc();
             let portmap_watcher_changed = portmap_watcher.changed();
 
@@ -1682,6 +1709,23 @@ impl Actor {
         debug!(is_major, "link change detected");
 
         if is_major {
+            // A lease belongs to its gateway, not to the endpoint identity.
+            // Recreate the service to discard both the old lease and protocol cache.
+            self.direct_addr_update_state.port_mapper.reset();
+            *self.sock.port_mapper.write().expect("portmapper lock") =
+                self.direct_addr_update_state.port_mapper.clone();
+            for addr in self.sock.local_addrs_watch.clone().get() {
+                if let transports::Addr::Ip(SocketAddr::V4(addr)) = addr
+                    && let Some(port) = std::num::NonZeroU16::new(addr.port())
+                {
+                    self.direct_addr_update_state
+                        .port_mapper
+                        .update_local_port(port);
+                    break;
+                }
+            }
+            #[cfg(not(wasm_browser))]
+            self.update_direct_addresses(None);
             if let Err(err) = self.transports_network_change.rebind() {
                 warn!("failed to rebind transports: {err:?}");
             }

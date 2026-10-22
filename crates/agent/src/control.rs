@@ -103,6 +103,18 @@ pub(crate) async fn serve_stream(
             Err(_) => return Err(TunnelError::Transport("control unavailable")),
         };
         counts.record_activity(peer);
+        if matches!(request, Request::RouterMapping {}) {
+            let report = crate::diagnostics::router_mapping_report(&diagnostics.endpoint).await;
+            if !authority.approved(peer).await {
+                write_frame(&mut send, br#"{"error":"access_denied"}"#).await?;
+            } else {
+                let bytes = serde_json::to_vec(&report)
+                    .map_err(|_| TunnelError::Transport("invalid router mapping report"))?;
+                write_frame(&mut send, &bytes).await?;
+            }
+            let _ = send.stopped().await;
+            return Ok(());
+        }
         if matches!(request, Request::Diagnostic {}) {
             let snapshot = crate::diagnostics::observe(&diagnostics, &connection).await;
             // A grant revoked during discovery must not authorize the reply.
@@ -252,4 +264,36 @@ pub async fn diagnostic_on(
     })
     .await
     .map_err(|_| TunnelError::Transport("host diagnostic timed out"))?
+}
+
+/// Optional mapping-status RPC. Older peers can reject it without affecting diagnostics.
+pub async fn router_mapping_on(
+    connection: &Connection,
+    expected: EndpointId,
+) -> Result<host::RouterMappingReport, TunnelError> {
+    if connection.remote_id() != expected {
+        return Err(TunnelError::Transport(
+            "router mapping target identity mismatch",
+        ));
+    }
+    timeout(std::time::Duration::from_secs(5), async {
+        let (mut send, mut recv) = connection
+            .open_bi()
+            .await
+            .map_err(|_| TunnelError::Transport("router mapping stream unavailable"))?;
+        let request = serde_json::to_vec(&Request::RouterMapping {})
+            .map_err(|_| TunnelError::Transport("invalid router mapping request"))?;
+        write_frame(&mut send, &request).await?;
+        let bytes = read_frame(&mut recv, 4096).await?;
+        let report: host::RouterMappingReport = serde_json::from_slice(&bytes)
+            .map_err(|_| TunnelError::Transport("invalid router mapping report"))?;
+        if !report.valid(expected) {
+            return Err(TunnelError::Transport(
+                "router mapping host or schema mismatch",
+            ));
+        }
+        Ok(report)
+    })
+    .await
+    .map_err(|_| TunnelError::Transport("router mapping request timed out"))?
 }

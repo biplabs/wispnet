@@ -10,6 +10,7 @@ pub const MAX_RESPONSE: usize = 128 * 1024;
 pub enum Request {
     Catalog {},
     Diagnostic {},
+    RouterMapping {},
     SetName { name: String },
 }
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -60,6 +61,31 @@ impl Catalog {
         self.host == previous.host
             && self.generation == previous.generation
             && (self.revision > previous.revision || self == previous)
+    }
+}
+
+/// Address-free automatic mapping status, available only to approved peers.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RouterMappingReport {
+    pub version: u16,
+    pub host: EndpointId,
+    pub enabled: bool,
+    pub active: bool,
+    pub external_port: Option<u16>,
+    pub public_address: Option<bool>,
+    pub upnp: Option<bool>,
+    pub pcp: Option<bool>,
+    pub nat_pmp: Option<bool>,
+}
+impl RouterMappingReport {
+    pub fn valid(&self, expected: EndpointId) -> bool {
+        self.version == 1
+            && self.host == expected
+            && self.active == self.external_port.is_some()
+            && self.active == self.public_address.is_some()
+            && self.external_port != Some(0)
+            && (self.enabled || !self.active)
     }
 }
 
@@ -126,5 +152,38 @@ impl DiagnosticSnapshot {
             && self.elapsed_ms <= 40_000
             && self.network.wait_ms <= 31_000
             && self.peer_ip_candidates.is_none_or(|count| count <= 1024)
+    }
+}
+
+#[cfg(test)]
+mod mapping_tests {
+    use super::*;
+    #[test]
+    fn mapping_report_requires_consistent_lease_and_pinned_host() {
+        let host = crate::identity::Identity::generate().endpoint_id();
+        let other = crate::identity::Identity::generate().endpoint_id();
+        let mut report = RouterMappingReport {
+            version: 1,
+            host,
+            enabled: true,
+            active: false,
+            external_port: None,
+            public_address: None,
+            upnp: None,
+            pcp: None,
+            nat_pmp: None,
+        };
+        assert!(report.valid(host));
+        assert!(!report.valid(other));
+        report.external_port = Some(43210);
+        assert!(!report.valid(host));
+        report.active = true;
+        report.public_address = Some(false);
+        assert!(report.valid(host)); // A private upstream mapping is still a granted lease.
+        report.enabled = false;
+        assert!(!report.valid(host));
+        report.enabled = true;
+        report.external_port = Some(0);
+        assert!(!report.valid(host));
     }
 }

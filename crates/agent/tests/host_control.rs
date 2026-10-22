@@ -1174,6 +1174,18 @@ async fn diagnostic_is_approved_peer_only_and_does_not_open_a_backend_or_change_
     assert!(report.valid(host_key.endpoint_id()));
     assert_eq!(report.paths.selected_path, "direct");
     assert!(!report.network.fresh); // No relay discovery is configured in this fixture.
+    let mapping = control::router_mapping_on(&connection, host_key.endpoint_id())
+        .await
+        .unwrap();
+    assert!(mapping.valid(host_key.endpoint_id()));
+    let mapping_json = serde_json::to_string(&mapping).unwrap();
+    assert!(!mapping_json.contains("127.0.0.1"));
+    assert!(!mapping_json.contains("192.168."));
+    assert!(
+        control::router_mapping_on(&connection, client.endpoint_id())
+            .await
+            .is_err()
+    );
     let json = serde_json::to_string(&report).unwrap();
     assert!(!json.contains("127.0.0.1"));
     assert!(!json.contains("llama"));
@@ -1198,6 +1210,11 @@ async fn diagnostic_is_approved_peer_only_and_does_not_open_a_backend_or_change_
     {
         assert!(
             control::diagnostic_on(&connection, host_key.endpoint_id())
+                .await
+                .is_err()
+        );
+        assert!(
+            control::router_mapping_on(&connection, host_key.endpoint_id())
                 .await
                 .is_err()
         );

@@ -1,4 +1,5 @@
 //! Private local UI API sharing the host's existing identity lease and endpoint.
+mod firewall;
 pub mod invitation;
 use iroh::Watcher;
 use serde_json::{Value, json};
@@ -52,12 +53,16 @@ impl State {
                         "public_ipv6_discovered":r.global_v6.is_some_and(|a|wispnet_agent::diagnostics::public_ip((*a.ip()).into())),
                     })
                 });
-                Ok(json!({"host":endpoint.id(),"network":network,
+                let router_mapping =
+                    wispnet_agent::diagnostics::router_mapping_report(endpoint).await;
+                Ok(
+                    json!({"host":endpoint.id(),"network":network,"router_mapping":router_mapping,
                     "local_ip_addresses":endpoint.addr().ip_addrs().count(),
                     "public_ip_addresses":endpoint.addr().ip_addrs().filter(|a|wispnet_agent::diagnostics::public_ip(a.ip())).count(),
                     "relays":wispnet_agent::diagnostics::transport_observations(endpoint)["relays"],
                     "discovery":wispnet_agent::diagnostics::transport_observations(endpoint)["discovery"],
-                    "peers":peers}))
+                    "peers":peers}),
+                )
             }
             "status" => {
                 if let Err(error) = self.client.publications.reconcile(&self.client).await {
@@ -342,11 +347,19 @@ pub async fn run(
         relay_configured: transport.relay_url.is_some(),
         config: config.clone(),
     });
+    let mut firewall_reporter = firewall::Reporter::new();
+    let mut firewall_tick = tokio::time::interval(std::time::Duration::from_secs(1));
     let mut tasks = JoinSet::new();
     tokio::pin!(shutdown);
     tracing::info!(component="agent",event="started",networking=true,mode="independent_host",endpoint_id=%host.endpoint().id(),bind_addr=%host.endpoint().bound_sockets().first().map(ToString::to_string).unwrap_or_else(||"relay-only".into()));
     loop {
-        tokio::select! {_= &mut shutdown=>break,Some(_)=tasks.join_next(),if !tasks.is_empty()=>{},accepted=listener.accept()=>{let(stream,_)=accepted?;if tasks.len()<32{tasks.spawn(serve(stream,state.clone()));}}}
+        tokio::select! {_= &mut shutdown=>break,
+        _ = firewall_tick.tick() => {
+            if let Some(reporter) = &mut firewall_reporter
+                && reporter.update(host.endpoint()).is_err() {
+                tracing::warn!("Cannot publish local firewall socket report");
+            }
+        },Some(_)=tasks.join_next(),if !tasks.is_empty()=>{},accepted=listener.accept()=>{let(stream,_)=accepted?;if tasks.len()<32{tasks.spawn(serve(stream,state.clone()));}}}
     }
     tasks.abort_all();
     while tasks.join_next().await.is_some() {}

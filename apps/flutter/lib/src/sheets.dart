@@ -421,7 +421,12 @@ String diagnosticObserved(Object? value) => value == null
     ? '✓'
     : '✗';
 
-void appendDiagnosticObservation(List<String> lines, String label, Map side) {
+void appendDiagnosticObservation(
+  List<String> lines,
+  String label,
+  Map side, {
+  Map? routerMapping,
+}) {
   final network = side['network'] as Map?;
   final n = network?['report'] as Map?;
   final p = side['paths'] as Map?;
@@ -430,6 +435,28 @@ void appendDiagnosticObservation(List<String> lines, String label, Map side) {
     lines.add(
       '• ${side['relay_only'] == true ? "✗" : "✓"} Direct UDP transports enabled',
     );
+  }
+  final mapping = routerMapping;
+  if (mapping == null) {
+    lines.add('• ? Automatic router mapping status unavailable');
+  } else {
+    lines.add(
+      '• ${diagnosticObserved(mapping['enabled'])} Automatic router mapping enabled',
+    );
+    lines.add(
+      '• Router responses: UPnP ${diagnosticObserved(mapping['upnp'])} · PCP ${diagnosticObserved(mapping['pcp'])} · NAT-PMP ${diagnosticObserved(mapping['nat_pmp'])}',
+    );
+    lines.add(
+      '• ${diagnosticObserved(mapping['active'])} Router mapping granted${mapping['active'] == true ? " · UDP ${mapping['external_port']}" : ""}',
+    );
+    if (mapping['active'] == true) {
+      lines.add(
+        '• ${diagnosticObserved(mapping['public_address'])} Mapped address is public',
+      );
+      lines.add(
+        '• A granted mapping does not prove reachability; see the direct-path result.',
+      );
+    }
   }
   if (p != null) {
     lines.add(
@@ -580,6 +607,7 @@ class _ConnectionDiagnosticsState extends State<ConnectionDiagnostics> {
             }
           }
           final local = r['local'] as Map?;
+          final mapping = r['router_mapping'] as Map?;
           appendDiagnosticObservation(
             lines,
             'Phone observations',
@@ -587,6 +615,7 @@ class _ConnectionDiagnosticsState extends State<ConnectionDiagnostics> {
                 {
                   'network': {'fresh': false, 'report': r['network_report']},
                 },
+            routerMapping: mapping?['local'] as Map?,
           );
           final remote = r['remote'] as Map?;
           if (remote != null) {
@@ -594,6 +623,7 @@ class _ConnectionDiagnosticsState extends State<ConnectionDiagnostics> {
               lines,
               'Target computer observations',
               remote,
+              routerMapping: mapping?['remote'] as Map?,
             );
           } else {
             lines.add(

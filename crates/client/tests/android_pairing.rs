@@ -140,6 +140,16 @@ async fn connection_diagnostic_requires_pairing_and_observes_direct_path() {
     assert_eq!(report["remote"]["host"], target.endpoint.id().to_string());
     assert_eq!(report["remote"]["version"], 1);
     assert!(report["remote_error"].is_null());
+    for (side, expected) in [
+        ("local", phone.endpoint.id()),
+        ("remote", target.endpoint.id()),
+    ] {
+        let mapping: wispnet_core::host::RouterMappingReport =
+            serde_json::from_value(report["router_mapping"][side].clone()).unwrap();
+        assert!(mapping.valid(expected));
+        assert!(mapping.enabled);
+    }
+
     let mut remote: wispnet_core::host::DiagnosticSnapshot =
         serde_json::from_value(report["remote"].clone()).unwrap();
     assert!(remote.valid(target.endpoint.id()));

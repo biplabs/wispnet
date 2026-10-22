@@ -46,3 +46,15 @@ including after a relay-based handshake. This is opt-in and retains upstream
 path selection for other endpoints. Existing peer authentication, TLS verification,
 bounded candidate exchange and endpoint-owned task cancellation remain in force.
 The active-session map is exposed through owner-local redacted diagnostics.
+
+`src/portmapper.rs` exposes bounded gateway protocol probes plus the current
+mapping through `Endpoint::port_mapping_status`, retaining the upstream
+portmapper service's lease acquisition/renewal. The socket keeps a clone of the
+same service handle for status queries and requests deactivation during graceful
+close. No second portmapper or independent renewal task is created. Wispnet's
+workspace enables the optional feature; disabled configurations still return a
+disabled status without probing the gateway.
+The existing owned net-report task probes mapping protocols in parallel with
+UDP discovery and retries acquisition after that probe. Major link changes
+replace the mapping service/cache and reattach its address watcher, so old-network
+leases are not advertised or reported on a new network.

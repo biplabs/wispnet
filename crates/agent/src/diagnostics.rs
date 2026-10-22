@@ -315,6 +315,10 @@ pub async fn explain_path(
             result
         }
     );
+    let (local_mapping, remote_mapping) = tokio::join!(
+        router_mapping_report(endpoint),
+        control::router_mapping_on(&connection.0, expected),
+    );
     let reason = if local.paths.selected_path == "direct" {
         "Direct connectivity succeeded."
     } else if local.paths.selected_path == "closed" {
@@ -340,6 +344,7 @@ pub async fn explain_path(
         "relay_only":relay_only, "relay_status":local.relay_status,
         "network_report":local.network.report, "reason":reason,
         "local":local, "remote":remote.as_ref().ok(),
+        "router_mapping":{"local":local_mapping,"remote":remote_mapping.as_ref().ok()},
         "remote_error":remote.as_ref().err().map(|_| "Host diagnostic unavailable: the host may need an update, or its diagnostic request failed."),
         "candidate_failure_reasons":"unavailable: transport does not expose reasons for failed candidate validation",
     }))
@@ -395,6 +400,22 @@ pub fn public_ip(address: std::net::IpAddr) -> bool {
                 && !(s[0] == 0x2001 && (s[1] == 0xdb8 || (s[1] == 2 && s[2] == 0)))
                 && !(s[0] == 0x3fff && s[1] & 0xf000 == 0)
         }
+    }
+}
+
+/// Probe router mapping support without exposing gateway or public IP addresses.
+pub async fn router_mapping_report(endpoint: &Endpoint) -> wispnet_core::host::RouterMappingReport {
+    let status = endpoint.port_mapping_status().await;
+    wispnet_core::host::RouterMappingReport {
+        version: 1,
+        host: endpoint.id(),
+        enabled: status.enabled,
+        active: status.mapping.is_some(),
+        external_port: status.mapping.map(|a| a.port()),
+        public_address: status.mapping.map(|a| public_ip((*a.ip()).into())),
+        upnp: status.protocols.as_ref().map(|p| p.upnp),
+        pcp: status.protocols.as_ref().map(|p| p.pcp),
+        nat_pmp: status.protocols.as_ref().map(|p| p.nat_pmp),
     }
 }
 
