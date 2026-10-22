@@ -1021,18 +1021,11 @@ async fn parallel_discovery_retains_all_candidates_and_idle_relay_sessions() {
     // No peer traffic: both TCP sessions and both independent QAD sessions must
     // survive beyond upstream's 60-second non-home idle cleanup boundary.
     tokio::time::sleep(Duration::from_secs(65)).await;
-    let mut updates = endpoint.net_report().stream_updates_only();
     endpoint.network_change().await;
-    let report = timeout(Duration::from_secs(15), async {
-        while let Some(Some(report)) = updates.next().await {
-            if report.discovery_addresses.len() == 2 {
-                return report.discovery_addresses;
-            }
-        }
-        panic!("discovery watcher closed");
-    })
-    .await
-    .unwrap();
+    // This notification does not change any interfaces. Netmon may correctly
+    // suppress it, so a new report event is not guaranteed. Check that both
+    // discoveries and relay sessions survived the idle interval instead.
+    let report = complete(&endpoint).await;
     assert_eq!(
         endpoint
             .relay_connections()
