@@ -64,3 +64,22 @@ one Android watch process alive across Wi-Fi off/on, sends notifications after
 interface changes, and verifies direct LAN → USB-reachable TLS relay → direct
 LAN with unchanged identity and catalog. No seamless application-stream migration
 or automatic retry of a potentially state-changing request is promised.
+
+## Android settings diagnostic
+
+In Settings, tap the network-check icon beside Device name, then Run connection
+diagnostic. The expandable report tests each paired host in turn using the
+existing phone identity and host approval. It keeps a successful catalog
+connection open for up to ten seconds to observe direct-path negotiation; each
+host has a 25-second overall deadline. It never opens a service backend or changes
+pairings, ports, permissions, or the device name. Closing settings stops further
+hosts from being tested; an already running host test finishes within its deadline.
+
+The copyable report includes the current Android network and VPN state, initial
+and final path, selected-path RTT, relay availability, and the latest Iroh network
+discovery observations. Discovery may predate the test. Missing observations are
+shown as unavailable. No UDP discovery response does not prove UDP is blocked;
+captive-portal detection is a heuristic. A relay result alone cannot distinguish
+carrier NAT, home-router restrictions, and a remote firewall. Public-address
+presence is reported without exposing the addresses. Device badges continue to
+show the last normal request's path rather than this separate diagnostic.

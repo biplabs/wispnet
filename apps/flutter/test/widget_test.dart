@@ -73,6 +73,25 @@ class FakeBackend implements WispnetBackend {
             },
           },
         };
+      case 'connectionDiagnostics':
+        return {
+          'network': 'Cellular',
+          'vpn': false,
+          'peers': [
+            {
+              'name': 'j-strix',
+              'report': {
+                'initial_path': 'relay',
+                'selected_path': 'relay',
+                'rtt_ms': 42,
+                'observation_ms': 10000,
+                'relay_status': 'connected',
+                'reason': 'No direct path was established within 10 seconds.',
+                'network_report': null,
+              },
+            },
+          ],
+        };
       case 'setAccess':
         enabled = arguments['enabled'] as bool;
         return {};
@@ -588,6 +607,35 @@ void main() {
     });
     await close(tester);
   });
+  testWidgets(
+    'connection diagnostics are hidden in settings and report unknown discovery honestly',
+    (tester) async {
+      final backend = FakeBackend();
+      await mount(tester, backend);
+      expect(find.byTooltip('Connection diagnostics'), findsNothing);
+      await tester.tap(find.byTooltip('Settings'));
+      await tester.pumpAndSettle();
+      expect(find.text('Run connection diagnostic'), findsNothing);
+      await tester.tap(find.byTooltip('Connection diagnostics'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Run connection diagnostic'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Network: Cellular'), findsOneWidget);
+      expect(find.textContaining('relay → relay'), findsOneWidget);
+      expect(
+        find.textContaining('UDP response IPv4: unavailable'),
+        findsOneWidget,
+      );
+      expect(
+        backend.calls
+            .where((c) => c.$1 == 'connectionDiagnostics')
+            .single
+            .$2['host'],
+        peer,
+      );
+      expect(backend.calls.where((c) => c.$1 == 'saveSettings'), isEmpty);
+    },
+  );
   testWidgets('settings validate before changing native state', (tester) async {
     final backend = FakeBackend();
     await mount(tester, backend);

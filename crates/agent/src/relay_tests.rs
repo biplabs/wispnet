@@ -183,6 +183,32 @@ async fn relay_dns_ip_replacement_recovers_without_endpoint_or_policy_reset() {
         Some("127.0.0.9:9".parse().unwrap()),
     )
     .unwrap();
+    let diagnostic = crate::diagnostics::explain_path(
+        &client,
+        host_key.endpoint_id(),
+        target.clone(),
+        true,
+        true,
+    )
+    .await
+    .unwrap();
+    assert_eq!(diagnostic["selected_path"], "relay");
+    assert_eq!(
+        diagnostic["reason"],
+        "This device is configured to use relay only."
+    );
+    assert!(diagnostic["network_report"].is_null() || diagnostic["network_report"].is_object());
+    assert!(
+        crate::diagnostics::explain_path(
+            &client,
+            client_key.endpoint_id(),
+            target.clone(),
+            false,
+            true,
+        )
+        .await
+        .is_err()
+    );
     let before_connection = control::connect_target(&client, target.clone())
         .await
         .unwrap();

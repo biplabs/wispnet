@@ -516,6 +516,26 @@ impl Client {
                 }
                 self.catalog(host).await
             }
+            "diagnose_connection" => {
+                let host = peer(value)?;
+                if self.saved_host(host).await?.is_none() {
+                    return Err("Pair with this host first".into());
+                }
+                let target = self.target(host).await?;
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(25),
+                    wispnet_agent::diagnostics::explain_path(
+                        &self.endpoint,
+                        host,
+                        target,
+                        self.config.relay_only,
+                        self.config.relay_url.is_some(),
+                    ),
+                )
+                .await
+                .map_err(|_| "Connection diagnostic timed out after 25 seconds")?
+                .map_err(|e| e.to_string())
+            }
             "relay_status" => Ok(
                 json!({"relay":wispnet_agent::diagnostics::relay_state(&self.endpoint,self.config.relay_url.is_some())}),
             ),

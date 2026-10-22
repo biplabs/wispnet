@@ -415,6 +415,129 @@ class _MachineSettingsState extends State<MachineSettings> {
   );
 }
 
+class ConnectionDiagnostics extends StatefulWidget {
+  const ConnectionDiagnostics({super.key, required this.backend});
+  final WispnetBackend backend;
+  @override
+  State<ConnectionDiagnostics> createState() => _ConnectionDiagnosticsState();
+}
+
+class _ConnectionDiagnosticsState extends State<ConnectionDiagnostics> {
+  bool running = false;
+  String report = '';
+  Future<void> run() async {
+    setState(() {
+      running = true;
+      report = 'Checking paired devices…';
+    });
+    final lines = <String>[
+      'Connection diagnostic · ${DateTime.now().toLocal()}',
+    ];
+    try {
+      final snapshot = await widget.backend.invoke('snapshot');
+      final hosts = snapshot['hosts'] as Map? ?? {};
+      if (hosts.isEmpty) lines.add('No paired devices to test.');
+      for (final host in hosts.keys) {
+        if (!mounted) return;
+        setState(
+          () => report = '${lines.join('\n')}\nTesting ${hosts[host]['name']}…',
+        );
+        final result = await widget.backend.invoke('connectionDiagnostics', {
+          'host': host,
+        });
+        lines.add(
+          'Network: ${result['network']} · VPN: ${result['vpn'] == true ? "yes" : "no"}',
+        );
+        for (final peer in result['peers'] as List? ?? []) {
+          lines.add('\n${peer['name']}');
+          if (peer['error'] != null) {
+            lines.add('Could not verify connection: ${peer['error']}');
+            continue;
+          }
+          final r = peer['report'] as Map;
+          lines.add(
+            '${r['initial_path']} → ${r['selected_path']} · RTT: ${r['rtt_ms'] ?? "unavailable"} ms',
+          );
+          lines.add(
+            'Observed for ${r['observation_ms']} ms · relay: ${r['relay_status']}',
+          );
+          lines.add('${r['reason']}');
+          final n = r['network_report'] as Map?;
+          String observed(Object? value) => value == null
+              ? 'unavailable'
+              : value == true
+              ? 'yes'
+              : 'no';
+          lines.add('Latest network discovery (may predate this test):');
+          lines.add(
+            'UDP response IPv4: ${observed(n?['udp_v4'])} · IPv6: ${observed(n?['udp_v6'])}',
+          );
+          lines.add(
+            'NAT mapping varies by destination: ${observed(n?['mapping_varies'])}',
+          );
+          lines.add(
+            'Public address discovered IPv4: ${observed(n?['public_ipv4_discovered'])} · IPv6: ${observed(n?['public_ipv6_discovered'])}',
+          );
+          lines.add(
+            'Captive portal suspected (heuristic): ${observed(n?['captive_portal'])}',
+          );
+          if (n?['mapping_varies'] == true) {
+            lines.add(
+              'Destination-dependent NAT can make direct connections harder.',
+            );
+          }
+          if (n != null && n['udp_v4'] == false && n['udp_v6'] == false) {
+            lines.add(
+              'Discovery received no UDP response. This alone does not prove UDP is blocked.',
+            );
+          }
+        }
+        if (result['network_changed'] == true) {
+          lines.add(
+            'Network changed during the test; run again on a stable connection.',
+          );
+        }
+      }
+      lines.add(
+        '\nResults describe this test. Normal device badges show the last request’s path.',
+      );
+    } catch (e) {
+      lines.add(failureMessage(e));
+    }
+    if (mounted) {
+      setState(() {
+        running = false;
+        report = lines.join('\n');
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      TextButton.icon(
+        onPressed: running ? null : run,
+        icon: const Icon(Icons.network_check),
+        label: Text(
+          running ? 'Testing connections…' : 'Run connection diagnostic',
+        ),
+      ),
+      if (report.isNotEmpty) ...[
+        SelectableText(report),
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton.icon(
+            onPressed: () => Clipboard.setData(ClipboardData(text: report)),
+            icon: const Icon(Icons.copy),
+            label: const Text('Copy report'),
+          ),
+        ),
+      ],
+    ],
+  );
+}
+
 class SettingsForm extends StatefulWidget {
   const SettingsForm({
     super.key,
@@ -435,7 +558,10 @@ class SettingsForm extends StatefulWidget {
 class _SettingsFormState extends State<SettingsForm> {
   late final name = TextEditingController(text: widget.deviceName);
   final port = TextEditingController();
-  bool loading = true, saving = false, opening = false;
+  bool loading = true,
+      saving = false,
+      opening = false,
+      diagnosticsExpanded = false;
   String? error;
   String address = '';
   bool get global => widget.host == null;
@@ -539,8 +665,20 @@ class _SettingsFormState extends State<SettingsForm> {
         TextField(
           controller: name,
           enabled: !saving,
-          decoration: const InputDecoration(labelText: 'Device name'),
+          decoration: InputDecoration(
+            labelText: 'Device name',
+            suffixIcon: Theme.of(context).platform == TargetPlatform.android
+                ? IconButton(
+                    tooltip: 'Connection diagnostics',
+                    icon: const Icon(Icons.network_check),
+                    onPressed: () => setState(
+                      () => diagnosticsExpanded = !diagnosticsExpanded,
+                    ),
+                  )
+                : null,
+          ),
         ),
+        if (diagnosticsExpanded) ConnectionDiagnostics(backend: widget.backend),
         const SizedBox(height: 12),
       ],
       Text(

@@ -99,3 +99,58 @@ pub async fn probe(
         "elapsed_ms":started.elapsed().as_millis()
     }))
 }
+
+/// A longer, explicit user-requested observation. No service backend is opened.
+pub async fn explain_path(
+    endpoint: &Endpoint,
+    expected: EndpointId,
+    target: EndpointAddr,
+    relay_only: bool,
+    relay_configured: bool,
+) -> Result<serde_json::Value, TunnelError> {
+    if target.id != expected {
+        return Err(TunnelError::Transport(
+            "diagnostic target identity mismatch",
+        ));
+    }
+    let connection = Close(control::connect_target(endpoint, target).await?);
+    control::catalog_on(&connection.0, expected).await?;
+    let initial = selected_path(&connection.0);
+    let started = Instant::now();
+    while !relay_only
+        && selected_path(&connection.0) != "direct"
+        && connection.0.close_reason().is_none()
+        && started.elapsed() < Duration::from_secs(10)
+    {
+        sleep(Duration::from_millis(100)).await;
+    }
+    let closed = connection.0.close_reason().is_some();
+    let selected = if closed {
+        "closed"
+    } else {
+        selected_path(&connection.0)
+    };
+    let report = endpoint.net_report().get();
+    let network = report.map(|r| {
+        serde_json::json!({
+            "udp_v4":r.udp_v4, "udp_v6":r.udp_v6,
+            "mapping_varies":r.mapping_varies_by_dest(),
+            "public_ipv4_discovered":r.global_v4.is_some(),
+            "public_ipv6_discovered":r.global_v6.is_some(),
+            "captive_portal":r.captive_portal
+        })
+    });
+    Ok(serde_json::json!({
+        "initial_path":initial, "selected_path":selected,
+        "rtt_ms":selected_rtt_ms(&connection.0),
+        "observation_ms":started.elapsed().as_millis(),
+        "relay_only":relay_only, "relay_status":relay_state(endpoint,relay_configured),
+        "network_report":network,
+        "reason":match selected {
+            "direct" => "Direct connectivity succeeded.",
+            "closed" => "Peer closed the connection during observation.",
+            _ if relay_only => "This device is configured to use relay only.",
+            _ => "No direct path was established within 10 seconds. NAT or firewall restrictions at either end are possible; this test cannot identify which network is responsible."
+        }
+    }))
+}

@@ -127,6 +127,22 @@ public final class FlutterMainActivity extends FlutterActivity {
     if (!getSharedPreferences("card-order", 0).edit().putString(group, ids.toString()).commit()) throw new Exception("Cannot save card order");
     return new JSONObject();
    }
+   case "connectionDiagnostics": {
+    android.net.ConnectivityManager cm = getSystemService(android.net.ConnectivityManager.class);
+    android.net.Network active = cm.getActiveNetwork();
+    android.net.NetworkCapabilities caps = cm.getNetworkCapabilities(active);
+    String network = caps == null ? "Offline" : caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) ? "Wi-Fi" : caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) ? "Cellular" : "Other network";
+    JSONArray peers = new JSONArray(); JSONObject records = store.all();
+    for (java.util.Iterator<String> keys = records.keys(); keys.hasNext();) {
+     String host = keys.next(); if (!host.equals(args.optString("host"))) continue; JSONObject row = new JSONObject().put("name", records.getJSONObject(host).optString("name", host)).put("host", host);
+     try { row.put("report", Native.request(new JSONObject().put("op", "diagnose_connection").put("host", host))); }
+     catch (Exception failure) { row.put("error", failure.getMessage()); }
+     peers.put(row);
+    }
+    android.net.Network after = cm.getActiveNetwork();
+    return new JSONObject().put("network", network).put("vpn", caps != null && caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN))
+     .put("network_changed", !java.util.Objects.equals(active, after)).put("peers", peers);
+   }
    case "settings": {
     JSONObject data = Native.command("gateway_settings"), settings = data.getJSONObject("settings");
     if (args.isNull("host")) return new JSONObject().put("port", settings.getInt("registry_port")).put("url", "http://registry.wispnet.localhost:" + settings.getInt("registry_port"));

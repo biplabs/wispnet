@@ -14,7 +14,7 @@ zeroize.workspace = true
 tempfile.workspace = true
 libc.workspace = true
 
-iroh.workspace = true
+iroh = { workspace = true, features = ["unstable-net-report"] }
 tokio = { workspace = true, features = ["time", "sync", "net", "io-util"] }
 serde_json = "=1.0.150"
 
