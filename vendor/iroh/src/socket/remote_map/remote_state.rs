@@ -248,6 +248,7 @@ impl RemoteStateActor {
         let idle_timeout = time::sleep(ACTOR_MAX_IDLE_TIMEOUT);
         n0_future::pin!(idle_timeout);
 
+        let mut relay_priority_tick = time::interval(Duration::from_secs(2));
         let check_connections = time::interval(UPGRADE_INTERVAL);
         n0_future::pin!(check_connections);
 
@@ -271,6 +272,9 @@ impl RemoteStateActor {
             tokio::select! {
                 biased;
 
+                _ = relay_priority_tick.tick(), if self.state.path_selector.maintain_relay_paths() => {
+                    self.check_relay_paths();
+                }
                 _ = shutdown_token.cancelled() => {
                     trace!("actor cancelled");
                     break;
@@ -428,7 +432,7 @@ impl RemoteStateActor {
                 .register_and_configure_path(conn_id, conn_state, &path);
 
             if let Some(path_remote) = path_remote
-                && !path_remote.is_relay()
+                && (!path_remote.is_relay() || self.state.path_selector.maintain_relay_paths())
                 && conn.side().is_client()
             {
                 // We may have raced this with a relay address.  Try and add any
@@ -750,10 +754,26 @@ impl RemoteStateActor {
         }
     }
 
-    /// Handles regularly checking if any paths need hole punching currently
-    ///
-    /// Currently we need to have 1 IP path, with a good enough latency.
+    /// Refresh alternate relay paths and apply the current relay preference.
+    fn check_relay_paths(&mut self) {
+        let relays: Vec<_> = self
+            .state
+            .paths
+            .addrs()
+            .filter(|a| a.is_relay())
+            .map(|a| transports::FourTuple::from_remote(a.clone()))
+            .collect();
+        for relay in relays {
+            self.open_path_on_all_conns(&relay);
+        }
+        self.select_path();
+    }
+
+    /// Check whether connections need additional direct paths.
     fn check_connections(&mut self) {
+        if self.state.path_selector.maintain_relay_paths() {
+            self.check_relay_paths();
+        }
         let mut is_goodenough = true;
         for conn_state in self.connections.values() {
             let mut is_conn_goodenough = false;
@@ -1459,6 +1479,11 @@ impl<'a> PathSelectionData<'a> {
 /// Most users do not need to provide their own selector.
 #[cfg_attr(not(feature = "unstable-custom-transports"), allow(unreachable_pub))]
 pub trait PathSelector: Send + Sync + std::fmt::Debug + 'static {
+    /// Keep alternate relay paths validated so relay preference can change on an existing connection.
+    fn maintain_relay_paths(&self) -> bool {
+        false
+    }
+
     /// Pick the selected path to carry application data among the currently
     /// open network paths to the remote endpoint.
     ///

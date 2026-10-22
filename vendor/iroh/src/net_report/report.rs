@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fmt,
     net::{SocketAddr, SocketAddrV4, SocketAddrV6},
     time::Duration,
@@ -7,7 +7,7 @@ use std::{
 
 use iroh_base::RelayUrl;
 use serde::{Deserialize, Serialize};
-use tracing::{trace, warn};
+use tracing::warn;
 
 use super::{ProbeReport, probes::Probe};
 
@@ -16,6 +16,9 @@ use super::{ProbeReport, probes::Probe};
 #[cfg_attr(not(feature = "unstable-net-report"), allow(unreachable_pub))]
 #[non_exhaustive]
 pub struct Report {
+    /// Latest address observations for each discovery relay, retaining both IP families.
+    #[serde(default)]
+    pub discovery_addresses: BTreeMap<RelayUrl, BTreeSet<SocketAddr>>,
     /// A QAD IPv4 round trip completed.
     pub udp_v4: bool,
     /// A QAD IPv6 round trip completed.
@@ -64,6 +67,49 @@ impl Report {
         }
     }
 
+    #[cfg(not(wasm_browser))]
+    fn record_discovery(&mut self, relay: RelayUrl, address: SocketAddr) {
+        let addresses = self.discovery_addresses.entry(relay).or_default();
+        addresses.retain(|a| a.is_ipv4() != address.is_ipv4());
+        addresses.insert(address);
+        let v4: Vec<_> = self
+            .discovery_addresses
+            .values()
+            .flatten()
+            .filter_map(|a| match a {
+                SocketAddr::V4(a) => Some(*a),
+                _ => None,
+            })
+            .collect();
+        let v6: Vec<_> = self
+            .discovery_addresses
+            .values()
+            .flatten()
+            .filter_map(|a| match a {
+                SocketAddr::V6(a) => Some(*a),
+                _ => None,
+            })
+            .collect();
+        let public_v4: Vec<_> = v4
+            .iter()
+            .copied()
+            .filter(|a| super::fallback::public_address((*a).into()))
+            .collect();
+        let public_v6: Vec<_> = v6
+            .iter()
+            .copied()
+            .filter(|a| super::fallback::public_address((*a).into()))
+            .collect();
+        self.global_v4 = public_v4.first().or(v4.first()).copied();
+        self.global_v6 = public_v6.first().or(v6.first()).copied();
+        // A LAN/hairpin observation and a public observation are different
+        // scopes, not evidence of destination-dependent public NAT mapping.
+        self.mapping_varies_by_dest_ipv4 =
+            (public_v4.len() >= 2).then(|| public_v4.iter().any(|a| a != &public_v4[0]));
+        self.mapping_varies_by_dest_ipv6 =
+            (public_v6.len() >= 2).then(|| public_v6.iter().any(|a| a != &public_v6[0]));
+    }
+
     /// Updates a net_report [`Report`] with a new [`ProbeReport`].
     pub(super) fn update(&mut self, report: &ProbeReport) {
         match report {
@@ -84,20 +130,7 @@ impl Report {
                 };
 
                 self.udp_v4 = true;
-
-                if let Some(global) = self.global_v4 {
-                    if global == ipp {
-                        if self.mapping_varies_by_dest_ipv4.is_none() {
-                            self.mapping_varies_by_dest_ipv4 = Some(false);
-                        }
-                    } else {
-                        self.mapping_varies_by_dest_ipv4 = Some(true);
-                        warn!("IPv4 address detected by QAD varies by destination");
-                    }
-                } else {
-                    self.global_v4 = Some(ipp);
-                }
-                trace!(?self.global_v4, ?self.mapping_varies_by_dest_ipv4, %ipp, "stored report");
+                self.record_discovery(report.relay.clone(), ipp.into());
             }
             #[cfg(not(wasm_browser))]
             ProbeReport::QadIpv6(report) => {
@@ -112,19 +145,7 @@ impl Report {
                 };
 
                 self.udp_v6 = true;
-                if let Some(global) = self.global_v6 {
-                    if global == ipp {
-                        if self.mapping_varies_by_dest_ipv6.is_none() {
-                            self.mapping_varies_by_dest_ipv6 = Some(false);
-                        }
-                    } else {
-                        self.mapping_varies_by_dest_ipv6 = Some(true);
-                        warn!("IPv6 address detected by QAD varies by destination");
-                    }
-                } else {
-                    self.global_v6 = Some(ipp);
-                }
-                trace!(?self.global_v6, ?self.mapping_varies_by_dest_ipv6, %ipp, "stored report");
+                self.record_discovery(report.relay.clone(), ipp.into());
             }
         }
     }

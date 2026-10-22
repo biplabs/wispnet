@@ -415,15 +415,16 @@ class _MachineSettingsState extends State<MachineSettings> {
   );
 }
 
+String diagnosticObserved(Object? value) => value == null
+    ? '?'
+    : value == true
+    ? '✓'
+    : '✗';
+
 void appendDiagnosticObservation(List<String> lines, String label, Map side) {
   final network = side['network'] as Map?;
   final n = network?['report'] as Map?;
   final p = side['paths'] as Map?;
-  String observed(Object? value) => value == null
-      ? '?'
-      : value == true
-      ? '✓'
-      : '✗';
   lines.add('\n$label');
   if (side.containsKey('relay_only')) {
     lines.add(
@@ -453,7 +454,7 @@ void appendDiagnosticObservation(List<String> lines, String label, Map side) {
     ('NAT mapping varies by destination', n?['mapping_varies']),
     ('Captive portal suspected (heuristic)', n?['captive_portal']),
   ]) {
-    lines.add('• ${observed(check.$2)} ${check.$1}');
+    lines.add('• ${diagnosticObserved(check.$2)} ${check.$1}');
   }
   if (n != null &&
       (n['udp_v4'] == true || n['udp_v6'] == true) &&
@@ -563,6 +564,21 @@ class _ConnectionDiagnosticsState extends State<ConnectionDiagnostics> {
             '• Observed for ${r['observation_ms']} ms · relay: ${r['relay_status']}',
           );
           lines.add('• ${r['reason']}');
+          final transport = r['transport'] as Map?;
+          if (transport != null) {
+            lines.add('\nPhone relay connections');
+            for (final relay in transport['relays'] as List? ?? []) {
+              lines.add(
+                '• ${diagnosticObserved(relay['connected'])} ${relay['url']}${relay['preferred'] == true ? " · preferred" : ""}',
+              );
+            }
+            lines.add('Phone discovery observations');
+            for (final discovery in transport['discovery'] as List? ?? []) {
+              lines.add(
+                '• ${discovery['url']} · IPv4 ${diagnosticObserved(discovery['ipv4'])} · IPv6 ${diagnosticObserved(discovery['ipv6'])}',
+              );
+            }
+          }
           final local = r['local'] as Map?;
           appendDiagnosticObservation(
             lines,

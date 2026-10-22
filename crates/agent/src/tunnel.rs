@@ -784,7 +784,7 @@ fn configured_builder(
             reports = reports.quic_discovery_fallback(observer);
         }
         if !config.backup_relay_urls.is_empty() {
-            reports = reports.prefer_relay(
+            reports = reports.keep_all_relays(true).prefer_relay(
                 config
                     .relay_url
                     .as_ref()

@@ -205,7 +205,7 @@ relay_url = "https://relay.wispnet.app"
 discovery_relay_url = "https://usw1-1.relay.n0.iroh.link"
 ```
 
-This is opt-in. Fresh discovery tries the primary relay first. A timeout,
+This is opt-in. Without packet backups, fresh discovery tries the primary relay first. A timeout,
 connection/DNS failure, or a private/special-use observed address triggers the
 outside observer on UDP 7842 through the endpoint's same socket. A usable public
 primary result does not contact the outside observer. Valid cached mappings are
@@ -218,10 +218,10 @@ observer cannot become the home relay unless it is also explicitly configured as
 `vendor/iroh` keeps discovery fallback separate from relay selection. No DNS/Pkarr
 peer lookup or publication is enabled. Certificate trust applies to both servers.
 n0's public service is rate-limited and has no uptime guarantee. Omit
-`discovery_relay_url` to restore the original single-relay behavior.
+`discovery_relay_url` and packet backups to restore the original single-relay behavior.
 
-The Android app enables the same ordered discovery policy at native initialization:
-`relay.wispnet.app` first, then `usw1-1.relay.n0.iroh.link` when required. This needs
+When packet backups are configured, both discovery connections are retained and
+queried independently. Android uses this parallel policy with our relay and n0. This needs
 an updated APK because both the native transport and its initialization setting
 are bundled in the app. Existing device identity and pairings are retained by an
 in-place update.
@@ -252,15 +252,28 @@ After five seconds of detected primary unavailability (including startup dial
 failure), it selects a backup. Socket failure detection and reconnect timeouts
 can add time to recovery; five seconds is a grace period, not an outage SLA.
 
-While on a working backup it continues reconnecting to the primary and requires
-30 seconds of uninterrupted authenticated primary health before failing back.
-Any primary disconnect resets that window. If the backup also fails and the
-primary already works, it may recover to the primary immediately. Healthy-primary
-startup does not establish a permanent backup connection for standby monitoring.
-Additional relay connections can be opened as needed to reach a peer using a
-backup, and idle non-primary/non-home connections expire after 60 seconds.
-Existing direct connections remain preferred; established peer streams may
-continue on an existing path while the home relay changes.
+Both configured packet relay connections remain active, including the standby.
+Both QUIC discovery connections also remain active per available IP family.
+Every distinct observed address is retained, together with LAN/interface and
+port-mapped candidates, and advertised for direct-path validation. Private LAN
+observations do not overwrite public observations. NAT mapping variation is
+compared only between public observations; a LAN/hairpin result is not evidence
+of destination-dependent public NAT. Closed discovery sessions are
+retried on subsequent discovery runs; healthy sessions survive report refreshes.
+
+Packet path selection prefers a validated direct path over either relay. If
+relay is needed, it prefers the currently healthy primary relay path over a
+lower-latency n0 path. Both relay paths are validated and retained on existing
+peer connections, so a fast n0 handshake cannot permanently bypass our relay.
+Failed relay paths are retried and selection is refreshed every two seconds.
+Keeping a relay connection alive and using it for application data are separate.
+
+While using the backup, the primary must recover for 30 continuous seconds
+before it is preferred again; any disconnect resets the window. If the backup
+also fails and the primary already works, recovery can use the primary immediately.
+Peer connections can change validated paths without re-pairing. Direct paths
+remain preferred throughout. Keeping both relays warm costs additional sockets,
+keepalives and mobile data, and cannot guarantee hole punching through hard NATs.
 
 Applications reconnect using the same pinned identity. Relays do not replicate
 Wispnet identity, catalogs or permissions. Public n0 service remains rate-limited
@@ -290,3 +303,12 @@ reachable listener for the phone and an unreachable listener for the host. The
 phone keeps the primary as home, the host uses the backup, and their first
 pinned catalog request succeeds using the locally configured relay candidates,
 without an earlier exchange through the primary or any direct UDP path.
+
+The phone diagnostic now lists both packet relay sessions and each relay's
+IPv4/IPv6 discovery observations. Owner-local `transport_status` exposes the same
+redacted session/discovery summaries for a computer, with `preferred` indicating
+its home relay. It does not expose observed IP addresses or application payloads.
+The idle fixture checks both sessions past 60 seconds, retains two different
+QUIC-observed NAT mappings, and verifies relay-only bootstrap upgrades to direct.
+A delayed-primary fixture proves relay preference beats RTT, tests primary loss,
+and verifies failback on the same peer connection.

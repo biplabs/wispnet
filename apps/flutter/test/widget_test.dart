@@ -93,6 +93,32 @@ class FakeBackend implements WispnetBackend {
                     'reason':
                         'No direct path was established within 10 seconds.',
                     'network_report': null,
+                    'transport': {
+                      'relays': [
+                        {
+                          'url': 'https://relay.wispnet.app/',
+                          'connected': true,
+                          'preferred': true,
+                        },
+                        {
+                          'url': 'https://usw1-1.relay.n0.iroh.link/',
+                          'connected': true,
+                          'preferred': false,
+                        },
+                      ],
+                      'discovery': [
+                        {
+                          'url': 'https://relay.wispnet.app/',
+                          'ipv4': true,
+                          'ipv6': false,
+                        },
+                        {
+                          'url': 'https://usw1-1.relay.n0.iroh.link/',
+                          'ipv4': true,
+                          'ipv6': false,
+                        },
+                      ],
+                    },
                   },
             },
           ],
@@ -651,6 +677,16 @@ void main() {
     expect(find.widgetWithText(AppBar, 'Diagnostic'), findsOneWidget);
     expect(find.textContaining('Network: Cellular'), findsOneWidget);
     expect(find.textContaining('relay → relay'), findsOneWidget);
+    expect(find.textContaining('Phone relay connections'), findsOneWidget);
+    expect(
+      find.textContaining('✓ https://relay.wispnet.app/ · preferred'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('✓ https://usw1-1.relay.n0.iroh.link/'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Phone discovery observations'), findsOneWidget);
     expect(find.textContaining('• ? UDP response IPv4'), findsOneWidget);
     expect(
       backend.calls

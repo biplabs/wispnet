@@ -653,11 +653,15 @@ async fn packet_priority_ignores_discovery_and_latency_and_requires_stable_failb
     let builder = |key: &SecretKey| {
         configured_builder(key, Some(&config))
             .unwrap()
-            .net_report_config(iroh::endpoint::NetReportConfig::minimal().prefer_relay(
-                primary_url.clone(),
-                Duration::from_secs(1),
-                Duration::from_secs(4),
-            ))
+            .net_report_config(
+                iroh::endpoint::NetReportConfig::minimal()
+                    .keep_all_relays(true)
+                    .prefer_relay(
+                        primary_url.clone(),
+                        Duration::from_secs(1),
+                        Duration::from_secs(4),
+                    ),
+            )
     };
     let host = TunnelHost::bind_builder(
         &config,
@@ -819,11 +823,15 @@ async fn different_home_relays_connect_without_first_contact_through_primary() {
         configured_builder(key, Some(&config))
             .unwrap()
             .dns_resolver(resolver)
-            .net_report_config(iroh::endpoint::NetReportConfig::minimal().prefer_relay(
-                primary_url.clone(),
-                Duration::from_secs(1),
-                Duration::from_secs(4),
-            ))
+            .net_report_config(
+                iroh::endpoint::NetReportConfig::minimal()
+                    .keep_all_relays(true)
+                    .prefer_relay(
+                        primary_url.clone(),
+                        Duration::from_secs(1),
+                        Duration::from_secs(4),
+                    ),
+            )
     };
     let host = TunnelHost::bind_builder(
         &config,
@@ -875,5 +883,452 @@ async fn different_home_relays_connect_without_first_contact_through_primary() {
     phone.close().await;
     host.shutdown().await;
     primary.shutdown().await.unwrap();
+    backup.shutdown().await.unwrap();
+}
+
+async fn qad_relay(cert: &rcgen::CertifiedKey<rcgen::KeyPair>) -> iroh_relay::server::Server {
+    use iroh_relay::server::{
+        CertConfig, QuicConfig, RelayConfig, Server, ServerConfig, TlsConfig,
+    };
+    let tls = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_no_client_auth()
+    .with_single_cert(
+        vec![cert.cert.der().clone()],
+        rustls_pki_types::PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der()).into(),
+    )
+    .unwrap();
+    let mut config = RelayConfig::new("127.0.0.1:0".parse::<SocketAddr>().unwrap());
+    config.tls = Some(TlsConfig::new(
+        "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
+        CertConfig::Manual { server_config: tls },
+    ));
+    let mut server = ServerConfig::default();
+    server.relay = Some(config);
+    server.quic = Some(QuicConfig::new(
+        "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
+    ));
+    Server::spawn(server).await.unwrap()
+}
+
+#[tokio::test]
+async fn parallel_discovery_retains_all_candidates_and_idle_relay_sessions() {
+    use iroh::Watcher;
+    let cert = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+    let primary = qad_relay(&cert).await;
+    let backup = qad_relay(&cert).await;
+    let primary_url: iroh::RelayUrl = format!("https://{}", primary.https_addr().unwrap())
+        .parse()
+        .unwrap();
+    let backup_url: iroh::RelayUrl = format!("https://{}", backup.https_addr().unwrap())
+        .parse()
+        .unwrap();
+    // This simple UDP NAT makes the second observer see a different source port.
+    // It exercises real QUIC discovery and proves neither candidate is discarded.
+    let proxy = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let proxy_addr = proxy.local_addr().unwrap();
+    let upstream = backup.quic_addr().unwrap();
+    let worker = tokio::spawn(async move {
+        let mut client = None;
+        let mut bytes = [0; 65536];
+        loop {
+            let (n, source) = proxy.recv_from(&mut bytes).await.unwrap();
+            if source == upstream {
+                if let Some(destination) = client {
+                    proxy.send_to(&bytes[..n], destination).await.unwrap();
+                }
+            } else if client.is_none() || client == Some(source) {
+                client = Some(source);
+                proxy.send_to(&bytes[..n], upstream).await.unwrap();
+            }
+        }
+    });
+    let endpoint = Endpoint::builder(presets::Minimal)
+        .relay_mode(iroh::RelayMode::Custom(
+            [
+                iroh::RelayConfig::new(
+                    primary_url.clone(),
+                    Some(iroh_relay::RelayQuicConfig::new(
+                        primary.quic_addr().unwrap().port(),
+                    )),
+                ),
+                iroh::RelayConfig::new(
+                    backup_url.clone(),
+                    Some(iroh_relay::RelayQuicConfig::new(proxy_addr.port())),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        ))
+        .ca_tls_config(iroh_relay::tls::CaTlsConfig::custom_roots([cert
+            .cert
+            .der()
+            .clone()]))
+        .net_report_config(
+            iroh::endpoint::NetReportConfig::default()
+                .keep_all_relays(true)
+                .prefer_relay(
+                    primary_url.clone(),
+                    Duration::from_secs(1),
+                    Duration::from_secs(3),
+                ),
+        )
+        .bind()
+        .await
+        .unwrap();
+    async fn complete(
+        endpoint: &Endpoint,
+    ) -> std::collections::BTreeMap<iroh::RelayUrl, std::collections::BTreeSet<SocketAddr>> {
+        timeout(Duration::from_secs(12), async {
+            loop {
+                if let Some(report) = endpoint.net_report().get()
+                    && report.discovery_addresses.len() == 2
+                    && endpoint
+                        .relay_connections()
+                        .iter()
+                        .filter(|s| s.is_connected())
+                        .count()
+                        == 2
+                {
+                    return report.discovery_addresses;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .unwrap()
+    }
+    let report = complete(&endpoint).await;
+    let first = report[&primary_url].iter().find(|a| a.is_ipv4()).unwrap();
+    let second = report[&backup_url].iter().find(|a| a.is_ipv4()).unwrap();
+    assert_ne!(first, second);
+    assert_eq!(second.port(), proxy_addr.port());
+    timeout(Duration::from_secs(3), async {
+        loop {
+            let addresses: std::collections::BTreeSet<_> =
+                endpoint.addr().ip_addrs().copied().collect();
+            if addresses.contains(first) && addresses.contains(second) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    // No peer traffic: both TCP sessions and both independent QAD sessions must
+    // survive beyond upstream's 60-second non-home idle cleanup boundary.
+    tokio::time::sleep(Duration::from_secs(65)).await;
+    let mut updates = endpoint.net_report().stream_updates_only();
+    endpoint.network_change().await;
+    let report = timeout(Duration::from_secs(15), async {
+        while let Some(Some(report)) = updates.next().await {
+            if report.discovery_addresses.len() == 2 {
+                return report.discovery_addresses;
+            }
+        }
+        panic!("discovery watcher closed");
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        endpoint
+            .relay_connections()
+            .iter()
+            .filter(|s| s.is_connected())
+            .count(),
+        2
+    );
+    assert_eq!(report.len(), 2);
+    assert!(
+        report[&backup_url]
+            .iter()
+            .any(|a| a.port() == proxy_addr.port())
+    );
+    assert_eq!(endpoint.home_relay_status().get()[0].url(), &primary_url);
+    // Bootstrap through relay only, exchange the full candidate set, then
+    // validate a real direct path despite the additional translated candidate.
+    endpoint.set_alpns(vec![protocol::ALPN.to_vec()]);
+    let client = Endpoint::builder(presets::Minimal)
+        .relay_mode(iroh::RelayMode::custom([
+            primary_url.clone(),
+            backup_url.clone(),
+        ]))
+        .ca_tls_config(iroh_relay::tls::CaTlsConfig::custom_roots([cert
+            .cert
+            .der()
+            .clone()]))
+        .net_report_config(
+            iroh::endpoint::NetReportConfig::minimal()
+                .keep_all_relays(true)
+                .prefer_relay(
+                    primary_url.clone(),
+                    Duration::from_secs(1),
+                    Duration::from_secs(3),
+                ),
+        )
+        .bind()
+        .await
+        .unwrap();
+    let target = EndpointAddr::new(endpoint.id())
+        .with_relay_url(primary_url.clone())
+        .with_relay_url(backup_url.clone());
+    let receive = async {
+        let conn = endpoint.accept().await.unwrap().await.unwrap();
+        assert_eq!(conn.remote_id(), client.id());
+        let (mut send, mut recv) = conn.accept_bi().await.unwrap();
+        let bytes = recv.read_to_end(128).await.unwrap();
+        send.write_all(&bytes).await.unwrap();
+        send.finish().unwrap();
+        let _ = send.stopped().await;
+        conn
+    };
+    let send = async {
+        let conn = connect_target(&client, target).await.unwrap();
+        let (mut send, mut recv) = conn.open_bi().await.unwrap();
+        send.write_all(b"parallel candidates").await.unwrap();
+        send.finish().unwrap();
+        assert_eq!(recv.read_to_end(128).await.unwrap(), b"parallel candidates");
+        timeout(Duration::from_secs(15), async {
+            while !conn.paths().iter().any(|p| p.is_selected() && p.is_ip()) {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .unwrap();
+        conn
+    };
+    let (server_conn, client_conn) = timeout(Duration::from_secs(25), async {
+        tokio::join!(receive, send)
+    })
+    .await
+    .unwrap();
+    assert!(
+        client_conn
+            .paths()
+            .iter()
+            .any(|p| p.is_selected() && p.is_ip())
+    );
+    client.close().await;
+    drop(server_conn);
+    endpoint.close().await;
+    worker.abort();
+    let _ = worker.await;
+    primary.shutdown().await.unwrap();
+    backup.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn parallel_relays_prefer_our_data_path_even_when_backup_is_faster() {
+    use iroh::Watcher;
+    let cert = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+    let primary = relay(&cert, "127.0.0.1:0".parse().unwrap()).await;
+    let backup = relay(&cert, "127.0.0.1:0".parse().unwrap()).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let primary_url: iroh::RelayUrl = format!("https://{}", listener.local_addr().unwrap())
+        .parse()
+        .unwrap();
+    let backup_url: iroh::RelayUrl = format!("https://{}", backup.https_addr().unwrap())
+        .parse()
+        .unwrap();
+    let upstream = primary.https_addr().unwrap();
+    let proxy = tokio::spawn(async move {
+        let mut workers = tokio::task::JoinSet::new();
+        loop {
+            tokio::select! {
+                accepted = listener.accept() => {
+                    let (downstream, _) = accepted.unwrap();
+                    workers.spawn(async move {
+                        let upstream = tokio::net::TcpStream::connect(upstream).await.unwrap();
+                        let (mut dr, mut dw) = downstream.into_split();
+                        let (mut ur, mut uw) = upstream.into_split();
+                        async fn delayed<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWrite + Unpin>(r: &mut R, w: &mut W) {
+                            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                            let mut bytes = [0; 65536];
+                            while let Ok(n) = r.read(&mut bytes).await {
+                                if n == 0 { break; }
+                                tokio::time::sleep(Duration::from_millis(25)).await;
+                                if w.write_all(&bytes[..n]).await.is_err() { break; }
+                            }
+                            let _ = w.shutdown().await;
+                        }
+                        tokio::join!(delayed(&mut dr, &mut uw), delayed(&mut ur, &mut dw));
+                    });
+                }
+                _ = workers.join_next(), if !workers.is_empty() => {}
+            }
+        }
+    });
+    let state = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let ca = state.path().join("relay.pem");
+    std::fs::write(&ca, cert.cert.pem()).unwrap();
+    let config: TransportConfig = serde_json::from_value(serde_json::json!({
+        "bind_addr":"127.0.0.1:0", "relay_only":true,"relay_ca_file":ca,
+        "relay_url":primary_url,"backup_relay_urls":[backup_url],
+    }))
+    .unwrap();
+    let host_key = Identity::generate();
+    let client_key = Identity::generate();
+    host::initialize(state.path(), host_key.endpoint_id()).unwrap();
+    let (mut store, owner) = host::owner_store(state.path(), host_key.endpoint_id()).unwrap();
+    store
+        .host_mutate(
+            host_key.endpoint_id(),
+            &owner,
+            Mutation::Approve {
+                expected_revision: 0,
+                peer: client_key.endpoint_id(),
+                name: "phone".into(),
+            },
+        )
+        .unwrap();
+    drop(store);
+    drop(owner);
+    let authority = Authority::open(state.path(), host_key.endpoint_id()).unwrap();
+    let builder = |key: &SecretKey| {
+        configured_builder(key, Some(&config))
+            .unwrap()
+            .net_report_config(
+                iroh::endpoint::NetReportConfig::minimal()
+                    .keep_all_relays(true)
+                    .prefer_relay(
+                        primary_url.clone(),
+                        Duration::from_secs(1),
+                        Duration::from_secs(4),
+                    ),
+            )
+    };
+    let host = TunnelHost::bind_builder(
+        &config,
+        Services::Host(authority),
+        builder(host_key.secret_key()),
+    )
+    .await
+    .unwrap();
+    let client = builder(client_key.secret_key()).bind().await.unwrap();
+    timeout(Duration::from_secs(12), async {
+        loop {
+            if client
+                .relay_connections()
+                .iter()
+                .filter(|s| s.is_connected())
+                .count()
+                == 2
+                && host
+                    .endpoint()
+                    .relay_connections()
+                    .iter()
+                    .filter(|s| s.is_connected())
+                    .count()
+                    == 2
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let target = peer_target(host_key.endpoint_id(), Some(&config), None).unwrap();
+    let connection = control::connect_target(&client, target.clone())
+        .await
+        .unwrap();
+    control::catalog_on(&connection, host_key.endpoint_id())
+        .await
+        .unwrap();
+    let selection_result = timeout(Duration::from_secs(15), async {
+        loop {
+            let paths = connection.paths();
+            let own = paths
+                .iter()
+                .find(|p| p.remote_addr() == &iroh::TransportAddr::Relay(primary_url.clone()));
+            let other = paths
+                .iter()
+                .find(|p| p.remote_addr() == &iroh::TransportAddr::Relay(backup_url.clone()));
+            if let (Some(own), Some(other)) = (own, other)
+                && own.is_selected()
+                && other.rtt() < own.rtt()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    assert!(
+        selection_result.is_ok(),
+        "homes={:?}; paths={:?}",
+        client.home_relay_status().get(),
+        connection
+            .paths()
+            .iter()
+            .map(|p| (p.remote_addr().clone(), p.is_selected(), p.rtt()))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(client.home_relay_status().get()[0].url(), &primary_url);
+    // Abrupt loss of our relay still allows authenticated data through n0.
+    connection.close(0u32.into(), b"primary failure fixture");
+    proxy.abort();
+    let _ = proxy.await;
+    primary.shutdown().await.unwrap();
+    let backup_connection = timeout(Duration::from_secs(20), async {
+        loop {
+            if let Ok(c) = control::connect_target(&client, target.clone()).await
+                && control::catalog_on(&c, host_key.endpoint_id())
+                    .await
+                    .is_ok()
+                && c.paths().iter().any(|p| {
+                    p.is_selected()
+                        && p.remote_addr() == &iroh::TransportAddr::Relay(backup_url.clone())
+                })
+            {
+                break c;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .unwrap();
+    timeout(Duration::from_secs(10), async {
+        while client.home_relay_status().get()[0].url() != &backup_url {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let restored = relay(
+        &cert,
+        primary_url
+            .to_string()
+            .trim_start_matches("https://")
+            .trim_end_matches('/')
+            .parse()
+            .unwrap(),
+    )
+    .await;
+    timeout(Duration::from_secs(20), async {
+        loop {
+            if client.home_relay_status().get()[0].url() == &primary_url
+                && backup_connection.paths().iter().any(|p| {
+                    p.is_selected()
+                        && p.remote_addr() == &iroh::TransportAddr::Relay(primary_url.clone())
+                })
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap();
+    control::catalog_on(&backup_connection, host_key.endpoint_id())
+        .await
+        .unwrap();
+    restored.shutdown().await.unwrap();
+    client.close().await;
+    host.shutdown().await;
     backup.shutdown().await.unwrap();
 }

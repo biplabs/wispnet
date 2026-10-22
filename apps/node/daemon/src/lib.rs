@@ -55,7 +55,8 @@ impl State {
                 Ok(json!({"host":endpoint.id(),"network":network,
                     "local_ip_addresses":endpoint.addr().ip_addrs().count(),
                     "public_ip_addresses":endpoint.addr().ip_addrs().filter(|a|wispnet_agent::diagnostics::public_ip(a.ip())).count(),
-                    "relays":endpoint.home_relay_status().get().iter().map(|r|json!({"url":r.url().to_string(),"connected":r.is_connected()})).collect::<Vec<_>>(),
+                    "relays":wispnet_agent::diagnostics::transport_observations(endpoint)["relays"],
+                    "discovery":wispnet_agent::diagnostics::transport_observations(endpoint)["discovery"],
                     "peers":peers}))
             }
             "status" => {

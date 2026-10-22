@@ -31,7 +31,9 @@ const RTT_SWITCHING_MIN: Duration = Duration::from_millis(5);
 enum TransportType {
     /// A primary path: used whenever available.
     Primary,
-    /// A backup path: only used when no primary path is available.
+    /// The preferred relay: used when no direct path is available.
+    PreferredRelay,
+    /// A backup path: only used when no preferred path is available.
     Backup,
 }
 
@@ -89,6 +91,7 @@ impl TransportBias {
 #[derive(Debug, Clone)]
 pub(crate) struct BiasedRttPathSelector {
     biases: Arc<FxHashMap<AddrKind, TransportBias>>,
+    relay_priority: Option<n0_watcher::Direct<Option<crate::endpoint::RelayStatus>>>,
 }
 
 impl Default for BiasedRttPathSelector {
@@ -102,11 +105,20 @@ impl Default for BiasedRttPathSelector {
         map.insert(AddrKind::Relay, TransportBias::backup());
         Self {
             biases: Arc::new(map),
+            relay_priority: None,
         }
     }
 }
 
 impl BiasedRttPathSelector {
+    pub(crate) fn with_relay_priority(
+        mut self,
+        watcher: n0_watcher::Direct<Option<crate::endpoint::RelayStatus>>,
+    ) -> Self {
+        self.relay_priority = Some(watcher);
+        self
+    }
+
     /// Returns a new selector with the given bias added or updated for `kind`.
     #[cfg(all(test, feature = "unstable-custom-transports"))]
     pub(crate) fn with_bias(self, kind: AddrKind, bias: TransportBias) -> Self {
@@ -114,11 +126,26 @@ impl BiasedRttPathSelector {
         map.insert(kind, bias);
         Self {
             biases: Arc::new(map),
+            relay_priority: self.relay_priority,
         }
     }
 
     /// Looks up the bias for an address.  Defaults to primary with no RTT bias.
     fn bias_for(&self, addr: &FourTuple) -> TransportBias {
+        use n0_watcher::Watcher;
+        if let FourTuple::Relay { url, .. } = addr
+            && self
+                .relay_priority
+                .as_ref()
+                .and_then(|w| w.clone().get())
+                .is_some_and(|s| s.url() == url && s.is_connected())
+        {
+            return TransportBias {
+                transport_type: TransportType::PreferredRelay,
+                rtt_bias: 0,
+            };
+        }
+
         self.biases
             .get(&addr.addr_kind())
             .copied()
@@ -134,6 +161,10 @@ impl BiasedRttPathSelector {
 }
 
 impl PathSelector for BiasedRttPathSelector {
+    fn maintain_relay_paths(&self) -> bool {
+        self.relay_priority.is_some()
+    }
+
     fn select(&self, ctx: &PathSelectionContext<'_>) -> PathSelection {
         // Single pass: track the best candidate by sort key, and the best (lowest)
         // sort key seen for the currently-selected address.  When the same address

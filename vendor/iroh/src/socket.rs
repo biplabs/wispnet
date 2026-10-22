@@ -359,6 +359,7 @@ pub(crate) struct Socket {
     /// Local addresses
     local_addrs_watch: LocalAddrsWatch,
     home_relay_watch: HomeRelayWatcher,
+    relay_connections: Arc<std::sync::Mutex<BTreeMap<RelayUrl, RelayStatus>>>,
     /// Currently bound IP addresses of all sockets
     #[cfg(not(wasm_browser))]
     ip_bind_addrs: Vec<SocketAddr>,
@@ -498,6 +499,16 @@ impl Socket {
                 })
                 .collect()
         })
+    }
+
+    pub(crate) fn relay_connections(&self) -> Vec<RelayStatus> {
+        self.relay_connections
+            .lock()
+            .expect("relay status lock")
+            .values()
+            .filter(|s| self.relay_map.contains(s.url()))
+            .cloned()
+            .collect()
     }
 
     pub(crate) fn home_relay_status(&self) -> impl Watcher<Value = Vec<RelayStatus>> + use<> {
@@ -918,6 +929,7 @@ impl EndpointInner {
         let ipv6_reported = Arc::new(AtomicBool::new(false));
 
         let relay_actor_config = RelayActorConfig {
+            keep_all_relays: net_report_config.keep_all_relays,
             relay_priority: net_report_config.relay_priority.clone(),
             my_relay: HomeRelayWatch::default(),
             secret_key: secret_key.clone(),
@@ -930,6 +942,16 @@ impl EndpointInner {
             relay_map: relay_map.clone(),
         };
 
+        let path_selector =
+            if net_report_config.keep_all_relays && net_report_config.relay_priority.is_some() {
+                Arc::new(
+                    biased_rtt_path_selector::BiasedRttPathSelector::default()
+                        .with_relay_priority(relay_actor_config.my_relay.watch()),
+                ) as Arc<dyn PathSelector>
+            } else {
+                path_selector
+            };
+        let relay_connections = relay_actor_config.my_relay.connection_states();
         let shutdown_state = ShutdownState::default();
         let shutdown_token = shutdown_state.at_endpoint_closed.child_token();
 
@@ -999,6 +1021,7 @@ impl EndpointInner {
             metrics: metrics.clone(),
             local_addrs_watch: transports.local_addrs_watch(),
             home_relay_watch,
+            relay_connections,
             #[cfg(not(wasm_browser))]
             ip_bind_addrs: transports.ip_bind_addrs(),
             tls_config: tls_config.clone(),
@@ -1865,6 +1888,16 @@ impl Actor {
             }
         }
 
+        if let Some(report) = net_report_report {
+            for address in report.discovery_addresses.values().flatten() {
+                if address.port() != 0
+                    && !address.ip().is_unspecified()
+                    && !address.ip().is_multicast()
+                {
+                    addrs.entry(*address).or_insert((DirectAddrType::Qad, None));
+                }
+            }
+        }
         self.collect_local_addresses(&mut addrs);
 
         // Add configured external addresses.

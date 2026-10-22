@@ -30,3 +30,19 @@ Wispnet configures five-second failure grace and 30-second stable failback.
 Endpoint cancellation drains the same owned relay actor tasks as upstream.
 The integration fixtures cover healthy primary without UDP discovery, primary
 failure, brief recovery, stable failback, cold starts and unchanged approvals.
+
+`NetReportConfig::keep_all_relays` enables parallel retained packet/QAD sessions.
+The opt-in multi-observer implementation is in src/net_report/multi.rs. It keeps
+one QUIC observation connection per relay/family and publishes all latest
+addresses in Report::discovery_addresses; src/socket.rs advertises the distinct
+candidate set. Initial observations are stored immediately for later reports.
+The primary preference remains independent of UDP address-discovery success.
+
+Additional changes: src/endpoint.rs exposes a read-only relay session snapshot;
+src/net_report/report.rs retains per-observer addresses;
+src/socket/biased_rtt_path_selector.rs ranks direct > preferred relay > backup;
+src/socket/remote_map/remote_state.rs validates and retries alternate relay paths,
+including after a relay-based handshake. This is opt-in and retains upstream
+path selection for other endpoints. Existing peer authentication, TLS verification,
+bounded candidate exchange and endpoint-owned task cancellation remain in force.
+The active-session map is exposed through owner-local redacted diagnostics.

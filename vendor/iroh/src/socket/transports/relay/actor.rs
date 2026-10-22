@@ -355,6 +355,10 @@ impl ActiveRelayActor {
                 backoff = Self::build_backoff();
             }
         }
+        self.my_relay.set_status(
+            &self.url,
+            RelayConnectionState::Disconnected { last_failure: None },
+        );
         debug!("exiting");
     }
 
@@ -941,6 +945,7 @@ pub(super) struct RelayActor {
 
 #[derive(Debug, Clone)]
 pub(crate) struct Config {
+    pub keep_all_relays: bool,
     pub relay_priority: Option<(RelayUrl, Duration, Duration)>,
     pub my_relay: HomeRelayWatch,
     pub secret_key: SecretKey,
@@ -1079,12 +1084,14 @@ fn auth_denied_reason(error: &RelayConnectionError) -> Option<&str> {
 #[derive(Debug, Clone)]
 pub(crate) struct HomeRelayWatch {
     inner: Watchable<Option<RelayStatus>>,
+    connections: Arc<std::sync::Mutex<BTreeMap<RelayUrl, RelayStatus>>>,
 }
 
 impl Default for HomeRelayWatch {
     fn default() -> Self {
         Self {
             inner: Watchable::new(None),
+            connections: Default::default(),
         }
     }
 }
@@ -1092,6 +1099,10 @@ impl Default for HomeRelayWatch {
 impl HomeRelayWatch {
     /// Set the home relay URL and status. Used by [`RelayActor`] on relay changes.
     fn set(&self, url: RelayUrl, state: RelayConnectionState) {
+        self.connections
+            .lock()
+            .expect("relay status lock")
+            .insert(url.clone(), RelayStatus::new(url.clone(), state.clone()));
         let _ = self.inner.set(Some(RelayStatus::new(url, state)));
     }
 
@@ -1107,6 +1118,10 @@ impl HomeRelayWatch {
     /// updates the URL in the watchable *before* sending `SetHomeRelay(false)`, so by
     /// the time the old actor tries to write, the URL no longer matches.
     fn set_status(&self, url: &RelayUrl, state: RelayConnectionState) {
+        self.connections
+            .lock()
+            .expect("relay status lock")
+            .insert(url.clone(), RelayStatus::new(url.clone(), state.clone()));
         if self.inner.get().as_ref().map(RelayStatus::url) == Some(url) {
             let _ = self.inner.set(Some(RelayStatus::new(url.clone(), state)));
         }
@@ -1114,6 +1129,12 @@ impl HomeRelayWatch {
 
     fn get(&self) -> Option<RelayStatus> {
         self.inner.get()
+    }
+
+    pub(crate) fn connection_states(
+        &self,
+    ) -> Arc<std::sync::Mutex<BTreeMap<RelayUrl, RelayStatus>>> {
+        self.connections.clone()
     }
 
     pub(crate) fn watch(&self) -> n0_watcher::Direct<Option<RelayStatus>> {
@@ -1150,7 +1171,7 @@ impl RelayActor {
         loop {
             tokio::select! {
                 biased;
-                _ = priority_tick.tick(), if self.config.relay_priority.is_some() => {
+                _ = priority_tick.tick(), if self.config.relay_priority.is_some() || self.config.keep_all_relays => {
                     self.enforce_relay_priority().await;
                 }
                 _ = self.cancel_token.cancelled() => {
@@ -1262,6 +1283,12 @@ impl RelayActor {
     }
 
     async fn enforce_relay_priority(&mut self) {
+        if self.config.keep_all_relays {
+            for url in self.config.relay_map.urls::<Vec<RelayUrl>>() {
+                self.active_relay_handle(url);
+            }
+        }
+
         let Some((primary, failure_grace, stable_recovery)) = self.config.relay_priority.clone()
         else {
             return;
@@ -1343,8 +1370,9 @@ impl RelayActor {
     async fn set_home_relay(&mut self, home_url: RelayUrl) {
         let home_url_ref = &home_url;
         let priority_primary = self.config.relay_priority.as_ref().map(|(url, _, _)| url);
+        let keep_all = self.config.keep_all_relays;
         n0_future::join_all(self.active_relays.iter().map(|(url, handle)| async move {
-            let is_preferred = url == home_url_ref || priority_primary == Some(url);
+            let is_preferred = keep_all || url == home_url_ref || priority_primary == Some(url);
             handle
                 .inbox_addr
                 .send(ActiveRelayMessage::SetHomeRelay(is_preferred))
@@ -1409,7 +1437,8 @@ impl RelayActor {
             Some(e) => e.clone(),
             None => {
                 let handle = self.start_active_relay(url.clone());
-                if (Some(&url) == self.config.my_relay.get().as_ref().map(RelayStatus::url)
+                if (self.config.keep_all_relays
+                    || Some(&url) == self.config.my_relay.get().as_ref().map(RelayStatus::url)
                     || self
                         .config
                         .relay_priority
@@ -1632,6 +1661,7 @@ mod tests {
     async fn close_all_active_relays_survives_a_cancelled_task() {
         let (relay_datagram_recv_queue, _recv_rx) = mpsc::channel(1);
         let config = Config {
+            keep_all_relays: false,
             relay_priority: None,
             my_relay: Default::default(),
             secret_key: SecretKey::from_bytes(&[0u8; 32]),

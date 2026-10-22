@@ -522,7 +522,7 @@ impl Client {
                     return Err("Pair with this host first".into());
                 }
                 let target = self.target(host).await?;
-                tokio::time::timeout(
+                let mut report = tokio::time::timeout(
                     std::time::Duration::from_secs(55),
                     wispnet_agent::diagnostics::explain_path(
                         &self.endpoint,
@@ -534,7 +534,10 @@ impl Client {
                 )
                 .await
                 .map_err(|_| "Connection diagnostic timed out after 55 seconds")?
-                .map_err(|e| e.to_string())
+                .map_err(|e| e.to_string())?;
+                report["transport"] =
+                    wispnet_agent::diagnostics::transport_observations(&self.endpoint);
+                Ok(report)
             }
             "relay_status" => Ok(
                 json!({"relay":wispnet_agent::diagnostics::relay_state(&self.endpoint,self.config.relay_url.is_some())}),

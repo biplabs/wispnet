@@ -59,6 +59,8 @@ mod defaults;
 #[cfg(not(wasm_browser))]
 mod fallback;
 mod metrics;
+#[cfg(not(wasm_browser))]
+mod multi;
 mod options;
 mod probes;
 mod report;
@@ -90,6 +92,8 @@ enum QadProbeError {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct NetReportConfig {
+    /// Keep all configured packet and discovery relay sessions active.
+    pub keep_all_relays: bool,
     /// Optional primary packet relay, failure grace and stable failback window.
     /// Selection uses authenticated relay connections, independently of discovery.
     pub relay_priority: Option<(RelayUrl, Duration, Duration)>,
@@ -120,6 +124,12 @@ pub struct NetReportConfig {
 }
 
 impl NetReportConfig {
+    /// Maintains independent address observations and packet connections to every relay.
+    pub fn keep_all_relays(mut self, enabled: bool) -> Self {
+        self.keep_all_relays = enabled;
+        self
+    }
+
     /// Prefers this packet relay; falls back after failure and returns after stable recovery.
     pub fn prefer_relay(
         mut self,
@@ -140,6 +150,7 @@ impl NetReportConfig {
     /// Creates a minimal configuration that disables all optional probes and checks.
     pub fn minimal() -> Self {
         Self {
+            keep_all_relays: false,
             relay_priority: None,
             quic_discovery_fallback: None,
             https_probes: false,
@@ -151,6 +162,7 @@ impl NetReportConfig {
 impl Default for NetReportConfig {
     fn default() -> Self {
         Self {
+            keep_all_relays: false,
             relay_priority: None,
             quic_discovery_fallback: None,
             https_probes: true,
@@ -171,6 +183,7 @@ pub(crate) struct Client {
     probes: BTreeSet<Probe>,
     relay_map: RelayMap,
     quic_discovery_fallback: Option<Arc<iroh_relay::RelayConfig>>,
+    keep_all_relays: bool,
     #[cfg(not(wasm_browser))]
     qad_conns: QadConns,
     #[cfg(not(wasm_browser))]
@@ -186,6 +199,8 @@ pub(crate) struct Client {
 #[cfg(not(wasm_browser))]
 #[derive(Debug, Default)]
 struct QadConns {
+    all_v4: BTreeMap<RelayUrl, QadConn>,
+    all_v6: BTreeMap<RelayUrl, QadConn>,
     v4: Option<(RelayUrl, QadConn)>,
     v6: Option<(RelayUrl, QadConn)>,
 }
@@ -193,6 +208,14 @@ struct QadConns {
 #[cfg(not(wasm_browser))]
 impl QadConns {
     fn clear(&mut self) {
+        for (_, conn) in std::mem::take(&mut self.all_v4)
+            .into_iter()
+            .chain(std::mem::take(&mut self.all_v6))
+        {
+            conn.conn
+                .close(QUIC_ADDR_DISC_CLOSE_CODE, QUIC_ADDR_DISC_CLOSE_REASON);
+        }
+
         if let Some((_, conn)) = self.v4.take() {
             conn.conn
                 .close(QUIC_ADDR_DISC_CLOSE_CODE, QUIC_ADDR_DISC_CLOSE_REASON);
@@ -234,6 +257,14 @@ impl QadConns {
     }
 
     fn watch_v4(&self) -> impl n0_future::Stream<Item = Option<QadProbeReport>> + Unpin + use<> {
+        if !self.all_v4.is_empty() {
+            return n0_watcher::Join::new(self.all_v4.values().map(|conn| conn.observer.watch()))
+                .stream_updates_only()
+                .flat_map(|reports| {
+                    n0_future::stream::iter(reports.into_iter().flatten().map(Some))
+                })
+                .boxed();
+        }
         let watcher = self.v4.as_ref().map(|(_url, conn)| conn.observer.watch());
 
         if let Some(watcher) = watcher {
@@ -244,6 +275,14 @@ impl QadConns {
     }
 
     fn watch_v6(&self) -> impl n0_future::Stream<Item = Option<QadProbeReport>> + Unpin + use<> {
+        if !self.all_v6.is_empty() {
+            return n0_watcher::Join::new(self.all_v6.values().map(|conn| conn.observer.watch()))
+                .stream_updates_only()
+                .flat_map(|reports| {
+                    n0_future::stream::iter(reports.into_iter().flatten().map(Some))
+                })
+                .boxed();
+        }
         let watcher = self.v6.as_ref().map(|(_url, conn)| conn.observer.watch());
         if let Some(watcher) = watcher {
             watcher.stream_updates_only().boxed()
@@ -313,6 +352,7 @@ impl Client {
             reports: Reports::default(),
             probes,
             quic_discovery_fallback: opts.user_config.quic_discovery_fallback.clone(),
+            keep_all_relays: opts.user_config.keep_all_relays,
             relay_map,
             #[cfg(not(wasm_browser))]
             qad_conns: QadConns::default(),
@@ -481,6 +521,9 @@ impl Client {
     ) -> Vec<ProbeReport> {
         use tracing::{Instrument, info_span};
 
+        if self.keep_all_relays {
+            return self.spawn_all_qad_probes(if_state, shutdown_token).await;
+        }
         let Some(ref quic_client) = self.socket_state.quic_client else {
             return Vec::new();
         };
@@ -970,7 +1013,7 @@ async fn run_probe_v4(
         latency: conn.rtt(PathId::ZERO).unwrap_or_default(),
     };
 
-    let observer = Watchable::new(None);
+    let observer = Watchable::new(Some(report.clone()));
     let endpoint = relay.url.clone();
     let handle = task::spawn(shutdown_token.run_until_cancelled_owned({
         let conn = conn.clone();
@@ -1039,7 +1082,7 @@ async fn run_probe_v6(
         latency: conn.rtt(PathId::ZERO).unwrap_or_default(),
     };
 
-    let observer = Watchable::new(None);
+    let observer = Watchable::new(Some(report.clone()));
     let endpoint = relay.url.clone();
     let handle = task::spawn(shutdown_token.run_until_cancelled_owned({
         let observer = observer.clone();

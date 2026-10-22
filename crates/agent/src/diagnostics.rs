@@ -398,6 +398,36 @@ pub fn public_ip(address: std::net::IpAddr) -> bool {
     }
 }
 
+/// Owner-visible relay and discovery summaries, without IP addresses or payloads.
+pub fn transport_observations(endpoint: &Endpoint) -> serde_json::Value {
+    let homes = endpoint.home_relay_status().get();
+    let relays: Vec<_> = endpoint
+        .relay_connections()
+        .iter()
+        .map(|s| {
+            serde_json::json!({
+                "url":s.url(), "connected":s.is_connected(),
+                "preferred":homes.iter().any(|h|h.url()==s.url()),
+            })
+        })
+        .collect();
+    let report = endpoint.net_report().get();
+    let discovery: Vec<_> = report
+        .iter()
+        .flat_map(|r| r.discovery_addresses.iter())
+        .map(|(url, addresses)| {
+            serde_json::json!({
+                "url":url, "ipv4":addresses.iter().any(|a|a.is_ipv4()),
+                "ipv6":addresses.iter().any(|a|a.is_ipv6()),
+                "public_ipv4":addresses.iter().any(|a|a.is_ipv4()&&public_ip(a.ip())),
+                "public_ipv6":addresses.iter().any(|a|a.is_ipv6()&&public_ip(a.ip())),
+            })
+        })
+        .collect();
+    serde_json::json!({"relays":relays,"discovery":discovery,
+        "direct_ip_candidates":endpoint.addr().ip_addrs().count()})
+}
+
 #[cfg(test)]
 mod address_scope_tests {
     use super::public_ip;

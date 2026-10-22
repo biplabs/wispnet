@@ -1388,6 +1388,11 @@ impl Endpoint {
         }
     }
 
+    /// Snapshots connection status for all configured relays, including standby sessions.
+    pub fn relay_connections(&self) -> Vec<RelayStatus> {
+        self.inner.relay_connections()
+    }
+
     /// Returns a [`Watcher`] over the connection status of the endpoint's home relays.
     ///
     /// The watched value has one entry per home relay whose URL is known,
