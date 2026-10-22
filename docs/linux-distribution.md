@@ -145,5 +145,6 @@ verification, migration of old manual rules, and removal behavior.
 The `wispnet-bin` package tooling is documented in
 [packaging/arch/README.md](../packaging/arch/README.md). It uses pacman-owned files
 and an abortable removal hook, rather than running the standalone per-user
-installer from package scriptlets. A public versioned binary release, real
-distribution terms, and an AUR maintainer account are required before publication.
+installer from package scriptlets. Wispnet license metadata is Apache-2.0; archives include LICENSE, NOTICE and
+supplied Iroh/Roboto licenses. A public versioned binary release and an AUR
+maintainer account are still required before publication.

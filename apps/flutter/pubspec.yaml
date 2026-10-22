@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 name: wispnet
 description: Shared Wispnet interface, matching the Android application.
 publish_to: none

@@ -5,7 +5,7 @@ pkgrel=1
 pkgdesc='Connect your devices and access their services'
 arch=('x86_64')
 url='https://wispnet.app'
-license=('@LICENSE@')
+license=('Apache-2.0')
 depends=('glibc>=@GLIBC@' 'gcc-libs' 'python>=3.11' 'systemd' 'iptables' 'gtk3' 'libayatana-appindicator' 'xdg-utils')
 provides=("wispnet=$pkgver")
 conflicts=('wispnet' 'wispnet-git')
@@ -13,7 +13,7 @@ options=('!strip' '!debug')
 install=wispnet-bin.install
 source=("wispnet-${pkgver}-linux-x86_64.tar.gz::@URL@"
         'wispnet-host.service' 'wispnet-desktop.service' 'wispnet-firewall.service'
-        'wispnet.desktop' 'wispnet-setup' 'package_system.py' 'wispnet-remove.hook' 'LICENSE')
+        'wispnet.desktop' 'wispnet-setup' 'package_system.py' 'wispnet-remove.hook' 'LICENSE' 'NOTICE')
 sha256sums=(@CHECKSUMS@)
 
 package() {
@@ -39,5 +39,8 @@ package() {
     install -Dm644 "$srcdir/wispnet.desktop" "$pkgdir/usr/share/applications/wispnet.desktop"
     install -Dm644 "$bundle/bin/icon.png" "$pkgdir/usr/share/icons/hicolor/256x256/apps/wispnet.png"
     install -Dm644 "$srcdir/wispnet-remove.hook" "$pkgdir/usr/share/libalpm/hooks/wispnet-remove.hook"
+    install -Dm644 "$srcdir/NOTICE" "$pkgdir/usr/share/licenses/$pkgname/NOTICE"
+    install -Dm644 "$bundle/vendor/iroh/LICENSE-BSD3" "$pkgdir/usr/share/licenses/$pkgname/iroh-LICENSE-BSD3"
+    install -Dm644 "$bundle/apps/flutter/assets/fonts/Roboto_LICENSE.txt" "$pkgdir/usr/share/licenses/$pkgname/Roboto_LICENSE.txt"
     install -Dm644 "$srcdir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

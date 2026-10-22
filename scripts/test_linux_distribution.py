@@ -78,6 +78,11 @@ class DistributionTests(unittest.TestCase):
         )
 
     def test_fresh_install_reinstall_and_missing_authority(self):
+        manifest = json.loads((self.bundle / "manifest.json").read_text())
+        self.assertEqual(manifest["license"], "Apache-2.0")
+        for name in ["LICENSE", "NOTICE", "vendor/iroh/LICENSE-BSD3",
+                     "apps/flutter/assets/fonts/Roboto_LICENSE.txt"]:
+            self.assertEqual((self.bundle / name).read_bytes(), (ROOT / name).read_bytes())
         self.install()
         self.assertFalse(self.config.exists())
         self.assertFalse(self.state.exists())

@@ -48,6 +48,10 @@ def package(binary, output, desktop_binary=None):
         tree = Path(temporary) / "wispnet-linux-x86_64"
         tree.mkdir()
         files = [
+            "LICENSE",
+            "NOTICE",
+            "vendor/iroh/LICENSE-BSD3",
+            "apps/flutter/assets/fonts/Roboto_LICENSE.txt",
             "scripts/install_node_desktop.py",
             "scripts/node_request.py",
             "scripts/firewall_helper.py",
@@ -94,6 +98,7 @@ def package(binary, output, desktop_binary=None):
             json.dumps(
                 {
                     "format": 1,
+                    "license": "Apache-2.0",
                     "source_commit": revision,
                     "source_dirty": bool(
                         subprocess.check_output(

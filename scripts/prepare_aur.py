@@ -17,7 +17,8 @@ FILES = ['wispnet-host.service', 'wispnet-desktop.service', 'wispnet-firewall.se
          'wispnet.desktop', 'wispnet-setup', 'package_system.py', 'wispnet-remove.hook']
 
 
-def prepare(archive, output, version, url, license_id, license_file, allow_dirty=False):
+def prepare(archive, output, version, url, license_id="Apache-2.0", license_file=None, allow_dirty=False):
+    license_file = license_file or ROOT / "LICENSE"
     if not re.fullmatch(r'[0-9][A-Za-z0-9.+_]*', version):
         raise ValueError('Use an Arch-compatible version without hyphens')
     parsed = urlsplit(url)
@@ -25,13 +26,15 @@ def prepare(archive, output, version, url, license_id, license_file, allow_dirty
         raise ValueError('Use a pinned public HTTPS archive URL without credentials/query/fragment')
     if '/latest/' in parsed.path:
         raise ValueError('Pin a release URL, not latest')
-    if not re.fullmatch(r'[A-Za-z0-9.+-]+', license_id) or not license_file.read_text().strip():
-        raise ValueError('Supply the actual distribution license identifier and terms')
+    if license_id != 'Apache-2.0' or license_file.read_bytes() != (ROOT/'LICENSE').read_bytes():
+        raise ValueError('Wispnet packaging requires Apache-2.0 and the repository LICENSE')
     with tempfile.TemporaryDirectory() as temporary:
         with tarfile.open(archive) as tar:
             tar.extractall(temporary, filter='data')
         bundle = Path(temporary)/'wispnet-linux-x86_64'
         manifest = json.loads((bundle/'manifest.json').read_text())
+        if manifest.get('license') != 'Apache-2.0':
+            raise ValueError('Release manifest must declare Apache-2.0')
         if manifest['platform'] != 'linux-x86_64' or manifest['desktop'] != 'flutter':
             raise ValueError('wispnet-bin requires the Linux x86_64 Flutter desktop bundle')
         if manifest['source_dirty'] and not allow_dirty:
@@ -45,19 +48,25 @@ def prepare(archive, output, version, url, license_id, license_file, allow_dirty
         for name in ['bin/Wispnet', 'bin/wispnet', 'bin/bridge.py', 'bin/desktop_data.py',
                      'bin/lib/libflutter_linux_gtk.so', 'bin/wispnet_desktop/api.py',
                      'bin/data/flutter_assets/AssetManifest.bin',
+                     'LICENSE', 'NOTICE', 'vendor/iroh/LICENSE-BSD3',
+                     'apps/flutter/assets/fonts/Roboto_LICENSE.txt',
                      'scripts/firewall_helper.py', 'scripts/install_firewall_helper.py', 'scripts/node_request.py']:
             if name not in manifest['sha256']:
                 raise ValueError('Missing desktop release payload: '+name)
+        if (bundle/'LICENSE').read_bytes() != license_file.read_bytes():
+            raise ValueError('Release LICENSE does not match Apache-2.0')
+        notice = (bundle/'NOTICE').read_bytes()
     if output.exists():
         raise ValueError('Output directory already exists; use a fresh staging directory')
     output.mkdir(parents=True)
     for name in [*FILES, 'wispnet-bin.install']:
         shutil.copy2(SUPPORT/name, output/name)
     shutil.copy2(license_file, output/'LICENSE')
+    (output/'NOTICE').write_bytes(notice)
     checksums = [hashlib.sha256(archive.read_bytes()).hexdigest()]
-    checksums += [hashlib.sha256((output/name).read_bytes()).hexdigest() for name in [*FILES, 'LICENSE']]
+    checksums += [hashlib.sha256((output/name).read_bytes()).hexdigest() for name in [*FILES, 'LICENSE', 'NOTICE']]
     template = (SUPPORT/'PKGBUILD.in').read_text()
-    for key, value in {'VERSION': version, 'URL': url, 'LICENSE': license_id,
+    for key, value in {'VERSION': version, 'URL': url,
                        'GLIBC': manifest['minimum_glibc'],
                        'CHECKSUMS': '\n            '.join(repr(x) for x in checksums)}.items():
         template = template.replace('@'+key+'@', value)
@@ -73,8 +82,8 @@ def main():
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--version', required=True)
     parser.add_argument('--url', required=True)
-    parser.add_argument('--license-id', required=True)
-    parser.add_argument('--license-file', required=True, type=Path)
+    parser.add_argument('--license-id', default='Apache-2.0', choices=['Apache-2.0'])
+    parser.add_argument('--license-file', default=ROOT/'LICENSE', type=Path)
     args = parser.parse_args()
     prepare(args.archive, args.output, args.version, args.url, args.license_id, args.license_file)
     print('AUR submission staged at '+str(args.output))

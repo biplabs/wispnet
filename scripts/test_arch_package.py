@@ -11,7 +11,7 @@ from unittest.mock import patch
 import importlib.util
 import sys
 
-from prepare_aur import prepare, SUPPORT
+from prepare_aur import prepare, SUPPORT, ROOT
 
 
 class ArchPackaging(unittest.TestCase):
@@ -23,13 +23,16 @@ class ArchPackaging(unittest.TestCase):
         names = ['bin/Wispnet','bin/wispnet','bin/bridge.py','bin/desktop_data.py',
                  'bin/lib/libflutter_linux_gtk.so','bin/wispnet_desktop/api.py',
                  'bin/data/flutter_assets/AssetManifest.bin','bin/icon.png',
-                 'scripts/firewall_helper.py','scripts/install_firewall_helper.py','scripts/node_request.py']
+                 'scripts/firewall_helper.py','scripts/install_firewall_helper.py','scripts/node_request.py',
+                 'LICENSE','NOTICE','vendor/iroh/LICENSE-BSD3','apps/flutter/assets/fonts/Roboto_LICENSE.txt']
         for name in names:
             p=self.bundle/name; p.parent.mkdir(parents=True,exist_ok=True);p.write_text('test payload\n')
-        self.manifest = {'platform':'linux-x86_64','desktop':'flutter','source_dirty':False,
+        (self.bundle/'LICENSE').write_bytes((ROOT/'LICENSE').read_bytes())
+        (self.bundle/'NOTICE').write_bytes((ROOT/'NOTICE').read_bytes())
+        self.manifest = {'license':'Apache-2.0','platform':'linux-x86_64','desktop':'flutter','source_dirty':False,
                          'minimum_glibc':'2.39','sha256':{n:hashlib.sha256((self.bundle/n).read_bytes()).hexdigest() for n in names}}
         self.archive = self.root/'bundle.tar.gz'
-        self.license = self.root/'terms';self.license.write_text('Test fixture only; not Wispnet distribution terms.\n')
+        self.license = ROOT/'LICENSE'
         self.pack()
 
     def pack(self):
@@ -39,7 +42,7 @@ class ArchPackaging(unittest.TestCase):
     def generate(self, **changes):
         args = dict(archive=self.archive, output=self.root/'aur', version='0.1.0',
                     url='https://example.invalid/releases/v0.1.0/wispnet.tar.gz',
-                    license_id='LicenseRef-Proprietary',license_file=self.license)
+                    license_id='Apache-2.0',license_file=self.license)
         args.update(changes)
         return prepare(**args)
 
@@ -57,6 +60,10 @@ class ArchPackaging(unittest.TestCase):
         self.assertFalse(any(n.startswith(('home/','usr/local/','etc/')) for n in names))
         info=(out/'.SRCINFO').read_text()
         self.assertIn('pkgbase = wispnet-bin',info)
+        self.assertIn('license = Apache-2.0',info)
+        self.assertIn('usr/share/licenses/wispnet-bin/NOTICE',names)
+        self.assertIn('usr/share/licenses/wispnet-bin/iroh-LICENSE-BSD3',names)
+        self.assertEqual((out/'LICENSE').read_bytes(), (ROOT/'LICENSE').read_bytes())
         self.assertIn(hashlib.sha256(self.archive.read_bytes()).hexdigest(),info)
         self.assertNotIn('SKIP',info)
 
@@ -70,9 +77,21 @@ class ArchPackaging(unittest.TestCase):
         self.manifest['desktop']='headless';self.pack()
         with self.assertRaisesRegex(ValueError,'desktop bundle'):self.generate()
 
+    def test_rejects_wrong_license_metadata_and_mislabeled_license_payload(self):
+        self.manifest['license'] = 'MIT'
+        self.pack()
+        with self.assertRaisesRegex(ValueError, 'declare Apache-2.0'):
+            self.generate()
+        self.manifest['license'] = 'Apache-2.0'
+        (self.bundle/'LICENSE').write_text('different terms')
+        self.manifest['sha256']['LICENSE'] = hashlib.sha256((self.bundle/'LICENSE').read_bytes()).hexdigest()
+        self.pack()
+        with self.assertRaisesRegex(ValueError, 'LICENSE does not match'):
+            self.generate()
+
     def test_rejects_unpinned_urls_and_shell_injection(self):
         for changes in [dict(url='https://example.com/latest/binary.tar.gz'),dict(url='https://example.com/$(touch-x)'),
-                        dict(version="1'; touch x"),dict(license_id="MIT';touch x")]:
+                        dict(version="1'; touch x"),dict(license_id="MIT';touch x"),dict(license_id="MIT")]:
             with self.subTest(changes=changes), self.assertRaises(ValueError):self.generate(**changes)
 
 

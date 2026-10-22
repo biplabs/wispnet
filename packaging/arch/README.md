@@ -3,8 +3,10 @@
 `wispnet-bin` installs the prebuilt Linux x86_64 Flutter desktop and Rust node.
 `PKGBUILD.in` is an upstream template, not an AUR submission: generate the final
 `PKGBUILD` and `.SRCINFO` only after a real versioned public binary release exists.
-There is deliberately no guessed download URL, `SKIP` checksum, or assumed
-redistribution license. The source repository may remain private.
+There is deliberately no guessed download URL or `SKIP` checksum. Wispnet's
+license metadata is Apache-2.0; generated submissions include the release's
+LICENSE and NOTICE and preserve the bundled third-party license files. The
+source repository may remain private until public release.
 
 ## Release and submission
 
@@ -17,7 +19,7 @@ redistribution license. The source repository may remain private.
 3. Publish the archive at an immutable/versioned **public HTTPS** download URL.
    GitHub Releases on a private repository are not public downloads. A separate
    public binary-release repository allows the application sources to stay private.
-   Include actual redistribution terms and the required third-party notices.
+   Include the repository LICENSE, NOTICE and required third-party notices.
 4. On an Arch host with `makepkg` installed, generate a fresh submission directory:
 
    ```sh
@@ -25,9 +27,7 @@ redistribution license. The source repository may remain private.
      --archive target/dist/wispnet-linux-x86_64.tar.gz \
      --output /tmp/wispnet-bin-aur \
      --version YOUR_VERSION \
-     --url https://YOUR_PUBLIC_RELEASE_URL/wispnet-linux-x86_64.tar.gz \
-     --license-id YOUR_LICENSE_IDENTIFIER \
-     --license-file /absolute/path/to/distribution-terms
+     --url https://YOUR_PUBLIC_RELEASE_URL/wispnet-linux-x86_64.tar.gz
    cd /tmp/wispnet-bin-aur
    makepkg --verifysource
    makepkg
@@ -42,7 +42,7 @@ redistribution license. The source repository may remain private.
    directory to the AUR `wispnet-bin` Git repository using the maintainer's AUR
    account/SSH key. Do not submit the template or private test fixtures.
 
-   AUR hosting credentials and binary distribution permission are separate from
+   AUR hosting credentials and public download availability are separate from
    access to this application's Git repository. Nothing in these tools changes
    repository visibility or automatically publishes an AUR package.
 

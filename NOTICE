@@ -1,0 +1,16 @@
+Wispnet
+Copyright 2026 Wispnet contributors
+
+Wispnet's original source code, documentation and packaging are licensed under
+the Apache License, Version 2.0. See LICENSE.
+
+Third-party components retain their original licenses and copyright notices.
+This license declaration does not relicense those components:
+
+- The vendored Iroh transport is distributed under its BSD 3-Clause license;
+  see vendor/iroh/LICENSE-BSD3 and existing notices in vendor/iroh.
+- The bundled Roboto font retains its supplied license;
+  see apps/flutter/assets/fonts/Roboto_LICENSE.txt.
+- Flutter and its dependencies retain the notices generated in the desktop
+  bundle's data/flutter_assets/NOTICES.Z and the Android application assets.
+- Other Rust, Dart and system dependencies retain their upstream licenses.

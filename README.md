@@ -226,3 +226,8 @@ Older implementation guides describe earlier HTTPS-controller prototypes, not th
 Owner nodes can optionally [publish a local HTTP service publicly](docs/public-access.md)
 with an HTTPS URL under `wispnet.app`; private device grants do not permit
 republishing another node's service.
+
+## License
+
+Wispnet's original code is licensed under [Apache-2.0](LICENSE). Vendored code,
+fonts and other third-party components retain their own licenses; see [NOTICE](NOTICE).
