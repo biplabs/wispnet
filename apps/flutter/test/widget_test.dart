@@ -230,11 +230,12 @@ Future<void> mount(
   FakeBackend backend, {
   Size size = const Size(390, 844),
   double scale = 1,
+  bool disableAnimations = true,
 }) async {
   tester.view.devicePixelRatio = 1;
   tester.view.physicalSize = size;
   tester.platformDispatcher.accessibilityFeaturesTestValue =
-      const FakeAccessibilityFeatures(disableAnimations: true);
+      FakeAccessibilityFeatures(disableAnimations: disableAnimations);
   addTearDown(() {
     tester.view.resetPhysicalSize();
     tester.view.resetDevicePixelRatio();
@@ -247,7 +248,7 @@ Future<void> mount(
         data: MediaQueryData(
           size: size,
           textScaler: TextScaler.linear(scale),
-          disableAnimations: true,
+          disableAnimations: disableAnimations,
         ),
         child: WispnetApp(backend: backend),
       ),
@@ -452,6 +453,26 @@ void main() {
       expect(find.byTooltip('Enter wisp space'), findsOneWidget);
       await close(tester);
     }
+  });
+  testWidgets('entry reveals all controls only during the end of the jump', (
+    tester,
+  ) async {
+    await mount(tester, FakeBackend(enabled: false), disableAnimations: false);
+    await tester.tap(find.byTooltip('Enter wisp space'));
+    await tester.pump();
+    double opacity() => tester
+        .widget<FadeTransition>(find.byKey(const ValueKey('entry-reveal')))
+        .opacity
+        .value;
+    expect(opacity(), 0);
+    await tester.pump(const Duration(milliseconds: 650));
+    expect(opacity(), 0);
+    await tester.pump(const Duration(milliseconds: 150));
+    expect(opacity(), closeTo(.5, .01));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(opacity(), 1);
+    expect(find.text('REMOTE SECTOR'), findsOneWidget);
+    await close(tester);
   });
   testWidgets('both launch states show a centered entry and its caption', (
     tester,

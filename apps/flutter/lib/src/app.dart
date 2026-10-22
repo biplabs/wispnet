@@ -38,7 +38,8 @@ class _WispHomeState extends State<WispHome>
       refreshing = false,
       busy = false,
       foreground = true,
-      pairingSheet = false;
+      pairingSheet = false,
+      entering = false;
   int ticks = 0, launchGeneration = 0;
   String lastNetwork = '';
   Timer? timer;
@@ -172,9 +173,12 @@ class _WispHomeState extends State<WispHome>
 
   Future<void> toggle() async {
     if (busy) return;
-    setState(() => busy = true);
+    final enable = !online;
+    setState(() {
+      busy = true;
+      entering = enable && !MediaQuery.disableAnimationsOf(context);
+    });
     try {
-      final enable = !online;
       await backend.invoke('setAccess', {'enabled': enable});
       if (enable) {
         final deadline = DateTime.now().add(const Duration(seconds: 15));
@@ -199,7 +203,12 @@ class _WispHomeState extends State<WispHome>
     } catch (error) {
       notice(message(error));
     } finally {
-      if (mounted) setState(() => busy = false);
+      if (mounted) {
+        setState(() {
+          busy = false;
+          entering = false;
+        });
+      }
     }
   }
 
@@ -609,117 +618,129 @@ class _WispHomeState extends State<WispHome>
       body: WispSpace(
         online: online,
         warp: warp,
-        child: SafeArea(
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 1200),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: Column(
-                  children: [
-                    if (online)
-                      WispHeader(
-                        label:
-                            '${snapshot['name'] ?? 'Wispnet'}${snapshot['peer'] == null ? '' : ' · ${shortId(snapshot['peer'] as String)}'}',
-                        online: online,
-                        onSettings: snapshot.isEmpty ? null : () => settings(),
-                        onToggle: busy ? null : toggle,
-                      ),
-                    Expanded(
-                      child: initializationError != null
-                          ? Center(
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(
-                                    initializationError!,
-                                    textAlign: TextAlign.center,
-                                  ),
-                                  const SizedBox(height: 16),
-                                  FilledButton(
-                                    onPressed: initialize,
-                                    child: const Text('Retry'),
-                                  ),
-                                ],
-                              ),
-                            )
-                          : snapshot.isEmpty
-                          ? const Center(child: CircularProgressIndicator())
-                          : AnimatedSwitcher(
-                              duration: MediaQuery.disableAnimationsOf(context)
-                                  ? Duration.zero
-                                  : const Duration(milliseconds: 220),
-                              child: online
-                                  ? directory()
-                                  : Center(
-                                      key: const ValueKey('standby'),
-                                      child: Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          SpaceToggle(
-                                            first: list.isEmpty,
-                                            busy: busy,
-                                            beacons: list
-                                                .map(stateColor)
-                                                .toList(),
-                                            onPressed: busy
-                                                ? null
-                                                : list.isEmpty
-                                                ? pair
-                                                : toggle,
-                                          ),
-                                          const SizedBox(height: 8),
-                                          Text(
-                                            list.isEmpty
-                                                ? 'establish your wispnet'
-                                                : 'hyperjump to wispnet',
-                                            textAlign: TextAlign.center,
-                                            style: const TextStyle(
-                                              fontSize: 21,
-                                              letterSpacing: 1,
-                                              shadows: [
-                                                Shadow(
-                                                  color: Color(0x883868c8),
-                                                  blurRadius: 10,
-                                                  offset: Offset(0, 2),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        ],
+        child: IgnorePointer(
+          ignoring: entering,
+          child: FadeTransition(
+            key: const ValueKey('entry-reveal'),
+            opacity: entering
+                ? warp.drive(CurveTween(curve: const Interval(7 / 9, 1)))
+                : const AlwaysStoppedAnimation(1.0),
+            child: SafeArea(
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 1200),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Column(
+                      children: [
+                        if (online)
+                          WispHeader(
+                            label:
+                                '${snapshot['name'] ?? 'Wispnet'}${snapshot['peer'] == null ? '' : ' · ${shortId(snapshot['peer'] as String)}'}',
+                            online: online,
+                            onSettings: snapshot.isEmpty
+                                ? null
+                                : () => settings(),
+                            onToggle: busy ? null : toggle,
+                          ),
+                        Expanded(
+                          child: initializationError != null
+                              ? Center(
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        initializationError!,
+                                        textAlign: TextAlign.center,
                                       ),
-                                    ),
+                                      const SizedBox(height: 16),
+                                      FilledButton(
+                                        onPressed: initialize,
+                                        child: const Text('Retry'),
+                                      ),
+                                    ],
+                                  ),
+                                )
+                              : snapshot.isEmpty
+                              ? const Center(child: CircularProgressIndicator())
+                              : AnimatedSwitcher(
+                                  duration:
+                                      MediaQuery.disableAnimationsOf(context)
+                                      ? Duration.zero
+                                      : const Duration(milliseconds: 220),
+                                  child: online
+                                      ? directory()
+                                      : Center(
+                                          key: const ValueKey('standby'),
+                                          child: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              SpaceToggle(
+                                                first: list.isEmpty,
+                                                busy: busy,
+                                                beacons: list
+                                                    .map(stateColor)
+                                                    .toList(),
+                                                onPressed: busy
+                                                    ? null
+                                                    : list.isEmpty
+                                                    ? pair
+                                                    : toggle,
+                                              ),
+                                              const SizedBox(height: 8),
+                                              Text(
+                                                list.isEmpty
+                                                    ? 'establish your wispnet'
+                                                    : 'hyperjump to wispnet',
+                                                textAlign: TextAlign.center,
+                                                style: const TextStyle(
+                                                  fontSize: 21,
+                                                  letterSpacing: 1,
+                                                  shadows: [
+                                                    Shadow(
+                                                      color: Color(0x883868c8),
+                                                      blurRadius: 10,
+                                                      offset: Offset(0, 2),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                ),
+                        ),
+                        if (online)
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: Padding(
+                              padding: const EdgeInsets.only(top: 6, bottom: 2),
+                              child: Text(
+                                'Relay: ${snapshot['relay'] ?? 'connecting…'}',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: WispColors.muted,
+                                ),
+                              ),
                             ),
+                          ),
+                        if (online)
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: Padding(
+                              padding: const EdgeInsets.only(bottom: 6),
+                              child: Text(
+                                'v${snapshot['version'] ?? ''}',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: WispColors.muted,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
-                    if (online)
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: Padding(
-                          padding: const EdgeInsets.only(top: 6, bottom: 2),
-                          child: Text(
-                            'Relay: ${snapshot['relay'] ?? 'connecting…'}',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: WispColors.muted,
-                            ),
-                          ),
-                        ),
-                      ),
-                    if (online)
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: Padding(
-                          padding: const EdgeInsets.only(bottom: 6),
-                          child: Text(
-                            'v${snapshot['version'] ?? ''}',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: WispColors.muted,
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
+                  ),
                 ),
               ),
             ),
