@@ -20,7 +20,9 @@ class FakeBackend implements WispnetBackend {
     this.paired = true,
     this.enabled = true,
     this.state = 'available',
+    this.diagnosticReport,
   });
+  final Map<String, dynamic>? diagnosticReport;
   bool paired, enabled;
   final String state;
   final calls = <(String, Map<String, dynamic>)>[];
@@ -80,15 +82,18 @@ class FakeBackend implements WispnetBackend {
           'peers': [
             {
               'name': 'j-strix',
-              'report': {
-                'initial_path': 'relay',
-                'selected_path': 'relay',
-                'rtt_ms': 42,
-                'observation_ms': 10000,
-                'relay_status': 'connected',
-                'reason': 'No direct path was established within 10 seconds.',
-                'network_report': null,
-              },
+              'report':
+                  diagnosticReport ??
+                  {
+                    'initial_path': 'relay',
+                    'selected_path': 'relay',
+                    'rtt_ms': 42,
+                    'observation_ms': 10000,
+                    'relay_status': 'connected',
+                    'reason':
+                        'No direct path was established within 10 seconds.',
+                    'network_report': null,
+                  },
             },
           ],
         };
@@ -625,10 +630,7 @@ void main() {
     expect(find.widgetWithText(AppBar, 'Diagnostic'), findsOneWidget);
     expect(find.textContaining('Network: Cellular'), findsOneWidget);
     expect(find.textContaining('relay → relay'), findsOneWidget);
-    expect(
-      find.textContaining('UDP response IPv4: unavailable'),
-      findsOneWidget,
-    );
+    expect(find.textContaining('• ? UDP response IPv4'), findsOneWidget);
     expect(
       backend.calls
           .where((c) => c.$1 == 'connectionDiagnostics')
@@ -641,6 +643,68 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.widgetWithText(TextField, 'Device name'), findsOneWidget);
     expect(find.text('Save'), findsOneWidget);
+  });
+  testWidgets('both ends distinguish refreshed discovery from cached reports', (
+    tester,
+  ) async {
+    Map<String, dynamic> side(bool fresh) => {
+      'relay_status': 'connected',
+      'elapsed_ms': 20000,
+      'peer_ip_candidates': 2,
+      'network': {
+        'fresh': fresh,
+        'wait_ms': 20000,
+        'report': {
+          'udp_v4': true,
+          'udp_v6': false,
+          'mapping_varies': null,
+          'public_ipv4_discovered': true,
+          'public_ipv6_discovered': false,
+        },
+      },
+      'paths': {
+        'initial_path': 'relay',
+        'selected_path': 'relay',
+        'rtt_ms': 100,
+        'direct_paths_seen': 0,
+        'direct_paths_closed': 0,
+        'direct_datagrams_sent': 0,
+        'direct_datagrams_received': 0,
+        'direct_challenges_sent': 0,
+        'direct_responses_received': 0,
+        'connection_challenges_sent': 3,
+        'connection_responses_received': 2,
+        'events_lost': 0,
+      },
+    };
+    final backend = FakeBackend(
+      diagnosticReport: {
+        'initial_path': 'relay',
+        'selected_path': 'relay',
+        'observation_ms': 20000,
+        'relay_status': 'connected',
+        'reason': 'UDP discovery works; direct peer connectivity failed during this test.',
+        'local': side(true),
+        'remote': side(false),
+      },
+    );
+    await mount(tester, backend);
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Diagnostic'));
+    await tester.pumpAndSettle();
+    final text = tester
+        .widget<SelectableText>(find.byType(SelectableText))
+        .data!;
+    expect(text, contains('Phone observations'));
+    expect(text, contains('Target computer observations'));
+    expect(text, contains('network report updated during this test'));
+    expect(text, contains('cached; no new report observed during this test'));
+    expect(text, contains('across all paths (includes relay)'));
+    expect(
+      text,
+      contains('Zero observed paths does not prove no attempts were made'),
+    );
   });
   testWidgets('settings validate before changing native state', (tester) async {
     final backend = FakeBackend();

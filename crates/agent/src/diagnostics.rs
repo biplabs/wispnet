@@ -1,8 +1,14 @@
 //! Read-only reachability/path snapshots. Never opens a backend or retries a service.
 use crate::{control, tunnel::TunnelError};
+use iroh::endpoint::{PathEvent, PathStats};
 use iroh::{Endpoint, EndpointAddr, Watcher, endpoint::Connection};
-use std::time::Duration;
+use n0_future::StreamExt;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Duration,
+};
 use tokio::time::{Instant, sleep};
+use wispnet_core::host::{DiagnosticSnapshot, NetworkObservation, NetworkReport, PathObservation};
 use wispnet_core::identity::EndpointId;
 
 struct Close(Connection);
@@ -100,7 +106,187 @@ pub async fn probe(
     }))
 }
 
-/// A longer, explicit user-requested observation. No service backend is opened.
+#[derive(Clone)]
+pub(crate) struct Context {
+    pub endpoint: Endpoint,
+    pub relay_only: bool,
+    pub relay_configured: bool,
+}
+
+fn network_report(endpoint: &Endpoint) -> Option<NetworkReport> {
+    endpoint.net_report().get().map(|r| NetworkReport {
+        udp_v4: r.udp_v4,
+        udp_v6: r.udp_v6,
+        mapping_varies: r.mapping_varies_by_dest(),
+        public_ipv4_discovered: r.global_v4.is_some(),
+        public_ipv6_discovered: r.global_v6.is_some(),
+        captive_portal: r.captive_portal,
+    })
+}
+
+/// Wait for an actual report publication after subscribing. Merely notifying
+/// Iroh of a possible network change does not guarantee it reruns discovery.
+async fn fresh_network(context: &Context) -> NetworkObservation {
+    let started = Instant::now();
+    if context.relay_only || !context.relay_configured {
+        return NetworkObservation {
+            fresh: false,
+            report: network_report(&context.endpoint),
+            wait_ms: 0,
+        };
+    }
+    let mut updates = context.endpoint.net_report().stream();
+    let _baseline = updates.next().await;
+    context.endpoint.network_change().await;
+    let update = tokio::time::timeout(Duration::from_secs(30), async {
+        while let Some(report) = updates.next().await {
+            if report.is_some() {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .unwrap_or(false);
+    NetworkObservation {
+        fresh: update,
+        report: network_report(&context.endpoint),
+        wait_ms: started.elapsed().as_millis() as u64,
+    }
+}
+
+fn record_event(
+    event: PathEvent,
+    direct: &mut BTreeMap<String, PathStats>,
+    closed: &mut BTreeSet<String>,
+    events_lost: &mut u64,
+) {
+    match event {
+        PathEvent::Opened {
+            id, remote_addr, ..
+        } if remote_addr.is_ip() => {
+            direct.entry(format!("{id:?}")).or_default();
+        }
+        PathEvent::Closed {
+            id,
+            remote_addr,
+            last_stats,
+            ..
+        } if remote_addr.is_ip() => {
+            let key = format!("{id:?}");
+            closed.insert(key.clone());
+            direct.insert(key, *last_stats);
+        }
+        PathEvent::Lagged { missed, .. } => *events_lost = events_lost.saturating_add(missed),
+        _ => {}
+    }
+}
+
+/// Reports only connection-scoped counters and candidate counts, never addresses.
+/// Failed candidates that never became paths are not exposed by Iroh's path API.
+pub(crate) async fn observe(context: &Context, connection: &Connection) -> DiagnosticSnapshot {
+    observe_until(context, connection, None).await
+}
+
+async fn observe_until(
+    context: &Context,
+    connection: &Connection,
+    remote_finished: Option<tokio::sync::watch::Receiver<bool>>,
+) -> DiagnosticSnapshot {
+    let started = Instant::now();
+    let initial = selected_path(connection).to_owned();
+    let mut events = connection.path_events();
+    let mut events_open = true;
+    let mut direct: BTreeMap<String, PathStats> = BTreeMap::new();
+    let mut closed = BTreeSet::new();
+    let mut events_lost = 0u64;
+    let network_future = fresh_network(context);
+    tokio::pin!(network_future);
+    let mut network = None;
+    loop {
+        for path in connection.paths().iter().filter(|p| p.is_ip()) {
+            direct.insert(format!("{:?}", path.id()), path.stats());
+        }
+        let path_done = context.relay_only
+            || selected_path(connection) == "direct"
+            || started.elapsed() >= Duration::from_secs(10);
+        let remote_done = remote_finished
+            .as_ref()
+            .is_none_or(|finished| *finished.borrow());
+        if (path_done && network.is_some() && remote_done) || connection.close_reason().is_some() {
+            break;
+        }
+        tokio::select! {
+            value = &mut network_future, if network.is_none() => network = Some(value),
+            event = events.next(), if events_open => match event {
+                Some(event) => record_event(event,&mut direct,&mut closed,&mut events_lost),
+                None => events_open = false,
+            },
+            _ = sleep(Duration::from_millis(100)) => {},
+        }
+    }
+    // Include events already queued when the observation deadline completed.
+    for _ in 0..64 {
+        let mut next = std::pin::pin!(events.next());
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        let std::task::Poll::Ready(Some(event)) = std::future::Future::poll(next.as_mut(), &mut cx)
+        else {
+            break;
+        };
+        record_event(event, &mut direct, &mut closed, &mut events_lost);
+    }
+    let stats = connection.stats();
+    let mut paths = PathObservation {
+        initial_path: initial,
+        selected_path: if connection.close_reason().is_some() {
+            "closed".into()
+        } else {
+            selected_path(connection).into()
+        },
+        rtt_ms: selected_rtt_ms(connection),
+        direct_paths_seen: direct.len(),
+        direct_paths_closed: closed.len(),
+        events_lost,
+        connection_challenges_sent: stats.frame_tx.path_challenge,
+        connection_responses_received: stats.frame_rx.path_response,
+        ..Default::default()
+    };
+    for stats in direct.values() {
+        paths.direct_datagrams_sent = paths
+            .direct_datagrams_sent
+            .saturating_add(stats.udp_tx.datagrams);
+        paths.direct_datagrams_received = paths
+            .direct_datagrams_received
+            .saturating_add(stats.udp_rx.datagrams);
+        paths.direct_challenges_sent = paths
+            .direct_challenges_sent
+            .saturating_add(stats.frame_tx.path_challenge);
+        paths.direct_responses_received = paths
+            .direct_responses_received
+            .saturating_add(stats.frame_rx.path_response);
+    }
+    let candidates = context
+        .endpoint
+        .remote_info(connection.remote_id())
+        .await
+        .map(|info| info.addrs().filter(|a| a.addr().is_ip()).count());
+    DiagnosticSnapshot {
+        version: 1,
+        host: context.endpoint.id(),
+        relay_only: context.relay_only,
+        relay_status: relay_state(&context.endpoint, context.relay_configured).into(),
+        network: network.unwrap_or(NetworkObservation {
+            fresh: false,
+            report: network_report(&context.endpoint),
+            wait_ms: started.elapsed().as_millis() as u64,
+        }),
+        paths,
+        peer_ip_candidates: candidates,
+        elapsed_ms: started.elapsed().as_millis() as u64,
+    }
+}
+
+/// Observe both authenticated endpoints without opening a service backend.
 pub async fn explain_path(
     endpoint: &Endpoint,
     expected: EndpointId,
@@ -115,42 +301,46 @@ pub async fn explain_path(
     }
     let connection = Close(control::connect_target(endpoint, target).await?);
     control::catalog_on(&connection.0, expected).await?;
-    let initial = selected_path(&connection.0);
-    let started = Instant::now();
-    while !relay_only
-        && selected_path(&connection.0) != "direct"
-        && connection.0.close_reason().is_none()
-        && started.elapsed() < Duration::from_secs(10)
-    {
-        sleep(Duration::from_millis(100)).await;
-    }
-    let closed = connection.0.close_reason().is_some();
-    let selected = if closed {
-        "closed"
-    } else {
-        selected_path(&connection.0)
+    let context = Context {
+        endpoint: endpoint.clone(),
+        relay_only,
+        relay_configured,
     };
-    let report = endpoint.net_report().get();
-    let network = report.map(|r| {
-        serde_json::json!({
-            "udp_v4":r.udp_v4, "udp_v6":r.udp_v6,
-            "mapping_varies":r.mapping_varies_by_dest(),
-            "public_ipv4_discovered":r.global_v4.is_some(),
-            "public_ipv6_discovered":r.global_v6.is_some(),
-            "captive_portal":r.captive_portal
-        })
-    });
-    Ok(serde_json::json!({
-        "initial_path":initial, "selected_path":selected,
-        "rtt_ms":selected_rtt_ms(&connection.0),
-        "observation_ms":started.elapsed().as_millis(),
-        "relay_only":relay_only, "relay_status":relay_state(endpoint,relay_configured),
-        "network_report":network,
-        "reason":match selected {
-            "direct" => "Direct connectivity succeeded.",
-            "closed" => "Peer closed the connection during observation.",
-            _ if relay_only => "This device is configured to use relay only.",
-            _ => "No direct path was established within 10 seconds. NAT or firewall restrictions at either end are possible; this test cannot identify which network is responsible."
+    let (finished, finished_watch) = tokio::sync::watch::channel(false);
+    let (local, remote) = tokio::join!(
+        observe_until(&context, &connection.0, Some(finished_watch)),
+        async {
+            let result = control::diagnostic_on(&connection.0, expected).await;
+            let _ = finished.send(true);
+            result
         }
+    );
+    let reason = if local.paths.selected_path == "direct" {
+        "Direct connectivity succeeded."
+    } else if local.paths.selected_path == "closed" {
+        "Peer closed the connection during observation."
+    } else if relay_only {
+        "This device is configured to use relay only."
+    } else if remote.as_ref().is_ok_and(|r| r.relay_only) {
+        "The target computer is configured to use relay only."
+    } else if local.network.fresh
+        && local
+            .network
+            .report
+            .as_ref()
+            .is_some_and(|r| r.udp_v4 || r.udp_v6)
+    {
+        "UDP discovery works; direct peer connectivity failed during this test. NAT or firewall restrictions remain possible at either end."
+    } else {
+        "Direct peer connectivity failed during this test. Discovery freshness and both endpoints' observations are needed to narrow the cause."
+    };
+    Ok(serde_json::json!({
+        "initial_path":local.paths.initial_path, "selected_path":local.paths.selected_path,
+        "rtt_ms":local.paths.rtt_ms, "observation_ms":local.elapsed_ms,
+        "relay_only":relay_only, "relay_status":local.relay_status,
+        "network_report":local.network.report, "reason":reason,
+        "local":local, "remote":remote.as_ref().ok(),
+        "remote_error":remote.as_ref().err().map(|_| "Host diagnostic unavailable: the host may need an update, or its diagnostic request failed."),
+        "candidate_failure_reasons":"unavailable: transport does not expose reasons for failed candidate validation",
     }))
 }

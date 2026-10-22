@@ -346,6 +346,10 @@ async fn serve(
                 let streams = streams.clone();
                 let counts = counts.clone();
                 let max = config.max_streams_per_connection;
+                let diagnostics = crate::diagnostics::Context {
+                    endpoint:endpoint.clone(), relay_only:config.relay_only,
+                    relay_configured:config.relay_url.is_some(),
+                };
                 // Count before spawning so it includes in-flight handshakes.
                 let guard = CountGuard::new(counts.connections.clone());
                 tasks.spawn(async move {
@@ -376,7 +380,7 @@ async fn serve(
                         return;
                     }
                     let _peer = PeerGuard::new(counts.clone(), peer);
-                    serve_connection(connection, peer, services, streams, max, counts).await;
+                    serve_connection(connection, peer, services, streams, max, counts, diagnostics).await;
                 });
             }
         }
@@ -392,6 +396,7 @@ async fn serve_connection(
     streams: Arc<Semaphore>,
     max: usize,
     counts: ActiveCounts,
+    diagnostics: crate::diagnostics::Context,
 ) {
     let connection_control = connection.alpn() == wispnet_core::host::ALPN;
     let _close = CloseConnection(connection.clone());
@@ -417,11 +422,13 @@ async fn serve_connection(
                 let guard = CountGuard::new(counts.streams.clone());
                 let services = services.clone();
                 let counts = counts.clone();
+                let diagnostics = diagnostics.clone();
+                let observed_connection = connection.clone();
                 tasks.spawn(async move {
                     let _permit = permit;
                     let _guard = guard;
                     if connection_control {
-                        if let Services::Host(host)=services {crate::control::serve_stream(send,recv,peer,host,counts).await;}
+                        if let Services::Host(host)=services {crate::control::serve_stream(send,recv,peer,host,counts,diagnostics,observed_connection).await;}
                     } else {
                         serve_stream(send, recv, peer, &services, &counts).await;
                     }

@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import tomllib
 import urllib.request
 import urllib.error
 
@@ -80,7 +81,13 @@ def main():
             put(gateway, config + '/gateway.toml')
             ssh(f'caddy adapt --config {quote(config + "/Caddyfile")} --adapter caddyfile >/dev/null')
             relay = temporary / 'relay.toml'
-            relay.write_text('listen="127.0.0.1:18443"\nhttp_only=true\nmax_connections=64\n')
+            relay_text = 'listen="127.0.0.1:18443"\nhttp_only=true\nmax_connections=64\n'
+            # Preserve separately enabled UDP discovery when updating the HTTPS gateway.
+            old_relay = tomllib.loads(ssh('cat ' + quote(relay_config)))
+            for field in ['quic_listen', 'quic_certificate', 'quic_private_key']:
+                if field in old_relay:
+                    relay_text += field + '=' + json.dumps(old_relay[field]) + '\n'
+            relay.write_text(relay_text)
             put(relay, relay_config)
             relay_changed = any(ssh(f'cmp -s {quote(backup + "/" + str(paths.index(path)))} {quote(path)} || printf changed') == 'changed' for path in [home + '/.local/libexec/wispnet-relay/wispnet-relay', relay_config])
             front_changed = not old_front or any(ssh(f'cmp -s {quote(backup + "/" + str(paths.index(path)))} {quote(path)} || printf changed') == 'changed' for path in [config + '/Caddyfile', home + '/.config/systemd/user/wispnet-public-https.service'])

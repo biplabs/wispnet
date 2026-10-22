@@ -9,6 +9,7 @@ pub const MAX_RESPONSE: usize = 128 * 1024;
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
     Catalog {},
+    Diagnostic {},
     SetName { name: String },
 }
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -59,5 +60,69 @@ impl Catalog {
         self.host == previous.host
             && self.generation == previous.generation
             && (self.revision > previous.revision || self == previous)
+    }
+}
+
+/// Address-free observations, disclosed only to an authenticated approved peer.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosticSnapshot {
+    pub version: u16,
+    pub host: EndpointId,
+    pub relay_only: bool,
+    pub relay_status: String,
+    pub network: NetworkObservation,
+    pub paths: PathObservation,
+    pub peer_ip_candidates: Option<usize>,
+    pub elapsed_ms: u64,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkObservation {
+    pub fresh: bool,
+    pub report: Option<NetworkReport>,
+    pub wait_ms: u64,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkReport {
+    pub udp_v4: bool,
+    pub udp_v6: bool,
+    pub mapping_varies: Option<bool>,
+    pub public_ipv4_discovered: bool,
+    pub public_ipv6_discovered: bool,
+    pub captive_portal: Option<bool>,
+}
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PathObservation {
+    pub initial_path: String,
+    pub selected_path: String,
+    pub rtt_ms: Option<u64>,
+    pub direct_paths_seen: usize,
+    pub direct_paths_closed: usize,
+    pub direct_datagrams_sent: u64,
+    pub direct_datagrams_received: u64,
+    pub direct_challenges_sent: u64,
+    pub direct_responses_received: u64,
+    pub connection_challenges_sent: u64,
+    pub connection_responses_received: u64,
+    pub events_lost: u64,
+}
+impl DiagnosticSnapshot {
+    pub fn valid(&self, expected: EndpointId) -> bool {
+        self.version == 1
+            && self.host == expected
+            && matches!(
+                self.relay_status.as_str(),
+                "disabled" | "connected" | "denied" | "unavailable"
+            )
+            && [&self.paths.initial_path, &self.paths.selected_path]
+                .iter()
+                .all(|p| matches!(p.as_str(), "direct" | "relay" | "unknown" | "closed"))
+            && (!self.network.fresh || self.network.report.is_some())
+            && self.elapsed_ms <= 40_000
+            && self.network.wait_ms <= 31_000
+            && self.peer_ip_candidates.is_none_or(|count| count <= 1024)
     }
 }

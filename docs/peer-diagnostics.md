@@ -68,18 +68,39 @@ or automatic retry of a potentially state-changing request is promised.
 ## Android settings diagnostic
 
 In Settings, tap Diagnostic below Save. A separate page opens and automatically
-tests each paired host in turn using the
-existing phone identity and host approval. It keeps a successful catalog
-connection open for up to ten seconds to observe direct-path negotiation; each
-host has a 25-second overall deadline. It never opens a service backend or changes
-pairings, ports, permissions, or the device name. Leaving the diagnostic page stops further
-hosts from being tested; an already running host test finishes within its deadline.
+tests each paired host using the existing phone identity and host approval.
+Run again and Copy report share the action row. Each host has a 55-second overall
+deadline; refreshing network observations can make the test take longer than the
+original ten-second path observation. Leaving the page stops subsequent hosts;
+an already running host test remains bounded by its deadline.
 
-The copyable report includes the current Android network and VPN state, initial
-and final path, selected-path RTT, relay availability, and the latest Iroh network
-discovery observations. Discovery may predate the test. Missing observations are
-shown as unavailable. No UDP discovery response does not prove UDP is blocked;
-captive-portal detection is a heuristic. A relay result alone cannot distinguish
-carrier NAT, home-router restrictions, and a remote firewall. Public-address
-presence is reported without exposing the addresses. Device badges continue to
-show the last normal request's path rather than this separate diagnostic.
+The phone and target independently watch for a new Iroh network-report publication
+for up to 30 seconds while observing the same authenticated control connection.
+Iroh periodically runs discovery (normally every 20–26 seconds). A network-change
+hint does not guarantee a new discovery run. The report marks an observation
+updated during this test only after receiving a later publication; otherwise it
+labels the available report cached, or the observations unavailable. A fresh
+publication is not a promise that every discovery sub-probe succeeded.
+
+Both sides report selected paths, latency, known peer IP-candidate counts, direct
+paths seen/closed, direct-path datagrams, and validation-frame counters. Counts
+across all connection paths explicitly include relay paths. Failed candidates
+that never became observable paths and their rejection reasons are not exposed
+by the pinned transport API; zero observed direct paths does not establish that
+no hole-punch attempts occurred. A missed-event warning marks incomplete counts.
+The diagnostic does not identify a NAT type without sufficient discovery data.
+
+Host observations use a new bounded `diagnostic` control RPC. Transport identity
+and existing host approval authorize it, with approval checked again before the
+reply. The response is versioned, host-pinned, bounded to 4096 bytes, and contains
+no addresses, backend details, service payloads, or credentials. Older hosts may
+reset the unsupported request stream; local results are retained and the host
+observation is marked unavailable with an update hint. Catalog, service access,
+and permissions remain unchanged. Normal control-RPC deadlines remain bounded
+independently from the longer diagnostic request.
+
+Receiving no UDP discovery response does not prove a blanket UDP block; captive-portal detection
+is a heuristic. Public-address presence is reported without the addresses.
+Device badges continue to show the last normal request's path rather than this
+separate diagnostic. For LTE analysis, rerun on a stable cellular connection and
+compare the phone and target observations in the copied report.

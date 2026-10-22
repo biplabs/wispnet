@@ -415,6 +415,82 @@ class _MachineSettingsState extends State<MachineSettings> {
   );
 }
 
+void appendDiagnosticObservation(List<String> lines, String label, Map side) {
+  final network = side['network'] as Map?;
+  final n = network?['report'] as Map?;
+  final p = side['paths'] as Map?;
+  String observed(Object? value) => value == null
+      ? '?'
+      : value == true
+      ? '✓'
+      : '✗';
+  lines.add('\n$label');
+  if (side.containsKey('relay_only')) {
+    lines.add(
+      '• ${side['relay_only'] == true ? "✗" : "✓"} Direct UDP transports enabled',
+    );
+  }
+  if (p != null) {
+    lines.add(
+      '• ${p['initial_path']} → ${p['selected_path']} · RTT: ${p['rtt_ms'] ?? "unavailable"} ms',
+    );
+    lines.add(
+      '• Observed for ${side['elapsed_ms']} ms · relay: ${side['relay_status']}',
+    );
+  }
+  lines.add(
+    network?['fresh'] == true
+        ? '• Discovery: network report updated during this test (${network?['wait_ms']} ms)'
+        : n != null
+        ? '• Discovery: cached; no new report observed during this test'
+        : '• Discovery: unavailable during this test',
+  );
+  for (final check in <(String, Object?)>[
+    ('UDP response IPv4', n?['udp_v4']),
+    ('UDP response IPv6', n?['udp_v6']),
+    ('Public IPv4 address discovered', n?['public_ipv4_discovered']),
+    ('Public IPv6 address discovered', n?['public_ipv6_discovered']),
+    ('NAT mapping varies by destination', n?['mapping_varies']),
+    ('Captive portal suspected (heuristic)', n?['captive_portal']),
+  ]) {
+    lines.add('• ${observed(check.$2)} ${check.$1}');
+  }
+  if (n?['mapping_varies'] == true) {
+    lines.add(
+      '• Destination-dependent NAT can make direct connections harder.',
+    );
+  }
+  if (n != null && n['udp_v4'] == false && n['udp_v6'] == false) {
+    lines.add(
+      '• No UDP discovery response in this report. This alone does not prove UDP is blocked.',
+    );
+  }
+  if (side.containsKey('peer_ip_candidates')) {
+    lines.add(
+      '• Known direct IP candidates for the peer: ${side['peer_ip_candidates'] ?? "unavailable"}',
+    );
+  }
+  if (p != null) {
+    lines.add(
+      '• Direct paths seen: ${p['direct_paths_seen']} · closed: ${p['direct_paths_closed']}',
+    );
+    lines.add(
+      '• Datagrams on direct paths: sent ${p['direct_datagrams_sent']} · received ${p['direct_datagrams_received']}',
+    );
+    lines.add(
+      '• Validation on direct paths: challenges sent ${p['direct_challenges_sent']} · responses received ${p['direct_responses_received']}',
+    );
+    lines.add(
+      '• Validation across all paths (includes relay): challenges sent ${p['connection_challenges_sent']} · responses received ${p['connection_responses_received']}',
+    );
+    if ((p['events_lost'] as num? ?? 0) > 0) {
+      lines.add(
+        '• Some path events were lost; activity counts may be incomplete.',
+      );
+    }
+  }
+}
+
 class ConnectionDiagnostics extends StatefulWidget {
   const ConnectionDiagnostics({super.key, required this.backend});
   final WispnetBackend backend;
@@ -436,10 +512,11 @@ class _ConnectionDiagnosticsState extends State<ConnectionDiagnostics> {
   Future<void> run() async {
     setState(() {
       running = true;
-      report = 'Checking paired devices…';
+      report = 'Refreshing discovery and testing paired devices…';
     });
     final lines = <String>[
-      'Connection diagnostic · ${DateTime.now().toLocal()}',
+      'Connection diagnostic · ${DateTime.now().toLocal().toIso8601String().split(".").first.replaceFirst("T", " ")}',
+      '✓ Yes · ✗ No · ? Unavailable',
     ];
     try {
       final snapshot = await widget.backend.invoke('snapshot');
@@ -448,61 +525,61 @@ class _ConnectionDiagnosticsState extends State<ConnectionDiagnostics> {
       for (final host in hosts.keys) {
         if (!mounted) return;
         setState(
-          () => report = '${lines.join('\n')}\nTesting ${hosts[host]['name']}…',
+          () => report =
+              '${lines.join('\n')}\nTesting ${hosts[host]['name']}… (up to 55 seconds)',
         );
         final result = await widget.backend.invoke('connectionDiagnostics', {
           'host': host,
         });
         lines.add(
-          'Network: ${result['network']} · VPN: ${result['vpn'] == true ? "yes" : "no"}',
+          '• Network: ${result['network']} · VPN: ${result['vpn'] == null
+              ? "?"
+              : result['vpn'] == true
+              ? "✓"
+              : "✗"}',
         );
         for (final peer in result['peers'] as List? ?? []) {
           lines.add('\n${peer['name']}');
           if (peer['error'] != null) {
-            lines.add('Could not verify connection: ${peer['error']}');
+            lines.add('• ? Could not verify connection: ${peer['error']}');
             continue;
           }
           final r = peer['report'] as Map;
           lines.add(
-            '${r['initial_path']} → ${r['selected_path']} · RTT: ${r['rtt_ms'] ?? "unavailable"} ms',
+            '• Path: ${r['initial_path']} → ${r['selected_path']} · RTT: ${r['rtt_ms'] ?? "unavailable"} ms',
           );
           lines.add(
-            'Observed for ${r['observation_ms']} ms · relay: ${r['relay_status']}',
+            '• Observed for ${r['observation_ms']} ms · relay: ${r['relay_status']}',
           );
-          lines.add('${r['reason']}');
-          final n = r['network_report'] as Map?;
-          String observed(Object? value) => value == null
-              ? 'unavailable'
-              : value == true
-              ? 'yes'
-              : 'no';
-          lines.add('Latest network discovery (may predate this test):');
-          lines.add(
-            'UDP response IPv4: ${observed(n?['udp_v4'])} · IPv6: ${observed(n?['udp_v6'])}',
+          lines.add('• ${r['reason']}');
+          final local = r['local'] as Map?;
+          appendDiagnosticObservation(
+            lines,
+            'Phone observations',
+            local ??
+                {
+                  'network': {'fresh': false, 'report': r['network_report']},
+                },
           );
-          lines.add(
-            'NAT mapping varies by destination: ${observed(n?['mapping_varies'])}',
-          );
-          lines.add(
-            'Public address discovered IPv4: ${observed(n?['public_ipv4_discovered'])} · IPv6: ${observed(n?['public_ipv6_discovered'])}',
-          );
-          lines.add(
-            'Captive portal suspected (heuristic): ${observed(n?['captive_portal'])}',
-          );
-          if (n?['mapping_varies'] == true) {
+          final remote = r['remote'] as Map?;
+          if (remote != null) {
+            appendDiagnosticObservation(
+              lines,
+              'Target computer observations',
+              remote,
+            );
+          } else {
             lines.add(
-              'Destination-dependent NAT can make direct connections harder.',
+              '\n• ? ${r['remote_error'] ?? "Target computer observations unavailable; update the host to collect both ends."}',
             );
           }
-          if (n != null && n['udp_v4'] == false && n['udp_v6'] == false) {
-            lines.add(
-              'Discovery received no UDP response. This alone does not prove UDP is blocked.',
-            );
-          }
+          lines.add(
+            '• ? Failed candidate validation reasons: unavailable in the transport API. Zero observed paths does not prove no attempts were made.',
+          );
         }
         if (result['network_changed'] == true) {
           lines.add(
-            'Network changed during the test; run again on a stable connection.',
+            '• Network changed during the test; run again on a stable connection.',
           );
         }
       }

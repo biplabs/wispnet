@@ -987,6 +987,17 @@ async fn catalog_rejects_mismatched_pin_before_sending_a_stream() {
             .await
             .is_err()
     );
+    assert!(matches!(
+        control::diagnostic_on(&outgoing, unrelated.endpoint_id()).await,
+        Err(tunnel::TunnelError::Transport(
+            "diagnostic target identity mismatch"
+        ))
+    ));
+    assert!(
+        timeout(Duration::from_millis(100), incoming.accept_bi())
+            .await
+            .is_err()
+    );
     // Rejection is local: it neither closes nor poisons the shared connection.
     let (mut send, _recv) = outgoing.open_bi().await.unwrap();
     send.write_all(b"still usable").await.unwrap();
@@ -1119,4 +1130,137 @@ async fn authenticated_device_name_updates_only_own_label_and_preserves_access()
     assert!(!authority.approved(device.endpoint_id()).await);
     endpoint.close().await;
     server.shutdown().await;
+}
+
+#[tokio::test]
+async fn diagnostic_is_approved_peer_only_and_does_not_open_a_backend_or_change_policy() {
+    use tokio::time::{Duration, timeout};
+    let directory = dir();
+    let host_key = Identity::generate();
+    let client = Identity::generate();
+    host::initialize(directory.path(), host_key.endpoint_id()).unwrap();
+    approve(
+        directory.path(),
+        host_key.endpoint_id(),
+        client.endpoint_id(),
+        0,
+    );
+    let backend = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    service(
+        directory.path(),
+        host_key.endpoint_id(),
+        client.endpoint_id(),
+        backend.local_addr().unwrap(),
+        1,
+    );
+    let authority = Authority::open(directory.path(), host_key.endpoint_id()).unwrap();
+    let before = serde_json::to_value(authority.snapshot().await.unwrap()).unwrap();
+    let server = tunnel::TunnelHost::bind_host(host_key.secret_key(), &config(), authority.clone())
+        .await
+        .unwrap();
+    let endpoint = tunnel::bind_client(client.secret_key()).await.unwrap();
+    let connection = control::connect(
+        &endpoint,
+        host_key.endpoint_id(),
+        server.endpoint().bound_sockets()[0],
+    )
+    .await
+    .unwrap();
+    let report = control::diagnostic_on(&connection, host_key.endpoint_id())
+        .await
+        .unwrap();
+    assert!(report.valid(host_key.endpoint_id()));
+    assert_eq!(report.paths.selected_path, "direct");
+    assert!(!report.network.fresh); // No relay discovery is configured in this fixture.
+    let json = serde_json::to_string(&report).unwrap();
+    assert!(!json.contains("127.0.0.1"));
+    assert!(!json.contains("llama"));
+    assert!(
+        timeout(Duration::from_millis(100), backend.accept())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        before,
+        serde_json::to_value(authority.snapshot().await.unwrap()).unwrap()
+    );
+    let stranger = tunnel::bind_client(Identity::generate().secret_key())
+        .await
+        .unwrap();
+    if let Ok(connection) = control::connect(
+        &stranger,
+        host_key.endpoint_id(),
+        server.endpoint().bound_sockets()[0],
+    )
+    .await
+    {
+        assert!(
+            control::diagnostic_on(&connection, host_key.endpoint_id())
+                .await
+                .is_err()
+        );
+    }
+    endpoint.close().await;
+    stranger.close().await;
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn old_host_without_diagnostic_support_keeps_the_local_report() {
+    use iroh::{Endpoint, EndpointAddr, endpoint::presets};
+    use wispnet_core::host::ALPN;
+    let server = Endpoint::builder(presets::Minimal)
+        .alpns(vec![ALPN.to_vec()])
+        .bind()
+        .await
+        .unwrap();
+    let host = server.id();
+    let accepted = server.clone();
+    let worker = tokio::spawn(async move {
+        let connection = accepted.accept().await.unwrap().await.unwrap();
+        while let Ok((mut send, mut recv)) = connection.accept_bi().await {
+            let mut length = [0u8; 4];
+            if recv.read_exact(&mut length).await.is_err() {
+                break;
+            }
+            let mut bytes = vec![0; u32::from_be_bytes(length) as usize];
+            recv.read_exact(&mut bytes).await.unwrap();
+            let request: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            if request["op"] != "catalog" {
+                let _ = send.reset(1u32.into());
+                continue;
+            }
+            let reply = serde_json::to_vec(&serde_json::json!({"version":1,"complete":true,
+                "host":host,"generation":"a".repeat(64),"revision":0,"service_count":0,"services":[]})).unwrap();
+            send.write_all(&(reply.len() as u32).to_be_bytes())
+                .await
+                .unwrap();
+            send.write_all(&reply).await.unwrap();
+            send.finish().unwrap();
+        }
+    });
+    let endpoint = tunnel::bind_client(Identity::generate().secret_key())
+        .await
+        .unwrap();
+    let report = wispnet_agent::diagnostics::explain_path(
+        &endpoint,
+        host,
+        EndpointAddr::new(host).with_ip_addr(server.bound_sockets()[0]),
+        false,
+        false,
+    )
+    .await
+    .unwrap();
+    assert_eq!(report["local"]["paths"]["selected_path"], "direct");
+    assert!(report["remote"].is_null());
+    assert!(
+        report["remote_error"]
+            .as_str()
+            .unwrap()
+            .contains("may need an update")
+    );
+    endpoint.close().await;
+    server.close().await;
+    worker.abort();
+    let _ = worker.await;
 }

@@ -12,6 +12,7 @@ from relay_smoke import ROOT, BINARY, event, run, stop
 
 
 def main():
+    run(['cargo','build','-p','wispnet-agent','--example','relay_discovery_probe','--locked'])
     with tempfile.TemporaryDirectory(prefix='wispnet-standalone-relay-') as temporary:
         root=Path(temporary);key=root/'key.pem';certificate=root/'certificate.pem'
         run(['openssl','req','-x509','-newkey','ed25519','-nodes','-days','1',
@@ -20,13 +21,19 @@ def main():
         key.chmod(0o600)
         with socket.socket() as port_socket:
             port_socket.bind(('127.0.0.1',0));port=port_socket.getsockname()[1]
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp_socket:
+            udp_socket.bind(('127.0.0.1',0));udp_port=udp_socket.getsockname()[1]
         config=root/'relay.toml'
-        config.write_text(f"listen='127.0.0.1:{port}'\ncertificate='{certificate}'\nprivate_key='{key}'\nmax_connections=2\n")
+        config.write_text(f"listen='127.0.0.1:{port}'\ncertificate='{certificate}'\nprivate_key='{key}'\nmax_connections=2\nquic_listen='127.0.0.1:{udp_port}'\n")
         config.chmod(0o600)
         command=[ROOT/'target/debug/wispnet-relay','--config',config]
         relay=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
         try:
             started=event(relay,relay.stdout,'started');assert started['role']=='packet_relay'
+            # Complete a certificate-verified QUIC address discovery exchange,
+            # rather than treating a UDP listener as connectivity proof.
+            run([ROOT/'target/debug/examples/relay_discovery_probe',
+                 f'https://127.0.0.1:{port}',str(udp_port),certificate])
             context=ssl.create_default_context(cafile=str(certificate))
             with urllib.request.urlopen(f'https://127.0.0.1:{port}/ping',context=context,timeout=5) as response:
                 assert response.status==200
@@ -54,10 +61,19 @@ def main():
             finally: stop(agent)
 
         finally: stop(relay)
+        # The production topology terminates HTTPS at Caddy, while QUIC uses
+        # an explicit certificate on a separate UDP listener.
+        config.write_text(f"listen='127.0.0.1:{port}'\nhttp_only=true\nmax_connections=2\nquic_listen='127.0.0.1:{udp_port}'\nquic_certificate='{certificate}'\nquic_private_key='{key}'\n")
+        relay=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+        try:
+            event(relay,relay.stdout,'started')
+            run([ROOT/'target/debug/examples/relay_discovery_probe',
+                 f'http://127.0.0.1:{port}',str(udp_port),certificate])
+        finally: stop(relay)
         # Secret protection errors are fixed labels and must not dump PEM bytes.
         key.chmod(0o644)
         rejected=run(command,ok=False)
         assert 'protected' in rejected.stderr and 'PRIVATE KEY' not in rejected.stderr
-    print('Standalone relay: verified TLS, wrong hostname/key-permission rejection, no relay-owned node state, native Iroh catalog and graceful shutdown passed')
+    print('Standalone relay: verified authenticated UDP discovery in TLS and Caddy modes, TLS, wrong hostname/key-permission rejection, no relay-owned node state, native Iroh catalog and graceful shutdown passed')
 
 if __name__=='__main__':main()

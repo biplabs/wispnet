@@ -158,3 +158,39 @@ These probes do not publish node state. Trace payload strings are suppressed and
 temporary fixture traces are deleted after auditing. This validates the exercised
 pinned native transport paths, not unimplemented Android/UI flows or every future
 library feature.
+
+## Public UDP address discovery
+
+The standalone relay can optionally run Iroh QUIC address discovery on UDP 7842.
+This lets endpoints learn their public UDP addresses and attempt direct NAT
+traversal. Forwarding HTTPS alone provides relay traffic but does not provide
+this discovery service. Enabling discovery does not guarantee a direct path on
+every carrier/router combination.
+
+For the existing Caddy-fronted deployment:
+
+```sh
+python3 scripts/install_relay_discovery.py --ssh-host desktop.home
+cargo run -p wispnet-agent --example relay_discovery_probe --locked
+```
+
+Forward external TCP 443 to the host's TCP 8443 and external UDP 7842 to the
+host's UDP 7842. The installer preserves the loopback HTTP packet relay and uses
+Caddy's certificate for authenticated UDP discovery. A systemd path watcher
+restarts the relay when Caddy renews the certificate/key. The public gateway
+installer preserves these discovery settings on subsequent deployments.
+
+The relay's opt-in settings are:
+
+```toml
+quic_listen = "0.0.0.0:7842"
+quic_certificate = "/absolute/caddy/relay.wispnet.app.crt"
+quic_private_key = "/absolute/caddy/relay.wispnet.app.key"
+```
+
+Private-key protection and certificate matching use the same checks as the TLS
+packet relay. HTTP-only mode requires an explicit complete discovery certificate
+and key. In a relay terminating its own TLS, discovery may inherit that TLS
+configuration instead. Omitting `quic_listen` leaves UDP discovery disabled.
+A discovery probe verifies the TLS certificate and an actual observed-address
+response; a UDP listener or HTTPS 200 by itself is not proof of discovery.

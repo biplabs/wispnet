@@ -55,11 +55,28 @@ pub(crate) async fn serve_stream(
     peer: EndpointId,
     authority: wispnet_registry::host::Authority,
     counts: crate::tunnel::ActiveCounts,
+    diagnostics: crate::diagnostics::Context,
+    connection: Connection,
 ) {
-    let outcome = timeout(HANDSHAKE_TIMEOUT, async {
-        let request = read_frame(&mut recv, host::MAX_REQUEST).await?;
-        let request: Request = serde_json::from_slice(&request)
-            .map_err(|_| TunnelError::Transport("invalid control request"))?;
+    let started = tokio::time::Instant::now();
+    let request = timeout(HANDSHAKE_TIMEOUT, async {
+        let bytes = read_frame(&mut recv, host::MAX_REQUEST).await?;
+        serde_json::from_slice::<Request>(&bytes)
+            .map_err(|_| TunnelError::Transport("invalid control request"))
+    })
+    .await;
+    let Ok(Ok(request)) = request else {
+        let _ = recv.stop(1u32.into());
+        let _ = send.reset(1u32.into());
+        return;
+    };
+    let deadline = if matches!(request, Request::Diagnostic {}) {
+        std::time::Duration::from_secs(40)
+    } else {
+        HANDSHAKE_TIMEOUT
+    }
+    .saturating_sub(started.elapsed());
+    let outcome = timeout(deadline, async {
         if let Request::SetName { name } = request {
             let reply = match authority.set_client_name(peer, name.clone()).await {
                 Ok(()) => serde_json::to_vec(&serde_json::json!({"name":name}))
@@ -86,6 +103,19 @@ pub(crate) async fn serve_stream(
             Err(_) => return Err(TunnelError::Transport("control unavailable")),
         };
         counts.record_activity(peer);
+        if matches!(request, Request::Diagnostic {}) {
+            let snapshot = crate::diagnostics::observe(&diagnostics, &connection).await;
+            // A grant revoked during discovery must not authorize the reply.
+            if !authority.approved(peer).await {
+                write_frame(&mut send, br#"{"error":"access_denied"}"#).await?;
+            } else {
+                let bytes = serde_json::to_vec(&snapshot)
+                    .map_err(|_| TunnelError::Transport("invalid diagnostic snapshot"))?;
+                write_frame(&mut send, &bytes).await?;
+            }
+            let _ = send.stopped().await;
+            return Ok(());
+        }
         let bytes =
             serde_json::to_vec(&catalog).map_err(|_| TunnelError::Transport("invalid catalog"))?;
         if bytes.len() > host::MAX_RESPONSE {
@@ -191,4 +221,35 @@ pub async fn set_name_on(
     })
     .await
     .map_err(|_| TunnelError::Transport("device name update timeout"))?
+}
+
+/// One bounded, pinned, address-free host diagnostic RPC. Older hosts may reset
+/// this stream; that does not invalidate a successful catalog or local report.
+pub async fn diagnostic_on(
+    connection: &Connection,
+    expected: EndpointId,
+) -> Result<host::DiagnosticSnapshot, TunnelError> {
+    if connection.remote_id() != expected {
+        return Err(TunnelError::Transport(
+            "diagnostic target identity mismatch",
+        ));
+    }
+    timeout(std::time::Duration::from_secs(40), async {
+        let (mut send, mut recv) = connection
+            .open_bi()
+            .await
+            .map_err(|_| TunnelError::Transport("diagnostic stream unavailable"))?;
+        let request = serde_json::to_vec(&Request::Diagnostic {})
+            .map_err(|_| TunnelError::Transport("invalid diagnostic request"))?;
+        write_frame(&mut send, &request).await?;
+        let bytes = read_frame(&mut recv, 4096).await?;
+        let snapshot: host::DiagnosticSnapshot = serde_json::from_slice(&bytes)
+            .map_err(|_| TunnelError::Transport("invalid diagnostic snapshot"))?;
+        if !snapshot.valid(expected) || connection.remote_id() != expected {
+            return Err(TunnelError::Transport("diagnostic host or schema mismatch"));
+        }
+        Ok(snapshot)
+    })
+    .await
+    .map_err(|_| TunnelError::Transport("host diagnostic timed out"))?
 }

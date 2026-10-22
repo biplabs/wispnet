@@ -136,5 +136,31 @@ async fn connection_diagnostic_requires_pairing_and_observes_direct_path() {
     assert_eq!(report["selected_path"], "direct");
     assert_eq!(report["relay_only"], false);
     assert_eq!(report["reason"], "Direct connectivity succeeded.");
-    assert!(report["observation_ms"].as_u64().unwrap() < 1000);
+    assert!(report["observation_ms"].as_u64().unwrap() <= 40_000);
+    assert_eq!(report["remote"]["host"], target.endpoint.id().to_string());
+    assert_eq!(report["remote"]["version"], 1);
+    assert!(report["remote_error"].is_null());
+    let mut remote: wispnet_core::host::DiagnosticSnapshot =
+        serde_json::from_value(report["remote"].clone()).unwrap();
+    assert!(remote.valid(target.endpoint.id()));
+    assert!(!remote.valid(phone.endpoint.id()));
+    remote.network.fresh = true;
+    remote.network.report = None;
+    assert!(!remote.valid(target.endpoint.id()));
+
+    assert_eq!(report["local"]["paths"]["selected_path"], "direct");
+    assert!(
+        report["local"]["paths"]["direct_paths_seen"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert!(
+        report["remote"]["paths"]["direct_datagrams_received"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    phone.endpoint.close().await;
+    target.endpoint.close().await;
 }

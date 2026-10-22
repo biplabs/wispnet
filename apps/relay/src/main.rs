@@ -1,7 +1,7 @@
 //! Standalone packet relay: no application/node identity or persistent registry.
 use iroh_relay::server::{
     Access, AccessControl, AcmeConfig, CertConfig, ClientRateLimit, ClientRequest, ConnectionId,
-    RelayConfig, Server, ServerConfig, TlsConfig,
+    QuicConfig, RelayConfig, Server, ServerConfig, TlsConfig,
 };
 use rustls_pki_types::pem::PemObject;
 use serde::Deserialize;
@@ -30,6 +30,9 @@ struct Config {
     acme_hostname: Option<String>,
     acme_cache: Option<PathBuf>,
     max_connections: usize,
+    quic_listen: Option<SocketAddr>,
+    quic_certificate: Option<PathBuf>,
+    quic_private_key: Option<PathBuf>,
 }
 
 fn read_protected(path: &Path, secret: bool) -> Result<Vec<u8>, &'static str> {
@@ -93,6 +96,46 @@ impl AccessControl for Admission {
     }
 }
 
+fn manual_tls_config(
+    certificate: &Path,
+    private_key: &Path,
+) -> Result<rustls::ServerConfig, &'static str> {
+    let certificates = read_protected(certificate, false)?;
+    let certificates = rustls_pki_types::CertificateDer::pem_slice_iter(&certificates)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| "invalid relay certificate")?;
+    let key = Zeroizing::new(read_protected(private_key, true)?);
+    let key = rustls_pki_types::PrivateKeyDer::from_pem_slice(&key)
+        .map_err(|_| "invalid relay private key")?;
+    rustls::ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+        .with_safe_default_protocol_versions()
+        .map_err(|_| "relay TLS configuration failed")?
+        .with_no_client_auth()
+        .with_single_cert(certificates, key)
+        .map_err(|_| "relay certificate/key mismatch")
+}
+
+fn quic_config(config: &Config) -> Result<Option<QuicConfig>, &'static str> {
+    let Some(address) = config.quic_listen else {
+        if config.quic_certificate.is_some() || config.quic_private_key.is_some() {
+            return Err("QUIC certificate requires quic_listen");
+        }
+        return Ok(None);
+    };
+    if address.port() == 0 {
+        return Err("QUIC discovery requires a fixed nonzero UDP port");
+    }
+    let mut quic = QuicConfig::new(address);
+    match (&config.quic_certificate, &config.quic_private_key) {
+        (Some(certificate), Some(key)) => {
+            quic.server_config = Some(manual_tls_config(certificate, key)?);
+        }
+        (None, None) if !config.http_only => {}
+        _ => return Err("HTTP-only relay requires a complete QUIC certificate/key pair"),
+    }
+    Ok(Some(quic))
+}
+
 fn certificate_config(config: &Config) -> Result<CertConfig, &'static str> {
     let tls_builder = rustls::ServerConfig::builder_with_provider(Arc::new(
         rustls::crypto::ring::default_provider(),
@@ -106,20 +149,10 @@ fn certificate_config(config: &Config) -> Result<CertConfig, &'static str> {
         &config.acme_hostname,
         &config.acme_cache,
     ) {
-        (Some(certificate), Some(private_key), None, None) => {
-            let certificates = read_protected(certificate, false)?;
-            let certificates = rustls_pki_types::CertificateDer::pem_slice_iter(&certificates)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|_| "invalid relay certificate")?;
-            let key = Zeroizing::new(read_protected(private_key, true)?);
-            let key = rustls_pki_types::PrivateKeyDer::from_pem_slice(&key)
-                .map_err(|_| "invalid relay private key")?;
-            CertConfig::Manual {
-                server_config: tls_builder
-                    .with_single_cert(certificates, key)
-                    .map_err(|_| "relay certificate/key mismatch")?,
-            }
-        }
+        (Some(certificate), Some(private_key), None, None) => CertConfig::Manual {
+            server_config: manual_tls_config(certificate, private_key)?,
+        },
+
         (None, None, Some(hostname), Some(cache)) => {
             if !hostname.contains('.')
                 || hostname.len() > 253
@@ -173,8 +206,8 @@ async fn serve(path: &Path) -> Result<(), &'static str> {
     } else {
         Some(certificate_config(&config)?)
     };
-    // Auxiliary HTTP stays loopback-only on an ephemeral port. QUIC and metrics
-    // listeners remain disabled; only the configured TLS port is exposed.
+    // Auxiliary HTTP stays loopback-only. UDP discovery is explicitly opt-in;
+    // metrics remain disabled.
     let mut relay = RelayConfig::new(if config.http_only {
         config.listen
     } else {
@@ -194,6 +227,7 @@ async fn serve(path: &Path) -> Result<(), &'static str> {
     relay.limits.client_rx = Some(rate);
     let mut server_config = ServerConfig::default();
     server_config.relay = Some(relay);
+    server_config.quic = quic_config(&config)?;
     let server = Server::spawn(server_config)
         .await
         .map_err(|_| "relay listener startup failed")?;
@@ -261,11 +295,29 @@ mod tests {
         assert!(read_protected(&key, true).is_err());
     }
     #[test]
+    fn quic_discovery_is_opt_in_and_http_mode_requires_its_own_tls() {
+        let mut config: Config =
+            toml::from_str("listen='127.0.0.1:18443'\nhttp_only=true\nmax_connections=2").unwrap();
+        assert!(quic_config(&config).unwrap().is_none());
+        config.quic_listen = Some("0.0.0.0:7842".parse().unwrap());
+        assert!(quic_config(&config).is_err());
+        config.http_only = false;
+        assert!(quic_config(&config).unwrap().is_some());
+        config.quic_listen = Some("0.0.0.0:0".parse().unwrap());
+        assert!(quic_config(&config).is_err());
+        config.quic_listen = None;
+        config.quic_certificate = Some("/not-read.pem".into());
+        assert!(quic_config(&config).is_err());
+    }
+    #[test]
     fn tls_mode_never_silently_falls_back_or_accepts_mixed_settings() {
         let mut config = Config {
             http_only: false,
             listen: "127.0.0.1:8443".parse().unwrap(),
             max_connections: 2,
+            quic_listen: None,
+            quic_certificate: None,
+            quic_private_key: None,
             certificate: None,
             private_key: None,
             acme_hostname: None,

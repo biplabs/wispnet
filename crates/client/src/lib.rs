@@ -523,7 +523,7 @@ impl Client {
                 }
                 let target = self.target(host).await?;
                 tokio::time::timeout(
-                    std::time::Duration::from_secs(25),
+                    std::time::Duration::from_secs(55),
                     wispnet_agent::diagnostics::explain_path(
                         &self.endpoint,
                         host,
@@ -533,7 +533,7 @@ impl Client {
                     ),
                 )
                 .await
-                .map_err(|_| "Connection diagnostic timed out after 25 seconds")?
+                .map_err(|_| "Connection diagnostic timed out after 55 seconds")?
                 .map_err(|e| e.to_string())
             }
             "relay_status" => Ok(
