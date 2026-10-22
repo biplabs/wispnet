@@ -32,6 +32,10 @@ def main():
         return subprocess.run(['ssh', '-o', 'BatchMode=yes', args.ssh_host, 'sh -c ' + shlex.quote(script)], check=True,
                               capture_output=True, text=True, timeout=90, **kwargs).stdout.strip()
 
+    # The privileged-port migration moves Caddy to the system manager. The
+    # legacy installer must not overwrite its config or start a competing user unit.
+    if ssh('systemctl show wispnet-public-https.service --property=FragmentPath --value'):
+        raise RuntimeError('Caddy is managed as a system service; this legacy user-service installer cannot update it. Update Caddy separately with sudo systemctl.')
     home = ssh('printf "%s" "$HOME"')
     quote = shlex.quote
     config = home + '/.config/wispnet-public'
