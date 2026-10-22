@@ -1,0 +1,79 @@
+name: Linux build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
+      - name: Install Linux desktop build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            binutils clang cmake ninja-build pkg-config \
+            libgtk-3-dev libayatana-appindicator3-dev
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: stable
+          flutter-version: '3.47.7'
+          cache: true
+      - name: Prepare Flutter Linux build
+        run: |
+          scripts/flutter.sh --version
+          scripts/flutter.sh config --enable-linux-desktop
+          scripts/flutter.sh precache --linux
+          cd apps/flutter
+          ../../scripts/flutter.sh pub get --enforce-lockfile
+      - name: Build Linux desktop distribution
+        run: python3 scripts/package_linux.py
+      - name: Verify distribution provenance and checksum
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: |
+          cd target/dist
+          sha256sum --check wispnet-linux-x86_64.tar.gz.sha256
+          python3 - <<'PY'
+          import json, os, tarfile
+          with tarfile.open('wispnet-linux-x86_64.tar.gz') as archive:
+              manifest = json.load(archive.extractfile('wispnet-linux-x86_64/manifest.json'))
+          assert manifest['source_commit'] == os.environ['EXPECTED_COMMIT'], 'Wrong source revision'
+          assert manifest['source_dirty'] is False, 'Build modified tracked sources'
+          assert manifest['platform'] == 'linux-x86_64'
+          assert manifest['desktop'] == 'flutter'
+          assert manifest['license'] == 'Apache-2.0'
+          PY
+      - name: Upload Linux build artifact
+        id: artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wispnet-linux-x86_64-${{ github.sha }}
+          path: |
+            target/dist/wispnet-linux-x86_64.tar.gz
+            target/dist/wispnet-linux-x86_64.tar.gz.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Summarize build
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+          ARTIFACT_URL: ${{ steps.artifact.outputs.artifact-url }}
+        run: |
+          {
+            echo '### Linux x86_64 desktop build'
+            echo "Source commit: \`$SOURCE_COMMIT\`"
+            echo "[Download bundle and SHA-256 checksum]($ARTIFACT_URL)"
+            echo 'Contains the Rust node, Flutter desktop, installers, license and notices.'
+            echo 'Build artifact only; GitHub Release and AUR publication are separate steps.'
+          } >> "$GITHUB_STEP_SUMMARY"

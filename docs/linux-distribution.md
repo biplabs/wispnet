@@ -36,6 +36,21 @@ Build hosts need Flutter 3.47.7, Clang, CMake, Ninja, the corresponding developm
 before changing installed files. `--desktop-binary /absolute/Wispnet` packages an
 explicit prebuilt Flutter executable together with its sibling `lib`/`data` and helper files. Its provenance must be established separately.
 
+## GitHub Actions build artifact
+
+Every push to `main` automatically runs **Actions → Linux build**. You can also
+use **Run workflow** on `main` to rebuild manually. The workflow builds the Rust node and Flutter Linux x86_64 desktop on Ubuntu 24.04 using the
+existing packaging scripts, with Rust 1.95.0 and Flutter 3.47.7. It checks the
+archive checksum, clean source provenance, platform, desktop and license metadata.
+Project tests remain local through the required pre-push hook.
+
+After the run succeeds, download the `wispnet-linux-x86_64-COMMIT` artifact from
+its summary or Artifacts section. It contains `wispnet-linux-x86_64.tar.gz` and
+its `.sha256` sidecar; extract the artifact ZIP, then follow the verification and
+installation steps above. Artifacts are retained for 14 days. Access follows the
+repository's GitHub permissions, so private-repository builds require access.
+This workflow does not create GitHub Releases or publish/update an AUR package.
+
 ## Fresh host: initialize explicitly
 
 First verify the archive checksum. Extract into a new directory rather than
