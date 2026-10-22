@@ -1325,3 +1325,40 @@ async fn parallel_relays_prefer_our_data_path_even_when_backup_is_faster() {
     host.shutdown().await;
     backup.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn wildcard_host_binds_both_families_and_explicit_bind_stays_restricted() {
+    // Require IPv6 on this test host rather than silently passing without testing it.
+    let probe = tokio::net::UdpSocket::bind("[::1]:0").await.unwrap();
+    drop(probe);
+    for (address, expect_ipv6) in [("0.0.0.0:0", true), ("127.0.0.1:0", false)] {
+        let config: TransportConfig = serde_json::from_value(serde_json::json!({
+            "bind_addr": address
+        }))
+        .unwrap();
+        let host = TunnelHost::bind(&SecretKey::generate(), &config, &[])
+            .await
+            .unwrap();
+        let sockets = host.endpoint.bound_sockets();
+        assert!(sockets.iter().any(|a| a.is_ipv4()));
+        assert_eq!(sockets.iter().any(|a| a.is_ipv6()), expect_ipv6);
+        if expect_ipv6 {
+            // Exercise actual QUIC over IPv6, not just socket creation.
+            let client = bind_client(&SecretKey::generate()).await.unwrap();
+            let port = sockets.iter().find(|a| a.is_ipv6()).unwrap().port();
+            let target = EndpointAddr::new(host.endpoint.id()).with_ip_addr(
+                std::net::SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port)),
+            );
+            let connection = timeout(
+                Duration::from_secs(5),
+                client.connect(target, protocol::ALPN),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            connection.close(0u32.into(), b"test complete");
+            client.close().await;
+        }
+        host.shutdown().await;
+    }
+}

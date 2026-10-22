@@ -307,6 +307,21 @@ impl TunnelHost {
             builder = builder
                 .bind_addr(config.bind_addr)
                 .map_err(|_| TunnelError::Transport("invalid transport bind address"))?;
+            // A wildcard IPv4 bind means all interfaces. Add IPv6 too, but keep
+            // explicit interface/loopback binds restricted to their chosen address.
+            // IPv6 is optional so hosts without IPv6 support can still start.
+            if config.bind_addr.ip().is_unspecified() && config.bind_addr.is_ipv4() {
+                let ipv6 = std::net::SocketAddr::from((
+                    std::net::Ipv6Addr::UNSPECIFIED,
+                    config.bind_addr.port(),
+                ));
+                builder = builder
+                    .bind_addr_with_opts(
+                        ipv6,
+                        iroh::endpoint::BindOpts::default().set_is_required(false),
+                    )
+                    .map_err(|_| TunnelError::Transport("invalid IPv6 transport bind address"))?;
+            }
         }
         let endpoint = builder
             .alpns(alpns)

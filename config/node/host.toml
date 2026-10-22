@@ -10,6 +10,8 @@ log_level = "info"
 # relay_url = "https://relay.wispnet.app"
 # relay_only = false
 # relay_ca_file = "/absolute/path/private-relay-ca.pem"
+# Use 0.0.0.0:0 for automatic IPv4 + optional IPv6 on all interfaces.
+# Explicit interface and loopback addresses stay restricted to that address.
 bind_addr = "127.0.0.1:7779"
 max_connections = 16
 max_streams = 64
