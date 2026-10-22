@@ -180,10 +180,14 @@ Caddy's certificate for authenticated UDP discovery. A systemd path watcher
 restarts the relay when Caddy renews the certificate/key. The public gateway
 installer preserves these discovery settings on subsequent deployments.
 
+On Linux, `[::]:7842` accepts IPv6 and IPv4-mapped clients. Allow UDP 7842
+in the host and IPv6 router firewalls as well as retaining the IPv4 forwarding
+rule. A listener alone does not prove either family is reachable.
+
 The relay's opt-in settings are:
 
 ```toml
-quic_listen = "0.0.0.0:7842"
+quic_listen = "[::]:7842"
 quic_certificate = "/absolute/caddy/relay.wispnet.app.crt"
 quic_private_key = "/absolute/caddy/relay.wispnet.app.key"
 ```
@@ -192,6 +196,10 @@ Private-key protection and certificate matching use the same checks as the TLS
 packet relay. HTTP-only mode requires an explicit complete discovery certificate
 and key. In a relay terminating its own TLS, discovery may inherit that TLS
 configuration instead. Omitting `quic_listen` leaves UDP discovery disabled.
+To verify IPv6 before publishing an AAAA record, use
+`relay_discovery_probe --bind-addr "[::]:0" --resolve RELAY_IPV6 https://relay.wispnet.app`.
+The address override retains hostname and certificate verification.
+
 A discovery probe verifies the TLS certificate and an actual observed-address
 response; a UDP listener or HTTPS 200 by itself is not proof of discovery.
 

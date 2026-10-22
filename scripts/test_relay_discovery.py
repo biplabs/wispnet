@@ -12,7 +12,7 @@ class RelayDiscoveryConfigTests(unittest.TestCase):
         config = tomllib.loads(second)
         self.assertEqual(config['listen'], '127.0.0.1:18443')
         self.assertEqual(config['max_connections'], 64)
-        self.assertEqual(config['quic_listen'], '0.0.0.0:7842')
+        self.assertEqual(config['quic_listen'], '[::]:7842')
         self.assertEqual(config['quic_certificate'], '/renewed/cert.pem')
         self.assertEqual(config['quic_private_key'], '/renewed/key.pem')
         self.assertEqual(second.count('quic_listen='), 1)

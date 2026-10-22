@@ -24,7 +24,7 @@ def discovery_config(text, certificate, key):
         raise ValueError('This installer requires the existing loopback HTTP relay behind Caddy')
     fields = {'quic_listen', 'quic_certificate', 'quic_private_key'}
     lines = [line for line in text.splitlines() if line.split('=', 1)[0].strip() not in fields]
-    for name, value in [('quic_listen', '0.0.0.0:7842'),
+    for name, value in [('quic_listen', '[::]:7842'),
                         ('quic_certificate', certificate), ('quic_private_key', key)]:
         lines.append(name + '=' + json.dumps(value))
     return '\n'.join(lines) + '\n'
@@ -95,8 +95,8 @@ def main():
             remote('systemctl --user daemon-reload && systemctl --user enable --now wispnet-relay-certificate.path && systemctl --user restart wispnet-relay.service')
             time.sleep(2)
             remote('systemctl --user is-active --quiet wispnet-relay.service && systemctl --user is-active --quiet wispnet-relay-certificate.path')
-            listeners = remote('ss -lun')
-            if '0.0.0.0:7842' not in listeners:
+            listeners = remote('ss -6 -lun')
+            if ':7842' not in listeners:
                 raise RuntimeError('UDP discovery listener did not start')
             remote('curl --fail --silent --max-time 8 https://relay.wispnet.app/ping >/dev/null')
     except Exception:

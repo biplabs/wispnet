@@ -1,11 +1,59 @@
 //! Disposable UDP discovery check; no device identity, pairing or service state.
+use iroh::dns::{BoxIter, DnsError, DnsResolver, Resolver, TxtRecordData};
 use iroh::{Endpoint, RelayConfig, RelayMode, Watcher, endpoint::presets};
 use iroh_relay::RelayQuicConfig;
 use std::time::{Duration, Instant};
+use std::{
+    future::Future,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    pin::Pin,
+};
+
+type Lookup<T> = Pin<Box<dyn Future<Output = Result<BoxIter<T>, DnsError>> + Send>>;
+
+/// Probe one selected address while retaining the relay hostname for TLS checks.
+#[derive(Debug, Clone)]
+struct ProbeResolver {
+    host: String,
+    address: IpAddr,
+}
+impl Resolver for ProbeResolver {
+    fn lookup_ipv4(&self, host: String) -> Lookup<Ipv4Addr> {
+        let address = match self.address {
+            IpAddr::V4(ip) if host == self.host => Some(ip),
+            _ => None,
+        };
+        Box::pin(async move { Ok(Box::new(address.into_iter()) as BoxIter<Ipv4Addr>) })
+    }
+    fn lookup_ipv6(&self, host: String) -> Lookup<Ipv6Addr> {
+        let address = match self.address {
+            IpAddr::V6(ip) if host == self.host => Some(ip),
+            _ => None,
+        };
+        Box::pin(async move { Ok(Box::new(address.into_iter()) as BoxIter<Ipv6Addr>) })
+    }
+    fn lookup_txt(&self, _host: String) -> Lookup<TxtRecordData> {
+        Box::pin(async { Err(n0_error::e!(DnsError::NoResponse)) })
+    }
+    fn clear_cache(&self) {}
+    fn reset(&self) -> Box<dyn Resolver> {
+        Box::new(self.clone())
+    }
+}
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let resolve = if let Some(index) = args.iter().position(|arg| arg == "--resolve") {
+        if index + 1 >= args.len() {
+            return Err("--resolve requires an IP address".into());
+        }
+        let address = args.remove(index + 1).parse::<IpAddr>()?;
+        args.remove(index);
+        Some(address)
+    } else {
+        None
+    };
     let bind_addr = if let Some(index) = args.iter().position(|arg| arg == "--bind-addr") {
         if index + 1 >= args.len() {
             return Err("--bind-addr requires IP:PORT".into());
@@ -18,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     if args.len() > 3 {
         return Err(
-            "usage: relay_discovery_probe [--bind-addr IP:PORT] [RELAY_URL [UDP_PORT [CA_FILE]]]"
+            "usage: relay_discovery_probe [--resolve IP] [--bind-addr IP:PORT] [RELAY_URL [UDP_PORT [CA_FILE]]]"
                 .into(),
         );
     }
@@ -33,6 +81,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let relay = RelayConfig::new(url.parse()?, Some(RelayQuicConfig::new(port)));
     let mut builder = Endpoint::builder(presets::Minimal)
         .relay_mode(RelayMode::Custom([relay].into_iter().collect()));
+    if let Some(address) = resolve {
+        let relay_url: iroh::RelayUrl = url.parse()?;
+        let host = relay_url
+            .host_str()
+            .ok_or("relay URL requires a hostname")?
+            .to_owned();
+        builder = builder.dns_resolver(DnsResolver::custom(ProbeResolver { host, address }));
+    }
     if let Some(path) = args.get(2) {
         use rustls_pki_types::pem::PemObject;
         let pem = std::fs::read(path)?;

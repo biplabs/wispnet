@@ -18,7 +18,7 @@ def main():
         root=Path(temporary);key=root/'key.pem';certificate=root/'certificate.pem'
         run(['openssl','req','-x509','-newkey','ed25519','-nodes','-days','1',
              '-keyout',key,'-out',certificate,'-subj','/CN=127.0.0.1',
-             '-addext','subjectAltName=IP:127.0.0.1','-addext','basicConstraints=critical,CA:FALSE'])
+             '-addext','subjectAltName=IP:127.0.0.1,IP:::1,DNS:localhost','-addext','basicConstraints=critical,CA:FALSE'])
         key.chmod(0o600)
         with socket.socket() as port_socket:
             port_socket.bind(('127.0.0.1',0));port=port_socket.getsockname()[1]
@@ -42,8 +42,9 @@ def main():
             with urllib.request.urlopen(f'https://127.0.0.1:{port}/ping',context=context,timeout=5) as response:
                 assert response.status==200
             try:
-                urllib.request.urlopen(f'https://localhost:{port}/ping',context=context,timeout=5)
-            except urllib.error.URLError: pass
+                with socket.create_connection(('127.0.0.1',port),timeout=5) as raw:
+                    context.wrap_socket(raw,server_hostname='wrong.localhost')
+            except ssl.SSLCertVerificationError: pass
             else: raise AssertionError('wrong TLS hostname was accepted')
             assert set(p.name for p in root.iterdir())=={'key.pem','certificate.pem','relay.toml'},'relay created node/application state'
             # A native Iroh client catches certificate-chain errors that a
@@ -67,12 +68,16 @@ def main():
         finally: stop(relay)
         # The production topology terminates HTTPS at Caddy, while QUIC uses
         # an explicit certificate on a separate UDP listener.
-        config.write_text(f"listen='127.0.0.1:{port}'\nhttp_only=true\nmax_connections=2\nquic_listen='127.0.0.1:{udp_port}'\nquic_certificate='{certificate}'\nquic_private_key='{key}'\n")
+        config.write_text(f"listen='127.0.0.1:{port}'\nhttp_only=true\nmax_connections=2\nquic_listen='[::]:{udp_port}'\nquic_certificate='{certificate}'\nquic_private_key='{key}'\n")
         relay=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
         try:
             event(relay,relay.stdout,'started')
-            run([ROOT/'target/debug/examples/relay_discovery_probe',
-                 f'http://127.0.0.1:{port}',str(udp_port),certificate])
+            for address, bind, family in [('127.0.0.1', '127.0.0.1:0', 'udp_v4'),
+                                          ('::1', '[::1]:0', 'udp_v6')]:
+                report=json.loads(run([ROOT/'target/debug/examples/relay_discovery_probe',
+                     '--bind-addr',bind,'--resolve',address,
+                     f'http://localhost:{port}',str(udp_port),certificate]).stdout)
+                assert report['ok'] and report['network_report'][family], report
         finally: stop(relay)
         # Secret protection errors are fixed labels and must not dump PEM bytes.
         key.chmod(0o644)
