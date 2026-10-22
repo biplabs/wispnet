@@ -67,12 +67,12 @@ or automatic retry of a potentially state-changing request is promised.
 
 ## Android settings diagnostic
 
-In Settings, tap the network-check icon beside Device name, then Run connection
-diagnostic. The expandable report tests each paired host in turn using the
+In Settings, tap Diagnostic below Save. A separate page opens and automatically
+tests each paired host in turn using the
 existing phone identity and host approval. It keeps a successful catalog
 connection open for up to ten seconds to observe direct-path negotiation; each
 host has a 25-second overall deadline. It never opens a service backend or changes
-pairings, ports, permissions, or the device name. Closing settings stops further
+pairings, ports, permissions, or the device name. Leaving the diagnostic page stops further
 hosts from being tested; an already running host test finishes within its deadline.
 
 The copyable report includes the current Android network and VPN state, initial

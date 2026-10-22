@@ -607,35 +607,41 @@ void main() {
     });
     await close(tester);
   });
-  testWidgets(
-    'connection diagnostics are hidden in settings and report unknown discovery honestly',
-    (tester) async {
-      final backend = FakeBackend();
-      await mount(tester, backend);
-      expect(find.byTooltip('Connection diagnostics'), findsNothing);
-      await tester.tap(find.byTooltip('Settings'));
-      await tester.pumpAndSettle();
-      expect(find.text('Run connection diagnostic'), findsNothing);
-      await tester.tap(find.byTooltip('Connection diagnostics'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Run connection diagnostic'));
-      await tester.pumpAndSettle();
-      expect(find.textContaining('Network: Cellular'), findsOneWidget);
-      expect(find.textContaining('relay → relay'), findsOneWidget);
-      expect(
-        find.textContaining('UDP response IPv4: unavailable'),
-        findsOneWidget,
-      );
-      expect(
-        backend.calls
-            .where((c) => c.$1 == 'connectionDiagnostics')
-            .single
-            .$2['host'],
-        peer,
-      );
-      expect(backend.calls.where((c) => c.$1 == 'saveSettings'), isEmpty);
-    },
-  );
+  testWidgets('Diagnostic below Save opens a page and runs automatically', (
+    tester,
+  ) async {
+    final backend = FakeBackend();
+    await mount(tester, backend);
+    expect(find.text('Diagnostic'), findsNothing);
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Connection diagnostics'), findsNothing);
+    expect(
+      tester.getTopLeft(find.text('Diagnostic')).dy,
+      greaterThan(tester.getBottomLeft(find.text('Save')).dy),
+    );
+    await tester.tap(find.text('Diagnostic'));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(AppBar, 'Diagnostic'), findsOneWidget);
+    expect(find.textContaining('Network: Cellular'), findsOneWidget);
+    expect(find.textContaining('relay → relay'), findsOneWidget);
+    expect(
+      find.textContaining('UDP response IPv4: unavailable'),
+      findsOneWidget,
+    );
+    expect(
+      backend.calls
+          .where((c) => c.$1 == 'connectionDiagnostics')
+          .single
+          .$2['host'],
+      peer,
+    );
+    expect(backend.calls.where((c) => c.$1 == 'saveSettings'), isEmpty);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(TextField, 'Device name'), findsOneWidget);
+    expect(find.text('Save'), findsOneWidget);
+  });
   testWidgets('settings validate before changing native state', (tester) async {
     final backend = FakeBackend();
     await mount(tester, backend);

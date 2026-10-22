@@ -425,6 +425,14 @@ class ConnectionDiagnostics extends StatefulWidget {
 class _ConnectionDiagnosticsState extends State<ConnectionDiagnostics> {
   bool running = false;
   String report = '';
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) run();
+    });
+  }
+
   Future<void> run() async {
     setState(() {
       running = true;
@@ -513,28 +521,35 @@ class _ConnectionDiagnosticsState extends State<ConnectionDiagnostics> {
   }
 
   @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      TextButton.icon(
-        onPressed: running ? null : run,
-        icon: const Icon(Icons.network_check),
-        label: Text(
-          running ? 'Testing connections…' : 'Run connection diagnostic',
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Diagnostic')),
+    body: SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextButton.icon(
+              onPressed: running ? null : run,
+              icon: const Icon(Icons.network_check),
+              label: Text(running ? 'Testing connections…' : 'Run again'),
+            ),
+            if (report.isNotEmpty) ...[
+              SelectableText(report),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: () =>
+                      Clipboard.setData(ClipboardData(text: report)),
+                  icon: const Icon(Icons.copy),
+                  label: const Text('Copy report'),
+                ),
+              ),
+            ],
+          ],
         ),
       ),
-      if (report.isNotEmpty) ...[
-        SelectableText(report),
-        Align(
-          alignment: Alignment.centerRight,
-          child: TextButton.icon(
-            onPressed: () => Clipboard.setData(ClipboardData(text: report)),
-            icon: const Icon(Icons.copy),
-            label: const Text('Copy report'),
-          ),
-        ),
-      ],
-    ],
+    ),
   );
 }
 
@@ -558,10 +573,7 @@ class SettingsForm extends StatefulWidget {
 class _SettingsFormState extends State<SettingsForm> {
   late final name = TextEditingController(text: widget.deviceName);
   final port = TextEditingController();
-  bool loading = true,
-      saving = false,
-      opening = false,
-      diagnosticsExpanded = false;
+  bool loading = true, saving = false, opening = false;
   String? error;
   String address = '';
   bool get global => widget.host == null;
@@ -665,20 +677,8 @@ class _SettingsFormState extends State<SettingsForm> {
         TextField(
           controller: name,
           enabled: !saving,
-          decoration: InputDecoration(
-            labelText: 'Device name',
-            suffixIcon: Theme.of(context).platform == TargetPlatform.android
-                ? IconButton(
-                    tooltip: 'Connection diagnostics',
-                    icon: const Icon(Icons.network_check),
-                    onPressed: () => setState(
-                      () => diagnosticsExpanded = !diagnosticsExpanded,
-                    ),
-                  )
-                : null,
-          ),
+          decoration: const InputDecoration(labelText: 'Device name'),
         ),
-        if (diagnosticsExpanded) ConnectionDiagnostics(backend: widget.backend),
         const SizedBox(height: 12),
       ],
       Text(
@@ -741,6 +741,23 @@ class _SettingsFormState extends State<SettingsForm> {
               : 'Save',
         ),
       ),
+      if (global && Theme.of(context).platform == TargetPlatform.android) ...[
+        const SizedBox(height: 12),
+        OutlinedButton(
+          onPressed: saving
+              ? null
+              : () {
+                  FocusManager.instance.primaryFocus?.unfocus();
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) =>
+                          ConnectionDiagnostics(backend: widget.backend),
+                    ),
+                  );
+                },
+          child: const Text('Diagnostic'),
+        ),
+      ],
     ],
   );
 }
