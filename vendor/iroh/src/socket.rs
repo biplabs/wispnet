@@ -918,6 +918,7 @@ impl EndpointInner {
         let ipv6_reported = Arc::new(AtomicBool::new(false));
 
         let relay_actor_config = RelayActorConfig {
+            relay_priority: net_report_config.relay_priority.clone(),
             my_relay: HomeRelayWatch::default(),
             secret_key: secret_key.clone(),
             #[cfg(not(wasm_browser))]

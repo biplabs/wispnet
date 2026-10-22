@@ -779,11 +779,23 @@ fn configured_builder(
         if let Some(mode) = configured_relay_mode(config)? {
             builder = builder.relay_mode(mode);
         }
+        let mut reports = iroh::endpoint::NetReportConfig::default();
         if let Some(observer) = configured_discovery_relay(config)? {
-            builder = builder.net_report_config(
-                iroh::endpoint::NetReportConfig::default().quic_discovery_fallback(observer),
+            reports = reports.quic_discovery_fallback(observer);
+        }
+        if !config.backup_relay_urls.is_empty() {
+            reports = reports.prefer_relay(
+                config
+                    .relay_url
+                    .as_ref()
+                    .expect("validated primary")
+                    .parse()
+                    .map_err(|_| TunnelError::Transport("invalid relay URL"))?,
+                Duration::from_secs(5),
+                Duration::from_secs(30),
             );
         }
+        builder = builder.net_report_config(reports);
         if let Some(path) = &config.relay_ca_file {
             use rustls_pki_types::pem::PemObject;
             use std::io::Read;

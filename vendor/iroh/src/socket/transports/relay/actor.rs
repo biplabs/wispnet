@@ -155,6 +155,7 @@ struct ActiveRelayActor {
     stop_token: CancellationToken,
     metrics: Arc<SocketMetrics>,
     my_relay: HomeRelayWatch,
+    health: Arc<std::sync::Mutex<Option<Instant>>>,
 }
 
 #[derive(Debug)]
@@ -199,6 +200,7 @@ struct ActiveRelayActorOptions {
     stop_token: CancellationToken,
     metrics: Arc<SocketMetrics>,
     my_relay: HomeRelayWatch,
+    health: Arc<std::sync::Mutex<Option<Instant>>>,
 }
 
 /// Configuration needed to create a connection to a relay server.
@@ -271,6 +273,7 @@ impl ActiveRelayActor {
             stop_token,
             metrics,
             my_relay,
+            health,
         } = opts;
         let relay_client_builder = Self::create_relay_builder(url.clone(), connection_opts);
         ActiveRelayActor {
@@ -285,6 +288,7 @@ impl ActiveRelayActor {
             stop_token,
             metrics,
             my_relay,
+            health,
         }
     }
 
@@ -405,6 +409,7 @@ impl ActiveRelayActor {
     /// be retried with a backoff.
     #[allow(clippy::result_large_err)]
     async fn run_once(&mut self) -> Result<(), RelayConnectionError> {
+        *self.health.lock().expect("relay health lock") = None;
         self.my_relay
             .set_status(&self.url, RelayConnectionState::Connecting);
         let client = match self.run_dialing().instrument(info_span!("dialing")).await {
@@ -415,6 +420,7 @@ impl ActiveRelayActor {
             }
             None => return Ok(()),
         };
+        *self.health.lock().expect("relay health lock") = Some(Instant::now());
         self.my_relay
             .set_status(&self.url, RelayConnectionState::Connected);
         self.metrics.relay_conns_success.inc();
@@ -422,6 +428,7 @@ impl ActiveRelayActor {
             .run_connected(client)
             .instrument(info_span!("connected"))
             .await;
+        *self.health.lock().expect("relay health lock") = None;
         self.metrics.relay_conns_closed.inc();
         res
     }
@@ -928,11 +935,13 @@ pub(super) struct RelayActor {
     active_relays: BTreeMap<RelayUrl, ActiveRelayHandle>,
     /// The tasks for the [`ActiveRelayActor`]s in `active_relays` above.
     active_relay_tasks: JoinSet<()>,
+    priority_failed_since: Option<Instant>,
     cancel_token: CancellationToken,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct Config {
+    pub relay_priority: Option<(RelayUrl, Duration, Duration)>,
     pub my_relay: HomeRelayWatch,
     pub secret_key: SecretKey,
     #[cfg(not(wasm_browser))]
@@ -1123,6 +1132,7 @@ impl RelayActor {
             relay_datagram_recv_queue,
             active_relays: Default::default(),
             active_relay_tasks: JoinSet::new(),
+            priority_failed_since: None,
             cancel_token,
         }
     }
@@ -1136,9 +1146,13 @@ impl RelayActor {
         // ActiveRelayActor.  We can not process further datagrams during this time.
         let mut datagram_send_fut = std::pin::pin!(MaybeFuture::None);
 
+        let mut priority_tick = time::interval(Duration::from_secs(1));
         loop {
             tokio::select! {
                 biased;
+                _ = priority_tick.tick(), if self.config.relay_priority.is_some() => {
+                    self.enforce_relay_priority().await;
+                }
                 _ = self.cancel_token.cancelled() => {
                     debug!("shutting down");
                     break;
@@ -1229,7 +1243,77 @@ impl RelayActor {
         }
     }
 
+    fn relay_healthy_since(&self, url: &RelayUrl) -> Option<Instant> {
+        self.active_relays
+            .get(url)
+            .filter(|h| !h.inbox_addr.is_closed())
+            .and_then(|h| *h.health.lock().expect("relay health lock"))
+    }
+
+    async fn select_priority_home(&mut self, url: RelayUrl) {
+        let state = if self.relay_healthy_since(&url).is_some() {
+            RelayConnectionState::Connected
+        } else {
+            RelayConnectionState::Connecting
+        };
+        self.config.my_relay.set(url.clone(), state);
+        self.priority_failed_since = None;
+        self.set_home_relay(url).await;
+    }
+
+    async fn enforce_relay_priority(&mut self) {
+        let Some((primary, failure_grace, stable_recovery)) = self.config.relay_priority.clone()
+        else {
+            return;
+        };
+        if !self.config.relay_map.contains(&primary) {
+            return;
+        }
+        let current = self.config.my_relay.get().map(|s| s.url().clone());
+        let Some(current) = current else {
+            self.select_priority_home(primary).await;
+            return;
+        };
+        // While using a backup, keep reconnecting to the primary to observe
+        // continuous authenticated health and detect another flap.
+        self.active_relay_handle(primary.clone());
+        let primary_since = self.relay_healthy_since(&primary);
+        if current != primary
+            && primary_since.is_some_and(|since| since.elapsed() >= stable_recovery)
+        {
+            self.select_priority_home(primary).await;
+            return;
+        }
+        if self.relay_healthy_since(&current).is_some() {
+            self.priority_failed_since = None;
+            return;
+        }
+        let failed = self.priority_failed_since.get_or_insert_with(Instant::now);
+        if failed.elapsed() < failure_grace {
+            return;
+        }
+        if current != primary && primary_since.is_some() {
+            // Recover immediately if the backup also fails and the primary works.
+            self.select_priority_home(primary).await;
+            return;
+        }
+        let next = self
+            .config
+            .relay_map
+            .urls::<Vec<RelayUrl>>()
+            .into_iter()
+            .find(|url| url != &primary && url != &current);
+        if let Some(next) = next {
+            self.select_priority_home(next).await;
+        }
+    }
+
     async fn on_network_change(&mut self, report: Report) {
+        if self.config.relay_priority.is_some() {
+            // QAD/private addresses and latency cannot override packet relay health.
+            return;
+        }
+
         let prev = self.config.my_relay.get();
         let prev_url = prev.as_ref().map(RelayStatus::url);
         if report.preferred_relay.as_ref() == prev_url {
@@ -1258,8 +1342,9 @@ impl RelayActor {
 
     async fn set_home_relay(&mut self, home_url: RelayUrl) {
         let home_url_ref = &home_url;
+        let priority_primary = self.config.relay_priority.as_ref().map(|(url, _, _)| url);
         n0_future::join_all(self.active_relays.iter().map(|(url, handle)| async move {
-            let is_preferred = url == home_url_ref;
+            let is_preferred = url == home_url_ref || priority_primary == Some(url);
             handle
                 .inbox_addr
                 .send(ActiveRelayMessage::SetHomeRelay(is_preferred))
@@ -1324,7 +1409,12 @@ impl RelayActor {
             Some(e) => e.clone(),
             None => {
                 let handle = self.start_active_relay(url.clone());
-                if Some(&url) == self.config.my_relay.get().as_ref().map(RelayStatus::url)
+                if (Some(&url) == self.config.my_relay.get().as_ref().map(RelayStatus::url)
+                    || self
+                        .config
+                        .relay_priority
+                        .as_ref()
+                        .is_some_and(|(primary, _, _)| primary == &url))
                     && let Err(err) = handle
                         .inbox_addr
                         .try_send(ActiveRelayMessage::SetHomeRelay(true))
@@ -1361,7 +1451,9 @@ impl RelayActor {
         let (prio_inbox_tx, prio_inbox_rx) = mpsc::channel(32);
         let (inbox_tx, inbox_rx) = mpsc::channel(64);
         let span = info_span!("active-relay", %url);
+        let health: Arc<std::sync::Mutex<Option<Instant>>> = Arc::new(std::sync::Mutex::new(None));
         let opts = ActiveRelayActorOptions {
+            health: health.clone(),
             url,
             prio_inbox_: prio_inbox_rx,
             inbox: inbox_rx,
@@ -1380,6 +1472,7 @@ impl RelayActor {
             .instrument(span),
         );
         let handle = ActiveRelayHandle {
+            health,
             prio_inbox_addr: prio_inbox_tx,
             inbox_addr: inbox_tx,
             datagrams_send_queue: send_datagram_tx,
@@ -1490,6 +1583,7 @@ fn log_active_relay_task_result(res: Result<(), JoinError>) {
 /// Handle to one [`ActiveRelayActor`].
 #[derive(Debug, Clone)]
 struct ActiveRelayHandle {
+    health: Arc<std::sync::Mutex<Option<Instant>>>,
     prio_inbox_addr: mpsc::Sender<ActiveRelayPrioMessage>,
     inbox_addr: mpsc::Sender<ActiveRelayMessage>,
     datagrams_send_queue: mpsc::Sender<RelaySendItem>,
@@ -1538,6 +1632,7 @@ mod tests {
     async fn close_all_active_relays_survives_a_cancelled_task() {
         let (relay_datagram_recv_queue, _recv_rx) = mpsc::channel(1);
         let config = Config {
+            relay_priority: None,
             my_relay: Default::default(),
             secret_key: SecretKey::from_bytes(&[0u8; 32]),
             dns_resolver: DnsResolver::new(),
@@ -1594,6 +1689,7 @@ mod tests {
             stop_token,
             metrics,
             my_relay: Default::default(),
+            health: Default::default(),
         };
         let task = tokio::spawn(ActiveRelayActor::new(opts).run().instrument(span));
         AbortOnDropHandle::new(task)
@@ -1959,6 +2055,7 @@ mod tests {
             stop_token: CancellationToken::new(),
             metrics: Default::default(),
             my_relay: Default::default(),
+            health: Default::default(),
         };
         let mut actor = ActiveRelayActor::new(opts);
 

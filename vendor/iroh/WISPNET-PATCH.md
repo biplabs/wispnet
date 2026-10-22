@@ -3,7 +3,8 @@
 Source: crates.io iroh 1.3.0, archive SHA-256 `885787b892b5e2507c701f132ecbd45d2bad4bbb75157a19427087c16dadb833`.
 Upstream BSD-3-Clause license is preserved in LICENSE-BSD3.
 
-Local changes: src/net_report.rs plus src/net_report/fallback.rs. An optional
+Local changes: src/net_report.rs, src/net_report/fallback.rs, src/socket.rs and
+src/socket/transports/relay/actor.rs. An optional
 QUIC observer is tried only after the packet relay's discovery request fails or
 returns a private/special-use address. A valid public primary result avoids the
 outside request. Each attempt has a three-second timeout. Valid cached public
@@ -18,3 +19,14 @@ Regression coverage: crates/agent/src/relay_tests.rs runs the exact fallback
 policy tests from fallback.rs and local TLS relay/QUIC observer fixtures. It checks
 that primary failure falls back using the actual peer socket without changing the
 home relay. Remove this patch when upstream supports ordered discovery fallback.
+
+The optional `NetReportConfig::prefer_relay` policy carries an explicit primary
+URL, failure grace and stable recovery window to the relay actor. Per-connection
+health tracks the actual authenticated relay session lifetime, not QAD results.
+Latency-based home changes are ignored only when this policy is enabled. The
+primary stays connected/retrying while a backup is home, so recovery and flaps
+are observed; other idle relay connections retain upstream cleanup behavior.
+Wispnet configures five-second failure grace and 30-second stable failback.
+Endpoint cancellation drains the same owned relay actor tasks as upstream.
+The integration fixtures cover healthy primary without UDP discovery, primary
+failure, brief recovery, stable failback, cold starts and unchanged approvals.

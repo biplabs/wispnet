@@ -12,7 +12,8 @@ from relay_smoke import ROOT, BINARY, event, run, stop
 
 
 def main():
-    run(['cargo','build','-p','wispnet-agent','--example','relay_discovery_probe','--locked'])
+    # Compilation can exceed the network probe's 15-second default on a cold build.
+    run(['cargo','build','-p','wispnet-agent','--example','relay_discovery_probe','--locked'],timeout=120)
     with tempfile.TemporaryDirectory(prefix='wispnet-standalone-relay-') as temporary:
         root=Path(temporary);key=root/'key.pem';certificate=root/'certificate.pem'
         run(['openssl','req','-x509','-newkey','ed25519','-nodes','-days','1',

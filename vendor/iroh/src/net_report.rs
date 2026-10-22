@@ -90,6 +90,9 @@ enum QadProbeError {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct NetReportConfig {
+    /// Optional primary packet relay, failure grace and stable failback window.
+    /// Selection uses authenticated relay connections, independently of discovery.
+    pub relay_priority: Option<(RelayUrl, Duration, Duration)>,
     /// Outside observer used only after primary discovery fails or returns a non-public address.
     pub quic_discovery_fallback: Option<Arc<iroh_relay::RelayConfig>>,
     /// Run HTTPS latency probes against relay servers.
@@ -117,6 +120,17 @@ pub struct NetReportConfig {
 }
 
 impl NetReportConfig {
+    /// Prefers this packet relay; falls back after failure and returns after stable recovery.
+    pub fn prefer_relay(
+        mut self,
+        primary: RelayUrl,
+        failure_grace: Duration,
+        stable_recovery: Duration,
+    ) -> Self {
+        self.relay_priority = Some((primary, failure_grace, stable_recovery));
+        self
+    }
+
     /// Tries packet relays first and uses this observer only for unusable results.
     pub fn quic_discovery_fallback(mut self, relay: iroh_relay::RelayConfig) -> Self {
         self.quic_discovery_fallback = Some(Arc::new(relay));
@@ -126,6 +140,7 @@ impl NetReportConfig {
     /// Creates a minimal configuration that disables all optional probes and checks.
     pub fn minimal() -> Self {
         Self {
+            relay_priority: None,
             quic_discovery_fallback: None,
             https_probes: false,
             captive_portal_check: false,
@@ -136,6 +151,7 @@ impl NetReportConfig {
 impl Default for NetReportConfig {
     fn default() -> Self {
         Self {
+            relay_priority: None,
             quic_discovery_fallback: None,
             https_probes: true,
             captive_portal_check: true,

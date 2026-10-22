@@ -598,3 +598,282 @@ async fn backup_relay_supports_cold_start_and_primary_loss_without_repairing() {
     host.shutdown().await;
     primary.shutdown().await.unwrap();
 }
+
+#[derive(Debug, Default)]
+struct RecordAdmission(Mutex<std::collections::BTreeSet<iroh::EndpointId>>);
+impl iroh_relay::server::AccessControl for RecordAdmission {
+    async fn on_connect(
+        &self,
+        request: &iroh_relay::server::ClientRequest,
+    ) -> iroh_relay::server::Access {
+        self.0.lock().unwrap().insert(request.endpoint_id());
+        iroh_relay::server::Access::Allow
+    }
+}
+
+#[tokio::test]
+async fn packet_priority_ignores_discovery_and_latency_and_requires_stable_failback() {
+    use iroh::Watcher;
+    let cert = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+    // Neither fixture offers UDP discovery. Packet relay health must suffice.
+    let primary = relay(&cert, "127.0.0.1:0".parse().unwrap()).await;
+    let address = primary.https_addr().unwrap();
+    let primary_url: iroh::RelayUrl = format!("https://{address}").parse().unwrap();
+    let backup = relay(&cert, "127.0.0.1:0".parse().unwrap()).await;
+    let backup_url: iroh::RelayUrl = format!("https://{}", backup.https_addr().unwrap())
+        .parse()
+        .unwrap();
+    let state = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let ca = state.path().join("relay.pem");
+    std::fs::write(&ca, cert.cert.pem()).unwrap();
+    let config: TransportConfig = serde_json::from_value(serde_json::json!({
+        "bind_addr":"127.0.0.1:0", "relay_only":true, "relay_ca_file":ca,
+        "relay_url":primary_url, "backup_relay_urls":[backup_url],
+    }))
+    .unwrap();
+    let host_key = Identity::generate();
+    let client_key = Identity::generate();
+    host::initialize(state.path(), host_key.endpoint_id()).unwrap();
+    let (mut store, owner) = host::owner_store(state.path(), host_key.endpoint_id()).unwrap();
+    store
+        .host_mutate(
+            host_key.endpoint_id(),
+            &owner,
+            Mutation::Approve {
+                expected_revision: 0,
+                peer: client_key.endpoint_id(),
+                name: "phone".into(),
+            },
+        )
+        .unwrap();
+    drop(store);
+    drop(owner);
+    let authority = Authority::open(state.path(), host_key.endpoint_id()).unwrap();
+    let builder = |key: &SecretKey| {
+        configured_builder(key, Some(&config))
+            .unwrap()
+            .net_report_config(iroh::endpoint::NetReportConfig::minimal().prefer_relay(
+                primary_url.clone(),
+                Duration::from_secs(1),
+                Duration::from_secs(4),
+            ))
+    };
+    let host = TunnelHost::bind_builder(
+        &config,
+        Services::Host(authority.clone()),
+        builder(host_key.secret_key()),
+    )
+    .await
+    .unwrap();
+    let client = builder(client_key.secret_key()).bind().await.unwrap();
+    async fn wait_home(endpoint: &Endpoint, url: &iroh::RelayUrl) {
+        timeout(Duration::from_secs(20), async {
+            loop {
+                if endpoint
+                    .home_relay_status()
+                    .get()
+                    .iter()
+                    .any(|s| s.url() == url && s.is_connected())
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    tokio::join!(
+        wait_home(host.endpoint(), &primary_url),
+        wait_home(&client, &primary_url)
+    );
+    // Multiple net reports and a usable backup cannot displace healthy primary.
+    host.endpoint().network_change().await;
+    client.network_change().await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(client.home_relay_status().get()[0].url(), &primary_url);
+    let target = peer_target(host_key.endpoint_id(), Some(&config), None).unwrap();
+    let c = control::connect_target(&client, target.clone())
+        .await
+        .unwrap();
+    let before = control::catalog_on(&c, host_key.endpoint_id())
+        .await
+        .unwrap();
+    c.close(0u32.into(), b"priority fixture");
+    primary.shutdown().await.unwrap();
+    tokio::join!(
+        wait_home(host.endpoint(), &backup_url),
+        wait_home(&client, &backup_url)
+    );
+    let c = control::connect_target(&client, target.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&before).unwrap(),
+        serde_json::to_value(
+            control::catalog_on(&c, host_key.endpoint_id())
+                .await
+                .unwrap()
+        )
+        .unwrap()
+    );
+    c.close(0u32.into(), b"priority fixture");
+    // A brief recovery must not trigger failback.
+    let admissions = Arc::new(RecordAdmission::default());
+    let recovering = relay_with_access(&cert, address, admissions.clone()).await;
+    timeout(Duration::from_secs(10), async {
+        loop {
+            if admissions
+                .0
+                .lock()
+                .unwrap()
+                .contains(&client_key.endpoint_id())
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(client.home_relay_status().get()[0].url(), &backup_url);
+    recovering.shutdown().await.unwrap();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(client.home_relay_status().get()[0].url(), &backup_url);
+    let restored = relay(&cert, address).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(client.home_relay_status().get()[0].url(), &backup_url);
+    tokio::join!(
+        wait_home(host.endpoint(), &primary_url),
+        wait_home(&client, &primary_url)
+    );
+    // Verify data still works and the authenticated catalog/approvals survived.
+    let c = control::connect_target(&client, target).await.unwrap();
+    assert_eq!(
+        serde_json::to_value(before).unwrap(),
+        serde_json::to_value(
+            control::catalog_on(&c, host_key.endpoint_id())
+                .await
+                .unwrap()
+        )
+        .unwrap()
+    );
+    assert!(authority.approved(client_key.endpoint_id()).await);
+    client.close().await;
+    host.shutdown().await;
+    restored.shutdown().await.unwrap();
+    backup.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn different_home_relays_connect_without_first_contact_through_primary() {
+    use iroh::Watcher;
+    let phone_dns = DnsFixture::start().await;
+    let host_dns = DnsFixture::start().await;
+    // Same primary URL, but the host's network can only resolve an unreachable
+    // IPv6 listener. The phone can reach its IPv4 listener. Backup is shared.
+    host_dns.replacement.store(true, Ordering::SeqCst);
+    let cert =
+        rcgen::generate_simple_self_signed(vec!["relay.test".into(), "127.0.0.1".into()]).unwrap();
+    let primary = relay(&cert, "127.0.0.1:0".parse().unwrap()).await;
+    let backup = relay(&cert, "127.0.0.1:0".parse().unwrap()).await;
+    let primary_url: iroh::RelayUrl = format!(
+        "https://relay.test:{}",
+        primary.https_addr().unwrap().port()
+    )
+    .parse()
+    .unwrap();
+    let backup_url: iroh::RelayUrl = format!("https://{}", backup.https_addr().unwrap())
+        .parse()
+        .unwrap();
+    let state = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let ca = state.path().join("relay.pem");
+    std::fs::write(&ca, cert.cert.pem()).unwrap();
+    let config: TransportConfig = serde_json::from_value(serde_json::json!({
+        "bind_addr":"127.0.0.1:0", "relay_only":true, "relay_ca_file":ca,
+        "relay_url":primary_url, "backup_relay_urls":[backup_url],
+    }))
+    .unwrap();
+    let host_key = Identity::generate();
+    let phone_key = Identity::generate();
+    host::initialize(state.path(), host_key.endpoint_id()).unwrap();
+    let (mut store, owner) = host::owner_store(state.path(), host_key.endpoint_id()).unwrap();
+    store
+        .host_mutate(
+            host_key.endpoint_id(),
+            &owner,
+            Mutation::Approve {
+                expected_revision: 0,
+                peer: phone_key.endpoint_id(),
+                name: "phone".into(),
+            },
+        )
+        .unwrap();
+    drop(store);
+    drop(owner);
+    let authority = Authority::open(state.path(), host_key.endpoint_id()).unwrap();
+    let builder = |key: &SecretKey, resolver: DnsResolver| {
+        configured_builder(key, Some(&config))
+            .unwrap()
+            .dns_resolver(resolver)
+            .net_report_config(iroh::endpoint::NetReportConfig::minimal().prefer_relay(
+                primary_url.clone(),
+                Duration::from_secs(1),
+                Duration::from_secs(4),
+            ))
+    };
+    let host = TunnelHost::bind_builder(
+        &config,
+        Services::Host(authority.clone()),
+        builder(host_key.secret_key(), host_dns.resolver()),
+    )
+    .await
+    .unwrap();
+    let phone = builder(phone_key.secret_key(), phone_dns.resolver())
+        .bind()
+        .await
+        .unwrap();
+    timeout(Duration::from_secs(15), async {
+        loop {
+            let host_ready = host
+                .endpoint()
+                .home_relay_status()
+                .get()
+                .iter()
+                .any(|s| s.url() == &backup_url && s.is_connected());
+            let phone_ready = phone
+                .home_relay_status()
+                .get()
+                .iter()
+                .any(|s| s.url() == &primary_url && s.is_connected());
+            if host_ready && phone_ready {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap();
+    // This is their first peer connection: no previous exchange can have told
+    // the phone the host's home relay. Both candidates came from local config.
+    let target = peer_target(host_key.endpoint_id(), Some(&config), None).unwrap();
+    let connection = control::connect_target(&phone, target).await.unwrap();
+    let catalog = control::catalog_on(&connection, host_key.endpoint_id())
+        .await
+        .unwrap();
+    assert_eq!(catalog.host, host_key.endpoint_id());
+    assert!(connection.paths().iter().all(|p| p.is_relay()));
+    assert_eq!(phone.home_relay_status().get()[0].url(), &primary_url);
+    assert_eq!(
+        host.endpoint().home_relay_status().get()[0].url(),
+        &backup_url
+    );
+    assert!(authority.approved(phone_key.endpoint_id()).await);
+    phone.close().await;
+    host.shutdown().await;
+    primary.shutdown().await.unwrap();
+    backup.shutdown().await.unwrap();
+}

@@ -245,13 +245,28 @@ host-local approvals remain valid. Both endpoints need this configuration and
 updated software; older clients still know only the original URL. A discovery-only
 observer is never implicitly promoted to a packet relay.
 
-Iroh selects a reachable home relay using latency and recent measurements; the
-primary configuration field is not a strict traffic-priority guarantee. It can
-select n0 while the primary is healthy. A relay change may interrupt requests;
-applications reconnect using the same pinned identity. Relays do not replicate
+Wispnet explicitly prefers `relay_url` as its home packet relay whenever its
+TLS-authenticated relay connection works. UDP discovery failure, a private
+observed address, and a faster n0 discovery response do not cause packet failover.
+After five seconds of detected primary unavailability (including startup dial
+failure), it selects a backup. Socket failure detection and reconnect timeouts
+can add time to recovery; five seconds is a grace period, not an outage SLA.
+
+While on a working backup it continues reconnecting to the primary and requires
+30 seconds of uninterrupted authenticated primary health before failing back.
+Any primary disconnect resets that window. If the backup also fails and the
+primary already works, it may recover to the primary immediately. Healthy-primary
+startup does not establish a permanent backup connection for standby monitoring.
+Additional relay connections can be opened as needed to reach a peer using a
+backup, and idle non-primary/non-home connections expire after 60 seconds.
+Existing direct connections remain preferred; established peer streams may
+continue on an existing path while the home relay changes.
+
+Applications reconnect using the same pinned identity. Relays do not replicate
 Wispnet identity, catalogs or permissions. Public n0 service remains rate-limited
 and has no uptime guarantee; dedicated independent relays are preferable for
 production. Omitting `backup_relay_urls` restores single-packet-relay operation.
+Both the host and Android use the same policy; an updated APK is required.
 The Android app and new Linux app-host installations explicitly configure the
 n0 US West relay as a packet-relay candidate. Existing Linux config is preserved
 by the installer and must be updated explicitly.
@@ -269,3 +284,9 @@ uses local TLS fixtures to cover primary-offline cold startup, loss of the
 selected relay, and restart with the other relay offline while preserving the
 same identities, catalog and approval policy. Recovery is bounded by transport
 probing, reconnect and request timeouts; it is not instantaneous.
+
+Split-home connectivity is also covered: the same primary URL resolves to a
+reachable listener for the phone and an unreachable listener for the host. The
+phone keeps the primary as home, the host uses the backup, and their first
+pinned catalog request succeeds using the locally configured relay candidates,
+without an earlier exchange through the primary or any direct UDP path.
