@@ -91,7 +91,7 @@ jobs:
         run: |
           test -n "$ANDROID_PUBLISHER_CREDENTIALS" || { echo "Missing ANDROID_PUBLISHER_CREDENTIALS; configure the Play service account secret first." >&2; exit 1; }
           scripts/build_android_release.sh --signed
-          uv run scripts/publish_android_internal.py apps/android/app/build/outputs/bundle/release/app-release.aab --publish --release-status "$RELEASE_STATUS"
+          uv run scripts/publish_android_internal.py apps/flutter/build/app/outputs/bundle/release/app-release.aab --publish --release-status "$RELEASE_STATUS"
       - name: Remove temporary keystore
         if: always()
         run: |
