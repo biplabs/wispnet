@@ -48,6 +48,7 @@ fn service(
 }
 fn config() -> TransportConfig {
     TransportConfig {
+        backup_relay_urls: Vec::new(),
         discovery_relay_url: None,
         relay_url: None,
         relay_only: false,

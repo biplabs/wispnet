@@ -106,6 +106,7 @@ async fn native_catalog_and_service_need_no_peer_address() {
     drop(owner);
     let cfg = TransportConfig {
         bind_addr: "127.0.0.1:0".parse().unwrap(),
+        backup_relay_urls: Vec::new(),
         discovery_relay_url: None,
         relay_url: Some(relay_url),
         relay_only: false,
@@ -421,6 +422,7 @@ async fn native_direct_probe_reports_path_without_backend_or_relay() {
     drop(owner);
     let config = TransportConfig {
         bind_addr: "127.0.0.1:0".parse().unwrap(),
+        backup_relay_urls: Vec::new(),
         discovery_relay_url: None,
         relay_url: None,
         relay_only: false,

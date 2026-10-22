@@ -597,6 +597,7 @@ fn app_transport_config(value: &Value) -> Result<TransportConfig, String> {
         "bind_addr": "0.0.0.0:0",
         "relay_url": argument(value, "relay")?,
         "discovery_relay_url": value.get("discovery_relay"),
+        "backup_relay_urls": value.get("backup_relays").cloned().unwrap_or_else(|| json!([])),
         "relay_only": false,
     }))
     .map_err(|_| "Invalid relay")?;
@@ -667,10 +668,13 @@ mod app_transport_tests {
     fn android_discovery_fallback_preserves_primary_and_legacy_init() {
         let primary = "https://relay.wispnet.app";
         let outside = "https://usw1-1.relay.n0.iroh.link";
-        let config =
-            app_transport_config(&json!({"relay": primary, "discovery_relay": outside})).unwrap();
+        let config = app_transport_config(
+            &json!({"relay": primary, "discovery_relay": outside, "backup_relays":[outside]}),
+        )
+        .unwrap();
         assert_eq!(config.relay_url.as_deref(), Some(primary));
         assert_eq!(config.discovery_relay_url.as_deref(), Some(outside));
+        assert_eq!(config.backup_relay_urls, vec![outside.to_string()]);
         assert!(!config.relay_only);
         assert!(
             app_transport_config(&json!({"relay": primary}))

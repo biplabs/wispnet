@@ -727,7 +727,15 @@ fn configured_relay_mode(config: &TransportConfig) -> Result<Option<iroh::RelayM
             let relay = url
                 .parse()
                 .map_err(|_| TunnelError::Transport("invalid relay URL"))?;
-            Ok(iroh::RelayMode::custom([relay]))
+            let mut relays: Vec<iroh::RelayUrl> = vec![relay];
+            for backup in &config.backup_relay_urls {
+                relays.push(
+                    backup
+                        .parse()
+                        .map_err(|_| TunnelError::Transport("invalid backup relay URL"))?,
+                );
+            }
+            Ok(iroh::RelayMode::custom(relays))
         })
         .transpose()
 }
@@ -828,6 +836,14 @@ pub fn peer_target(
             url.parse()
                 .map_err(|_| TunnelError::Transport("invalid relay URL"))?,
         );
+    }
+    if let Some(config) = config {
+        for url in &config.backup_relay_urls {
+            target = target.with_relay_url(
+                url.parse()
+                    .map_err(|_| TunnelError::Transport("invalid backup relay URL"))?,
+            );
+        }
     }
     if let Some(address) = address {
         target = target.with_ip_addr(address);

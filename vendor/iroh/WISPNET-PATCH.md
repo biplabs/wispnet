@@ -10,7 +10,8 @@ outside request. Each attempt has a three-second timeout. Valid cached public
 mappings are reused; unusable LAN mappings are retried on the next report. A LAN
 observation survives an outside-service failure.
 
-Observer latency is excluded from home-relay selection. Existing TLS verification,
+Observer latency is excluded from home-relay selection unless that URL is also
+explicitly present in the packet RelayMap. Existing TLS verification,
 peer authentication and UDP socket ownership are unchanged.
 
 Regression coverage: crates/agent/src/relay_tests.rs runs the exact fallback

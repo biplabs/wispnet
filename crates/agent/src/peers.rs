@@ -158,6 +158,7 @@ pub fn transport(
 ) -> Option<TransportConfig> {
     configured.cloned().or_else(|| {
         saved.map(|saved| TransportConfig {
+            backup_relay_urls: Vec::new(),
             discovery_relay_url: None,
             relay_url: Some(saved.relay_url.clone()),
             relay_only: false,

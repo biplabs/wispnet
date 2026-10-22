@@ -86,9 +86,12 @@ pub fn controller_origin(origin: &str) -> Result<url::Url, ConfigError> {
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TransportConfig {
-    /// Explicit private relay; Minimal never enables public discovery or default relays.
+    /// Primary packet relay and invitation origin; no implicit public relay defaults.
     #[serde(default)]
     pub relay_url: Option<String>,
+    /// Additional packet relays and peer bootstrap candidates. No implicit public defaults.
+    #[serde(default)]
+    pub backup_relay_urls: Vec<String>,
     /// Outside-NAT QUIC discovery fallback after failed/non-public primary discovery.
     #[serde(default)]
     pub discovery_relay_url: Option<String>,
@@ -130,6 +133,20 @@ impl TransportConfig {
                     "relay must be an HTTPS origin without credentials, path, query or fragment",
                 )
             })?;
+        }
+        if self.backup_relay_urls.len() > 4 {
+            return Err(ConfigError("at most four backup relays are supported"));
+        }
+        if !self.backup_relay_urls.is_empty() && self.relay_url.is_none() {
+            return Err(ConfigError("backup relays require a primary relay URL"));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for relay in self.relay_url.iter().chain(self.backup_relay_urls.iter()) {
+            let origin =
+                controller_origin(relay).map_err(|_| ConfigError("invalid relay HTTPS origin"))?;
+            if !seen.insert(origin.to_string()) {
+                return Err(ConfigError("relay URLs must be distinct"));
+            }
         }
         if let Some(discovery) = &self.discovery_relay_url {
             let discovery = controller_origin(discovery)
@@ -551,5 +568,49 @@ unknown = 'value'",
             .err()
             .unwrap();
         assert!(!error.to_string().contains("SECRET-SENTINEL"));
+    }
+}
+
+#[cfg(test)]
+mod backup_relay_tests {
+    use super::*;
+    #[test]
+    fn backup_relays_are_explicit_bounded_distinct_https_origins() {
+        let base = "schema_version=2\nstate_dir='/tmp/wispnet'\nlog_level='info'\n[transport]\nbind_addr='0.0.0.0:0'\n";
+        let primary = "relay_url='https://home.example'\n";
+        let parse = |extras: &str| Config::parse(&format!("{base}{primary}{extras}"));
+        assert!(
+            parse("")
+                .unwrap()
+                .transport
+                .unwrap()
+                .backup_relay_urls
+                .is_empty()
+        );
+        assert_eq!(
+            parse("backup_relay_urls=['https://outside.example']")
+                .unwrap()
+                .transport
+                .unwrap()
+                .backup_relay_urls
+                .len(),
+            1
+        );
+        for extras in [
+            "backup_relay_urls=['http://outside.example']",
+            "backup_relay_urls=['https://home.example/']",
+            "backup_relay_urls=['https://outside.example','https://outside.example/']",
+            "backup_relay_urls=['https://user:password@outside.example']",
+            "backup_relay_urls=['https://outside.example/path']",
+            "backup_relay_urls=['https://a.example','https://b.example','https://c.example','https://d.example','https://e.example']",
+        ] {
+            assert!(parse(extras).is_err(), "{extras}");
+        }
+        assert!(
+            Config::parse(&format!(
+                "{base}backup_relay_urls=['https://outside.example']"
+            ))
+            .is_err()
+        );
     }
 }

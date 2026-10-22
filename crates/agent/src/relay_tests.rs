@@ -135,6 +135,7 @@ async fn relay_dns_ip_replacement_recovers_without_endpoint_or_policy_reset() {
     std::fs::write(&ca, cert.cert.pem()).unwrap();
     let config = TransportConfig {
         bind_addr: "127.0.0.1:0".parse().unwrap(),
+        backup_relay_urls: Vec::new(),
         discovery_relay_url: None,
         relay_url: Some(format!("https://relay.test:{port}")),
         relay_only: true,
@@ -303,6 +304,7 @@ async fn relay_admission_diagnostic_is_distinct_and_redacts_server_reason() {
     std::fs::write(&ca, cert.cert.pem()).unwrap();
     let config = TransportConfig {
         bind_addr: "127.0.0.1:0".parse().unwrap(),
+        backup_relay_urls: Vec::new(),
         discovery_relay_url: None,
         relay_url: Some(format!("https://{}", relay.https_addr().unwrap())),
         relay_only: true,
@@ -366,6 +368,13 @@ fn outside_discovery_is_not_a_packet_relay_destination() {
     // Pairing/bootstrap still names the primary, regardless of relay selection.
     let target = peer_target(Identity::generate().endpoint_id(), Some(&config), None).unwrap();
     assert_eq!(target.relay_urls().next(), Some(&home));
+    config.backup_relay_urls.push(outside.to_string());
+    let map = configured_relay_mode(&config).unwrap().unwrap().relay_map();
+    assert!(map.contains(&outside));
+    assert_eq!(map.len(), 2);
+    let target = peer_target(Identity::generate().endpoint_id(), Some(&config), None).unwrap();
+    assert_eq!(target.relay_urls().count(), 2);
+    assert!(target.relay_urls().any(|url| url == &outside));
 }
 
 #[tokio::test]
@@ -481,3 +490,111 @@ async fn primary_discovery_timeout_uses_same_socket_fallback_without_changing_ho
 // pulling its unrelated upstream development dependencies into this workspace.
 #[path = "../../../vendor/iroh/src/net_report/fallback.rs"]
 mod discovery_fallback_policy;
+
+#[tokio::test]
+async fn backup_relay_supports_cold_start_and_primary_loss_without_repairing() {
+    use iroh::Watcher;
+    let cert = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+    let primary = relay(&cert, "127.0.0.1:0".parse().unwrap()).await;
+    let primary_addr = primary.https_addr().unwrap();
+    let backup = relay(&cert, "127.0.0.1:0".parse().unwrap()).await;
+    let backup_url = format!("https://{}", backup.https_addr().unwrap());
+    let state = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let ca = state.path().join("relay.pem");
+    std::fs::write(&ca, cert.cert.pem()).unwrap();
+    let mut config: TransportConfig = serde_json::from_value(serde_json::json!({
+        "bind_addr":"127.0.0.1:0", "relay_url":format!("https://{primary_addr}"),
+        "backup_relay_urls":[backup_url], "relay_only":true, "relay_ca_file":ca,
+    }))
+    .unwrap();
+    let host_key = Identity::generate();
+    let client_key = Identity::generate();
+    host::initialize(state.path(), host_key.endpoint_id()).unwrap();
+    let (mut store, owner) = host::owner_store(state.path(), host_key.endpoint_id()).unwrap();
+    store
+        .host_mutate(
+            host_key.endpoint_id(),
+            &owner,
+            Mutation::Approve {
+                expected_revision: 0,
+                peer: client_key.endpoint_id(),
+                name: "phone".into(),
+            },
+        )
+        .unwrap();
+    drop(store);
+    drop(owner);
+    let authority = Authority::open(state.path(), host_key.endpoint_id()).unwrap();
+    // Primary offline before either endpoint has ever seen the backup.
+    primary.shutdown().await.unwrap();
+    let host = TunnelHost::bind_host(host_key.secret_key(), &config, authority.clone())
+        .await
+        .unwrap();
+    let client = bind_configured_client(client_key.secret_key(), Some(&config))
+        .await
+        .unwrap();
+    timeout(Duration::from_secs(20), async {
+        tokio::join!(host.endpoint().online(), client.online());
+    })
+    .await
+    .unwrap();
+    let target = peer_target(host_key.endpoint_id(), Some(&config), None).unwrap();
+    assert_eq!(target.relay_urls().count(), 2);
+    let connection = control::connect_target(&client, target.clone())
+        .await
+        .unwrap();
+    let before = control::catalog_on(&connection, host_key.endpoint_id())
+        .await
+        .unwrap();
+    assert!(connection.paths().iter().all(|p| p.is_relay()));
+    assert_eq!(
+        client.home_relay_status().get()[0].url().to_string(),
+        format!("{backup_url}/")
+    );
+    // Bring primary back, then remove the currently selected backup. Existing
+    // endpoints must discover the remaining relay, without clearing peer state.
+    let primary = relay(&cert, primary_addr).await;
+    connection.close(0u32.into(), b"fixture failover");
+    backup.shutdown().await.unwrap();
+    timeout(Duration::from_secs(90), async {
+        loop {
+            if let Ok(c) = control::connect_target(&client, target.clone()).await
+                && let Ok(after) = control::catalog_on(&c, host_key.endpoint_id()).await
+            {
+                assert_eq!(
+                    serde_json::to_value(&before).unwrap(),
+                    serde_json::to_value(&after).unwrap()
+                );
+                assert!(c.paths().iter().all(|p| p.is_relay()));
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .unwrap();
+    client.close().await;
+    host.shutdown().await;
+    // A fresh process with the same identity and approvals also works with
+    // the backup offline. No discovery cache or old connection is required.
+    config.discovery_relay_url = None;
+    let host = TunnelHost::bind_host(host_key.secret_key(), &config, authority.clone())
+        .await
+        .unwrap();
+    let client = bind_configured_client(client_key.secret_key(), Some(&config))
+        .await
+        .unwrap();
+    let c = control::connect_target(&client, target).await.unwrap();
+    let after = control::catalog_on(&c, host_key.endpoint_id())
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(before).unwrap(),
+        serde_json::to_value(after).unwrap()
+    );
+    assert!(authority.approved(client_key.endpoint_id()).await);
+    client.close().await;
+    host.shutdown().await;
+    primary.shutdown().await.unwrap();
+}

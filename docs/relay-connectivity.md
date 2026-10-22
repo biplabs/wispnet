@@ -213,8 +213,8 @@ reused until a full refresh or network change; an unusable cached LAN result is
 retried on the next report. If both attempts fail, any LAN observation remains
 available for local connectivity.
 
-The primary relay remains the pinned-peer bootstrap and packet relay. The outside
-observer cannot become the home relay. The local compatibility patch in
+The primary relay remains the invitation/bootstrap URL and a permitted packet relay. The outside
+observer cannot become the home relay unless it is also explicitly configured as a packet relay. The local compatibility patch in
 `vendor/iroh` keeps discovery fallback separate from relay selection. No DNS/Pkarr
 peer lookup or publication is enabled. Certificate trust applies to both servers.
 n0's public service is rate-limited and has no uptime guarantee. Omit
@@ -225,3 +225,47 @@ The Android app enables the same ordered discovery policy at native initializati
 an updated APK because both the native transport and its initialization setting
 are bundled in the app. Existing device identity and pairings are retained by an
 in-place update.
+
+## Redundant packet relays
+
+Configure the same relay set on every paired node, including Android:
+
+```toml
+[transport]
+bind_addr = "0.0.0.0:0"
+relay_url = "https://relay.wispnet.app"
+backup_relay_urls = ["https://usw1-1.relay.n0.iroh.link"]
+relay_only = false
+```
+
+The primary URL remains the invitation/bootstrap URL. All configured packet relay
+URLs are included as candidates when dialing a pinned peer, so the primary is
+not needed to locate a peer that has moved to a backup. Existing pairings and
+host-local approvals remain valid. Both endpoints need this configuration and
+updated software; older clients still know only the original URL. A discovery-only
+observer is never implicitly promoted to a packet relay.
+
+Iroh selects a reachable home relay using latency and recent measurements; the
+primary configuration field is not a strict traffic-priority guarantee. It can
+select n0 while the primary is healthy. A relay change may interrupt requests;
+applications reconnect using the same pinned identity. Relays do not replicate
+Wispnet identity, catalogs or permissions. Public n0 service remains rate-limited
+and has no uptime guarantee; dedicated independent relays are preferable for
+production. Omitting `backup_relay_urls` restores single-packet-relay operation.
+The Android app and new Linux app-host installations explicitly configure the
+n0 US West relay as a packet-relay candidate. Existing Linux config is preserved
+by the installer and must be updated explicitly.
+
+For an opt-in real public-service check, run:
+
+```sh
+cargo run -p wispnet-agent --example relay_failover_probe --locked -- https://usw1-1.relay.n0.iroh.link
+```
+
+This uses two disposable identities, an unreachable primary and relay-only
+transport. It verifies an authenticated, pinned-ID echo through the backup;
+it does not read device state or change pairing policies. The regular test suite
+uses local TLS fixtures to cover primary-offline cold startup, loss of the
+selected relay, and restart with the other relay offline while preserving the
+same identities, catalog and approval policy. Recovery is bounded by transport
+probing, reconnect and request timeouts; it is not instantaneous.
