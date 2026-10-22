@@ -73,6 +73,7 @@ where
 }
 fn limits() -> TransportConfig {
     TransportConfig {
+        discovery_relay_url: None,
         relay_url: None,
         relay_only: false,
         relay_ca_file: None,

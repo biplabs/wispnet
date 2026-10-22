@@ -1,5 +1,6 @@
 //! Private local UI API sharing the host's existing identity lease and endpoint.
 pub mod invitation;
+use iroh::Watcher;
 use serde_json::{Value, json};
 use std::{
     future::Future,
@@ -33,6 +34,29 @@ impl State {
                 })
                 .await
                 .map_err(|_| "Cannot generate pairing QR".to_owned())?
+            }
+            "transport_status" => {
+                let snapshot = self.authority.snapshot().await.map_err(|e| e.to_string())?;
+                let mut peers = self.counts.peer_transport();
+                if let Some(peers) = peers.as_object_mut() {
+                    peers.retain(|peer, _| {
+                        snapshot.clients.iter().any(|c| c.peer.to_string() == *peer)
+                    });
+                }
+                let endpoint = &self.client.endpoint;
+                let network = endpoint.net_report().get().map(|r| {
+                    json!({
+                        "udp_v4":r.udp_v4,"udp_v6":r.udp_v6,
+                        "public_ipv4_discovered":r.global_v4.is_some_and(|a|wispnet_agent::diagnostics::public_ip((*a.ip()).into())),
+                        "observed_ipv4_is_private":r.global_v4.map(|a|a.ip().is_private()),
+                        "public_ipv6_discovered":r.global_v6.is_some_and(|a|wispnet_agent::diagnostics::public_ip((*a.ip()).into())),
+                    })
+                });
+                Ok(json!({"host":endpoint.id(),"network":network,
+                    "local_ip_addresses":endpoint.addr().ip_addrs().count(),
+                    "public_ip_addresses":endpoint.addr().ip_addrs().filter(|a|wispnet_agent::diagnostics::public_ip(a.ip())).count(),
+                    "relays":endpoint.home_relay_status().get().iter().map(|r|json!({"url":r.url().to_string(),"connected":r.is_connected()})).collect::<Vec<_>>(),
+                    "peers":peers}))
             }
             "status" => {
                 if let Err(error) = self.client.publications.reconcile(&self.client).await {

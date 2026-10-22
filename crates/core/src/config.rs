@@ -89,6 +89,9 @@ pub struct TransportConfig {
     /// Explicit private relay; Minimal never enables public discovery or default relays.
     #[serde(default)]
     pub relay_url: Option<String>,
+    /// Outside-NAT QUIC discovery fallback after failed/non-public primary discovery.
+    #[serde(default)]
+    pub discovery_relay_url: Option<String>,
     #[serde(default)]
     pub relay_only: bool,
     /// PEM trust root for a privately operated HTTPS relay.
@@ -127,6 +130,19 @@ impl TransportConfig {
                     "relay must be an HTTPS origin without credentials, path, query or fragment",
                 )
             })?;
+        }
+        if let Some(discovery) = &self.discovery_relay_url {
+            let discovery = controller_origin(discovery)
+                .map_err(|_| ConfigError("discovery relay must be an HTTPS origin without credentials, path, query or fragment"))?;
+            let primary = self
+                .relay_url
+                .as_ref()
+                .ok_or(ConfigError("discovery relay requires a primary relay URL"))?;
+            if controller_origin(primary)? == discovery {
+                return Err(ConfigError(
+                    "discovery relay must differ from the primary relay",
+                ));
+            }
         }
         if (self.relay_only || self.relay_ca_file.is_some()) && self.relay_url.is_none() {
             return Err(ConfigError(
@@ -355,6 +371,29 @@ log_level = 'info'"
         assert!(!config.device_name.is_empty());
         assert_eq!(Config::parse(&valid()).unwrap().device_name, "laptop");
         assert!(Config::parse(&valid().replace("'laptop'", "''")).is_err());
+    }
+
+    #[test]
+    fn outside_discovery_is_explicit_and_requires_a_distinct_primary() {
+        let base = format!("{}\n[transport]\nbind_addr='0.0.0.0:0'\n", valid());
+        let primary = "relay_url='https://relay.example'\n";
+        let external = "discovery_relay_url='https://observer.example'\n";
+        let legacy = Config::parse(&format!("{base}{primary}")).unwrap();
+        assert!(legacy.transport.unwrap().discovery_relay_url.is_none());
+        assert!(Config::parse(&format!("{base}{primary}{external}")).is_ok());
+        assert!(Config::parse(&format!("{base}{external}")).is_err());
+        for url in [
+            "https://relay.example/",
+            "http://observer.example",
+            "https://user@observer.example",
+            "https://observer.example/path",
+            "https://observer.example/?token=secret",
+        ] {
+            assert!(
+                Config::parse(&format!("{base}{primary}discovery_relay_url='{url}'\n")).is_err(),
+                "{url}"
+            );
+        }
     }
 
     #[test]

@@ -437,6 +437,7 @@ async fn publish_once(
         return Err("service changed; disable and re-enable public access".into());
     }
     let transport = wispnet_core::config::TransportConfig {
+        discovery_relay_url: None,
         relay_url: Some(gateway.relay_url.clone()),
         ..client.config.clone()
     };

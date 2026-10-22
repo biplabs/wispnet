@@ -53,7 +53,10 @@ Edit that config: set a unique device name, an absolute state directory such as
 `/home/YOU/.local/state/wispnet-node`, and the intended bind/relay settings.
 For the operated public relay, set `relay_url = "https://relay.wispnet.app"`
 inside `[transport]`; a direct-only loopback example cannot reach remote hosts.
-Use `bind_addr = "0.0.0.0:60303"` for ordinary IPv4 direct access plus relay.
+Use `bind_addr = "0.0.0.0:0"` for ordinary IPv4 direct access plus relay;
+the OS chooses the local UDP port, and discovery advertises the reachable address.
+Use a fixed port only when deliberately configuring a fixed direct address.
+The client's local UDP port is separate from the relay's UDP discovery port (7842).
 Do not copy another computer's state, identity or owner token.
 
 ```sh

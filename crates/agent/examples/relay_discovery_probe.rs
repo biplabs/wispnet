@@ -5,9 +5,22 @@ use std::time::{Duration, Instant};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let bind_addr = if let Some(index) = args.iter().position(|arg| arg == "--bind-addr") {
+        if index + 1 >= args.len() {
+            return Err("--bind-addr requires IP:PORT".into());
+        }
+        let value = args.remove(index + 1).parse::<std::net::SocketAddr>()?;
+        args.remove(index);
+        Some(value)
+    } else {
+        None
+    };
     if args.len() > 3 {
-        return Err("usage: relay_discovery_probe [RELAY_URL [UDP_PORT [CA_FILE]]]".into());
+        return Err(
+            "usage: relay_discovery_probe [--bind-addr IP:PORT] [RELAY_URL [UDP_PORT [CA_FILE]]]"
+                .into(),
+        );
     }
     let url = args
         .first()
@@ -26,6 +39,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let cert = rustls_pki_types::CertificateDer::from_pem_slice(&pem)?;
         builder = builder.ca_tls_config(iroh_relay::tls::CaTlsConfig::custom_roots([cert]));
     }
+    if let Some(address) = bind_addr {
+        builder = builder.clear_ip_transports().bind_addr(address)?;
+    }
     let started = Instant::now();
     let endpoint = builder.bind().await?;
     let mut observed = None;
@@ -40,12 +56,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "{}",
         serde_json::json!({
-            "event":"relay_udp_discovery", "ok":ok, "relay":url, "udp_port":port,
+            "event":"relay_udp_discovery", "ok":ok, "bind_addr":bind_addr, "relay":url, "udp_port":port,
             "elapsed_ms":started.elapsed().as_millis(),
             "network_report":observed.map(|r| serde_json::json!({
                 "udp_v4":r.udp_v4, "udp_v6":r.udp_v6,
-                "public_ipv4_discovered":r.global_v4.is_some(),
-                "public_ipv6_discovered":r.global_v6.is_some()
+                "public_ipv4_discovered":r.global_v4.is_some_and(|a|wispnet_agent::diagnostics::public_ip((*a.ip()).into())),
+                "observed_ipv4_is_private":r.global_v4.map(|a|a.ip().is_private()),
+                "observed_ipv4_is_loopback":r.global_v4.map(|a|a.ip().is_loopback()),
+                "public_ipv6_discovered":r.global_v6.is_some_and(|a|wispnet_agent::diagnostics::public_ip((*a.ip()).into()))
             }))
         })
     );

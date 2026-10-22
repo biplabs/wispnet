@@ -51,6 +51,9 @@ impl fmt::Display for TunnelError {
 }
 impl std::error::Error for TunnelError {}
 
+type PeerTransportHistory =
+    std::collections::BTreeMap<String, (std::time::Instant, serde_json::Value)>;
+
 pub type PeerTelemetry = std::collections::BTreeMap<String, (&'static str, Option<u64>)>;
 
 #[derive(Clone, Default)]
@@ -60,6 +63,7 @@ pub struct ActiveCounts {
     streams: Arc<AtomicUsize>,
     peers: Arc<std::sync::Mutex<std::collections::BTreeMap<String, usize>>>,
     telemetry: Arc<std::sync::Mutex<PeerTelemetry>>,
+    transport: Arc<std::sync::Mutex<PeerTransportHistory>>,
 }
 impl ActiveCounts {
     pub(crate) fn record_activity(&self, peer: EndpointId) {
@@ -76,7 +80,37 @@ impl ActiveCounts {
         {
             telemetry.remove(&first);
         }
-        telemetry.insert(peer, (path, rtt));
+        telemetry.insert(peer.clone(), (path, rtt));
+        drop(telemetry);
+        let mut transport = self.transport.lock().unwrap_or_else(|e| e.into_inner());
+        if transport.len() >= 1024
+            && !transport.contains_key(&peer)
+            && let Some(first) = transport.keys().next().cloned()
+        {
+            transport.remove(&first);
+        }
+        transport.insert(
+            peer,
+            (
+                std::time::Instant::now(),
+                crate::diagnostics::connection_counters(connection),
+            ),
+        );
+    }
+    /// Last authenticated incoming connection per peer, including closed RPCs.
+    /// Counters belong to that connection; these are not endpoint totals.
+    pub fn peer_transport(&self) -> serde_json::Value {
+        let transport = self.transport.lock().unwrap_or_else(|e| e.into_inner());
+        transport
+            .iter()
+            .map(|(peer, (at, counters))| {
+                (
+                    peer.clone(),
+                    serde_json::json!({"age_ms":at.elapsed().as_millis(),"connection":counters}),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>()
+            .into()
     }
     pub fn peer_telemetry(&self) -> PeerTelemetry {
         self.telemetry
@@ -685,6 +719,34 @@ impl Drop for ServiceStream {
     }
 }
 
+fn configured_relay_mode(config: &TransportConfig) -> Result<Option<iroh::RelayMode>, TunnelError> {
+    config
+        .relay_url
+        .as_ref()
+        .map(|url| {
+            let relay = url
+                .parse()
+                .map_err(|_| TunnelError::Transport("invalid relay URL"))?;
+            Ok(iroh::RelayMode::custom([relay]))
+        })
+        .transpose()
+}
+
+fn configured_discovery_relay(
+    config: &TransportConfig,
+) -> Result<Option<iroh::RelayConfig>, TunnelError> {
+    config
+        .discovery_relay_url
+        .as_ref()
+        .map(|url| {
+            let relay: iroh::RelayUrl = url
+                .parse()
+                .map_err(|_| TunnelError::Transport("invalid discovery relay URL"))?;
+            Ok(iroh::RelayConfig::from(relay))
+        })
+        .transpose()
+}
+
 fn configured_builder(
     secret: &SecretKey,
     config: Option<&TransportConfig>,
@@ -706,11 +768,13 @@ fn configured_builder(
         config
             .validate()
             .map_err(|_| TunnelError::Transport("invalid relay configuration"))?;
-        if let Some(url) = &config.relay_url {
-            let relay: iroh::RelayUrl = url
-                .parse()
-                .map_err(|_| TunnelError::Transport("invalid relay URL"))?;
-            builder = builder.relay_mode(iroh::RelayMode::custom([relay]));
+        if let Some(mode) = configured_relay_mode(config)? {
+            builder = builder.relay_mode(mode);
+        }
+        if let Some(observer) = configured_discovery_relay(config)? {
+            builder = builder.net_report_config(
+                iroh::endpoint::NetReportConfig::default().quic_discovery_fallback(observer),
+            );
         }
         if let Some(path) = &config.relay_ca_file {
             use rustls_pki_types::pem::PemObject;

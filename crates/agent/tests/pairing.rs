@@ -80,6 +80,7 @@ fn invitation_files_and_targets_fail_closed_without_exposing_capabilities() {
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
     let invitation = pairing::read_invitation(&path).unwrap();
     let mut config = TransportConfig {
+        discovery_relay_url: None,
         relay_url: Some("https://relay.example/".into()),
         relay_only: true,
         relay_ca_file: None,

@@ -73,6 +73,8 @@ pub struct DiagnosticSnapshot {
     pub relay_status: String,
     pub network: NetworkObservation,
     pub paths: PathObservation,
+    /// Legacy wire name: count of IP entries in Iroh's remote address cache.
+    /// This is not the QUIC NAT traversal candidate list.
     pub peer_ip_candidates: Option<usize>,
     pub elapsed_ms: u64,
 }

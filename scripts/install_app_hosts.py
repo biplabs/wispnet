@@ -30,7 +30,7 @@ for item in sys.argv[1:]:
             if remote:run(['scp','-q','-o','BatchMode=yes','-o','StrictHostKeyChecking=yes',stripped,'desktop.home:'+binary+'.next'])
             else:shutil.copyfile(stripped,binary+'.next')
         call(['python3','-c','import os,sys;os.chmod(sys.argv[1]+".next",0o700);os.replace(sys.argv[1]+".next",sys.argv[1])',binary])
-        content=f"schema_version=2\nstate_dir='{state}'\nlog_level='info'\n[transport]\nbind_addr='0.0.0.0:60303'\nrelay_url='https://relay.wispnet.app'\nrelay_only=false\n"
+        content=f"schema_version=2\nstate_dir='{state}'\nlog_level='info'\n[transport]\nbind_addr='0.0.0.0:0'\nrelay_url='https://relay.wispnet.app'\nrelay_only=false\n"
         if call(['test','-f',config],ok=None).returncode:
             call(['python3','-c',"import os,sys; f=os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600);os.write(f,sys.stdin.buffer.read());os.close(f)",config],input=content)
         status=call([binary,'host-status','--config',config],ok=None)

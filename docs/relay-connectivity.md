@@ -194,3 +194,34 @@ and key. In a relay terminating its own TLS, discovery may inherit that TLS
 configuration instead. Omitting `quic_listen` leaves UDP discovery disabled.
 A discovery probe verifies the TLS certificate and an actual observed-address
 response; a UDP listener or HTTPS 200 by itself is not proof of discovery.
+
+## Optional outside-NAT address discovery
+
+For a relay hosted behind the same router as an endpoint, explicitly configure
+an outside observer in that endpoint's `[transport]` section:
+
+```toml
+relay_url = "https://relay.wispnet.app"
+discovery_relay_url = "https://usw1-1.relay.n0.iroh.link"
+```
+
+This is opt-in. Fresh discovery tries the primary relay first. A timeout,
+connection/DNS failure, or a private/special-use observed address triggers the
+outside observer on UDP 7842 through the endpoint's same socket. A usable public
+primary result does not contact the outside observer. Valid cached mappings are
+reused until a full refresh or network change; an unusable cached LAN result is
+retried on the next report. If both attempts fail, any LAN observation remains
+available for local connectivity.
+
+The primary relay remains the pinned-peer bootstrap and packet relay. The outside
+observer cannot become the home relay. The local compatibility patch in
+`vendor/iroh` keeps discovery fallback separate from relay selection. No DNS/Pkarr
+peer lookup or publication is enabled. Certificate trust applies to both servers.
+n0's public service is rate-limited and has no uptime guarantee. Omit
+`discovery_relay_url` to restore the original single-relay behavior.
+
+The Android app enables the same ordered discovery policy at native initialization:
+`relay.wispnet.app` first, then `usw1-1.relay.n0.iroh.link` when required. This needs
+an updated APK because both the native transport and its initialization setting
+are bundled in the app. Existing device identity and pairings are retained by an
+in-place update.

@@ -106,6 +106,7 @@ class NodeIntegration(unittest.TestCase):
                 )
                 self.assertEqual(capi.request(**approval), receipt)
                 self.assertEqual(capi.request(op="status")["host"]["clients"], [])
+                self.assertEqual(capi.request(op="transport_status")["peers"], {})
                 with self.assertRaisesRegex(ValueError, "Wrong target host"):
                     capi.request(**{**approval, "host": pb})
                 rejected = capi.request(
@@ -178,6 +179,20 @@ class NodeIntegration(unittest.TestCase):
                 catalog = api.request(op="catalog", host=pb)
                 self.assertEqual(catalog["host"], pb)
                 self.assertEqual([s["id"] for s in catalog["services"]], ["website"])
+                # Owner-local tracing survives a short authenticated RPC closing.
+                # It exposes frame counts, never peer addresses or payloads.
+                transport = bapi.request(op="transport_status")
+                self.assertEqual(transport["host"], pb)
+                observed = transport["peers"][pa]
+                self.assertGreaterEqual(observed["age_ms"], 0)
+                counters = observed["connection"]
+                self.assertIn(counters["path"], ("direct", "relay", "unknown"))
+                for field in ("address_advertisements_sent", "address_advertisements_received",
+                              "holepunch_requests_sent", "holepunch_requests_received",
+                              "path_challenges_sent", "path_responses_received"):
+                    self.assertIsInstance(counters[field], int)
+                    self.assertGreaterEqual(counters[field], 0)
+                self.assertNotIn("127.0.0.1", json.dumps(transport))
                 remote_incarnation = catalog["services"][0]["incarnation"]
                 # The headless command reuses the daemon, without a key lease or Qt.
                 command = [

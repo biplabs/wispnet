@@ -2,6 +2,7 @@
 use super::*;
 use crate::control;
 use iroh::dns::{DnsResolver, NameserverConfig};
+use n0_future::StreamExt;
 use std::{
     net::{Ipv4Addr, SocketAddr},
     os::unix::fs::PermissionsExt,
@@ -134,6 +135,7 @@ async fn relay_dns_ip_replacement_recovers_without_endpoint_or_policy_reset() {
     std::fs::write(&ca, cert.cert.pem()).unwrap();
     let config = TransportConfig {
         bind_addr: "127.0.0.1:0".parse().unwrap(),
+        discovery_relay_url: None,
         relay_url: Some(format!("https://relay.test:{port}")),
         relay_only: true,
         relay_ca_file: Some(ca),
@@ -301,6 +303,7 @@ async fn relay_admission_diagnostic_is_distinct_and_redacts_server_reason() {
     std::fs::write(&ca, cert.cert.pem()).unwrap();
     let config = TransportConfig {
         bind_addr: "127.0.0.1:0".parse().unwrap(),
+        discovery_relay_url: None,
         relay_url: Some(format!("https://{}", relay.https_addr().unwrap())),
         relay_only: true,
         relay_ca_file: Some(ca),
@@ -339,3 +342,142 @@ async fn relay_admission_diagnostic_is_distinct_and_redacts_server_reason() {
     endpoint.close().await;
     relay.shutdown().await.unwrap();
 }
+
+#[test]
+fn outside_discovery_is_not_a_packet_relay_destination() {
+    let mut config: TransportConfig = serde_json::from_value(serde_json::json!({
+        "bind_addr":"0.0.0.0:0", "relay_url":"https://home.example"
+    }))
+    .unwrap();
+    let legacy = configured_relay_mode(&config).unwrap().unwrap().relay_map();
+    let home: iroh::RelayUrl = "https://home.example".parse().unwrap();
+    let outside: iroh::RelayUrl = "https://outside.example".parse().unwrap();
+    assert!(legacy.get(&home).unwrap().quic.is_some());
+    assert_eq!(legacy.len(), 1);
+    config.discovery_relay_url = Some(outside.to_string());
+    let map = configured_relay_mode(&config).unwrap().unwrap().relay_map();
+    assert_eq!(map.len(), 1);
+    assert!(map.contains(&home));
+    assert!(!map.contains(&outside));
+    let discovery = configured_discovery_relay(&config).unwrap().unwrap();
+    assert_eq!(discovery.url, outside);
+    assert_ne!(discovery.url, home);
+    assert_eq!(discovery.quic.as_ref().unwrap().port, 7842);
+    // Pairing/bootstrap still names the primary, regardless of relay selection.
+    let target = peer_target(Identity::generate().endpoint_id(), Some(&config), None).unwrap();
+    assert_eq!(target.relay_urls().next(), Some(&home));
+}
+
+#[tokio::test]
+async fn primary_discovery_timeout_uses_same_socket_fallback_without_changing_home_relay() {
+    use iroh::Watcher;
+    use iroh_relay::server::{
+        CertConfig, QuicConfig, RelayConfig, Server, ServerConfig, TlsConfig,
+    };
+    let cert = rcgen::generate_simple_self_signed(vec!["relay.test".into()]).unwrap();
+    let primary = relay(&cert, "127.0.0.1:0".parse().unwrap()).await;
+    let primary_url: iroh::RelayUrl = format!(
+        "https://relay.test:{}",
+        primary.https_addr().unwrap().port()
+    )
+    .parse()
+    .unwrap();
+    let tls = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_no_client_auth()
+    .with_single_cert(
+        vec![cert.cert.der().clone()],
+        rustls_pki_types::PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der()).into(),
+    )
+    .unwrap();
+    let mut relay_config = RelayConfig::new("127.0.0.1:0".parse::<SocketAddr>().unwrap());
+    relay_config.tls = Some(TlsConfig::new(
+        "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
+        CertConfig::Manual { server_config: tls },
+    ));
+    let mut server_config = ServerConfig::default();
+    server_config.relay = Some(relay_config);
+    server_config.quic = Some(QuicConfig::new(
+        "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
+    ));
+    let observer = Server::spawn(server_config).await.unwrap();
+    let observer_url: iroh::RelayUrl = format!(
+        "https://relay.test:{}",
+        observer.https_addr().unwrap().port()
+    )
+    .parse()
+    .unwrap();
+    let fallback = iroh::RelayConfig::new(
+        observer_url.clone(),
+        Some(iroh_relay::RelayQuicConfig::new(
+            observer.quic_addr().unwrap().port(),
+        )),
+    );
+    let unused = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let unused_port = unused.local_addr().unwrap().port();
+    drop(unused);
+    let primary_config = iroh::RelayConfig::new(
+        primary_url.clone(),
+        Some(iroh_relay::RelayQuicConfig::new(unused_port)),
+    );
+    let dns = DnsFixture::start().await;
+    let endpoint = Endpoint::builder(presets::Minimal)
+        .dns_resolver(dns.resolver())
+        .relay_mode(iroh::RelayMode::Custom(
+            [primary_config].into_iter().collect(),
+        ))
+        .ca_tls_config(iroh_relay::tls::CaTlsConfig::custom_roots([cert
+            .cert
+            .der()
+            .clone()]))
+        .net_report_config(
+            iroh::endpoint::NetReportConfig::default().quic_discovery_fallback(fallback),
+        )
+        .bind()
+        .await
+        .unwrap();
+    let report = timeout(Duration::from_secs(8), async {
+        let mut reports = endpoint.net_report().stream();
+        while let Some(report) = reports.next().await {
+            if let Some(report) = report
+                && report.has_udp()
+                && report.preferred_relay.as_ref() == Some(&primary_url)
+            {
+                return report;
+            }
+        }
+        panic!("network report stream ended");
+    })
+    .await
+    .unwrap();
+    // Primary has no QAD listener: this response can only come from the observer.
+    // Its observed source port must belong to this endpoint, not a helper socket.
+    let observed_port = report.global_v4.unwrap().port();
+    assert!(
+        endpoint
+            .bound_sockets()
+            .iter()
+            .any(|a| a.is_ipv4() && a.port() == observed_port)
+    );
+    timeout(Duration::from_secs(5), endpoint.online())
+        .await
+        .unwrap();
+    let homes = endpoint.home_relay_status().get();
+    assert!(
+        homes
+            .iter()
+            .any(|r| r.url() == &primary_url && r.is_connected())
+    );
+    assert!(homes.iter().all(|r| r.url() != &observer_url));
+    endpoint.close().await;
+    observer.shutdown().await.unwrap();
+    primary.shutdown().await.unwrap();
+}
+
+// Exercise the exact generic policy used by the vendored dependency without
+// pulling its unrelated upstream development dependencies into this workspace.
+#[path = "../../../vendor/iroh/src/net_report/fallback.rs"]
+mod discovery_fallback_policy;

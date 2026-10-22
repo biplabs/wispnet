@@ -113,13 +113,13 @@ pub(crate) struct Context {
     pub relay_configured: bool,
 }
 
-fn network_report(endpoint: &Endpoint) -> Option<NetworkReport> {
+pub fn network_report(endpoint: &Endpoint) -> Option<NetworkReport> {
     endpoint.net_report().get().map(|r| NetworkReport {
         udp_v4: r.udp_v4,
         udp_v6: r.udp_v6,
         mapping_varies: r.mapping_varies_by_dest(),
-        public_ipv4_discovered: r.global_v4.is_some(),
-        public_ipv6_discovered: r.global_v6.is_some(),
+        public_ipv4_discovered: r.global_v4.is_some_and(|a| public_ip((*a.ip()).into())),
+        public_ipv6_discovered: r.global_v6.is_some_and(|a| public_ip((*a.ip()).into())),
         captive_portal: r.captive_portal,
     })
 }
@@ -343,4 +343,89 @@ pub async fn explain_path(
         "remote_error":remote.as_ref().err().map(|_| "Host diagnostic unavailable: the host may need an update, or its diagnostic request failed."),
         "candidate_failure_reasons":"unavailable: transport does not expose reasons for failed candidate validation",
     }))
+}
+
+/// Address advertisement and coordinated hole-punch frame counters from the
+/// authenticated connection. Counts include retransmissions, not unique addresses.
+/// Exposed only through owner-local IPC, never raw addresses or application data.
+pub(crate) fn connection_counters(connection: &Connection) -> serde_json::Value {
+    let stats = connection.stats();
+    serde_json::json!({
+        "connection_id":connection.stable_id(),
+        "path":selected_path(connection),
+        "closed":connection.close_reason().is_some(),
+        "address_advertisements_sent":stats.frame_tx.add_address,
+        "address_advertisements_received":stats.frame_rx.add_address,
+        "address_removals_sent":stats.frame_tx.remove_address,
+        "address_removals_received":stats.frame_rx.remove_address,
+        "holepunch_requests_sent":stats.frame_tx.reach_out,
+        "holepunch_requests_received":stats.frame_rx.reach_out,
+        "path_challenges_sent":stats.frame_tx.path_challenge,
+        "path_challenges_received":stats.frame_rx.path_challenge,
+        "path_responses_sent":stats.frame_tx.path_response,
+        "path_responses_received":stats.frame_rx.path_response,
+        "direct_paths":connection.paths().iter().filter(|p|p.is_ip()).count(),
+    })
+}
+
+/// Exclude private and special-use addresses from the diagnostic's public-IP
+/// check. A true result describes address scope, not verified reachability.
+pub fn public_ip(address: std::net::IpAddr) -> bool {
+    match address {
+        std::net::IpAddr::V4(ip) => {
+            let [a, b, c, d] = ip.octets();
+            !(ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || ip.is_documentation()
+                || ip.is_broadcast()
+                || a == 0
+                || a >= 224
+                || (a == 100 && (64..=127).contains(&b))
+                || (a == 198 && (b == 18 || b == 19))
+                || (a == 192 && b == 0 && c == 0 && d != 9 && d != 10)
+                || (a == 192 && b == 88 && c == 99))
+        }
+        std::net::IpAddr::V6(ip) => {
+            if let Some(v4) = ip.to_ipv4_mapped() {
+                return public_ip(v4.into());
+            }
+            let s = ip.segments();
+            s[0] & 0xe000 == 0x2000
+                && !(s[0] == 0x2001 && (s[1] == 0xdb8 || (s[1] == 2 && s[2] == 0)))
+                && !(s[0] == 0x3fff && s[1] & 0xf000 == 0)
+        }
+    }
+}
+
+#[cfg(test)]
+mod address_scope_tests {
+    use super::public_ip;
+    #[test]
+    fn discovery_addresses_are_not_necessarily_public() {
+        for ip in [
+            "192.168.1.1",
+            "10.1.2.3",
+            "172.16.0.1",
+            "100.64.0.1",
+            "127.0.0.1",
+            "169.254.1.1",
+            "0.0.0.0",
+            "192.0.2.1",
+            "198.18.0.1",
+            "224.0.0.1",
+            "255.255.255.255",
+            "::1",
+            "::",
+            "fc00::1",
+            "fe80::1",
+            "2001:db8::1",
+            "::ffff:192.168.1.1",
+        ] {
+            assert!(!public_ip(ip.parse().unwrap()), "{ip}");
+        }
+        for ip in ["162.156.47.159", "1.1.1.1", "2606:4700::1111"] {
+            assert!(public_ip(ip.parse().unwrap()), "{ip}");
+        }
+    }
 }

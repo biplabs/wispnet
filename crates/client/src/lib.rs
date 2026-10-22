@@ -592,6 +592,18 @@ impl Client {
         }
     }
 }
+fn app_transport_config(value: &Value) -> Result<TransportConfig, String> {
+    let config: TransportConfig = serde_json::from_value(json!({
+        "bind_addr": "0.0.0.0:0",
+        "relay_url": argument(value, "relay")?,
+        "discovery_relay_url": value.get("discovery_relay"),
+        "relay_only": false,
+    }))
+    .map_err(|_| "Invalid relay")?;
+    config.validate().map_err(|_| "Invalid relay")?;
+    Ok(config)
+}
+
 pub fn call(text: &str) -> String {
     let outcome = (|| -> Result<Value, String> {
         if text.len() > 16384 {
@@ -606,7 +618,7 @@ pub fn call(text: &str) -> String {
                 .parse()
                 .map_err(|_| "Invalid device key")?;
             let state = PathBuf::from(argument(&value, "state")?);
-            let config:TransportConfig=serde_json::from_value(json!({"bind_addr":"0.0.0.0:0","relay_url":argument(&value,"relay")?,"relay_only":false})).map_err(|_|"Invalid relay")?;
+            let config = app_transport_config(&value)?;
             let mut client = CLIENT.lock().map_err(|_| "Native state unavailable")?;
             if client.is_none() {
                 *client = Some(runtime().block_on(Client::new_peer(key, state, config))?);
@@ -644,5 +656,33 @@ pub fn call(text: &str) -> String {
             };
             json!({"ok":false,"error":error,"code":code}).to_string()
         }
+    }
+}
+
+#[cfg(test)]
+mod app_transport_tests {
+    use super::*;
+
+    #[test]
+    fn android_discovery_fallback_preserves_primary_and_legacy_init() {
+        let primary = "https://relay.wispnet.app";
+        let outside = "https://usw1-1.relay.n0.iroh.link";
+        let config =
+            app_transport_config(&json!({"relay": primary, "discovery_relay": outside})).unwrap();
+        assert_eq!(config.relay_url.as_deref(), Some(primary));
+        assert_eq!(config.discovery_relay_url.as_deref(), Some(outside));
+        assert!(!config.relay_only);
+        assert!(
+            app_transport_config(&json!({"relay": primary}))
+                .unwrap()
+                .discovery_relay_url
+                .is_none()
+        );
+        assert!(
+            app_transport_config(
+                &json!({"relay": primary, "discovery_relay": "http://insecure.example"})
+            )
+            .is_err()
+        );
     }
 }

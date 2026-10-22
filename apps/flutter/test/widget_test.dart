@@ -679,7 +679,7 @@ void main() {
           'udp_v4': true,
           'udp_v6': false,
           'mapping_varies': null,
-          'public_ipv4_discovered': true,
+          'public_ipv4_discovered': fresh,
           'public_ipv6_discovered': false,
         },
       },
@@ -722,6 +722,9 @@ void main() {
     expect(text, contains('network report updated during this test'));
     expect(text, contains('cached; no new report observed during this test'));
     expect(text, contains('across all paths (includes relay)'));
+    expect(text, contains('Known peer IP addresses in transport cache: 2'));
+    expect(text, contains('cache count does not measure address exchange'));
+    expect(text, contains('Discovery responded, but no public IP was found'));
     expect(
       text,
       contains('Zero observed paths does not prove no attempts were made'),

@@ -455,6 +455,14 @@ void appendDiagnosticObservation(List<String> lines, String label, Map side) {
   ]) {
     lines.add('• ${observed(check.$2)} ${check.$1}');
   }
+  if (n != null &&
+      (n['udp_v4'] == true || n['udp_v6'] == true) &&
+      n['public_ipv4_discovered'] == false &&
+      n['public_ipv6_discovered'] == false) {
+    lines.add(
+      '• Discovery responded, but no public IP was found. A discovery server behind the same router can return a private LAN address.',
+    );
+  }
   if (n?['mapping_varies'] == true) {
     lines.add(
       '• Destination-dependent NAT can make direct connections harder.',
@@ -467,9 +475,12 @@ void appendDiagnosticObservation(List<String> lines, String label, Map side) {
   }
   if (side.containsKey('peer_ip_candidates')) {
     lines.add(
-      '• Known direct IP candidates for the peer: ${side['peer_ip_candidates'] ?? "unavailable"}',
+      '• Known peer IP addresses in transport cache: ${side['peer_ip_candidates'] ?? "unavailable"}',
     );
   }
+  lines.add(
+    '• Hole-punch candidate list: unavailable in the transport API; cache count does not measure address exchange.',
+  );
   if (p != null) {
     lines.add(
       '• Direct paths seen: ${p['direct_paths_seen']} · closed: ${p['direct_paths_closed']}',

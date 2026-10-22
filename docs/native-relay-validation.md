@@ -140,3 +140,33 @@ their own keys, authority state and local backend, and the tablet connects with
 the opposite host's agent stopped. Enable it with `WISPNET_SSH_RELAY_HOST` alongside
 `WISPNET_ANDROID_RELAY_TEST=1`. Its documented SSH/USB relay forwarding keeps the
 orchestration computer powered on; it is not a cloud deployment or APK test.
+
+### Owner-local connection tracing
+
+For a running installed node, capture its last authenticated incoming connection
+per approved peer without loading an identity into a second endpoint:
+
+```sh
+printf '%s\n' '{"op":"transport_status"}' | python3 scripts/node_request.py --config "$HOME/.config/wispnet-node/host.toml"
+```
+
+Each sample includes its age and connection ID. Short presence/catalog RPCs can
+replace an earlier diagnostic sample, so capture while reproducing the failure.
+Counters belong to that connection and include retransmitted frames. They do not
+contain IP addresses or application payloads. `ADD_ADDRESS` advertisements
+normally flow from server to client; `REACH_OUT` requests flow from client to
+server to coordinate hole punching. Successful advertisement/request exchange
+with unanswered path challenges places the failure after coordination, but does
+not identify which network rejected the packets.
+
+The diagnostic's transport-cache address count is not the QUIC NAT traversal
+candidate list. In particular, a zero cache count does not establish that no
+addresses were advertised or that no hole punching was attempted.
+
+A successful UDP discovery response does not imply a public address was found.
+When the discovery server and endpoint sit behind the same router, hairpin NAT
+can make the server observe a private LAN address. Such an address is usable on
+the LAN but cannot advertise an Internet route to a cellular peer. The public-IP
+checks reject private, loopback and other special-use address ranges. Internet
+reachability needs an observation from outside that NAT, a working router port
+mapping, or an explicitly configured public address backed by a UDP forward.

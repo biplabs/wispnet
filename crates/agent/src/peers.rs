@@ -158,6 +158,7 @@ pub fn transport(
 ) -> Option<TransportConfig> {
     configured.cloned().or_else(|| {
         saved.map(|saved| TransportConfig {
+            discovery_relay_url: None,
             relay_url: Some(saved.relay_url.clone()),
             relay_only: false,
             relay_ca_file: None,

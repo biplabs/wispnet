@@ -32,8 +32,11 @@ def main():
             started=event(relay,relay.stdout,'started');assert started['role']=='packet_relay'
             # Complete a certificate-verified QUIC address discovery exchange,
             # rather than treating a UDP listener as connectivity proof.
-            run([ROOT/'target/debug/examples/relay_discovery_probe',
-                 f'https://127.0.0.1:{port}',str(udp_port),certificate])
+            discovery=json.loads(run([ROOT/'target/debug/examples/relay_discovery_probe',
+                 '--bind-addr','127.0.0.1:0',
+                 f'https://127.0.0.1:{port}',str(udp_port),certificate]).stdout)
+            assert discovery['network_report']['udp_v4']
+            assert not discovery['network_report']['public_ipv4_discovered'], 'loopback QAD is not a public address'
             context=ssl.create_default_context(cafile=str(certificate))
             with urllib.request.urlopen(f'https://127.0.0.1:{port}/ping',context=context,timeout=5) as response:
                 assert response.status==200
