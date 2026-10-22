@@ -529,22 +529,30 @@ class _ConnectionDiagnosticsState extends State<ConnectionDiagnostics> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            TextButton.icon(
-              onPressed: running ? null : run,
-              icon: const Icon(Icons.network_check),
-              label: Text(running ? 'Testing connections…' : 'Run again'),
+            Row(
+              children: [
+                Expanded(
+                  child: TextButton.icon(
+                    onPressed: running ? null : run,
+                    icon: const Icon(Icons.network_check),
+                    label: Text(running ? 'Testing…' : 'Run again'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextButton.icon(
+                    onPressed: report.isEmpty
+                        ? null
+                        : () => Clipboard.setData(ClipboardData(text: report)),
+                    icon: const Icon(Icons.copy),
+                    label: const Text('Copy report'),
+                  ),
+                ),
+              ],
             ),
             if (report.isNotEmpty) ...[
+              const SizedBox(height: 8),
               SelectableText(report),
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton.icon(
-                  onPressed: () =>
-                      Clipboard.setData(ClipboardData(text: report)),
-                  icon: const Icon(Icons.copy),
-                  label: const Text('Copy report'),
-                ),
-              ),
             ],
           ],
         ),
