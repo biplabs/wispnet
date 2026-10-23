@@ -10,16 +10,15 @@ import 'backend.dart';
 class DesktopBackend implements WispnetBackend {
   DesktopBackend({this.helper, this.python}) {
     shell.setMethodCallHandler((call) async {
-      if (call.method == 'toggle') {
-        final state = await invoke('snapshot');
-        await invoke('setAccess', {'enabled': state['enabled'] != true});
-        await invoke('snapshot');
+      if (call.method == 'exit') {
+        await invoke('setAccess', {'enabled': false});
       }
     });
   }
   static const shell = MethodChannel('app.wispnet/desktop');
   final String? helper, python;
   Future<Process>? _starting;
+  Future<void>? _startup;
   final _pending = <int, Completer<Map<String, dynamic>>>{};
   int _sequence = 0;
 
@@ -93,6 +92,9 @@ class DesktopBackend implements WispnetBackend {
     Map<String, dynamic> arguments = const {},
   ]) async {
     final process = await (_starting ??= _start());
+    if (method == 'snapshot') {
+      await (_startup ??= invoke('startDesktop').then((_) {}));
+    }
     final id = ++_sequence;
     final result = Completer<Map<String, dynamic>>();
     _pending[id] = result;

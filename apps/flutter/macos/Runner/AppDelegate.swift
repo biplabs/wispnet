@@ -5,17 +5,16 @@ import FlutterMacOS
 class AppDelegate: FlutterAppDelegate {
   private var item: NSStatusItem?
   private let status = NSMenuItem(title: "Wispnet", action: nil, keyEquivalent: "")
-  private let toggle = NSMenuItem(title: "Offline", action: #selector(toggleNode), keyEquivalent: "")
+  private let menu = NSMenu()
   override func applicationDidFinishLaunching(_ notification: Notification) {
     item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     item?.button?.title = "W"
-    let menu = NSMenu()
     menu.addItem(status)
-    menu.addItem(withTitle: "Show Wispnet", action: #selector(reveal), keyEquivalent: "")
-    menu.addItem(toggle)
-    menu.addItem(withTitle: "Quit Wispnet (node keeps running)", action: #selector(quit), keyEquivalent: "q")
+    menu.addItem(withTitle: "Exit", action: #selector(quit), keyEquivalent: "q")
     for entry in menu.items { entry.target = self }
-    item?.menu = menu
+    item?.button?.target = self
+    item?.button?.action = #selector(trayClicked)
+    item?.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
     if CommandLine.arguments.contains("--background") || CommandLine.arguments.contains("--tray") {
       mainFlutterWindow?.orderOut(nil)
       NSApp.setActivationPolicy(.accessory)
@@ -24,11 +23,12 @@ class AppDelegate: FlutterAppDelegate {
   func updateStatus(_ args: [String: Any]) {
     status.title = args["text"] as? String ?? "Wispnet"
     item?.button?.toolTip = status.title
-    toggle.title = args["online"] as? Bool == true ? "Online" : "Offline"
   }
-  @objc private func toggleNode() {
-    (mainFlutterWindow as? MainFlutterWindow)?.shell?.invokeMethod("toggle", arguments: nil) { result in
-      if result is FlutterError { self.reveal() }
+  @objc private func trayClicked() {
+    if NSApp.currentEvent?.type == .rightMouseUp, let button = item?.button {
+      menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.minY), in: button)
+    } else {
+      reveal()
     }
   }
   @objc private func reveal() {
@@ -36,7 +36,19 @@ class AppDelegate: FlutterAppDelegate {
     mainFlutterWindow?.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
   }
-  @objc private func quit() { NSApp.terminate(nil) }
+  @objc private func quit() {
+    guard let shell = (mainFlutterWindow as? MainFlutterWindow)?.shell else { return }
+    shell.invokeMethod("exit", arguments: nil) { result in
+      if result is FlutterError || (result as? NSObject) == FlutterMethodNotImplemented {
+        self.reveal()
+        let alert = NSAlert()
+        alert.messageText = "Could not stop Wispnet. Please try again."
+        alert.runModal()
+      } else {
+        NSApp.terminate(nil)
+      }
+    }
+  }
   override func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
     reveal(); return true
   }

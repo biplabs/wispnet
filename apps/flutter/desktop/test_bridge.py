@@ -44,6 +44,18 @@ class BridgeTests(unittest.TestCase):
         self.addCleanup(patch.stopall)
         self.bridge = module.Bridge(self.config)
 
+    def test_desktop_start_and_exit_control_node_and_propagate_stop_failure(self):
+        with patch.object(self.bridge, 'lifecycle') as lifecycle:
+            self.bridge.dispatch('startDesktop', {})
+            lifecycle.assert_called_once_with(True)
+            lifecycle.reset_mock()
+            self.bridge.dispatch('setAccess', {'enabled': False})
+            lifecycle.assert_called_once_with(False)
+            lifecycle.side_effect = ValueError('Cannot stop node')
+            with self.assertRaisesRegex(ValueError, 'Cannot stop node'):
+                self.bridge.dispatch('setAccess', {'enabled': False})
+        self.assertNotIn({'op': 'enable'}, self.calls)
+
     def test_upgrade_preserves_private_order_names_and_cache_without_trusting_cache(self):
         self.bridge.dispatch('saveOrder', dict(group='machines', ids=[PEER, OWN]))
         self.bridge.dispatch('renameHost', dict(host=PEER, name='My server'))

@@ -199,6 +199,9 @@ class Bridge:
         return {}
 
     def dispatch(self, method, args):
+        if method == 'startDesktop':
+            self.lifecycle(True)
+            return {}
         if method == 'snapshot':
             return self.snapshot()
         if method == 'takeInvitation':

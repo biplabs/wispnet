@@ -10,9 +10,7 @@ struct _MyApplication {
   FlMethodChannel* channel;
   AppIndicator* tray;
   GtkWidget* status;
-  GtkWidget* toggle;
   gboolean background;
-  gboolean online;
 };
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 
@@ -21,20 +19,29 @@ static void show_window(GtkMenuItem*, gpointer data) {
   gtk_widget_show(GTK_WIDGET(self->window));
   gtk_window_present(self->window);
 }
-static void toggle_finished(GObject* source, GAsyncResult* result, gpointer data) {
+static void tray_activate(AppIndicator*, gint, gint, gpointer data) {
+  show_window(nullptr, data);
+}
+static void exit_finished(GObject* source, GAsyncResult* result, gpointer data) {
   MyApplication* self = MY_APPLICATION(data);
   g_autoptr(GError) error = nullptr;
   g_autoptr(FlMethodResponse) response = fl_method_channel_invoke_method_finish(
       FL_METHOD_CHANNEL(source), result, &error);
-  if (error || !FL_IS_METHOD_SUCCESS_RESPONSE(response)) show_window(nullptr, self);
+  if (error || !FL_IS_METHOD_SUCCESS_RESPONSE(response)) {
+    show_window(nullptr, self);
+    GtkWidget* dialog = gtk_message_dialog_new(self->window, GTK_DIALOG_MODAL,
+        GTK_MESSAGE_ERROR, GTK_BUTTONS_CLOSE, "Could not stop Wispnet. Please try again.");
+    g_signal_connect_swapped(dialog, "response", G_CALLBACK(gtk_widget_destroy), dialog);
+    gtk_widget_show(dialog);
+  } else {
+    g_application_quit(G_APPLICATION(self));
+  }
   g_object_unref(self);
 }
-static void toggle_node(GtkMenuItem*, gpointer data) {
-  MyApplication* self = MY_APPLICATION(data);
-  fl_method_channel_invoke_method(self->channel, "toggle", nullptr, nullptr, toggle_finished, g_object_ref(self));
-}
 static void quit_app(GtkMenuItem*, gpointer data) {
-  g_application_quit(G_APPLICATION(data));
+  MyApplication* self = MY_APPLICATION(data);
+  fl_method_channel_invoke_method(self->channel, "exit", nullptr, nullptr,
+      exit_finished, g_object_ref(self));
 }
 static gboolean hide_window(GtkWidget* window, GdkEvent*, gpointer) {
   gtk_widget_hide(window);
@@ -47,10 +54,7 @@ static void shell_call(FlMethodChannel*, FlMethodCall* call, gpointer data) {
   MyApplication* self = MY_APPLICATION(data);
   if (strcmp(fl_method_call_get_name(call), "status") == 0) {
     FlValue* args = fl_method_call_get_args(call);
-    FlValue* enabled = fl_value_lookup_string(args, "online");
     FlValue* text = fl_value_lookup_string(args, "text");
-    self->online = enabled && fl_value_get_bool(enabled);
-    gtk_menu_item_set_label(GTK_MENU_ITEM(self->toggle), self->online ? "Online" : "Offline");
     gtk_menu_item_set_label(GTK_MENU_ITEM(self->status), text ? fl_value_get_string(text) : "Wispnet");
     app_indicator_set_title(self->tray, text ? fl_value_get_string(text) : "Wispnet");
     fl_method_call_respond_success(call, nullptr, nullptr);
@@ -82,13 +86,7 @@ static void my_application_activate(GApplication* application) {
   self->status = gtk_menu_item_new_with_label("Wispnet");
   gtk_widget_set_sensitive(self->status, FALSE);
   gtk_menu_shell_append(GTK_MENU_SHELL(menu), self->status);
-  GtkWidget* show = gtk_menu_item_new_with_label("Show Wispnet");
-  g_signal_connect(show, "activate", G_CALLBACK(show_window), self);
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), show);
-  self->toggle = gtk_menu_item_new_with_label("Offline");
-  g_signal_connect(self->toggle, "activate", G_CALLBACK(toggle_node), self);
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), self->toggle);
-  GtkWidget* quit = gtk_menu_item_new_with_label("Quit Wispnet (node keeps running)");
+  GtkWidget* quit = gtk_menu_item_new_with_label("Exit");
   g_signal_connect(quit, "activate", G_CALLBACK(quit_app), self);
   gtk_menu_shell_append(GTK_MENU_SHELL(menu), quit);
   gtk_widget_show_all(menu);
@@ -97,6 +95,7 @@ static void my_application_activate(GApplication* application) {
   g_autofree gchar* icon = g_build_filename(directory, "icon.png", nullptr);
   self->tray = APP_INDICATOR(g_object_new(APP_INDICATOR_TYPE, "id", "wispnet",
       "icon-name", icon, "category", "ApplicationStatus", nullptr));
+  g_signal_connect(self->tray, "activate", G_CALLBACK(tray_activate), self);
   app_indicator_set_status(self->tray, APP_INDICATOR_STATUS_ACTIVE);
   app_indicator_set_menu(self->tray, GTK_MENU(menu));
   g_signal_connect_swapped(view, "first-frame", G_CALLBACK(first_frame_cb), self);
