@@ -110,11 +110,21 @@ class DesktopBackend implements WispnetBackend {
       },
     );
     if (method == 'snapshot') {
+      final hosts = (reply['hosts'] as Map?) ?? {};
+      final onlinePeers = reply['enabled'] == true
+          ? hosts.entries.where((entry) {
+              final machine = Machine(
+                entry.key as String,
+                (entry.value as Map).cast<String, dynamic>(),
+              );
+              return entry.key != reply['peer'] && machine.online;
+            }).length
+          : 0;
       try {
         await shell.invokeMethod<void>('status', {
           'online': reply['enabled'] == true,
           'text':
-              'Wispnet · ${reply['activeClients'] ?? 0} active · ${reply['pendingRequests'] ?? 0} requests · Relay: ${reply['relay'] ?? 'offline'}',
+              '$onlinePeers peers online · ${reply['activeClients'] ?? 0} active · ${reply['pendingRequests'] ?? 0} requests · Relay: ${reply['relay'] ?? 'offline'}',
         });
       } on MissingPluginException {
         /* Unit tests have no native shell. */
