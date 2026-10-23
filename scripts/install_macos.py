@@ -96,7 +96,7 @@ def main():
     staged = app.with_name("Wispnet.installing.app")
     if staged.exists():
         shutil.rmtree(staged)
-    shutil.copytree(app_source, staged)
+    shutil.copytree(app_source, staged, symlinks=True)
     if app.exists():
         old = app.with_name("Wispnet.previous.app")
         if old.exists():
@@ -157,7 +157,7 @@ def main():
         "LSMinimumSystemVersion": "13.0", "NSHighResolutionCapable": True,
         "WispnetStateDirectory": str(state),
     })
-    run("codesign", "--force", "--sign", "-", app)
+    run("codesign", "--force", "--deep", "--sign", "-", app)
     agents = home / "Library/LaunchAgents"
     agents.mkdir(parents=True, exist_ok=True)
     logs = home / "Library/Logs/Wispnet"

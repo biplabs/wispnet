@@ -19,6 +19,9 @@ import time
 import tomllib
 from urllib.parse import urlsplit
 
+# Keep the installed, signed application bundle unchanged when importing helpers.
+sys.dont_write_bytecode = True
+
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 sys.path.insert(0, str(ROOT / 'apps/node/desktop') if (ROOT / 'apps/node/desktop').exists() else str(HERE))
