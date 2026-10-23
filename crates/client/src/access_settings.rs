@@ -16,15 +16,18 @@ pub struct ServicePort {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    /// One loopback HTTP port for registry and all services. The field name is
+    /// retained for owner-API and saved-settings compatibility.
     pub registry_port: u16,
     /// Legacy preference retained for saved-settings compatibility; all websites are allowed.
     pub allowed_origins: Vec<String>,
+    /// Legacy per-service preferences, retained only to read older settings.
     pub service_ports: Vec<ServicePort>,
 }
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            registry_port: 18400,
+            registry_port: 11840,
             allowed_origins: vec![],
             service_ports: vec![],
         }
@@ -51,13 +54,12 @@ impl Settings {
         }
         for (i, route) in self.service_ports.iter().enumerate() {
             if route.port < 1024
-                || route.port == self.registry_port
                 || !wispnet_core::protocol::valid_service_id(&route.service)
-                || self.service_ports[..i].iter().any(|r| {
-                    r.port == route.port || (r.host == route.host && r.service == route.service)
-                })
+                || self.service_ports[..i]
+                    .iter()
+                    .any(|r| r.host == route.host && r.service == route.service)
             {
-                return Err("Service ports must be unique, between 1024 and 65535, and different from the registry port".into());
+                return Err("Invalid legacy service port preference".into());
             }
         }
         Ok(())
@@ -115,7 +117,7 @@ mod tests {
     use super::*;
     use std::os::unix::fs::{PermissionsExt, symlink};
     #[test]
-    fn rejects_collisions_unsafe_origins_and_unsafe_files() {
+    fn shared_ports_accept_legacy_preferences_but_reject_unsafe_settings() {
         let host = wispnet_core::identity::SecretKey::generate().public();
         let mut settings = Settings::default();
         settings.service_ports.push(ServicePort {
@@ -123,13 +125,15 @@ mod tests {
             service: "llama".into(),
             port: settings.registry_port,
         });
-        assert!(settings.validate().is_err());
+        assert!(settings.validate().is_ok());
         settings.service_ports[0].port = 18401;
         settings.service_ports.push(ServicePort {
             host,
             service: "other".into(),
             port: 18401,
         });
+        assert!(settings.validate().is_ok());
+        settings.service_ports[1].service = "llama".into();
         assert!(settings.validate().is_err());
         settings.service_ports.pop();
         for origin in [

@@ -3,6 +3,12 @@ import FlutterMacOS
 
 @main
 class AppDelegate: FlutterAppDelegate {
+  private var links: [String] = []
+  func takeLink() -> String? { links.isEmpty ? nil : links.removeFirst() }
+  override func application(_ application: NSApplication, open urls: [URL]) {
+    for url in urls where url.scheme == "wispnet" && url.absoluteString.count <= 256 && links.count < 16 { links.append(url.absoluteString) }
+    reveal()
+  }
   private var item: NSStatusItem?
   private let status = NSMenuItem(title: "Wispnet", action: nil, keyEquivalent: "")
   private let menu = NSMenu()

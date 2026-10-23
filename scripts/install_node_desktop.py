@@ -201,13 +201,19 @@ applications.mkdir(parents=True, exist_ok=True)
 (applications / "wispnet.desktop").write_text(
     '[Desktop Entry]\nType=Application\nName=Wispnet\nComment=Your services and connected devices\nExec="'
     + str(binpath)
-    + '"\nIcon='
+    + '" %u\nIcon='
     + str(destination / "icon.png")
-    + "\nCategories=Network;\nTerminal=false\n"
+    + "\nCategories=Network;\nTerminal=false\nMimeType=x-scheme-handler/wispnet;\n"
 )
 shutil.copy2(
     ROOT / "deploy/node/wispnet-desktop.service", units / "wispnet-desktop.service"
 )
+# Make the custom scheme discoverable to browser/desktop launchers immediately.
+if updater := shutil.which("update-desktop-database"):
+    subprocess.run([updater, str(applications)], check=True)
+if not args.no_start and (mime := shutil.which("xdg-mime")):
+    subprocess.run([mime, "default", "wispnet.desktop", "x-scheme-handler/wispnet"], check=True)
+
 if args.no_start:
     print("Installed desktop files; services were not enabled or started.")
     raise SystemExit(0)

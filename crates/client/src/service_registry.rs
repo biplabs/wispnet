@@ -82,6 +82,11 @@ impl Client {
         }
         let addresses = self.gateway.settings(self).await?;
         for service in &mut services {
+            service["link"] = json!(format!(
+                "wispnet://{}/{}",
+                service["host_id"].as_str().unwrap_or(""),
+                service["service_id"].as_str().unwrap_or("")
+            ));
             service["url"] = addresses["routes"]
                 .as_array()
                 .and_then(|routes| {
@@ -166,7 +171,9 @@ impl Client {
         let url = self
             .open_route(&json!({"host":host,"service":id,"incarnation":incarnation}))
             .await?;
-        Ok(json!({"api_version":1,"host_id":host,"service_id":id,"url":url}))
+        Ok(
+            json!({"api_version":1,"host_id":host,"service_id":id,"link":format!("wispnet://{host}/{id}"),"url":url}),
+        )
     }
 }
 pub(crate) async fn start(client: Arc<Client>, port: u16) -> Result<JoinHandle<()>, String> {
@@ -174,11 +181,11 @@ pub(crate) async fn start(client: Arc<Client>, port: u16) -> Result<JoinHandle<(
         format!("Registry port {port} unavailable; choose another port in Access settings")
     })?;
     Ok(tokio::spawn(async move {
-        let slots = Arc::new(tokio::sync::Semaphore::new(8));
+        let slots = client.gateway.connections.clone();
         let mut tasks = tokio::task::JoinSet::new();
         loop {
             tokio::select! {
-                accepted=listener.accept()=>{let Ok((socket,_))=accepted else {break};let Ok(permit)=slots.clone().try_acquire_owned() else {continue};let c=client.clone();tasks.spawn(async move {let _permit=permit;let _=tokio::time::timeout(Duration::from_secs(25),handle(c,socket,port)).await;});},
+                accepted=listener.accept()=>{let Ok((socket,_))=accepted else {break};let Ok(permit)=slots.clone().try_acquire_owned() else {continue};let c=client.clone();tasks.spawn(async move {let _permit=permit;let _=handle(c,socket,port).await;});},
                 _=tasks.join_next(),if !tasks.is_empty()=>{}
             }
         }
@@ -195,14 +202,21 @@ async fn handle(client: Arc<Client>, mut socket: TcpStream, port: u16) -> Result
         format!("127.0.0.1:{port}"),
     ];
     if !authorities.iter().any(|a| request.safe(a)) {
-        return response(
-            &mut socket,
-            "421 Misdirected Request",
-            "Unknown registry authority",
-            "",
-        )
-        .await;
+        return client.gateway.handle(socket, request).await;
     }
+    // Registry bodies stay bounded; service streams have their own deadlines.
+    tokio::time::timeout(
+        Duration::from_secs(25),
+        handle_registry(client, socket, request),
+    )
+    .await
+    .map_err(|_| ())?
+}
+async fn handle_registry(
+    client: Arc<Client>,
+    mut socket: TcpStream,
+    request: crate::gateway::Request,
+) -> Result<(), ()> {
     let settings = Settings::load(&client.state).map_err(|_| ())?;
     let cors = if let Some(origin) = request.allowed_website(&settings) {
         format!("Access-Control-Allow-Origin: {origin}\r\nVary: Origin\r\n")
@@ -249,6 +263,20 @@ async fn handle(client: Arc<Client>, mut socket: TcpStream, port: u16) -> Result
             let mut bytes = vec![0; length as usize];
             socket.read_exact(&mut bytes).await.map_err(|_| ())?;
             match serde_json::from_slice::<Value>(&bytes) {
+                Ok(v) if v.get("link").is_some() => {
+                    match v["link"]
+                        .as_str()
+                        .ok_or("Invalid Wispnet link")
+                        .and_then(wispnet_core::service_link::ServiceLink::parse)
+                    {
+                        Ok(link) => {
+                            client
+                                .resolve_service(&json!({"host":link.host,"service":link.service}))
+                                .await
+                        }
+                        Err(error) => Err(error.into()),
+                    }
+                }
                 Ok(v) => {
                     client
                         .resolve_service(&json!({"host":v["host_id"],"service":v["service_id"]}))
@@ -293,6 +321,166 @@ mod tests {
         let mut reply = String::new();
         socket.read_to_string(&mut reply).await.unwrap();
         reply
+    }
+    #[tokio::test]
+    async fn shared_listener_dispatches_services_and_links_without_cross_routing() {
+        use wispnet_registry::host::{self, Authority, Mutation};
+        let state = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let key = wispnet_core::identity::SecretKey::generate();
+        let own = key.public();
+        host::initialize(state.path(), own).unwrap();
+        let (mut store, owner) = host::owner_store(state.path(), own).unwrap();
+        let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut servers = vec![];
+        for (revision, id) in ["gike", "llama"].into_iter().enumerate() {
+            let backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            store
+                .host_mutate(
+                    own,
+                    &owner,
+                    Mutation::Service {
+                        expected_revision: revision as u64,
+                        id: id.into(),
+                        backend: backend.local_addr().unwrap(),
+                        allow: vec![],
+                        display_name: None,
+                        kind: None,
+                    },
+                )
+                .unwrap();
+            let hits = hits.clone();
+            servers.push(tokio::spawn(async move {
+                while let Ok((mut socket, _)) = backend.accept().await {
+                    headers(&mut socket).await.unwrap();
+                    hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    socket
+                        .write_all(
+                            format!(
+                                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{id}",
+                                id.len()
+                            )
+                            .as_bytes(),
+                        )
+                        .await
+                        .unwrap();
+                }
+            }));
+        }
+        let config = serde_json::from_value(json!({"bind_addr":"127.0.0.1:0"})).unwrap();
+        let endpoint = wispnet_agent::tunnel::bind_configured_client(&key, Some(&config))
+            .await
+            .unwrap();
+        let authority = Authority::open(state.path(), own).unwrap();
+        authority.set_device_id("j-strix").unwrap();
+        let client = Client::from_endpoint(endpoint, key, state.path().into(), config, authority);
+        let port = unused_port();
+        Settings {
+            registry_port: port,
+            ..Default::default()
+        }
+        .save(state.path())
+        .unwrap();
+        client.command(&json!({"op":"enable"})).await.unwrap();
+        async fn fetch(port: u16, authority: &str) -> String {
+            let mut socket = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+            socket
+                .write_all(
+                    format!("GET / HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n")
+                        .as_bytes(),
+                )
+                .await
+                .unwrap();
+            let mut reply = String::new();
+            socket.read_to_string(&mut reply).await.unwrap();
+            reply
+        }
+        let gike = format!("j-strix-{}-gike.localhost:{port}", &own.to_string()[..12]);
+        let llama = format!("j-strix-{}-llama.localhost:{port}", &own.to_string()[..12]);
+        // Opening the app's online access is sufficient; no tile or resolve first.
+        let (a, b) = tokio::join!(fetch(port, &gike), fetch(port, &llama));
+        assert!(a.ends_with("gike"), "{a}");
+        assert!(b.ends_with("llama"), "{b}");
+        let link = format!("wispnet://{own}/gike");
+        let resolved = client
+            .command(&json!({"op":"resolve_link","link":link}))
+            .await
+            .unwrap();
+        assert_eq!(resolved["url"], format!("http://{gike}/"));
+        let registry = call(
+            port,
+            "POST",
+            "/v1/resolve",
+            "Content-Type: application/json\r\n",
+            &json!({"link":link}).to_string(),
+        )
+        .await;
+        assert!(registry.starts_with("HTTP/1.1 200"));
+        assert!(registry.contains(&format!("http://{gike}/")));
+        assert!(
+            fetch(port, &format!("unknown.localhost:{port}"))
+                .await
+                .starts_with("HTTP/1.1 421")
+        );
+        assert!(
+            fetch(port, &format!("{gike}\r\nHost: {llama}"))
+                .await
+                .starts_with("HTTP/1.1 421")
+        );
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 2);
+        let changed = unused_port();
+        client
+            .gateway
+            .configure(
+                client.clone(),
+                Settings {
+                    registry_port: changed,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let moved = client
+            .command(&json!({"op":"resolve_link","link":link}))
+            .await
+            .unwrap();
+        assert_eq!(
+            moved["url"],
+            format!(
+                "http://{}/",
+                gike.replace(&format!(":{port}"), &format!(":{changed}"))
+            )
+        );
+        assert!(TcpStream::connect(("127.0.0.1", port)).await.is_err());
+        store
+            .host_mutate(
+                own,
+                &owner,
+                Mutation::Remove {
+                    expected_revision: 2,
+                    id: "gike".into(),
+                },
+            )
+            .unwrap();
+        assert!(
+            client
+                .command(&json!({"op":"resolve_link","link":link}))
+                .await
+                .is_err()
+        );
+        assert!(
+            fetch(
+                changed,
+                &llama.replace(&format!(":{port}"), &format!(":{changed}"))
+            )
+            .await
+            .ends_with("llama")
+        );
+        client.gateway.stop().await;
+        client.endpoint.close().await;
+        for server in servers {
+            server.abort();
+        }
     }
     #[tokio::test]
     async fn registry_ports_tokenless_origins_policy_and_lifecycle() {
@@ -347,7 +535,7 @@ mod tests {
             Authority::open(state.path(), own).unwrap(),
         );
         let registry = unused_port();
-        let service_port = unused_port();
+        let service_port = registry;
         let settings = Settings {
             registry_port: registry,
             allowed_origins: vec!["https://chat.example".into()],

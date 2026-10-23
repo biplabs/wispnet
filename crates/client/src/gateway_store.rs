@@ -84,28 +84,27 @@ pub(super) fn readable_hostname(
     system: Option<&str>,
     peer: EndpointId,
     service: &str,
-    saved: &[Binding],
+    _saved: &[Binding],
 ) -> String {
-    let base = format!(
-        "{}-{}-{}",
+    use sha1::{Digest, Sha1};
+    let label = slug(service, "service", 24);
+    let service_label = if label == service {
+        label
+    } else {
+        // Sanitization and truncation must not allocate order-dependent suffixes:
+        // every device derives the same distinct label from the full service ID.
+        let digest: String = Sha1::digest(service.as_bytes())[..4]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        format!("{}--{}", slug(service, "service", 15), &digest[..8])
+    };
+    format!(
+        "{}-{}-{}.localhost",
         slug(system.unwrap_or("system"), "system", 20),
         &peer.to_string()[..12],
-        slug(service, "service", 24)
-    );
-    for suffix in 1..=17 {
-        let candidate = if suffix == 1 {
-            format!("{base}.localhost")
-        } else {
-            format!("{base}-{suffix}.localhost")
-        };
-        if !saved
-            .iter()
-            .any(|b| b.names().any(|name| name == &candidate))
-        {
-            return candidate;
-        }
-    }
-    unreachable!("at most sixteen browser names are reserved")
+        service_label
+    )
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -158,8 +157,7 @@ pub(super) fn load(state: &Path, owner: EndpointId) -> Result<Vec<Binding>, Stri
     }
     for (i, r) in saved.routes.iter().enumerate() {
         if saved.routes[..i].iter().any(|b| {
-            b.port == r.port
-                || b.names().any(|name| r.names().any(|other| other == name))
+            b.names().any(|name| r.names().any(|other| other == name))
                 || (b.peer == r.peer && b.service == r.service)
         }) {
             return Err(error());
@@ -196,44 +194,51 @@ pub(super) fn save(state: &Path, owner: EndpointId, routes: &[Binding]) -> Resul
 mod tests {
     use super::*;
     #[test]
-    fn readable_names_are_bounded_and_resolve_slug_collisions() {
+    fn readable_names_are_deterministic_and_distinguish_transformed_service_ids() {
         let owner = wispnet_core::identity::SecretKey::generate().public();
-        let mut saved = Vec::new();
-        for n in 1..=16 {
-            let name = readable_hostname(Some("J Strix"), owner, "llama", &saved);
-            assert_eq!(
-                name,
-                if n == 1 {
-                    format!("j-strix-{}-llama.localhost", &owner.to_string()[..12])
-                } else {
-                    format!("j-strix-{}-llama-{n}.localhost", &owner.to_string()[..12])
-                }
-            );
-            saved.push(Binding {
-                peer: owner,
-                service: format!("service{n}"),
-                incarnation: "a".repeat(64),
-                hostname: name,
-                port: 49152 + n,
-                aliases: vec![],
-            });
-        }
+        let name = readable_hostname(Some("J Strix"), owner, "llama", &[]);
         assert_eq!(
-            readable_hostname(Some("j-strix"), owner, "llama", &saved),
-            format!("j-strix-{}-llama-17.localhost", &owner.to_string()[..12])
+            name,
+            format!("j-strix-{}-llama.localhost", &owner.to_string()[..12])
         );
-        for name in ["", "中文", "../../example.com", &"A".repeat(256)] {
+        let saved = vec![Binding {
+            peer: owner,
+            service: "llama".into(),
+            incarnation: "a".repeat(64),
+            hostname: name.clone(),
+            port: 11840,
+            aliases: vec![],
+        }];
+        assert_eq!(
+            readable_hostname(Some("J Strix"), owner, "llama", &saved),
+            name
+        );
+        let transformed = readable_hostname(Some("J Strix"), owner, "model.v1", &[]);
+        let mimic = transformed
+            .strip_prefix(&format!("j-strix-{}-", &owner.to_string()[..12]))
+            .unwrap()
+            .strip_suffix(".localhost")
+            .unwrap();
+        assert_ne!(
+            transformed,
+            readable_hostname(Some("J Strix"), owner, mimic, &[])
+        );
+        assert_ne!(
+            readable_hostname(Some("J Strix"), owner, "model.v1", &[]),
+            readable_hostname(Some("J Strix"), owner, "model_v1", &[])
+        );
+        assert_ne!(
+            readable_hostname(None, owner, &format!("{}a", "x".repeat(40)), &[]),
+            readable_hostname(None, owner, &format!("{}b", "x".repeat(40)), &[])
+        );
+        for label in ["", "中文", "../../example.com", &"A".repeat(256)] {
             assert!(valid_hostname(&readable_hostname(
-                Some(name),
+                Some(label),
                 owner,
                 &"s".repeat(64),
                 &[]
             )));
         }
-        assert_eq!(
-            readable_hostname(None, owner, "llama", &[]),
-            format!("system-{}-llama.localhost", &owner.to_string()[..12])
-        );
     }
     #[test]
     fn address_records_reject_corruption_duplicates_unsafe_permissions_and_symlinks() {

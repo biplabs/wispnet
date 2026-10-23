@@ -11,6 +11,7 @@ struct _MyApplication {
   AppIndicator* tray;
   GtkWidget* status;
   gboolean background;
+  GQueue* links;
 };
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 
@@ -52,7 +53,11 @@ static void first_frame_cb(MyApplication* self, FlView*) {
 }
 static void shell_call(FlMethodChannel*, FlMethodCall* call, gpointer data) {
   MyApplication* self = MY_APPLICATION(data);
-  if (strcmp(fl_method_call_get_name(call), "status") == 0) {
+  if (strcmp(fl_method_call_get_name(call), "takeLink") == 0) {
+    g_autofree gchar* link = static_cast<gchar*>(g_queue_pop_head(self->links));
+    g_autoptr(FlValue) value = link ? fl_value_new_string(link) : fl_value_new_null();
+    fl_method_call_respond_success(call, value, nullptr);
+  } else if (strcmp(fl_method_call_get_name(call), "status") == 0) {
     FlValue* args = fl_method_call_get_args(call);
     FlValue* text = fl_value_lookup_string(args, "text");
     gtk_menu_item_set_label(GTK_MENU_ITEM(self->status), text ? fl_value_get_string(text) : "Wispnet");
@@ -102,6 +107,15 @@ static void my_application_activate(GApplication* application) {
   gtk_widget_realize(GTK_WIDGET(view));
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }
+static void my_application_open(GApplication* application, GFile** files, gint count, const gchar*) {
+  MyApplication* self = MY_APPLICATION(application);
+  for (int i = 0; i < count; ++i) {
+    g_autofree gchar* uri = g_file_get_uri(files[i]);
+    if (g_str_has_prefix(uri, "wispnet://") && strlen(uri) <= 256 && g_queue_get_length(self->links) < 16)
+      g_queue_push_tail(self->links, g_strdup(uri));
+  }
+  g_application_activate(application);
+}
 static gboolean my_application_local_command_line(GApplication* application, gchar*** arguments, int* exit_status) {
   MyApplication* self = MY_APPLICATION(application);
   self->dart_entrypoint_arguments = g_strdupv(*arguments + 1);
@@ -112,7 +126,16 @@ static gboolean my_application_local_command_line(GApplication* application, gch
   if (!g_application_register(application, nullptr, &error)) {
     g_warning("Failed to register: %s", error->message); *exit_status = 1; return TRUE;
   }
-  g_application_activate(application);
+  gboolean opened = FALSE;
+  for (char** arg = *arguments + 1; *arg; ++arg) {
+    if (g_str_has_prefix(*arg, "wispnet://")) {
+      g_autoptr(GFile) file = g_file_new_for_uri(*arg);
+      GFile* files[] = {file};
+      g_application_open(application, files, 1, "");
+      opened = TRUE;
+    }
+  }
+  if (!opened) g_application_activate(application);
   *exit_status = 0;
   return TRUE;
 }
@@ -121,15 +144,17 @@ static void my_application_dispose(GObject* object) {
   g_clear_object(&self->tray);
   g_clear_object(&self->channel);
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
+  if (self->links) { g_queue_free_full(self->links, g_free); self->links = nullptr; }
   G_OBJECT_CLASS(my_application_parent_class)->dispose(object);
 }
 static void my_application_class_init(MyApplicationClass* klass) {
+  G_APPLICATION_CLASS(klass)->open = my_application_open;
   G_APPLICATION_CLASS(klass)->activate = my_application_activate;
   G_APPLICATION_CLASS(klass)->local_command_line = my_application_local_command_line;
   G_OBJECT_CLASS(klass)->dispose = my_application_dispose;
 }
-static void my_application_init(MyApplication*) {}
+static void my_application_init(MyApplication* self) { self->links = g_queue_new(); }
 MyApplication* my_application_new() {
   g_set_prgname("wispnet");
-  return MY_APPLICATION(g_object_new(my_application_get_type(), "application-id", APPLICATION_ID, "flags", G_APPLICATION_DEFAULT_FLAGS, nullptr));
+  return MY_APPLICATION(g_object_new(my_application_get_type(), "application-id", APPLICATION_ID, "flags", G_APPLICATION_HANDLES_OPEN, nullptr));
 }

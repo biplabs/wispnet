@@ -2,26 +2,54 @@ package com.biplabs.wispnet;
 import android.app.*;
 import android.content.*;
 import android.net.*;
-import android.os.IBinder;
+import android.os.*;
+import org.json.*;
 import java.util.concurrent.*;
 
-/** Owns browser access independently of the activity. Never restarts after process death. */
+/** Owns browser access independently of the activity. Runs in a dedicated process; never restarts after process death. */
 public final class AccessService extends Service {
- public static volatile boolean enabled=false;
- public static volatile String networkStatus="Access stopped";
+ public volatile boolean enabled=false;
+ public volatile String networkStatus="Access stopped";
  private final ScheduledExecutorService profileWork=Executors.newSingleThreadScheduledExecutor();
  private final ExecutorService networkWork=Executors.newSingleThreadExecutor();
  private final Object networkLock=new Object();
- private boolean destroyed=false,worker=false,starting=false;
+ private boolean destroyed=false,worker=false,starting=false,requestedOnline=false;
  private long generation=0;
  private boolean interrupted=false;
+ private NetworkController controller;
+ private volatile CompletableFuture<Void> online = new CompletableFuture<>();
+ private final Messenger messenger = new Messenger(new Handler(Looper.getMainLooper(), message -> {
+  if (message.what != 1 || message.replyTo == null || message.sendingUid != android.os.Process.myUid()) return true;
+  int id = message.arg1; Messenger reply = message.replyTo; Bundle data = message.getData();
+  controller.work.execute(() -> {
+   Bundle payload = new Bundle();
+   try {
+    String raw = data.getString("arguments", "{}");
+    if (raw.length() > 131072) throw new Exception("Request too large");
+    String method = data.getString("method", ""); JSONObject args = new JSONObject(raw), result;
+    if ("setAccess".equals(method)) {
+     if (args.getBoolean("enabled")) startAccess().get(30, TimeUnit.SECONDS); else stopAccess();
+     result = new JSONObject().put("enabled", enabled);
+    } else { Native.ensure(this); result = controller.dispatch(method, args); }
+    String encoded = result.toString();
+    if (encoded.length() > 262144) throw new Exception("Response too large");
+    payload.putString("result", encoded);
+   } catch (Exception failure) {
+    if (failure instanceof ExecutionException && failure.getCause() instanceof Exception) failure = (Exception)failure.getCause();
+    payload.putString("error", failure.getMessage() == null ? "Networking operation failed" : failure.getMessage());
+    payload.putString("code", failure instanceof Native.Failure ? ((Native.Failure)failure).code : "operation_failed");
+   }
+   Message response = Message.obtain(null, 1, id, 0); response.setData(payload);
+   try { reply.send(response); } catch (RemoteException windowClosed) {}
+  });
+  return true;
+ }));
  private Network current;
  private ConnectivityManager manager;
  private ConnectivityManager.NetworkCallback callback;
  public void onCreate(){
-  super.onCreate();profileWork.scheduleWithFixedDelay(()->{if(enabled)DeviceProfile.syncAll(this);},5,30,TimeUnit.SECONDS);NotificationManager nm=getSystemService(NotificationManager.class);
+  super.onCreate();controller=new NetworkController(this);profileWork.scheduleWithFixedDelay(()->{if(enabled)DeviceProfile.syncAll(this);},5,30,TimeUnit.SECONDS);NotificationManager nm=getSystemService(NotificationManager.class);
   nm.createNotificationChannel(new NotificationChannel("access","Wispnet browser access",NotificationManager.IMPORTANCE_LOW));
-  startForeground(1,notification("Wispnet starting…"));
   manager=getSystemService(ConnectivityManager.class);current=manager.getActiveNetwork();
   networkStatus=current==null?"No network. Reconnect, then reopen the service.":"Network available";
   callback=new ConnectivityManager.NetworkCallback(){
@@ -39,6 +67,7 @@ public final class AccessService extends Service {
  // Call while holding networkLock. Drain every generation, including a callback
  // arriving during native recovery; coalescing must never lose the final network.
  private void changed(){
+  if (!enabled || !Native.ready) { networkStatus=current==null?"No network. Waiting for a connection…":"Network available"; return; }
   generation++;networkStatus=current==null?"No network. Waiting for a connection…":"Reconnecting…";
   if(worker)return;worker=true;
   networkWork.execute(()->{while(true){long observed;synchronized(networkLock){if(destroyed){worker=false;return;}observed=generation;}
@@ -65,18 +94,45 @@ public final class AccessService extends Service {
  }
 
  public int onStartCommand(Intent intent,int flags,int startId){
-  if(intent!=null&&"stop".equals(intent.getAction())){stopSelf();return START_NOT_STICKY;}
-  synchronized(networkLock){if(destroyed||starting||enabled)return START_NOT_STICKY;starting=true;}
-  networkWork.execute(()->{try{Native.ensure(this);synchronized(networkLock){if(destroyed)return;Native.command("enable");enabled=true;getSystemService(NotificationManager.class).notify(1,notification("Wispnet online"));}}catch(Exception failure){networkStatus="Cannot start browser access";stopSelf();}finally{synchronized(networkLock){starting=false;}}});
-  return START_NOT_STICKY;
+  if(intent!=null&&"stop".equals(intent.getAction())){controller.work.execute(this::stopAccess);return START_NOT_STICKY;}
+  startAccess();return START_NOT_STICKY;
+ }
+ private CompletableFuture<Void> startAccess(){
+  synchronized(networkLock){
+   if(destroyed)return CompletableFuture.failedFuture(new IllegalStateException("Networking stopped"));
+   requestedOnline=true;
+   if(online.isDone()&&!enabled)online=new CompletableFuture<>();
+   if(starting||enabled)return online;
+   starting=true;
+   startForeground(1,notification("Wispnet starting…"));
+   networkWork.execute(()->{
+    try{
+     Native.ensure(this);
+     synchronized(networkLock){
+      if(destroyed||!requestedOnline)return;
+      Native.command("network");
+      Native.command("enable");enabled=true;
+      networkStatus=current==null?"No network. Waiting for a connection…":"Network available";
+      online.complete(null);
+      getSystemService(NotificationManager.class).notify(1,notification("Wispnet online"));
+     }
+    }catch(Exception failure){networkStatus="Cannot start browser access: "+failure.getMessage();online.completeExceptionally(failure);stopAccess();}
+    finally{synchronized(networkLock){starting=false;}}
+   });
+   return online;
+  }
+ }
+ void stopAccess(){
+  synchronized(networkLock){ requestedOnline=false;online.completeExceptionally(new IllegalStateException("Wispnet is offline"));enabled=false; try{if(Native.ready)Native.command("stop");}catch(Exception ignored){} }
+  stopForeground(STOP_FOREGROUND_REMOVE);stopSelf();
  }
  public void onDestroy(){
   enabled=false;synchronized(networkLock){destroyed=true;}
   try{if(callback!=null)manager.unregisterNetworkCallback(callback);}catch(Exception ignored){}
   try{Native.command("stop");}catch(Exception ignored){}
-  profileWork.shutdownNow();networkWork.shutdown();networkStatus="Access stopped. Go online to use your saved service addresses.";
+  controller.close();profileWork.shutdownNow();networkWork.shutdown();networkStatus="Access stopped. Go online to use your saved service addresses.";
   stopForeground(STOP_FOREGROUND_REMOVE);super.onDestroy();
  }
- @Override public void onTimeout(int startId,int fgsType){stopSelf();}
- public IBinder onBind(Intent intent){return null;}
+ @Override public void onTimeout(int startId,int fgsType){stopAccess();}
+ public IBinder onBind(Intent intent){return messenger.getBinder();}
 }

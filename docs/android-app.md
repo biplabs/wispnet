@@ -42,3 +42,28 @@ the retired Java-view test harness is no longer supported.
 
 See [Flutter development and verification](../apps/flutter/README.md),
 [release checks](android-release.md) and [service discovery](android-service-discovery.md).
+
+## Networking process
+
+The Flutter activity is a controller and browser launcher. `AccessService` runs
+in the private `:network` process and owns JNI initialization, the protected
+identity, peer/catalog storage, shared HTTP listener and network recovery.
+`NetworkBridge` uses private, UID-checked Messenger/Binder RPC; the service is not
+exported. UI teardown unbinds only and does not stop an online service.
+All network-owned SharedPreferences are read and written in that one process.
+
+Online access is a user-started `connectedDevice` foreground service with an
+ongoing notification and **Go offline** action. Its declared network permission
+satisfies the connected-device service prerequisite. It does not use a VPN slot
+or the time-limited `dataSync` service type. Play foreground-service declarations
+must describe the actual connected-device use when publishing this update.
+
+Android may still terminate the process, and force-stop ends access. The existing
+`START_NOT_STICKY` policy is retained: process death requires explicit restart;
+UI recreation alone does not create a second endpoint. Binder disconnection fails
+in-flight UI operations without replaying mutations and reconnects on a new service
+binding. Network changes and port changes never replay HTTP requests.
+
+`wispnet://HOST_ID/SERVICE_ID` links are handled by the activity, resolved by the
+network process and opened in the external browser. Ordinary HTTP service traffic
+continues after switching away from the UI while the foreground service is active.

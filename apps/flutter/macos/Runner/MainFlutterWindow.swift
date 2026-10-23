@@ -13,6 +13,7 @@ class MainFlutterWindow: NSWindow {
     RegisterGeneratedPlugins(registry: controller)
     shell = FlutterMethodChannel(name: "app.wispnet/desktop", binaryMessenger: controller.engine.binaryMessenger)
     shell?.setMethodCallHandler { call, result in
+      if call.method == "takeLink" { result((NSApp.delegate as? AppDelegate)?.takeLink()); return }
       guard call.method == "status", let args = call.arguments as? [String: Any] else { result(FlutterMethodNotImplemented); return }
       (NSApp.delegate as? AppDelegate)?.updateStatus(args)
       result(nil)

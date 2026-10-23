@@ -141,6 +141,26 @@ class _WispHomeState extends State<WispHome>
         initializationError = null;
       });
       if (pairingSheet) return;
+      final link = (await backend.invoke('takeLink'))['link'] as String?;
+      if (link != null) {
+        try {
+          final uri = Uri.parse(link);
+          if (uri.scheme != 'wispnet' ||
+              !RegExp(r'^[0-9a-f]{64}$').hasMatch(uri.host) ||
+              uri.userInfo.isNotEmpty ||
+              uri.hasPort ||
+              uri.hasQuery ||
+              uri.hasFragment ||
+              !RegExp(r'^/[a-z0-9][a-z0-9._-]{0,63}$').hasMatch(uri.path)) {
+            throw const FormatException('Invalid Wispnet service link');
+          }
+          await backend.invoke('setAccess', {'enabled': true});
+          final resolved = await backend.invoke('resolveLink', {'link': link});
+          await backend.invoke('launch', {'url': resolved['url']});
+        } catch (error) {
+          notice(message(error));
+        }
+      }
       final invitation = await backend.invoke('takeInvitation');
       final invitationError = invitation['error'] as String?;
       if (invitationError != null) notice(invitationError);
@@ -230,9 +250,7 @@ class _WispHomeState extends State<WispHome>
       }
       if (!mounted || !foreground || generation != launchGeneration) return;
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
-      await backend.invoke('launch', {
-        'url': result['url'],
-      });
+      await backend.invoke('launch', {'url': result['url']});
     } catch (error) {
       notice('Cannot open service: ${message(error)}');
     } finally {

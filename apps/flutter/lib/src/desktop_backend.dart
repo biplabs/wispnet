@@ -91,6 +91,14 @@ class DesktopBackend implements WispnetBackend {
     String method, [
     Map<String, dynamic> arguments = const {},
   ]) async {
+    if (method == 'takeLink') {
+      try {
+        final link = await shell.invokeMethod<String>('takeLink');
+        return link == null ? {} : {'link': link};
+      } on MissingPluginException {
+        return {};
+      }
+    }
     final process = await (_starting ??= _start());
     if (method == 'snapshot') {
       await (_startup ??= invoke('startDesktop').then((_) {}));

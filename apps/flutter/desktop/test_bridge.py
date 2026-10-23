@@ -155,15 +155,16 @@ class BridgeTests(unittest.TestCase):
         with patch.object(self.bridge.api, 'request', side_effect=ValueError('Node socket must be owner-only')):
             with self.assertRaises(ValueError): self.bridge.snapshot()
 
-    def test_settings_preserve_other_routes_and_remove_automatic_override(self):
+    def test_service_settings_change_the_shared_port_and_clear_legacy_overrides(self):
         self.bridge.dispatch('saveSettings', dict(host=PEER, service='web', port=19000))
         saved = self.calls[-1]
         self.assertEqual(saved['op'], 'configure_access')
-        self.assertEqual(saved['settings']['registry_port'], 18355)
-        self.assertEqual(len(saved['settings']['service_ports']), 2)
-        self.bridge.dispatch('saveSettings', dict(host=PEER, service='web', port=0))
-        self.assertEqual(len(self.calls[-1]['settings']['service_ports']), 1)
-        with self.assertRaises(ValueError): self.bridge.dispatch('saveSettings', dict(host=PEER, service='web', port=80))
+        self.assertEqual(saved['settings']['registry_port'], 19000)
+        self.assertEqual(saved['settings']['service_ports'], [])
+        self.assertEqual(self.bridge.dispatch('settings', dict(host=PEER, service='other'))['port'], 19000)
+        for port in [0, 80, 65536]:
+            with self.assertRaises(ValueError):
+                self.bridge.dispatch('saveSettings', dict(host=PEER, service='web', port=port))
 
     def test_unpair_uses_current_revision_and_never_removes_local_machine(self):
         self.bridge.snapshot()

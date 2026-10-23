@@ -227,9 +227,9 @@ so the same label identifies the same source snapshot across machines. Rebuild
 and reinstall after editing or committing to update the displayed identifier.
 Explicit Android release-publishing version overrides remain available.
 
-## Registry and service gateway ports
+## Shared registry and service port
 
-**Settings** configures the local registry port and each known HTTP service's gateway port. The same HTTP API is available on
+**Settings → Wispnet port** configures one loopback HTTP port for the registry and all services (11840 on new installs). HTTP Host headers select each service. The same HTTP API is available on
 Android; see the [registry contract and examples](service-registry.md).
 
 ## Public access

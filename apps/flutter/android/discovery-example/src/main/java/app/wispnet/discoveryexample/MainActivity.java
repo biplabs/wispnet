@@ -22,7 +22,7 @@ public final class MainActivity extends Activity {
   status=new TextView(this);status.setContentDescription("discovery_status");layout.addView(status);
   Button open=new Button(this);open.setText("Resolve service");open.setOnClickListener(v->resolve());layout.addView(open);
   Button again=new Button(this);again.setText("Call saved endpoint");again.setOnClickListener(v->fetch());layout.addView(again);
-  registry=new EditText(this);registry.setHint("Registry URL");registry.setText("http://127.0.0.1:"+getIntent().getIntExtra("registry_port",18400));layout.addView(registry);
+  registry=new EditText(this);registry.setHint("Registry URL");registry.setText("http://127.0.0.1:"+getIntent().getIntExtra("registry_port",11840));layout.addView(registry);
   if(getIntent().getBooleanExtra("resolve",false))resolve();
  }
  private void resolve(){

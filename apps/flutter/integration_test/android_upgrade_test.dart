@@ -17,6 +17,8 @@ void main() {
       final backend = PlatformBackend();
       final before = await backend.invoke('snapshot');
       final originalEnabled = before['enabled'] == true;
+      expect(before['network_pid'], isNot(before['ui_pid']));
+      expect(before['network_pid'], isA<int>());
       final key = GlobalKey();
       Future<void> waitFor(Finder finder) async {
         for (var n = 0; n < 100 && finder.evaluate().isEmpty; n++) {
@@ -59,7 +61,7 @@ void main() {
         }
         expect(find.textContaining(before['name'] as String), findsWidgets);
         await tester.tap(find.byTooltip('Settings'));
-        await waitFor(find.widgetWithText(TextField, 'Registry port'));
+        await waitFor(find.widgetWithText(TextField, 'Wispnet port'));
         await waitFor(find.widgetWithText(FilledButton, 'Save'));
         expect(
           tester

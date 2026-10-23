@@ -2,7 +2,8 @@
 Type=Application
 Name=Wispnet
 Comment=Your services and connected devices
-Exec=wispnet-desktop
+Exec=wispnet-desktop %u
 Icon=wispnet
 Categories=Network;
 Terminal=false
+MimeType=x-scheme-handler/wispnet;

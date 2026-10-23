@@ -280,6 +280,27 @@ class MachineCard extends StatelessWidget {
                 ),
               ),
             ),
+            if (service['kind'] == 'http')
+              IconButton(
+                tooltip: 'Copy Wispnet link for ${service['id']}',
+                onPressed: busy
+                    ? null
+                    : () async {
+                        await Clipboard.setData(
+                          ClipboardData(
+                            text: 'wispnet://${machine.id}/${service['id']}',
+                          ),
+                        );
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Wispnet link copied'),
+                            ),
+                          );
+                        }
+                      },
+                icon: const Icon(Icons.link, size: 20, color: WispColors.cyan),
+              ),
             if (publicEnabled && publicUrl != null && publicUrl.isNotEmpty)
               IconButton(
                 tooltip: 'Copy public URL for ${service['id']}',

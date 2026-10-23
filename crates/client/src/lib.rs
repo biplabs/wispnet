@@ -58,6 +58,25 @@ fn peer(value: &Value) -> Result<EndpointId, String> {
         .map_err(|_| "Invalid host pin".into())
 }
 impl Client {
+    async fn service_host_name(&self, host: EndpointId) -> Result<String, String> {
+        if host == self.endpoint.id() {
+            return self
+                .local_authority
+                .as_ref()
+                .map(|a| a.device_id())
+                .ok_or("Local host unavailable".into());
+        }
+        if self.saved_host(host).await?.is_none() {
+            return Err("Pair with this host first".into());
+        }
+        let connection =
+            wispnet_agent::control::connect_target(&self.endpoint, self.target(host).await?)
+                .await
+                .map_err(|e| e.to_string())?;
+        let result = wispnet_agent::control::device_id_on(&connection, host).await;
+        connection.close(0u32.into(), b"device ID read complete");
+        result.map_err(|e| e.to_string())
+    }
     pub(crate) async fn open_route(self: &Arc<Self>, value: &Value) -> Result<String, String> {
         let host = peer(value)?;
         let id = argument(value, "service")?;
@@ -91,6 +110,7 @@ impl Client {
                 return Err("Service no longer permitted".into());
             }
         }
+        let host_name = self.service_host_name(host).await?;
         let url = self
             .gateway
             .open_named(
@@ -98,7 +118,7 @@ impl Client {
                 host,
                 id.to_owned(),
                 incarnation.to_owned(),
-                value.get("host_name").and_then(Value::as_str),
+                Some(&host_name),
             )
             .await?;
         Ok(url)
@@ -499,19 +519,7 @@ impl Client {
                 Ok(json!({"device_id":id}))
             }
             "host_device_id" => {
-                let host = peer(value)?;
-                if self.saved_host(host).await?.is_none() {
-                    return Err("Pair with this host first".into());
-                }
-                let connection = wispnet_agent::control::connect_target(
-                    &self.endpoint,
-                    self.target(host).await?,
-                )
-                .await
-                .map_err(|e| e.to_string())?;
-                let result = wispnet_agent::control::device_id_on(&connection, host).await;
-                connection.close(0u32.into(), b"device ID read complete");
-                Ok(json!({"device_id": result.map_err(|e|e.to_string())?}))
+                Ok(json!({"device_id":self.service_host_name(peer(value)?).await?}))
             }
             "set_name" => {
                 let host = peer(value)?;
@@ -587,20 +595,35 @@ impl Client {
                 self.gateway.configure(self.clone(), settings).await
             }
             "resolve_service" => self.resolve_service(value).await,
+            "resolve_link" => {
+                let link =
+                    wispnet_core::service_link::ServiceLink::parse(argument(value, "link")?)?;
+                self.resolve_service(&json!({"host":link.host,"service":link.service}))
+                    .await
+            }
             "access_status" => Ok(json!({"enabled":self.gateway.is_enabled()})),
             "enable" => {
+                let _guard = self.gateway.settings_lock.lock().await;
+                let discover = !self.gateway.is_enabled();
                 self.gateway.enable();
                 if let Err(error) = self.gateway.restore(self.clone()).await {
                     self.gateway.stop().await;
                     return Err(error);
                 }
+                if discover {
+                    // Populate permitted routes so a copied HTTP link also works
+                    // before the user opens its tile on this device.
+                    let _ = self.service_list().await;
+                }
                 Ok(json!({"enabled":true}))
             }
             "stop" => {
+                let _guard = self.gateway.settings_lock.lock().await;
                 self.gateway.stop().await;
                 Ok(json!({"enabled":false}))
             }
             "network" => {
+                let _guard = self.gateway.settings_lock.lock().await;
                 let interrupted = self.gateway.interrupt().await;
                 self.endpoint.network_change().await;
                 if self.gateway.is_enabled() {

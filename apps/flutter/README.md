@@ -134,3 +134,9 @@ coverage claim. Bundled Roboto 3.005 (2022) Regular/Medium/Bold are static insta
 of the reference Android system font (weight 400/500/700, width 100, italic 0),
 under the included Apache 2.0 license. Bundling them keeps that typography shared
 across future desktop targets.
+
+Android networking is owned by `AccessService` in `:network`; `NetworkController`
+contains the private native operations and `NetworkBridge` is the UI's Binder
+adapter. The activity never initializes the native client. All platforms use one
+shared HTTP service/registry port, defaulting to 11840 for new settings. See
+`docs/service-registry.md` for migration and stable `wispnet://` links.

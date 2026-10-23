@@ -735,9 +735,8 @@ class _SettingsFormState extends State<SettingsForm> {
 
   Future<void> save() async {
     final raw = port.text.trim();
-    final number = raw.isEmpty && !global ? 0 : int.tryParse(raw);
-    if (number == null ||
-        (number != 0 || global) && (number < 1024 || number > 65535)) {
+    final number = int.tryParse(raw);
+    if (number == null || (number < 1024 || number > 65535)) {
       setState(() => error = 'Port must be between 1024 and 65535.');
       return;
     }
@@ -781,8 +780,8 @@ class _SettingsFormState extends State<SettingsForm> {
       ],
       Text(
         global
-            ? 'Registry port on this device. Changes reconnect active sessions.'
-            : 'Gateway port on this device. Leave blank to keep an automatically assigned port. Changes reconnect active sessions.',
+            ? 'One HTTP port for all Wispnet services and the registry on this device. Default: 11840. Changes reconnect active sessions.'
+            : 'All services share this port on this device. Changing it also changes the registry and every other service URL.',
         style: const TextStyle(color: WispColors.muted),
       ),
       const SizedBox(height: 16),
@@ -792,8 +791,8 @@ class _SettingsFormState extends State<SettingsForm> {
         keyboardType: TextInputType.number,
         decoration: InputDecoration(
           floatingLabelBehavior: FloatingLabelBehavior.always,
-          labelText: global ? 'Registry port' : 'Service gateway port',
-          hintText: global ? null : 'Automatic',
+          labelText: 'Wispnet port',
+          hintText: '11840',
         ),
       ),
       if (address.isNotEmpty)
@@ -822,6 +821,21 @@ class _SettingsFormState extends State<SettingsForm> {
               ),
             ),
           ),
+        ),
+      if (!global)
+        TextButton.icon(
+          onPressed: () async {
+            await Clipboard.setData(
+              ClipboardData(text: 'wispnet://${widget.host}/${widget.service}'),
+            );
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Wispnet link copied')),
+              );
+            }
+          },
+          icon: const Icon(Icons.link),
+          label: const Text('Copy Wispnet link'),
         ),
       if (error != null)
         Padding(

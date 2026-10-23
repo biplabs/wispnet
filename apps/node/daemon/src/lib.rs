@@ -195,6 +195,7 @@ impl State {
             | "configure_public_gateway"
             | "gateway_settings"
             | "configure_access"
+            | "resolve_link"
             | "resolve_service"
             | "unpair"
             | "preview_invitation"

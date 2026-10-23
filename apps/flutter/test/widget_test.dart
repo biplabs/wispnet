@@ -151,6 +151,27 @@ class FakeBackend implements WispnetBackend {
   }
 }
 
+class LinkFake extends FakeBackend {
+  LinkFake(this.link) : super(enabled: false);
+  String? link;
+  @override
+  Future<Map<String, dynamic>> invoke(
+    String method, [
+    Map<String, dynamic> arguments = const {},
+  ]) async {
+    if (method == 'takeLink') {
+      final value = link;
+      link = null;
+      return value == null ? {} : {'link': value};
+    }
+    if (method == 'resolveLink') {
+      calls.add((method, arguments));
+      return {'url': 'http://j-strix-xxx-website.localhost:11840/'};
+    }
+    return super.invoke(method, arguments);
+  }
+}
+
 class DesktopFake extends FakeBackend {
   final ownerCalls = <Map<String, dynamic>>[];
   final status = <String, dynamic>{
@@ -306,6 +327,44 @@ Future<void> screenshot(WidgetTester tester, String name) async {
 }
 
 void main() {
+  testWidgets(
+    'service links enable access and launch the resolved HTTP URL once',
+    (tester) async {
+      final backend = LinkFake('wispnet://$peer/website');
+      await tester.pumpWidget(WispnetApp(backend: backend));
+      for (var n = 0; n < 20; n++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(
+        backend.calls.where((c) => c.$1 == 'resolveLink').single.$2['link'],
+        'wispnet://$peer/website',
+      );
+      expect(
+        backend.calls.where((c) => c.$1 == 'launch').single.$2['url'],
+        'http://j-strix-xxx-website.localhost:11840/',
+      );
+      expect(backend.enabled, true);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+  testWidgets(
+    'malformed service links never enable access or resolve a service',
+    (tester) async {
+      final backend = LinkFake('wispnet://$peer/website?backend=evil');
+      await tester.pumpWidget(WispnetApp(backend: backend));
+      for (var n = 0; n < 20; n++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(
+        backend.calls.where(
+          (c) => ['setAccess', 'resolveLink', 'launch'].contains(c.$1),
+        ),
+        isEmpty,
+      );
+      expect(backend.enabled, false);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
   testWidgets('empty remote card is compact and names the device once', (
     tester,
   ) async {
@@ -802,7 +861,7 @@ void main() {
     await tester.tap(find.byTooltip('Settings'));
     await tester.pumpAndSettle();
     await tester.enterText(
-      find.widgetWithText(TextField, 'Registry port'),
+      find.widgetWithText(TextField, 'Wispnet port'),
       '80',
     );
     await tester.tap(find.widgetWithText(FilledButton, 'Save'));
@@ -810,7 +869,7 @@ void main() {
     expect(find.text('Port must be between 1024 and 65535.'), findsOneWidget);
     expect(backend.calls.where((c) => c.$1 == 'saveSettings'), isEmpty);
     await tester.enterText(
-      find.widgetWithText(TextField, 'Registry port'),
+      find.widgetWithText(TextField, 'Wispnet port'),
       '18401',
     );
     for (final invalid in ['has spaces', 'Uppercase', '-prefix', 'a' * 65]) {
@@ -913,7 +972,7 @@ void main() {
     await tester.tap(find.byTooltip('Settings'));
     await tester.pumpAndSettle();
     expect(find.widgetWithText(TextField, 'Device ID'), findsOneWidget);
-    expect(find.widgetWithText(TextField, 'Registry port'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Wispnet port'), findsOneWidget);
     expect(find.text('Device and browser settings'), findsNothing);
     expect(find.text('Share a service'), findsNothing);
     expect(find.byType(DropdownButton<String>), findsNothing);

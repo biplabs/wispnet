@@ -242,6 +242,8 @@ class Bridge:
             return {}
         if method == 'snapshot':
             return self.snapshot()
+        if method == 'resolveLink':
+            return self.api.request(op='resolve_link', link=args['link'])
         if method == 'takeInvitation':
             return {}
         if method == 'setAccess':
@@ -318,22 +320,17 @@ class Bridge:
             if method == 'settings':
                 if host is None:
                     return {'port': settings['registry_port'], 'url': f"http://registry.wispnet.localhost:{settings['registry_port']}"}
-                row = next((p for p in settings['service_ports'] if p['host'] == host and p['service'] == service), {})
                 route = next((p for p in data['routes'] if p['host'] == host and p['service'] == service), {})
-                return {'port': row.get('port', ''), 'url': route.get('url', '')}
+                return {'port': settings['registry_port'], 'url': route.get('url', '')}
             port = args['port']
-            if type(port) is not int or (port != 0 or host is None) and not 1024 <= port <= 65535:
+            if type(port) is not int or not 1024 <= port <= 65535:
                 raise ValueError('Port must be between 1024 and 65535')
             if host is None:
-                # Desktop device names are node configuration, changed explicitly by the owner.
                 name = args['name'].strip()
                 if not re.fullmatch(r'[a-z0-9][a-z0-9._-]{0,63}', name):
                     raise ValueError('Invalid device ID')
-                settings['registry_port'] = port
-            else:
-                settings['service_ports'] = [p for p in settings['service_ports'] if (p['host'], p['service']) != (host, service)]
-                if port:
-                    settings['service_ports'].append({'host': host, 'service': service, 'port': port})
+            settings['registry_port'] = port
+            settings['service_ports'] = []
             self.api.request(op='configure_access', settings=settings)
             if host is None and name != self.api.request(op='status')['host_name']:
                 self.rename_device(name)
