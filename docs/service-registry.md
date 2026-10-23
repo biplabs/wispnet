@@ -8,13 +8,13 @@ No Android package queries, Binder connection or app permission prompt is needed
 
 ## Shared HTTP port
 
-Open **Settings** in either app. The registry and every HTTP service share port **11840** by default:
+Open **Settings** in either app. The registry and every HTTP service share port **7842** by default:
 
 ```
-http://registry.wispnet.localhost:11840
+http://registry.wispnet.localhost:7842
 ```
 
-`http://127.0.0.1:11840` and `http://localhost:11840` are also accepted. It binds
+`http://127.0.0.1:7842` and `http://localhost:7842` are also accepted. It binds
 only to IPv4 loopback, never the LAN. All website origins are allowed without
 an origin list. Native clients without browser Origin/Fetch Metadata headers use
 device-level access. This is discovery/access only; the
@@ -25,8 +25,8 @@ settings show the same value; changing it changes every service URL and the
 registry URL. For example, both of these can use one loopback listener:
 
 ```
-http://j-strix-0123456789ab-llama.localhost:11840/
-http://j-strix-0123456789ab-gike.localhost:11840/
+http://j-strix-0123456789ab-llama.localhost:7842/
+http://j-strix-0123456789ab-gike.localhost:7842/
 ```
 
 The listener dispatches by the exact HTTP Host authority, never by URL paths or
@@ -35,6 +35,9 @@ rejected. Local-owner routes connect directly to their registered backend;
 remote routes use the authenticated P2P tunnel and current host grants. HTTP,
 REST, SSE and WebSocket services are supported; raw TCP is not multiplexed here.
 
+This is a TCP listener. Iroh's local UDP transport port remains automatically
+assigned; the relay's UDP discovery port is separately configured as 7842.
+
 Choose a port in 1024–65535. An occupied port produces an error without silently
 selecting another port. Failed live changes restore previous settings and routes;
 if recovery fails, access stops with an error. Port changes interrupt streams;
@@ -42,7 +45,7 @@ requests are never replayed. Taking Wispnet offline closes the shared listener.
 
 On upgrade, the saved registry port becomes the shared port, preserving explicit
 user configuration. Legacy per-service ports are ignored; old bookmarks to those
-ports must be updated. Newly installed devices default to 11840. Devices with
+ports must be updated. Newly installed devices default to 7842. Devices with
 the same port and owning-host name derive the same HTTP addresses, including
 service IDs that need sanitization or truncation. The host's canonical name is
 read from that host, rather than derived from local display aliases.
@@ -57,7 +60,7 @@ helper. `{"op":"gateway_settings"}` returns `settings`, saved `routes` and
 `enabled`. Send `{"op":"configure_access","settings":...}` to replace settings:
 
 ```json
-{"registry_port":11840,"service_ports":[]}
+{"registry_port":7842,"service_ports":[]}
 ```
 
 Settings are saved privately in `state_dir/access-settings.json`. Use the owner
@@ -90,7 +93,7 @@ catalogs do not authorize access. `POST /v1/resolve` remains available to rechec
 authority and obtain a route explicitly:
 
 ```js
-const registry = 'http://127.0.0.1:11840';
+const registry = 'http://127.0.0.1:7842';
 const directory = await fetch(`${registry}/v1/services`).then(r => r.json());
 const service = directory.services.find(s => s.service_id === 'llama');
 if (!service) throw new Error('Llama is unavailable');

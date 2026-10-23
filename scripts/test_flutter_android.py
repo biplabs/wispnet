@@ -52,7 +52,7 @@ def check_network_process(adb, private):
         try:
             port = json.loads(private('files/client/access-settings.json'))['registry_port']
         except (subprocess.CalledProcessError, json.JSONDecodeError):
-            port = 11840
+            port = 7842
         forwarded = adb('forward', 'tcp:0', 'tcp:' + str(port), capture_output=True, text=True).stdout.strip()
         def request(path, authority):
             with urlopen(Request(f'http://127.0.0.1:{forwarded}{path}', headers={'Host': authority}), timeout=20) as response:

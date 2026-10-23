@@ -27,7 +27,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            registry_port: 11840,
+            registry_port: 7842,
             allowed_origins: vec![],
             service_ports: vec![],
         }

@@ -780,7 +780,7 @@ class _SettingsFormState extends State<SettingsForm> {
       ],
       Text(
         global
-            ? 'One HTTP port for all Wispnet services and the registry on this device. Default: 11840. Changes reconnect active sessions.'
+            ? 'One HTTP port for all Wispnet services and the registry on this device. Default: 7842. Changes reconnect active sessions.'
             : 'All services share this port on this device. Changing it also changes the registry and every other service URL.',
         style: const TextStyle(color: WispColors.muted),
       ),
@@ -792,7 +792,7 @@ class _SettingsFormState extends State<SettingsForm> {
         decoration: InputDecoration(
           floatingLabelBehavior: FloatingLabelBehavior.always,
           labelText: 'Wispnet port',
-          hintText: '11840',
+          hintText: '7842',
         ),
       ),
       if (address.isNotEmpty)

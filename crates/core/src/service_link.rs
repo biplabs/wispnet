@@ -52,7 +52,7 @@ mod tests {
         for value in [
             format!("https://{host}/gike"),
             format!("wispnet://user@{host}/gike"),
-            format!("wispnet://{host}:11840/gike"),
+            format!("wispnet://{host}:7842/gike"),
             "wispnet://short/gike".into(),
         ] {
             assert!(ServiceLink::parse(&value).is_err());

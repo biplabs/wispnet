@@ -138,5 +138,5 @@ across future desktop targets.
 Android networking is owned by `AccessService` in `:network`; `NetworkController`
 contains the private native operations and `NetworkBridge` is the UI's Binder
 adapter. The activity never initializes the native client. All platforms use one
-shared HTTP service/registry port, defaulting to 11840 for new settings. See
+shared HTTP service/registry port, defaulting to 7842 for new settings. See
 `docs/service-registry.md` for migration and stable `wispnet://` links.

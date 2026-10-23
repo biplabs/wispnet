@@ -206,7 +206,7 @@ mod tests {
             service: "llama".into(),
             incarnation: "a".repeat(64),
             hostname: name.clone(),
-            port: 11840,
+            port: 7842,
             aliases: vec![],
         }];
         assert_eq!(

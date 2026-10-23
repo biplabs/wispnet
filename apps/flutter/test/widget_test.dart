@@ -166,7 +166,7 @@ class LinkFake extends FakeBackend {
     }
     if (method == 'resolveLink') {
       calls.add((method, arguments));
-      return {'url': 'http://j-strix-xxx-website.localhost:11840/'};
+      return {'url': 'http://j-strix-xxx-website.localhost:7842/'};
     }
     return super.invoke(method, arguments);
   }
@@ -341,7 +341,7 @@ void main() {
       );
       expect(
         backend.calls.where((c) => c.$1 == 'launch').single.$2['url'],
-        'http://j-strix-xxx-website.localhost:11840/',
+        'http://j-strix-xxx-website.localhost:7842/',
       );
       expect(backend.enabled, true);
       await tester.pumpWidget(const SizedBox());

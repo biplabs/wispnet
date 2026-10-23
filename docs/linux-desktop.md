@@ -229,7 +229,7 @@ Explicit Android release-publishing version overrides remain available.
 
 ## Shared registry and service port
 
-**Settings → Wispnet port** configures one loopback HTTP port for the registry and all services (11840 on new installs). HTTP Host headers select each service. The same HTTP API is available on
+**Settings → Wispnet port** configures one loopback HTTP port for the registry and all services (7842 on new installs). HTTP Host headers select each service. The same HTTP API is available on
 Android; see the [registry contract and examples](service-registry.md).
 
 ## Public access
