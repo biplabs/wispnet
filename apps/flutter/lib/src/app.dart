@@ -357,7 +357,6 @@ class _WispHomeState extends State<WispHome>
       child: MachineSettings(
         machine: machine,
         backend: backend,
-        desktop: snapshot['desktop'] == true,
         onChanged: () {
           unawaited(poll());
           unawaited(refresh());
@@ -463,9 +462,9 @@ class _WispHomeState extends State<WispHome>
     final peer = (snapshot['telemetry'] as Map?)?['peers']?[machine.id] as Map?;
     if (peer == null) return '';
     final path = peer['path'] == 'direct'
-        ? 'DIRECT'
+        ? 'Direct'
         : peer['path'] == 'relay'
-        ? 'RELAY'
+        ? 'Relay'
         : '';
     final rtt = peer['rtt_ms'] as num? ?? 0;
     return [

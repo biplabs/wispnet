@@ -293,10 +293,8 @@ class MachineSettings extends StatefulWidget {
     required this.machine,
     required this.backend,
     required this.onChanged,
-    this.desktop = false,
   });
   final Machine machine;
-  final bool desktop;
   final WispnetBackend backend;
   final VoidCallback onChanged;
   @override
@@ -382,24 +380,20 @@ class _MachineSettingsState extends State<MachineSettings> {
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
       SelectableText(
-        'Host ID\n${widget.machine.id}',
+        'Device ID\n${widget.machine.id}',
         style: const TextStyle(color: WispColors.muted),
       ),
       const SizedBox(height: 16),
-      Text(widget.machine.status),
-      if (widget.desktop) ...[
-        const SizedBox(height: 16),
-        TextField(
-          controller: label,
-          decoration: const InputDecoration(labelText: 'Private display name'),
-          enabled: !busy,
-        ),
-        const SizedBox(height: 12),
-        OutlinedButton(
-          onPressed: busy ? null : rename,
-          child: const Text('Save name'),
-        ),
-      ],
+      TextField(
+        controller: label,
+        decoration: const InputDecoration(labelText: 'Display name'),
+        enabled: !busy,
+      ),
+      const SizedBox(height: 12),
+      OutlinedButton(
+        onPressed: busy ? null : rename,
+        child: const Text('Save name'),
+      ),
       const SizedBox(height: 12),
       OutlinedButton(
         style: dangerStyle,

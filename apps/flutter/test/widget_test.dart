@@ -322,7 +322,7 @@ void main() {
                   'catalog': {'services': []},
                 }),
                 order: const {},
-                telemetry: 'DIRECT · 8ms',
+                telemetry: 'Direct · 8ms',
                 stateColor: Colors.white,
                 busy: false,
                 onManage: () {},
@@ -336,8 +336,8 @@ void main() {
       ),
     );
     expect(find.text('No shared services'), findsOneWidget);
-    expect(find.textContaining('Pixel 10 Pro'), findsNothing);
-    expect(find.textContaining('PIXEL 10 PRO'), findsOneWidget);
+    expect(find.textContaining('Pixel 10 Pro'), findsOneWidget);
+    expect(find.textContaining('PIXEL 10 PRO'), findsNothing);
     expect(tester.getSize(find.byType(MachineCard)).height, lessThan(80));
   });
 
@@ -358,7 +358,7 @@ void main() {
         matching: find.byType(WispInkWell),
       ),
       find.ancestor(
-        of: find.textContaining('J-STRIX'),
+        of: find.textContaining('j-strix'),
         matching: find.byType(WispInkWell),
       ),
     ];
@@ -384,12 +384,12 @@ void main() {
       await tester.pumpAndSettle();
       expect(overlay(control).a, 0);
     }
-    final heading = find.textContaining('J-STRIX');
+    final heading = find.textContaining('j-strix');
     expect(
       tester.getSize(controls[2]).width,
       closeTo(tester.getSize(heading).width, .01),
     );
-    final status = find.textContaining('ONLINE · DIRECT');
+    final status = find.textContaining('Online · Direct');
     await mouse.moveTo(tester.getCenter(status));
     await tester.pumpAndSettle();
     expect(overlay(controls[2]).a, 0);
@@ -424,7 +424,7 @@ void main() {
       final backend = FakeBackend();
       await mount(tester, backend);
       expect(find.text('REMOTE SECTOR'), findsOneWidget);
-      expect(find.text('ONLINE · DIRECT · 15ms'), findsOneWidget);
+      expect(find.text('Online · Direct · 15ms'), findsOneWidget);
       await screenshot(tester, 'android-directory');
       await tester.tap(find.textContaining('Website', findRichText: true));
       await tester.pump();
@@ -839,15 +839,36 @@ void main() {
     expect(tester.takeException(), isNull);
     await close(tester);
   });
+  testWidgets('Android can save a private machine display name', (
+    tester,
+  ) async {
+    final backend = FakeBackend();
+    await mount(tester, backend);
+    await tester.tap(find.textContaining('j-strix'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Display name'),
+      'My workstation',
+    );
+    await tester.tap(find.text('Save name'));
+    await tester.pumpAndSettle();
+    expect(backend.calls.where((call) => call.$1 == 'renameHost').single.$2, {
+      'host': peer,
+      'name': 'My workstation',
+    });
+    expect(find.text('Save name'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await close(tester);
+  });
   testWidgets('machine settings controls have consistent spacing', (
     tester,
   ) async {
     final backend = DesktopFake();
     await mount(tester, backend, size: const Size(1000, 850));
-    await tester.tap(find.textContaining('J-STRIX'));
+    await tester.tap(find.textContaining('j-strix'));
     await tester.pumpAndSettle();
     final controls = [
-      find.widgetWithText(TextField, 'Private display name'),
+      find.widgetWithText(TextField, 'Display name'),
       find.widgetWithText(OutlinedButton, 'Save name'),
       find.widgetWithText(OutlinedButton, 'Remove'),
     ];
@@ -887,7 +908,7 @@ void main() {
       peer,
     );
     expect(
-      find.widgetWithText(TextField, 'Private display name'),
+      find.widgetWithText(TextField, 'Display name'),
       findsNothing,
     );
     expect(tester.takeException(), isNull);
@@ -1154,7 +1175,7 @@ void main() {
       findsNothing,
     );
     expect(
-      find.descendant(of: local, matching: find.textContaining('ONLINE')),
+      find.descendant(of: local, matching: find.textContaining('Online')),
       findsNothing,
     );
     expect(
@@ -1214,7 +1235,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Paired machines'), findsOneWidget);
     expect(find.text('HiBreak · dddddddd'), findsOneWidget);
-    expect(find.text('j-strix · aaaaaaaa'), findsOneWidget);
+    expect(find.text('j-strix · aaaaaaaa'), findsNWidgets(2));
     expect(tester.takeException(), isNull);
     await close(tester);
   });

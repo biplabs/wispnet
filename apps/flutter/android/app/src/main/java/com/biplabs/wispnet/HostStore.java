@@ -10,6 +10,11 @@ final class HostStore {
  JSONObject all()throws JSONException{synchronized(LOCK){return new JSONObject(prefs.getString("records","{}"));}}
  void save(JSONObject records)throws Exception{synchronized(LOCK){if(records.length()>128||!prefs.edit().putString("records",records.toString()).commit())throw new Exception("Cannot save host directory");}}
  void paired(String host,String name)throws Exception{synchronized(LOCK){JSONObject records=all();records.put(host,new JSONObject().put("name",name).put("state","approval_pending").put("status","Pending approval on this host"));save(records);}}
+ void rename(String host,String name)throws Exception{synchronized(LOCK){
+  name=name.trim();if(!DeviceProfile.valid(name))throw new Exception("Use 1–128 bytes, without control characters");
+  JSONObject records=all();if(!records.has(host))throw new Exception("Machine was removed");
+  records.getJSONObject(host).put("name",name);save(records);
+ }}
  void nameSynced(String host,String name)throws Exception{synchronized(LOCK){JSONObject records=all();if(!records.has(host))return;records.getJSONObject(host).put("synced_name",name);save(records);}}
  void remove(String host)throws Exception{
   Native.ensure(context);Native.request(new JSONObject().put("op","unpair").put("host",host));

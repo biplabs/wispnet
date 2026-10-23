@@ -42,12 +42,12 @@ class MachineCard extends StatelessWidget {
     );
     final tel = telemetry;
     final badge = machine.online
-        ? ['ONLINE', if (tel.isNotEmpty) tel].join(' · ')
+        ? ['Online', if (tel.isNotEmpty) tel].join(' · ')
         : machine.state == 'approval_pending'
         ? 'AWAITING APPROVAL'
         : machine.state == 'host_denied'
         ? 'ACCESS DENIED'
-        : 'OFFLINE';
+        : 'Offline';
     final content = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -60,7 +60,7 @@ class MachineCard extends StatelessWidget {
                   onTap: busy ? null : onManage,
                   borderRadius: BorderRadius.circular(6),
                   child: Text(
-                    '${machine.name.toUpperCase()} · ${machine.id.substring(0, 8)}',
+                    '${machine.name} · ${machine.id.substring(0, 8)}',
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       fontSize: 14,

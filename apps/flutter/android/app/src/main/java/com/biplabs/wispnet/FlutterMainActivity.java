@@ -6,7 +6,6 @@ import android.content.*;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
-import android.view.WindowManager;
 import androidx.annotation.NonNull;
 import io.flutter.embedding.android.FlutterActivity;
 import io.flutter.embedding.engine.FlutterEngine;
@@ -27,7 +26,6 @@ public final class FlutterMainActivity extends FlutterActivity {
 
  @Override public void onCreate(Bundle state) {
   super.onCreate(state);
-  getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
   receiveInvitation(getIntent());
   if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
    requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 101);
@@ -106,6 +104,10 @@ public final class FlutterMainActivity extends FlutterActivity {
      store.paired(peer, name);
      return new JSONObject().put("host", peer).put("name", name);
     } finally { pairing.set(false); }
+   }
+   case "renameHost": {
+    store.rename(args.getString("host"), args.getString("name"));
+    return new JSONObject();
    }
    case "removeHost": {
     store.remove(args.getString("host"));
