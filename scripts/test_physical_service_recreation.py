@@ -55,12 +55,9 @@ def mutate(remote, value):
 HTTP = """import http.client,json,sys,urllib.parse
 d=json.load(sys.stdin);u=urllib.parse.urlsplit(d['url'])
 c=http.client.HTTPConnection('127.0.0.1',u.port,timeout=15)
-h={'Host':u.netloc}
-if d['op']=='bootstrap':
- h.update({'Sec-Fetch-Site':'none','Sec-Fetch-Mode':'navigate','Sec-Fetch-Dest':'document'})
- c.request('GET','/',headers=h)
-else:
- h['Cookie']=d['cookie'];c.request('GET','/',headers=h)
+h={'Host':u.netloc,'Sec-Fetch-Site':'same-origin','Sec-Fetch-Mode':'navigate','Sec-Fetch-Dest':'document'}
+if d.get('cookie'):h['Cookie']=d['cookie']
+c.request('GET','/',headers=h)
 r=c.getresponse();body=r.read()
 print(json.dumps({'status':r.status,'bytes':len(body),'cookie':r.getheader('Set-Cookie','').split(';')[0]}))
 c.close()
@@ -148,7 +145,8 @@ def main():
             }
             url = request(source, opening)["url"]
             bootstrap = http(source, url)
-            assert bootstrap["status"] == 303
+            assert bootstrap["status"] == 200
+            assert not bootstrap["cookie"]
             cookie = bootstrap["cookie"]
             assert http(source, url, cookie)["status"] == 200
             # Same ID, address and grants, recreated before any one-second tick.
@@ -177,7 +175,8 @@ def main():
             opening["incarnation"] = fresh
             fresh_url = request(source, opening)["url"]
             fresh_bootstrap = http(source, fresh_url)
-            assert fresh_bootstrap["status"] == 303
+            assert fresh_bootstrap["status"] == 200
+            assert not fresh_bootstrap["cookie"]
             assert http(source, fresh_url, fresh_bootstrap["cookie"])["status"] == 200
             mutate(target, {"op": "remove", "id": fixture})
             request(source, {"op": "stop"})

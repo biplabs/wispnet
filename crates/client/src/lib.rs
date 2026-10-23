@@ -609,11 +609,8 @@ impl Client {
                 Ok(json!({"network_changed":true,"interrupted_requests":interrupted}))
             }
             "open" => {
-                let host = peer(value)?;
-                let id = argument(value, "service")?;
                 let url = self.open_route(value).await?;
-                let launch_url = self.gateway.launch_url(host, id).await?;
-                Ok(json!({"url":url,"launch_url":launch_url}))
+                Ok(json!({"url":url}))
             }
             _ => Err("Unknown app operation".into()),
         }

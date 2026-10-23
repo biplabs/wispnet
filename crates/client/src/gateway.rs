@@ -1,5 +1,5 @@
 //! Persistent, isolated loopback browser routes; authority is checked per request.
-use crate::{Client, token};
+use crate::Client;
 use iroh::{EndpointId, endpoint::Connection};
 use std::{
     sync::{
@@ -18,8 +18,8 @@ use tokio::{
 pub(crate) mod http;
 #[path = "gateway_store.rs"]
 mod store;
+// Reserved only to strip obsolete Wispnet credentials from legacy browser cookies.
 const COOKIE: &str = "_wispnet_session";
-const START: &str = r#"<!doctype html><meta name="referrer" content="no-referrer"><title>Wispnet</title><p id="status">Opening service…</p><script>const token=location.hash.slice(1);history.replaceState(null,'',location.pathname);fetch('/_wispnet/session',{method:'POST',headers:{Authorization:'Bearer '+token}}).then(r=>{if(!r.ok)throw Error();location.replace('/')}).catch(()=>document.getElementById('status').textContent='Open this service again in Wispnet.');</script>"#;
 struct Worker {
     binding: store::Binding,
     task: JoinHandle<()>,
@@ -152,29 +152,6 @@ impl Gateways {
         }
         workers.retain(|w| w.binding.peer != peer);
         Ok(())
-    }
-    /// App handoff proves an explicit Open even when Android Chrome marks it cross-site.
-    /// This short-lived token never changes the bookmarked root address.
-    pub async fn launch_url(&self, peer: EndpointId, service: &str) -> Result<String, String> {
-        let workers = self.workers.lock().await;
-        let worker = workers
-            .iter()
-            .find(|w| w.binding.peer == peer && w.binding.service == service)
-            .ok_or("Browser route unavailable")?;
-        let mut tokens = worker.route.bootstraps.lock().await;
-        tokens.retain(|(_, expires)| *expires > std::time::Instant::now());
-        if tokens.len() >= 8 {
-            tokens.remove(0);
-        }
-        let token = token();
-        tokens.push((
-            token.clone(),
-            std::time::Instant::now() + Duration::from_secs(60),
-        ));
-        Ok(format!(
-            "http://{}/_wispnet/start#{token}",
-            worker.binding.authority()
-        ))
     }
     /// Rebind exactly the saved ports. Never silently move a bookmark to a new port.
     pub async fn restore(&self, client: Arc<Client>) -> Result<(), String> {
@@ -359,8 +336,6 @@ impl Gateways {
                 .names()
                 .map(|name| format!("{}:{}", name, binding.port))
                 .collect(),
-            credential: token(),
-            bootstraps: Mutex::new(Vec::new()),
             active_requests: AtomicUsize::new(0),
         });
         let connections = self.connections.clone();
@@ -407,8 +382,6 @@ struct Route {
     incarnation: String,
     local_binding: Option<std::net::SocketAddr>,
     authorities: Vec<String>,
-    credential: String,
-    bootstraps: Mutex<Vec<(String, std::time::Instant)>>,
 }
 struct Close(Connection);
 impl Drop for Close {
@@ -523,9 +496,6 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Request, ()> {
             .collect::<Result<_, ()>>()?,
     })
 }
-fn constant_equal(a: &str, b: &str) -> bool {
-    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0, |d, (a, b)| d | (a ^ b)) == 0
-}
 pub(crate) async fn response(
     socket: &mut TcpStream,
     status: &str,
@@ -575,52 +545,15 @@ impl Route {
         if length > 16 * 1024 * 1024 {
             return response(&mut socket, "413 Content Too Large", "", "").await;
         }
-        if request.path == "/_wispnet/start" && request.method == "GET" {
-            let navigation = request.one("sec-fetch-mode") == Some("navigate")
-                && request.one("sec-fetch-dest") == Some("document");
-            if !request.same_origin(&origin) && !navigation {
-                return response(&mut socket, "403 Forbidden", "Embedding denied", "").await;
-            }
-            return response(&mut socket,"200 OK",START,"Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'\r\n").await;
-        }
-        if request.path == "/_wispnet/session" {
-            let mut tokens = self.bootstraps.lock().await;
-            tokens.retain(|(_, expires)| *expires > std::time::Instant::now());
-            let index = tokens.iter().position(|(t, _)| {
-                request
-                    .one("authorization")
-                    .is_some_and(|a| constant_equal(a, &format!("Bearer {t}")))
-            });
-            if !request.same_origin(&origin)
-                || request.one("origin") != Some(origin.as_str())
-                || request.method != "POST"
-                || length != 0
-                || websocket
-                || index.is_none()
-            {
-                return response(&mut socket, "403 Forbidden", "Bootstrap denied", "").await;
-            }
-            tokens.remove(index.unwrap());
-            return response(
-                &mut socket,
-                "204 No Content",
-                "",
-                &format!(
-                    "Set-Cookie: {COOKIE}={}; Path=/; HttpOnly; SameSite=Strict\r\n",
-                    self.credential
-                ),
-            )
-            .await;
-        }
-        // Only a direct address-bar/bookmark/app navigation can establish a session.
-        // Cross-site links, frames, fetches and unsafe methods cannot mint cookies.
+        // Top-level links (including Android app intents) need no browser session.
+        // Frames and cross-site requests without Origin remain restricted.
         let navigation = request.method == "GET"
             && length == 0
             && !websocket
-            && request.one("sec-fetch-site") == Some("none")
             && request.one("sec-fetch-mode") == Some("navigate")
             && request.one("sec-fetch-dest") == Some("document")
-            && request.values("origin").is_empty();
+            && request.values("origin").is_empty()
+            && request.values("sec-fetch-site").len() <= 1;
         let settings =
             crate::access_settings::Settings::load(&self.client.state).map_err(|_| ())?;
         let allowed_origin = request.allowed_website(&settings);
@@ -635,7 +568,7 @@ impl Route {
         {
             return response(&mut socket,"204 No Content","",&format!("{cors}Access-Control-Allow-Methods: GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, Authorization\r\nAccess-Control-Max-Age: 60\r\n")).await;
         }
-        if !request.same_origin(&origin) && cors.is_empty() {
+        if !request.same_origin(&origin) && cors.is_empty() && !navigation {
             return response(
                 &mut socket,
                 "403 Forbidden",
@@ -672,28 +605,6 @@ impl Route {
         }
         if http::cookies(&request).is_err() {
             return response(&mut socket, "400 Bad Request", "Invalid cookies", "").await;
-        }
-        let cookies = request.values("cookie");
-        let sessions: Vec<_> = cookies
-            .iter()
-            .flat_map(|v| v.split(';'))
-            .map(str::trim)
-            .filter(|s| s.split('=').next() == Some(COOKIE))
-            .collect();
-        let cookie_authenticated = request.same_origin(&origin)
-            && sessions.len() == 1
-            && constant_equal(sessions[0], &format!("{COOKIE}={}", self.credential));
-        if !(api_access || cookie_authenticated) {
-            if navigation {
-                return response(&mut socket, "303 See Other", "", &format!("Location: {}\r\nSet-Cookie: {COOKIE}={}; Path=/; HttpOnly; SameSite=Strict\r\n", request.path, self.credential)).await;
-            }
-            return response(
-                &mut socket,
-                "401 Unauthorized",
-                "Open this address directly in your browser while Wispnet is online",
-                "",
-            )
-            .await;
         }
         if (websocket || !["GET", "HEAD"].contains(&request.method.as_str()))
             && !api_access
@@ -915,16 +826,6 @@ mod tests {
     }
     const NAV: &str =
         "Sec-Fetch-Site: none\r\nSec-Fetch-Mode: navigate\r\nSec-Fetch-Dest: document\r\n";
-    fn cookie(reply: &str) -> String {
-        reply
-            .lines()
-            .find_map(|l| l.strip_prefix("Set-Cookie: "))
-            .unwrap()
-            .split(';')
-            .next()
-            .unwrap()
-            .into()
-    }
     async fn client(
         state: &std::path::Path,
         key: wispnet_core::identity::SecretKey,
@@ -1002,7 +903,7 @@ mod tests {
                 .await
                 .starts_with("HTTP/1.1 421")
         );
-        assert!(raw(&url, "GET", "/", NAV).await.starts_with("HTTP/1.1 303"));
+        assert!(raw(&url, "GET", "/", NAV).await.starts_with("HTTP/1.1 403"));
         let other_peer = wispnet_core::identity::SecretKey::generate().public();
         let other = c
             .gateway
@@ -1126,8 +1027,10 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
-        assert!(c.gateway.launch_url(peer, "website").await.is_err());
-        assert!(c.gateway.launch_url(other, "website").await.is_ok());
+        let workers = c.gateway.workers.lock().await;
+        assert!(!workers.iter().any(|w| w.binding.peer == peer));
+        assert!(workers.iter().any(|w| w.binding.peer == other));
+        drop(workers);
         assert!(TcpStream::connect(("127.0.0.1", port)).await.is_err());
         let saved = store::load(state.path(), c.endpoint.id()).unwrap();
         assert_eq!(saved.len(), 1);
@@ -1148,7 +1051,7 @@ mod tests {
         c.endpoint.close().await;
     }
     #[tokio::test]
-    async fn stable_bookmarks_restore_ports_rotate_credentials_and_reject_cross_origin() {
+    async fn stable_bookmarks_restore_without_open_and_keep_host_authorization() {
         let state = tempfile::tempdir().unwrap();
         std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         {
@@ -1160,16 +1063,9 @@ mod tests {
             .save(state.path())
             .unwrap();
         }
-
         let key = wispnet_core::identity::SecretKey::generate();
         let c = client(state.path(), key.clone()).await;
         let peer = wispnet_core::identity::SecretKey::generate().public();
-        assert!(
-            c.gateway
-                .open(c.clone(), peer, "website".into(), "a".repeat(64))
-                .await
-                .is_err()
-        );
         c.command(&serde_json::json!({"op":"enable"}))
             .await
             .unwrap();
@@ -1178,71 +1074,27 @@ mod tests {
             .open(c.clone(), peer, "website".into(), "a".repeat(64))
             .await
             .unwrap();
-        let launch = c.gateway.launch_url(peer, "website").await.unwrap();
-        let launch = url::Url::parse(&launch).unwrap();
-        let exchange = format!(
-            "Origin: http://{}\r\nAuthorization: Bearer {}\r\n",
-            launch.authority(),
-            launch.fragment().unwrap()
-        );
-        assert!(
-            raw(&url, "POST", "/_wispnet/session", &exchange)
-                .await
-                .starts_with("HTTP/1.1 204")
-        );
-        assert!(
-            raw(&url, "POST", "/_wispnet/session", &exchange)
-                .await
-                .starts_with("HTTP/1.1 403")
-        );
-        assert!(
-            raw(&url, "POST", "/_wipsnet/session", &exchange)
-                .await
-                .starts_with("HTTP/1.1 404")
-        );
         assert!(url.ends_with('/') && !url.contains('#'));
-        assert_eq!(
-            url,
-            c.gateway
-                .open(c.clone(), peer, "website".into(), "a".repeat(64))
-                .await
-                .unwrap()
-        );
-        assert!(
-            raw(&url, "GET", "/", "Sec-Fetch-Site: same-origin\r\n")
-                .await
-                .starts_with("HTTP/1.1 401")
-        );
+        // Even direct/app/same-origin navigations still require the host's grant.
         for headers in [
-            "Origin: https://attacker.invalid\r\n",
+            NAV,
+            "Sec-Fetch-Site: same-origin\r\nSec-Fetch-Mode: navigate\r\nSec-Fetch-Dest: document\r\n",
             "Sec-Fetch-Site: cross-site\r\nSec-Fetch-Mode: navigate\r\nSec-Fetch-Dest: document\r\n",
-            "Sec-Fetch-Site: none\r\nSec-Fetch-Mode: navigate\r\nSec-Fetch-Dest: iframe\r\n",
+            "Cookie: _wispnet_session=obsolete\r\nSec-Fetch-Site: same-origin\r\n",
         ] {
-            assert!(!raw(&url, "GET", "/", headers).await.contains("Set-Cookie:"));
+            let reply = raw(&url, "GET", "/bookmarked?x=1", headers).await;
+            assert!(
+                reply.starts_with("HTTP/1.1 403") && reply.contains("Pairing no longer available")
+            );
+            assert!(!reply.contains("Set-Cookie:"));
         }
-        let reply = raw(&url, "GET", "/bookmarked?x=1", NAV).await;
-        assert!(reply.starts_with("HTTP/1.1 303") && reply.contains("Location: /bookmarked?x=1"));
-        assert!(reply.contains("HttpOnly; SameSite=Strict") && !reply.contains("Max-Age="));
-        let old_cookie = cookie(&reply);
-        let other = c
-            .gateway
-            .open(c.clone(), peer, "other".into(), "b".repeat(64))
-            .await
-            .unwrap();
-        assert_ne!(
-            url::Url::parse(&url).unwrap().host_str(),
-            url::Url::parse(&other).unwrap().host_str()
-        );
-        assert!(
-            raw(
-                &other,
-                "GET",
-                "/",
-                &format!("Cookie: {old_cookie}\r\nSec-Fetch-Site: same-origin\r\n")
-            )
-            .await
-            .starts_with("HTTP/1.1 401")
-        );
+        for path in ["/_wispnet/start", "/_wispnet/session", "/_wipsnet/session"] {
+            assert!(
+                raw(&url, "GET", path, NAV)
+                    .await
+                    .starts_with("HTTP/1.1 404")
+            );
+        }
         c.gateway.stop().await;
         let port = url::Url::parse(&url).unwrap().port().unwrap();
         assert!(TcpStream::connect(("127.0.0.1", port)).await.is_err());
@@ -1260,30 +1112,26 @@ mod tests {
         c.command(&serde_json::json!({"op":"enable"}))
             .await
             .unwrap();
+        // Do not call Open after restarting: the old URL is already listening.
         assert_eq!(
-            url,
-            c.gateway
-                .open(c.clone(), peer, "website".into(), "a".repeat(64))
-                .await
-                .unwrap()
+            c.gateway.settings(&c).await.unwrap()["routes"][0]["url"],
+            url
         );
         assert!(
-            raw(
-                &url,
-                "GET",
-                "/",
-                &format!("Cookie: {old_cookie}\r\nSec-Fetch-Site: same-origin\r\n")
-            )
-            .await
-            .starts_with("HTTP/1.1 401")
+            raw(&url, "GET", "/", NAV)
+                .await
+                .contains("Pairing no longer available")
         );
-        assert_ne!(old_cookie, cookie(&raw(&url, "GET", "/", NAV).await));
         let recovered = c
             .command(&serde_json::json!({"op":"network"}))
             .await
             .unwrap();
         assert_eq!(recovered["interrupted_requests"], 0);
-        assert!(raw(&url, "GET", "/", NAV).await.starts_with("HTTP/1.1 303"));
+        assert!(
+            raw(&url, "GET", "/", NAV)
+                .await
+                .contains("Pairing no longer available")
+        );
         c.gateway.stop().await;
         c.endpoint.close().await;
         let different = client(state.path(), wispnet_core::identity::SecretKey::generate()).await;
@@ -1377,9 +1225,8 @@ mod tests {
             .open(c.clone(), peer, "site".into(), service.incarnation)
             .await
             .unwrap();
-        let session = cookie(&raw(&url, "GET", "/", NAV).await);
         assert!(
-            raw(&url, "GET", "/", &format!("Cookie: {session}\r\n"))
+            raw(&url, "GET", "/", "Sec-Fetch-Site: same-origin\r\n")
                 .await
                 .ends_with("ok")
         );
@@ -1392,14 +1239,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result["interrupted_requests"], 0);
-        let session = cookie(&raw(&url, "GET", "/", NAV).await);
         let mut stream = TcpStream::connect(("127.0.0.1", parsed.port().unwrap()))
             .await
             .unwrap();
         stream
             .write_all(
                 format!(
-                    "GET /hold HTTP/1.1\r\nHost: {}:{}\r\nCookie: {session}\r\n\r\n",
+                    "GET /hold HTTP/1.1\r\nHost: {}:{}\r\nSec-Fetch-Site: same-origin\r\n\r\n",
                     parsed.host_str().unwrap(),
                     parsed.port().unwrap()
                 )
@@ -1497,9 +1343,8 @@ mod tests {
             .open(c.clone(), peer, "site".into(), service.incarnation)
             .await
             .unwrap();
-        let session = cookie(&raw(&url, "GET", "/", NAV).await);
         assert!(
-            raw(&url, "GET", "/", &format!("Cookie: {session}\r\n"))
+            raw(&url, "GET", "/", "Sec-Fetch-Site: same-origin\r\n")
                 .await
                 .ends_with("ok")
         );
@@ -1507,7 +1352,7 @@ mod tests {
         tokio::time::advance(Duration::from_secs(601)).await;
         tokio::time::resume();
         assert!(
-            raw(&url, "GET", "/", &format!("Cookie: {session}\r\n"))
+            raw(&url, "GET", "/", "Sec-Fetch-Site: same-origin\r\n")
                 .await
                 .ends_with("ok")
         );
@@ -1525,7 +1370,7 @@ mod tests {
                 .unwrap();
         }
         assert!(
-            raw(&url, "GET", "/", &format!("Cookie: {session}\r\n"))
+            raw(&url, "GET", "/", "Sec-Fetch-Site: same-origin\r\n")
                 .await
                 .starts_with("HTTP/1.1 403")
         );

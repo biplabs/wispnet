@@ -33,7 +33,7 @@ for method,path,extra,status in cases:
  c.request(method,path,headers=h);r=c.getresponse();assert r.status==status,(method,status,r.status);r.read();c.close()
 c=http.client.HTTPConnection('127.0.0.1',u.port,timeout=15)
 c.request('POST','/_wispnet/session',headers={'Host':u.netloc,'Origin':origin,'Content-Length':'0'})
-r=c.getresponse();assert r.status==403,'missing app handoff token';r.read();c.close()
+r=c.getresponse();assert r.status==404,'retired app handoff endpoint';r.read();c.close()
 # Actual non-loopback interface, not merely a different Host header.
 s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.connect(('192.0.2.1',9));ip=s.getsockname()[0];s.close();assert not ip.startswith('127.')
 s=socket.socket();s.settimeout(2)

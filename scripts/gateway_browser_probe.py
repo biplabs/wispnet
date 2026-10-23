@@ -61,9 +61,7 @@ def chromium(urls):
         assert results[0]["cookie"] != results[1]["cookie"], (
             "application cookies crossed origins"
         )
-        assert all(
-            c["httpOnly"] for c in context.cookies() if c["name"] == "_wispnet_session"
-        )
+        assert not any(c["name"] == "_wispnet_session" for c in context.cookies())
         print(
             "Chromium "
             + browser.version
@@ -202,8 +200,8 @@ def firefox(urls):
                 value["cookie"] == results[i]["cookie"]
                 and value["storage"] == results[i]["storage"]
             )
-            assert any(
-                c["name"] == "_wispnet_session" and c["httpOnly"]
+            assert not any(
+                c["name"] == "_wispnet_session"
                 for c in call("GET", path + "/cookie")
             )
         print(

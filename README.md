@@ -113,7 +113,7 @@ A local service can use a local fast path, with the same policy and browser-boun
 | A client loses its directory cache | It can refetch from its saved trusted host identities; no central registry is required. Losing a host's authoritative policy store is a different recovery problem. |
 | The cloud relay is replaced | Restore connectivity without resetting peer trust, local registries, or grants. |
 
-Catalog freshness, local browser-session lifetime, and any explicitly expiring host-issued grant are separate concepts. An unrelated host's outage must not expire access. A trusted known host can be contacted directly to refresh missing/expired listing metadata before opening a service; malformed records and unknown identities fail closed.
+Catalog freshness and any explicitly expiring host-issued grant are separate concepts; service URLs require no Wispnet browser session. An unrelated host's outage must not expire access. A trusted known host can be contacted directly to refresh missing/expired listing metadata before opening a service; malformed records and unknown identities fail closed.
 
 This removes a **mesh-wide registry/authorization single point of failure**, not every dependency. Each service still depends on its own hosting computer and backend; Wispnet does not replicate application execution or wake sleeping computers. v1 has one relay, so relay-dependent connections and some new connections can be interrupted by its outage. Multi-relay resilience is future work, not a v1 availability guarantee.
 
@@ -169,7 +169,7 @@ Restoring Machine 1 must not reset Machine 2, require its approval, or block it 
 
 The [browser spike](experiments/browser/README.md), [ADR 0001](docs/decisions/0001-browser-access.md), and [evidence matrix](docs/browser-compatibility.md) establish the tested browser direction: service-specific hostnames and an HTTP-aware session/origin boundary. Per-host authority does not make an unrestricted local byte proxy safe.
 
-Bind gateways only to loopback, authenticate browser/API sessions, validate exact Host and appropriate Origin/Fetch Metadata, protect WebSocket upgrades, and strip gateway credentials before forwarding. Different ports are not cookie isolation. Local service origins and sessions must be bound to the full host/service identity, so two peers publishing `llama` cannot collide or reuse each other's browser authority.
+Bind gateways only to loopback, enforce device pairing and host/service grants, validate exact Host and appropriate Origin/Fetch Metadata, and protect WebSocket upgrades. Browser pages and APIs require no Wispnet cookie or launch token. Different ports are not cookie isolation. Local service origins must be bound to the full host/service identity, so two peers publishing `llama` cannot collide or share application cookies.
 
 Production cookie-prefix/Secure-cookie, HTTPS, hostname reuse, redirect/login, service-worker, streaming, and Android handoff decisions remain release requirements in [#10](https://github.com/biplabs/wispnet/issues/10). A directory entry or authenticated device connection is not proof of the human user's intent. Backend applications may still require their own authentication.
 

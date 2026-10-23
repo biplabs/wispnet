@@ -288,16 +288,17 @@ class NodeIntegration(unittest.TestCase):
                         "Sec-Fetch-Dest": "document",
                     },
                 )
-                self.assertEqual(status, 303)
-                cookie = headers["Set-Cookie"].split(";")[0]
+                self.assertEqual(status, 200)
+                self.assertNotIn("Set-Cookie", headers)
+                browser_headers = {"Sec-Fetch-Site": "same-origin"}
                 self.assertEqual(
-                    exchange("/", {"Cookie": cookie})[2], b"node-gateway-ok"
+                    exchange("/", browser_headers)[2], b"node-gateway-ok"
                 )
                 # Hold a real service stream open and distinguish approved from connected.
                 responses = []
                 held = threading.Thread(
                     target=lambda: responses.append(
-                        exchange("/hold", {"Cookie": cookie})
+                        exchange("/hold", browser_headers)
                     ),
                     daemon=True,
                 )
@@ -374,13 +375,14 @@ class NodeIntegration(unittest.TestCase):
                         "Sec-Fetch-Dest": "document",
                     },
                 )
-                self.assertEqual(status, 303)
-                cookie = headers["Set-Cookie"].split(";")[0]
+                self.assertEqual(status, 200)
+                self.assertNotIn("Set-Cookie", headers)
+                browser_headers = {"Sec-Fetch-Site": "same-origin"}
                 self.assertEqual(
-                    exchange("/", {"Cookie": cookie})[2], b"node-gateway-ok"
+                    exchange("/", browser_headers)[2], b"node-gateway-ok"
                 )
                 status, headers, body = exchange(
-                    "/", {"Cookie": cookie, "Origin": "https://unlisted.example"}
+                    "/", {"Origin": "https://unlisted.example"}
                 )
                 self.assertEqual(status, 200)
                 self.assertEqual(body, b"node-gateway-ok")
@@ -391,13 +393,13 @@ class NodeIntegration(unittest.TestCase):
                 self.assertEqual(api.request(op="status")["host"]["clients"][0]["peer"], pb)
                 self.assertNotIn(pa, api.request(op="status")["peer_pins"])
                 # Removing the binding interrupts an active local response and
-                # rejects subsequent requests using the old browser session.
+                # rejects subsequent requests using the saved service URL.
                 release.clear()
                 held_connection = http.client.HTTPConnection(
                     "127.0.0.1", parsed.port, timeout=4
                 )
                 held_connection.request(
-                    "GET", "/hold", headers={"Host": parsed.netloc, "Cookie": cookie}
+                    "GET", "/hold", headers={"Host": parsed.netloc, **browser_headers}
                 )
                 held_response = held_connection.getresponse()
                 started = time.monotonic()
@@ -421,7 +423,7 @@ class NodeIntegration(unittest.TestCase):
                 self.assertLess(time.monotonic() - started, 3)
                 held_connection.close()
                 release.set()
-                self.assertEqual(exchange("/", {"Cookie": cookie})[0], 403)
+                self.assertEqual(exchange("/", browser_headers)[0], 403)
                 with self.assertRaises(ValueError):
                     api.request(
                         op="open",

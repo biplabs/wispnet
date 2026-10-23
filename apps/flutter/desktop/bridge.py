@@ -154,6 +154,10 @@ class Bridge:
                 return {**self.display, 'enabled': False, 'desktop': True,
                         'order': self.preferences['order'], 'hosts': self.display.get('hosts', {}),
                         'network': 'Node offline', 'version': self.version()}
+        # A restarted node has a fresh gateway. Restore saved listeners before
+        # reporting online, including when the desktop itself stayed running.
+        if not status.get('access_enabled'):
+            self.api.request(op='enable')
         with self.lock:
             self.status = status
             own = status['host']['host']
@@ -234,6 +238,7 @@ class Bridge:
     def dispatch(self, method, args):
         if method == 'startDesktop':
             self.lifecycle(True)
+            self.api.request(op='enable')
             return {}
         if method == 'snapshot':
             return self.snapshot()
@@ -264,8 +269,7 @@ class Bridge:
             self.api.request(op='enable')
             result = self.api.request(op='open', host=args['host'], service=args['service'], incarnation=args['incarnation'],
                                       host_name=self.preferences.get('device_ids', {}).get(args['host']))
-            # Desktop uses the token-free local route, as the previous desktop did.
-            # The Android bootstrap URL is intentionally not exposed to this runner.
+            # Both platforms launch the stable service address directly.
             return {'url': browser_url(result['url'])}
         if method == 'launchPublic':
             status = self.api.request(op='status')

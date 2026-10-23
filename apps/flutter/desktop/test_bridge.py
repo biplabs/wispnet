@@ -30,7 +30,7 @@ class BridgeTests(unittest.TestCase):
         self.env.start()
         self.addCleanup(self.env.stop)
         self.status = dict(host=dict(host=OWN, revision=7, services=[], clients=[dict(peer=PEER, name='Saved host')]),
-                           host_name='Desktop', peer_pins=[PEER], invitations=[], relay='connected', peer_telemetry={PEER: dict(path='direct', rtt_ms=15)})
+                           host_name='Desktop', access_enabled=True, peer_pins=[PEER], invitations=[], relay='connected', peer_telemetry={PEER: dict(path='direct', rtt_ms=15)})
         self.gateway = dict(settings=dict(registry_port=18355, service_ports=[dict(host=PEER, service='other', port=18356)]), routes=[])
         self.calls = []
         def request(**args):
@@ -48,6 +48,8 @@ class BridgeTests(unittest.TestCase):
         with patch.object(self.bridge, 'lifecycle') as lifecycle:
             self.bridge.dispatch('startDesktop', {})
             lifecycle.assert_called_once_with(True)
+            self.assertEqual(self.calls[-1], {'op': 'enable'})
+            self.calls.clear()
             lifecycle.reset_mock()
             self.bridge.dispatch('setAccess', {'enabled': False})
             lifecycle.assert_called_once_with(False)
@@ -55,6 +57,27 @@ class BridgeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'Cannot stop node'):
                 self.bridge.dispatch('setAccess', {'enabled': False})
         self.assertNotIn({'op': 'enable'}, self.calls)
+
+    def test_online_requires_saved_listeners_and_recovers_after_node_restart(self):
+        self.status['access_enabled'] = False
+        self.assertTrue(self.bridge.snapshot()['enabled'])
+        self.assertEqual(self.calls[-1], {'op': 'enable'})
+        self.calls.clear()
+        self.status['access_enabled'] = True
+        self.assertTrue(self.bridge.snapshot()['enabled'])
+        self.assertNotIn({'op': 'enable'}, self.calls)
+        self.status['access_enabled'] = False
+        original = self.bridge.api.request
+        def unavailable(**args):
+            if args['op'] == 'enable':
+                raise module.NodeRejected('Saved browser port unavailable')
+            return original(**args)
+        with patch.object(self.bridge.api, 'request', side_effect=unavailable):
+            with self.assertRaisesRegex(ValueError, 'Saved browser port unavailable'):
+                self.bridge.snapshot()
+            with patch.object(self.bridge, 'lifecycle'):
+                with self.assertRaisesRegex(ValueError, 'Saved browser port unavailable'):
+                    self.bridge.dispatch('startDesktop', {})
 
     def test_upgrade_preserves_private_order_names_and_cache_without_trusting_cache(self):
         self.bridge.dispatch('saveOrder', dict(group='machines', ids=[PEER, OWN]))
@@ -223,6 +246,11 @@ class NativeBridgeTest(unittest.TestCase):
                     self.assertIsNone(process.poll()); self.assertLess(time.monotonic(), deadline); time.sleep(.05)
                 with patch.dict(os.environ, XDG_DATA_HOME=str(root / 'data'), XDG_CONFIG_HOME=str(root / 'config')):
                     bridge = module.Bridge(config)
+                with socket.socket() as available:
+                    available.bind(('127.0.0.1', 0)); registry_port = available.getsockname()[1]
+                bridge.api.request(op='configure_access', settings=dict(registry_port=registry_port, service_ports=[]))
+                with patch.object(bridge, 'lifecycle'):
+                    bridge.dispatch('startDesktop', {})
                 initial = bridge.snapshot()
                 self.assertTrue(initial['enabled'])
                 own = initial['peer']
@@ -242,7 +270,41 @@ class NativeBridgeTest(unittest.TestCase):
                 response = connection.getresponse()
                 self.assertEqual(response.status, 200)
                 self.assertEqual(response.read(), b'flutter-native-route-ok')
+                self.assertIsNone(response.getheader('Set-Cookie'))
                 connection.close()
+                # Restart the actual node, keep the desktop adapter alive, and
+                # request the saved deep link without calling Open or the registry.
+                process.terminate(); process.wait(timeout=10)
+                process = subprocess.Popen([binary, 'agent', '--config', config], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                deadline = time.monotonic() + 15
+                while True:
+                    self.assertIsNone(process.poll()); self.assertLess(time.monotonic(), deadline)
+                    try:
+                        bridge.api.request(op='status')
+                        break
+                    except OSError:
+                        time.sleep(.05)
+                self.assertTrue(bridge.snapshot()['enabled'])
+                for metadata in [
+                    {'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document'},
+                    {'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document'},
+                    {'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'no-cors', 'Sec-Fetch-Dest': 'script', 'Cookie': '_wispnet_session=obsolete'},
+                ]:
+                    connection = http.client.HTTPConnection('127.0.0.1', url.port, timeout=10)
+                    connection.request('GET', '/saved/path?x=1', headers={'Host': url.netloc, **metadata})
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, 200)
+                    self.assertEqual(response.read(), b'flutter-native-route-ok')
+                    self.assertIsNone(response.getheader('Set-Cookie'))
+                    connection.close()
+                # The ordinary startup path also restores routes after offline.
+                bridge.api.request(op='stop')
+                with patch.object(bridge, 'lifecycle'):
+                    bridge.dispatch('startDesktop', {})
+                connection = http.client.HTTPConnection('127.0.0.1', url.port, timeout=10)
+                connection.request('GET', '/', headers={'Host': url.netloc, 'Sec-Fetch-Site': 'same-origin'})
+                response = connection.getresponse()
+                self.assertEqual(response.status, 200); response.read(); connection.close()
                 with self.assertRaises(ValueError): bridge.dispatch('open', dict(host=own, service='fixture', incarnation='f' * 64))
                 self.assertEqual(bridge.snapshot()['peer'], own)
                 process.terminate(); process.wait(timeout=10)

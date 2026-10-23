@@ -231,7 +231,7 @@ class _WispHomeState extends State<WispHome>
       if (!mounted || !foreground || generation != launchGeneration) return;
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
       await backend.invoke('launch', {
-        'url': result['launch_url'] ?? result['url'],
+        'url': result['url'],
       });
     } catch (error) {
       notice('Cannot open service: ${message(error)}');

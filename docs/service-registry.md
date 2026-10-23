@@ -27,7 +27,7 @@ llama.cpp can run at backend port 8201 while the phone and Linux gateway both us
 18401. Leave the gateway port blank to use automatic allocation; an existing
 saved automatic port remains stable. Chosen ports must be unique and in
 1024–65535. Port conflicts produce an error; no silent fallback occurs.
-Changing settings reconnects active sessions and resets browser sessions.
+Changing settings reconnects active service connections.
 Failed live listener changes restore the previous settings and routes; if that
 recovery fails, access stops with an error. Taking Wispnet offline closes the
 registry and service connections. Settings and saved addresses survive restart.
@@ -115,7 +115,8 @@ the device's host/service grants directly. Retired `X-Wispnet-Access` headers ar
 ignored and stripped upstream. Legacy saved `allowed_origins` lists are ignored.
 
 Browser localhost/network permissions and secure-context rules can impose
-additional restrictions. Existing browser navigation retains its single-use
-handoff and same-origin session-cookie mechanism; these browser session cookies
-are separate from the removed API access tokens. Local native apps share the
-device's trust boundary; browser headers do not authenticate native processes.
+additional restrictions. Browser pages also use the stable service URL directly,
+without a Wispnet session cookie or launch token. Going online restores saved
+listeners before the desktop reports online, including after a node restart.
+Local native apps share the device's trust boundary; browser headers do not
+authenticate native processes. Application login cookies remain application-owned.

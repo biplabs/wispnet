@@ -15,7 +15,7 @@ in its path, query or fragment. Repeated opens reuse the listener; going online
 restores saved listeners on exactly their original ports. A conflicting local
 port fails explicitly rather than silently changing a bookmark. Addresses are
 saved in owner-only `browser-routes.json`, bound to the installation identity;
-browser credentials are never persisted in this file.
+no browser credentials are created or persisted.
 
 Native Android and Linux apps resolve URLs through the [shared registry](service-registry.md)
 and call them directly using device-level access. No API access token, per-app
@@ -23,24 +23,25 @@ consent or credential renewal is required. All website origins are allowed,
 including opaque origins serialized as `null`; duplicate or malformed Origin
 headers are rejected before forwarding. A service's
 own Authorization/API-key requirements remain unchanged. Host revocation still
-terminates access. Browser navigation retains its separate session-cookie and
-single-use handoff behavior. Native apps share the device's trust boundary.
+terminates access. Browser pages open the same stable URL without a Wispnet cookie or launch token.
+Native apps share the device's trust boundary.
 
-There is no ten-minute route or cookie deadline. Going offline and process death
+There is no ten-minute route deadline or Wispnet session cookie. Going offline and process death
 close sockets; going online restores the same addresses. Network changes cancel
-in-flight requests without replay, restore listeners, and rotate credentials.
+in-flight requests without replay and restore listeners.
 Each request checks current local service state or uses an authenticated peer
 connection whose host checks grants and service incarnation. Removing the local
 peer pin also denies forwarding. Explicitly opening a recreated service adopts
 its new incarnation at the same address; stale bindings stay denied.
 
-A browser address-bar, bookmark or app navigation (`Sec-Fetch-Site: none`,
-`Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`, GET without Origin) can
-establish a host-only HttpOnly SameSite=Strict session cookie and is redirected
-to the same path. Missing or stale cookies on fetches, frames, cross-site links,
-and unsafe methods cannot establish sessions. Cookies rotate when listeners are
-restored, but the address does not. This cookie is a browser session cookie,
-without Secure or a timed Max-Age; authorization still happens per request.
+Browser pages and same-origin assets/fetches need no Wispnet browser session.
+GET navigations to a top-level document are also accepted from external links
+and Android app intents. Cross-site frames and requests without an Origin remain
+restricted; website API access follows the device-level policy below. Old
+`/_wispnet/start` and `/_wispnet/session` endpoints return 404. Obsolete
+`_wispnet_session` cookies are ignored and stripped before forwarding; ordinary
+application cookies continue to work. Saved URLs, including deep links, are usable
+as soon as the app is online without opening the service again.
 
 The trust boundary excludes hostile same-UID/root processes and application
 scripts accessing their own origin. A browser secure-context flag does not
@@ -76,10 +77,11 @@ URLs. Ordinary relative fixture login passes in Chromium and Firefox.
 ## HTTP boundary
 
 - Exact Host, single Origin and Fetch Metadata are checked before backend access.
-  Cross-site/sibling/null-origin requests are rejected, including GET and
-  WebSocket. Non-GET/HEAD requests and WebSocket require exact same-origin Origin.
-  Only direct user navigation can mint a session; external cross-site navigation
-  and missing app handoff tokens grant no access.
+  Requests carrying a valid website Origin follow the device-level API policy.
+  Without Origin, cross-site fetches and frames are rejected; browser writes and
+  WebSocket requests require Origin. Native requests use device-level grants.
+  Browser pages require no gateway cookie or handoff token. Top-level GET
+  navigation is accepted from bookmarks, existing tabs, links and app intents.
 - Browser-facing requests must be HTTP/1.1 origin-form. GET/HEAD/POST/PUT/PATCH/
   DELETE/OPTIONS are supported; TRACE/CONNECT and other methods get 405.
   Uploads require a single decimal Content-Length (zero if absent), at most
@@ -170,29 +172,24 @@ Normative references: [HTTP/1.1 message framing, RFC 9112](https://www.rfc-edito
 [Set-Cookie semantics](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Set-Cookie),
 and [service-worker script requests](https://w3c.github.io/ServiceWorker/#service-worker-script-request).
 
-Android Chrome may classify app-to-browser intents as cross-site. Explicit Open
-therefore also issues a separate `launch_url` with a one-use, 60-second fragment
-token. Its isolated landing page exchanges that token for the same session cookie,
-then navigates to the stable root URL. Tokens are bounded, never stored on disk,
-and do not impose a lifetime on a service address or authenticated session.
-Desktop browsers can open the stable root directly. Bookmarks retain the root URL.
+Android and desktop launch the stable root URL directly. Browser/API access has
+no Wispnet session cookie or launch token; backend application authentication is
+unchanged.
 
 ## Persistent URL regression coverage
 
-Current native regressions check stable deduplicated addresses, exact-port restoration
-after client recreation, port conflict failure, credential rotation, cross-origin
-and iframe denial, missing cookies, service isolation, local policy withdrawal on
-an existing route, and continued access after advancing past the old ten-minute
-boundary. Header and aggregate socket limits remain bounded. The Android optional
-`--persistent-session` acceptance run streams for more than ten minutes and checks
-that the same address and credential still work; it replaces the old expiry test.
+Current regressions cover cookie-free browser navigation and assets, saved deep
+links immediately after a real node restart without Open, startup restoration,
+restoration failures, stable ports, host authorization, local policy withdrawal,
+and continued access beyond the former ten-minute boundary. Header and aggregate
+socket limits remain bounded. Historical session/bootstrap checks above describe
+the earlier design, before the browser session requirement was removed.
 
 ## Device-level HTTP API
 
 The [shared service registry](service-registry.md) uses the device's host/service
-grants without per-app consent or API access tokens. Approved website origins
-can call service APIs directly; other website requests are blocked before reaching
-the backend. Upstream CORS headers remain stripped; the gateway generates its own
+grants without per-app consent or API access tokens. All valid website origins
+can call service APIs directly under the device's host/service grants. Upstream CORS headers remain stripped; the gateway generates its own
 approved-origin headers. The registry and service listeners remain loopback-only,
 reject unexpected Host headers, and expose no management operations. Ports are
 configurable, with stable saved addresses and explicit conflict errors.
