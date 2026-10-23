@@ -97,7 +97,7 @@ class MachineCard extends StatelessWidget {
                     ),
                   ],
                 );
-                return constraints.maxWidth < 460
+                return constraints.maxWidth < 320
                     ? Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [title, const SizedBox(height: 6), status],
