@@ -404,6 +404,22 @@ void main() {
     tester,
   ) async {
     final backend = FakeBackend();
+    String? copied;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copied = call.arguments['text'] as String;
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
     await mount(tester, backend, size: const Size(1000, 850));
     final mouse = await tester.createGesture(kind: ui.PointerDeviceKind.mouse);
     await mouse.addPointer(location: Offset.zero);
@@ -453,15 +469,18 @@ void main() {
     await tester.pumpAndSettle();
     expect(overlay(controls[2]).a, 0);
     final service = controls[1];
-    final gear = find.byTooltip('Settings for website on j-strix');
-    expect(tester.getRect(service).contains(tester.getCenter(gear)), isTrue);
-    await mouse.moveTo(tester.getCenter(gear));
+    expect(find.byTooltip('Settings for website on j-strix'), findsNothing);
+    final copy = find.byTooltip('Copy Wispnet link for website');
+    expect(tester.getRect(service).contains(tester.getCenter(copy)), isTrue);
+    await mouse.moveTo(tester.getCenter(copy));
     await tester.pumpAndSettle();
     expect(overlay(service).a, greaterThan(.1));
-    await mouse.down(tester.getCenter(gear));
+    await mouse.down(tester.getCenter(copy));
     await mouse.up();
     await tester.pumpAndSettle();
-    expect(find.byTooltip('Close'), findsOneWidget);
+    expect(find.byTooltip('Close'), findsNothing);
+    expect(copied, 'wispnet://$peer/website');
+    expect(backend.calls.where((call) => call.$1 == 'settings'), isEmpty);
     expect(backend.calls.where((call) => call.$1 == 'open'), isEmpty);
     await mouse.removePointer();
     await close(tester);

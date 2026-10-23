@@ -14,7 +14,7 @@ class MachineCard extends StatelessWidget {
     required this.busy,
     required this.onManage,
     required this.onOpen,
-    required this.onSettings,
+    this.onSettings,
     required this.onReorder,
     this.showHeader = true,
   });
@@ -25,7 +25,8 @@ class MachineCard extends StatelessWidget {
   final Color stateColor;
   final bool busy;
   final VoidCallback onManage;
-  final ValueChanged<Map<String, dynamic>> onOpen, onSettings;
+  final ValueChanged<Map<String, dynamic>> onOpen;
+  final ValueChanged<Map<String, dynamic>>? onSettings;
   final void Function(
     String group,
     List<String> ids,
@@ -316,15 +317,16 @@ class MachineCard extends StatelessWidget {
                       },
                 icon: const Icon(Icons.copy, size: 20, color: WispColors.cyan),
               ),
-            IconButton(
-              tooltip: 'Settings for ${service['id']} on ${machine.name}',
-              onPressed: busy ? null : () => onSettings(service),
-              icon: const Icon(
-                Icons.settings,
-                size: 24,
-                color: WispColors.muted,
+            if (onSettings != null)
+              IconButton(
+                tooltip: 'Settings for ${service['id']} on ${machine.name}',
+                onPressed: busy ? null : () => onSettings!(service),
+                icon: const Icon(
+                  Icons.settings,
+                  size: 24,
+                  color: WispColors.muted,
+                ),
               ),
-            ),
           ],
         ),
       ),

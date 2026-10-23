@@ -661,12 +661,9 @@ class SettingsForm extends StatefulWidget {
     required this.backend,
     required this.deviceName,
     required this.onSaved,
-    this.host,
-    this.service,
   });
   final WispnetBackend backend;
   final String deviceName;
-  final String? host, service;
   final VoidCallback onSaved;
   @override
   State<SettingsForm> createState() => _SettingsFormState();
@@ -678,7 +675,6 @@ class _SettingsFormState extends State<SettingsForm> {
   bool loading = true, saving = false, opening = false;
   String? error;
   String address = '';
-  bool get global => widget.host == null;
   @override
   void initState() {
     super.initState();
@@ -694,10 +690,7 @@ class _SettingsFormState extends State<SettingsForm> {
 
   Future<void> load() async {
     try {
-      final result = await widget.backend.invoke('settings', {
-        'host': widget.host,
-        'service': widget.service,
-      });
+      final result = await widget.backend.invoke('settings');
       if (!mounted) return;
       port.text = '${result['port'] ?? ''}';
       setState(() {
@@ -714,9 +707,8 @@ class _SettingsFormState extends State<SettingsForm> {
     }
   }
 
-  String get browserAddress => global
-      ? Uri.parse(address).replace(path: '/v1/services').toString()
-      : address;
+  String get browserAddress =>
+      Uri.parse(address).replace(path: '/v1/services').toString();
 
   Future<void> openAddress() async {
     if (opening || address.isEmpty) return;
@@ -741,7 +733,7 @@ class _SettingsFormState extends State<SettingsForm> {
       return;
     }
     final value = name.text.trim();
-    if (global && !RegExp(r'^[a-z0-9][a-z0-9._-]{0,63}$').hasMatch(value)) {
+    if (!RegExp(r'^[a-z0-9][a-z0-9._-]{0,63}$').hasMatch(value)) {
       setState(
         () => error = 'Use 1–64 lowercase letters, numbers, dots, underscores or hyphens; start with a letter or number.',
       );
@@ -753,10 +745,8 @@ class _SettingsFormState extends State<SettingsForm> {
     });
     try {
       await widget.backend.invoke('saveSettings', {
-        'host': widget.host,
-        'service': widget.service,
         'port': number,
-        if (global) 'name': value,
+        'name': value,
       });
       if (mounted) widget.onSaved();
     } catch (e) {
@@ -770,19 +760,15 @@ class _SettingsFormState extends State<SettingsForm> {
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      if (global) ...[
-        TextField(
-          controller: name,
-          enabled: !saving,
-          decoration: const InputDecoration(labelText: 'Device ID'),
-        ),
-        const SizedBox(height: 12),
-      ],
-      Text(
-        global
-            ? 'One HTTP port for all Wispnet services and the registry on this device. Default: 7842. Changes reconnect active sessions.'
-            : 'All services share this port on this device. Changing it also changes the registry and every other service URL.',
-        style: const TextStyle(color: WispColors.muted),
+      TextField(
+        controller: name,
+        enabled: !saving,
+        decoration: const InputDecoration(labelText: 'Device ID'),
+      ),
+      const SizedBox(height: 12),
+      const Text(
+        'One HTTP port for all Wispnet services and the registry on this device. Default: 7842. Changes reconnect active sessions.',
+        style: TextStyle(color: WispColors.muted),
       ),
       const SizedBox(height: 16),
       TextField(
@@ -803,9 +789,7 @@ class _SettingsFormState extends State<SettingsForm> {
             child: Semantics(
               link: true,
               child: Tooltip(
-                message: global
-                    ? 'Open registry JSON in browser'
-                    : 'Open service in browser',
+                message: 'Open registry JSON in browser',
                 child: WispInkWell(
                   key: const ValueKey('settings-address'),
                   onTap: opening || saving ? null : openAddress,
@@ -821,21 +805,6 @@ class _SettingsFormState extends State<SettingsForm> {
               ),
             ),
           ),
-        ),
-      if (!global)
-        TextButton.icon(
-          onPressed: () async {
-            await Clipboard.setData(
-              ClipboardData(text: 'wispnet://${widget.host}/${widget.service}'),
-            );
-            if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Wispnet link copied')),
-              );
-            }
-          },
-          icon: const Icon(Icons.link),
-          label: const Text('Copy Wispnet link'),
         ),
       if (error != null)
         Padding(
@@ -853,7 +822,7 @@ class _SettingsFormState extends State<SettingsForm> {
               : 'Save',
         ),
       ),
-      if (global && Theme.of(context).platform == TargetPlatform.android) ...[
+      if (Theme.of(context).platform == TargetPlatform.android) ...[
         const SizedBox(height: 12),
         OutlinedButton(
           onPressed: saving

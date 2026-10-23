@@ -407,10 +407,7 @@ class _WispHomeState extends State<WispHome>
     );
   }
 
-  Future<void> localServiceSettings(
-    Machine machine,
-    Map<String, dynamic> service,
-  ) async {
+  Future<void> localServiceSettings(Map<String, dynamic> service) async {
     await showWispSheet<void>(
       context,
       title: service['id'] as String,
@@ -418,7 +415,7 @@ class _WispHomeState extends State<WispHome>
         backend: backend,
         servicesOnly: true,
         serviceId: service['id'] as String,
-        onAccess: () => settings(machine: machine, service: service),
+        onAccess: settings,
         onChanged: () {
           unawaited(poll());
           unawaited(refresh());
@@ -427,18 +424,13 @@ class _WispHomeState extends State<WispHome>
     );
   }
 
-  Future<void> settings({
-    Machine? machine,
-    Map<String, dynamic>? service,
-  }) async {
+  Future<void> settings() async {
     await showWispSheet<void>(
       context,
-      title: service?['id'] as String? ?? 'Settings',
+      title: 'Settings',
       child: SettingsForm(
         backend: backend,
         deviceName: snapshot['name'] as String? ?? '',
-        host: machine?.id,
-        service: service?['id'] as String?,
         onSaved: () {
           Navigator.pop(context);
           notice('Settings saved');
@@ -532,9 +524,9 @@ class _WispHomeState extends State<WispHome>
     busy: busy,
     onManage: () => machineSettings(machine),
     onOpen: (service) => open(machine, service),
-    onSettings: (service) => local && snapshot['desktop'] == true
-        ? localServiceSettings(machine, service)
-        : settings(machine: machine, service: service),
+    onSettings: local && snapshot['desktop'] == true
+        ? localServiceSettings
+        : null,
     onReorder: reorder,
   );
 

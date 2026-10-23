@@ -20,9 +20,9 @@ an origin list. Native clients without browser Origin/Fetch Metadata headers use
 device-level access. This is discovery/access only; the
 registry never exposes pairing, policy changes or settings commands.
 
-**Wispnet port** in Settings changes the shared port on that device. Service
-settings show the same value; changing it changes every service URL and the
-registry URL. For example, both of these can use one loopback listener:
+**Wispnet port** in device Settings changes the shared port on that device.
+Changing it changes every service URL and the registry URL. Service cards have
+no individual Wispnet port setting. For example, both of these use one loopback listener:
 
 ```
 http://j-strix-0123456789ab-llama.localhost:7842/
