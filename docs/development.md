@@ -87,11 +87,12 @@ There is no installed systemd service yet.
 
 ## Configuration and logging
 
-device_name is optional and defaults to the operating system hostname (Linux).
-Explicit names are preserved; omit the field to follow the machine name on startup.
-Android uses the device name from system settings, falling back to the model name;
-a custom Wispnet name overrides this default.
-The other three TOML fields are required. schema_version must be 1; device_name must
+device_id is optional and defaults to a normalized operating system hostname (Linux).
+The legacy device_name key is accepted as an alias for the same readable ID.
+Legacy names are normalized into one readable ID; omit the field to derive it
+from the OS name on startup. Android saves a normalized system/model name once
+and lets the owner edit that single Device ID in Wispnet settings.
+The other three TOML fields are required. schema_version must be 1; a legacy device_name value must
 be nonblank, at most 128 bytes and contain no control characters; state_dir
 must be absolute, non-root and contain no parent traversal; log_level accepts
 error, warn, info or debug. Optional transport/services define static service

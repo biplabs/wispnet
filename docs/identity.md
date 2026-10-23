@@ -11,8 +11,8 @@ cargo run -p wispnet-cli -- agent --config "$HOME/.config/wispnet/agent.toml"
 ```
 
 Initialization returns an existing valid identity unchanged. Status prints the
-configured device name and public endpoint ID, including while the agent runs.
-Device name is a display label, not an authenticated human identity. Target-host
+readable device ID and public host ID, including while the agent runs.
+The readable device ID is independent of the protected cryptographic host identity. Target-host
 pairing, approvals and service grants are implemented; see
 [pairing](pairing-bootstrap.md) and [host control](per-host-control.md).
 

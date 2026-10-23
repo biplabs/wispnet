@@ -304,29 +304,6 @@ class MachineSettings extends StatefulWidget {
 class _MachineSettingsState extends State<MachineSettings> {
   bool busy = false;
   String? error;
-  late final label = TextEditingController(text: widget.machine.name);
-  @override
-  void dispose() {
-    label.dispose();
-    super.dispose();
-  }
-
-  Future<void> rename() async {
-    setState(() => busy = true);
-    try {
-      await widget.backend.invoke('renameHost', {
-        'host': widget.machine.id,
-        'name': label.text,
-      });
-      widget.onChanged();
-      if (mounted) Navigator.pop(context);
-    } catch (e) {
-      if (mounted) setState(() => error = failureMessage(e));
-    } finally {
-      if (mounted) setState(() => busy = false);
-    }
-  }
-
   Future<void> perform(String method) async {
     setState(() {
       busy = true;
@@ -380,21 +357,10 @@ class _MachineSettingsState extends State<MachineSettings> {
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
       SelectableText(
-        'Device ID\n${widget.machine.id}',
+        'Device ID\n${widget.machine.name}\n\nHost ID\n${widget.machine.id}',
         style: const TextStyle(color: WispColors.muted),
       ),
       const SizedBox(height: 16),
-      TextField(
-        controller: label,
-        decoration: const InputDecoration(labelText: 'Display name'),
-        enabled: !busy,
-      ),
-      const SizedBox(height: 12),
-      OutlinedButton(
-        onPressed: busy ? null : rename,
-        child: const Text('Save name'),
-      ),
-      const SizedBox(height: 12),
       OutlinedButton(
         style: dangerStyle,
         onPressed: busy ? null : confirmRemove,
@@ -776,13 +742,9 @@ class _SettingsFormState extends State<SettingsForm> {
       return;
     }
     final value = name.text.trim();
-    if (global &&
-        (value.isEmpty ||
-            utf8.encode(value).length > 128 ||
-            value.runes.any((c) => c < 32 || c >= 127 && c <= 159))) {
+    if (global && !RegExp(r'^[a-z0-9][a-z0-9._-]{0,63}$').hasMatch(value)) {
       setState(
-        () => error =
-            'Enter a name up to 128 UTF-8 bytes, without control characters.',
+        () => error = 'Use 1–64 lowercase letters, numbers, dots, underscores or hyphens; start with a letter or number.',
       );
       return;
     }
@@ -813,7 +775,7 @@ class _SettingsFormState extends State<SettingsForm> {
         TextField(
           controller: name,
           enabled: !saving,
-          decoration: const InputDecoration(labelText: 'Device name'),
+          decoration: const InputDecoration(labelText: 'Device ID'),
         ),
         const SizedBox(height: 12),
       ],

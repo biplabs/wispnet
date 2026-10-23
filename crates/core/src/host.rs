@@ -12,6 +12,7 @@ pub enum Request {
     Diagnostic {},
     RouterMapping {},
     SetName { name: String },
+    DeviceId {},
 }
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]

@@ -19,7 +19,7 @@ catalog expiry or application database at the relay is involved.
     {
       "id": "website",
       "incarnation": "64_HEX_SERVICE_INCARNATION",
-      "display_name": "My website",
+      "display_name": "website",
       "kind": "http"
     }
   ]
@@ -94,17 +94,15 @@ deadlines retain their separate existing contracts.
 
 ## Service metadata and upgrade
 
-SQLite schema 8 stores `display_name` and `kind` on the owner. Existing rows get
-their local ID as display name and type `http`, matching the previous browser
-workflow. The migration advances revision once if existing services gain this
-metadata, preserving host identity/generation, incarnations, credentials, grants,
-pins and operation receipts. Schema 9 adds durable mutual-pairing records without changing service metadata or policy revisions. Schema 10 adds pairing session IDs and local removal state for authenticated checks on contact. Schema-5/6/7/8/9 binaries cannot open schema 10.
+SQLite schema 11 removes the stored `display_name` column. Existing service
+IDs, incarnations, pairings and grants remain unchanged. Catalog version 1 keeps
+`display_name` as a compatibility field derived from `id`; clients display `id`.
+The migration advances the revision when the compatibility field changes, so
+existing durable baselines accept the new snapshot. Legacy owner mutations can
+still send a bounded `display_name`, which is ignored. Optional `kind` preserves
+an existing type when omitted; changing it rotates the incarnation.
 
-Owner `service` mutations accept optional `display_name` and `kind`. Omitted/null
-metadata preserves an existing record; a fresh record defaults to its ID/`http`.
-The desktop service editor exposes both fields. Plain label edits preserve the
-incarnation. Changing HTTP/TCP type rotates it so old browser sessions cannot
-switch to a newly typed TCP backend. TCP services are listed but cannot Open in
+TCP services are listed but cannot Open in
 the HTTP browser gateway; explicitly use the native tunnel CLI for them. No
 backend address, grants or admin information are published in peer catalogs.
 

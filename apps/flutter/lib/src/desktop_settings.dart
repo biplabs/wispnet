@@ -167,16 +167,10 @@ class _DesktopSettingsState extends State<DesktopSettings> {
   Future<void> editService([Map<String, dynamic>? service]) async {
     final current = status!;
     final id = TextEditingController(text: service?['id'] as String?);
-    final name = TextEditingController(
-      text: service?['display_name'] as String?,
-    );
     final endpoint = Uri.parse(
       'tcp://${service?['backend'] ?? '127.0.0.1:8080'}',
     );
     final portField = TextEditingController(text: endpoint.port.toString());
-    final existingIds = services.map((s) => s['id'] as String).toSet();
-    var customId = false;
-    String suggestedId() => _serviceId(name.text, existingIds);
     var kind = service?['kind'] as String? ?? 'http';
     final allowed = (service?['allow'] as List? ?? []).cast<String>().toSet();
     final devices = List<Map<String, dynamic>>.of(clients);
@@ -184,45 +178,19 @@ class _DesktopSettingsState extends State<DesktopSettings> {
       context,
       title: service == null ? 'Share a service' : 'Edit service',
       child: _ActionForm(
-        controllers: [id, name, portField],
+        controllers: [id, portField],
         builder: (context, submit, working, failure) => StatefulBuilder(
           builder: (context, update) => Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               TextField(
-                controller: name,
-                enabled: !working,
-                decoration: const InputDecoration(labelText: 'Service name'),
-                onChanged: (_) {
-                  if (service == null && !customId) id.text = suggestedId();
-                  update(() {});
-                },
-              ),
-              const SizedBox(height: 12),
-              TextField(
                 controller: id,
                 enabled: service == null && !working,
-                onChanged: (value) =>
-                    update(() => customId = value != suggestedId()),
                 decoration: InputDecoration(
                   labelText: 'Service ID',
-                  helperText: service != null
-                      ? 'Kept unchanged when renamed'
-                      : customId
-                      ? 'Custom ID'
-                      : 'Generated from the service name',
-                  suffixIcon: service == null && customId
-                      ? IconButton(
-                          tooltip: 'Generate from service name',
-                          onPressed: working
-                              ? null
-                              : () => update(() {
-                                  customId = false;
-                                  id.text = suggestedId();
-                                }),
-                          icon: const Icon(Icons.refresh),
-                        )
-                      : null,
+                  helperText: service == null
+                      ? '1–64 lowercase letters, numbers, dots, underscores or hyphens'
+                      : 'Used in URLs and access grants',
                 ),
               ),
               const SizedBox(height: 12),
@@ -302,9 +270,6 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                         await mutate({
                           'op': 'service',
                           'id': serviceId,
-                          'display_name': name.text.trim().isEmpty
-                              ? serviceId
-                              : name.text.trim(),
                           'backend': address,
                           'kind': kind,
                           'allow': allowed.toList(),
@@ -344,7 +309,7 @@ class _DesktopSettingsState extends State<DesktopSettings> {
               ),
               for (final s in available)
                 CheckboxListTile(
-                  title: Text(s['display_name'] as String),
+                  title: Text(s['id'] as String),
                   value: allowed.contains(s['id']),
                   onChanged: working || existing.contains(s['id'])
                       ? null
@@ -414,15 +379,13 @@ class _DesktopSettingsState extends State<DesktopSettings> {
               TextField(
                 controller: peer,
                 enabled: plan == null && !working,
-                decoration: const InputDecoration(
-                  labelText: 'Client public ID',
-                ),
+                decoration: const InputDecoration(labelText: 'Host ID'),
               ),
               if (op == 'approve')
                 TextField(
                   controller: name,
                   enabled: plan == null && !working,
-                  decoration: const InputDecoration(labelText: 'Client name'),
+                  decoration: const InputDecoration(labelText: 'Device ID'),
                 ),
               for (final target in targets)
                 CheckboxListTile(
@@ -455,12 +418,12 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                                   .hasMatch(peer.text.trim()) ||
                               selected.isEmpty ||
                               op == 'approve' &&
-                                  (name.text.trim().isEmpty ||
-                                      name.text.trim().length > 80)) {
+                                  !RegExp(r'^[a-z0-9][a-z0-9._-]{0,63}$')
+                                      .hasMatch(name.text.trim())) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               const SnackBar(
                                 content: Text(
-                                  'Enter a full client ID, a name for approval, and select hosts.',
+                                  'Enter a full host ID, a device ID for approval, and select hosts.',
                                 ),
                               ),
                             );
@@ -614,7 +577,7 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    s['display_name'] as String,
+                    s['id'] as String,
                     style: const TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
@@ -636,7 +599,7 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                     () => run(
                       () => confirm(
                         'Remove service?',
-                        'Remove “${s['display_name']}” from this machine’s shared services? Paired devices will lose Wispnet access, and its public URL will stop working. This does not stop or delete the underlying application.',
+                        'Remove “${s['id']}” from this machine’s shared services? Paired devices will lose Wispnet access, and its public URL will stop working. This does not stop or delete the underlying application.',
                         () => mutate({
                           'op': 'remove',
                           'id': s['id'],
@@ -756,8 +719,8 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                 ? 'Disable public access?'
                 : 'Expose service to the internet?',
             enabled
-                ? 'Stop public internet access to “${service['display_name']}”? Its public URL will stop working. Approved paired devices will keep their Wispnet access.'
-                : 'This exposes “${service['display_name']}” unprotected to the public internet. Anyone with the public URL can connect without pairing, device approval, or Wispnet authentication. Wispnet adds no password or access protection; any login must be provided by the service itself.',
+                ? 'Stop public internet access to “${service['id']}”? Its public URL will stop working. Approved paired devices will keep their Wispnet access.'
+                : 'This exposes “${service['id']}” unprotected to the public internet. Anyone with the public URL can connect without pairing, device approval, or Wispnet authentication. Wispnet adds no password or access protection; any login must be provided by the service itself.',
             () => request({
               'op': 'configure_public',
               'service': service['id'],
@@ -1002,30 +965,4 @@ class _QrPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_QrPainter oldDelegate) => oldDelegate.matrix != matrix;
-}
-
-String _serviceId(String name, Set<String> existingIds) {
-  if (name.trim().isEmpty) return '';
-  var base = name
-      .replaceAllMapped(
-        RegExp(r'([A-Z]+)([A-Z][a-z])'),
-        (m) => '${m[1]}_${m[2]}',
-      )
-      .replaceAllMapped(RegExp(r'([a-z0-9])([A-Z])'), (m) => '${m[1]}_${m[2]}')
-      .toLowerCase()
-      .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
-      .replaceAll(RegExp(r'^_+|_+$'), '');
-  if (base.isEmpty) base = 'service';
-  if (base.length > 64) {
-    base = base.substring(0, 64).replaceAll(RegExp(r'_+$'), '');
-  }
-  var candidate = base;
-  for (var suffix = 2; existingIds.contains(candidate); suffix++) {
-    final ending = '_$suffix';
-    final prefix = base.length + ending.length > 64
-        ? base.substring(0, 64 - ending.length)
-        : base;
-    candidate = '${prefix.replaceAll(RegExp(r'_+$'), '')}$ending';
-  }
-  return candidate;
 }

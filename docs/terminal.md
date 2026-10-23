@@ -77,7 +77,7 @@ service access. On either machine, use **Local services → Edit service and
 permitted devices** to allow access independently. A second QR scan is unnecessary.
 Both nodes need the updated mutual-pairing implementation; existing phone clients
 keep their client-only flow. Existing pairings are not automatically converted.
-The TUI shares display names with the
+The TUI displays the same readable device and service IDs as the
 desktop and clears that host's stale display catalog after explicit re-pairing.
 
 ## Machines and services

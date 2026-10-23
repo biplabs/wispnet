@@ -77,7 +77,7 @@ with tempfile.TemporaryDirectory(prefix="wispnet-smoke-") as temporary:
                     database = state / "registry.sqlite3"
                     assert database.stat().st_mode & 0o777 == 0o600
                     with sqlite3.connect(database) as db:
-                        assert db.execute("PRAGMA user_version").fetchone() == (10,)
+                        assert db.execute("PRAGMA user_version").fetchone() == (11,)
                         db.execute("UPDATE revision SET value=7 WHERE id=1")
                     restarted = subprocess.Popen(
                         [binary, mode, "--config", config], stdout=subprocess.PIPE,

@@ -1029,7 +1029,9 @@ async fn authenticated_device_name_updates_only_own_label_and_preserves_access()
         "127.0.0.1:8201".parse().unwrap(),
         2,
     );
-    let authority = Authority::open(directory.path(), key.endpoint_id()).unwrap();
+    let authority = Authority::open(directory.path(), key.endpoint_id())
+        .unwrap()
+        .with_device_id("j-strix");
     let server = tunnel::TunnelHost::bind_host(key.secret_key(), &config(), authority.clone())
         .await
         .unwrap();
@@ -1041,6 +1043,30 @@ async fn authenticated_device_name_updates_only_own_label_and_preserves_access()
     )
     .await
     .unwrap();
+    assert_eq!(
+        control::device_id_on(&connection, key.endpoint_id())
+            .await
+            .unwrap(),
+        "j-strix"
+    );
+    assert!(
+        control::device_id_on(&connection, other.endpoint_id())
+            .await
+            .is_err()
+    );
+    let initial_revision = authority.snapshot().await.unwrap().revision;
+    authority.set_device_id("j-strix-").unwrap();
+    assert!(authority.set_device_id("bad id").is_err());
+    assert_eq!(
+        control::device_id_on(&connection, key.endpoint_id())
+            .await
+            .unwrap(),
+        "j-strix-"
+    );
+    assert_eq!(
+        authority.snapshot().await.unwrap().revision,
+        initial_revision
+    );
     let before = control::catalog_on(&connection, key.endpoint_id())
         .await
         .unwrap();
@@ -1055,7 +1081,7 @@ async fn authenticated_device_name_updates_only_own_label_and_preserves_access()
             .find(|c| c.peer == device.endpoint_id())
             .unwrap()
             .name,
-        "Johnny’s phone"
+        "johnny-s-phone"
     );
     assert_eq!(
         snapshot
@@ -1114,7 +1140,7 @@ async fn authenticated_device_name_updates_only_own_label_and_preserves_access()
             .find(|c| c.peer == device.endpoint_id())
             .unwrap()
             .name,
-        "Johnny’s phone"
+        "johnny-s-phone"
     );
     mutate(
         directory.path(),
@@ -1126,6 +1152,11 @@ async fn authenticated_device_name_updates_only_own_label_and_preserves_access()
     );
     assert!(
         control::set_name_on(&connection, key.endpoint_id(), "Revoked")
+            .await
+            .is_err()
+    );
+    assert!(
+        control::device_id_on(&connection, key.endpoint_id())
             .await
             .is_err()
     );

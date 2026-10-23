@@ -123,7 +123,7 @@ def main():
                     else request(source, {"op": "catalog", "host": host})
                 )
                 service = next(s for s in catalog["services"] if s["id"] == name)
-                assert service["display_name"] == "<script>malicious metadata</script>"
+                assert service["display_name"] == service["id"]
                 urls.append(
                     request(
                         source,

@@ -46,7 +46,7 @@ fn approval_confirms_the_original_peer_invitation_and_revision() {
 fn service_form_explicit_grants_and_revision_survive_concurrent_refresh() {
     let (mut app, rx, _) = fixture();
     let mut form = app.service_form(None);
-    form.fields[0].value = "Local dashboard".into();
+    form.fields[0].value = "local-dashboard".into();
     form.fields[1].value = "8310".into();
     form.fields[3].kind = FieldKind::Check(false);
     app.save_form(form).unwrap();
@@ -62,6 +62,7 @@ fn service_form_explicit_grants_and_revision_survive_concurrent_refresh() {
     assert_eq!(v["operation"]["allow"], json!([]));
     assert_eq!(v["operation"]["backend"], "127.0.0.1:8310");
     assert_eq!(v["operation"]["id"], "local-dashboard");
+    assert!(v["operation"].get("display_name").is_none());
     assert_eq!(v["operation"]["expected_revision"], 7);
 }
 #[test]

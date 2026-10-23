@@ -74,7 +74,7 @@ def main():
             assert (
                 records[ids[0]]["kind"] == "http" and records[ids[1]]["kind"] == "tcp"
             )
-            assert records[ids[1]]["display_name"] == "Snapshot fixture tcp"
+            assert records[ids[1]]["display_name"] == ids[1]
             request(source, {"op": "enable"})
             request(
                 source,

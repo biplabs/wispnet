@@ -20,7 +20,8 @@ pub async fn run(
     let identity = store.load()?;
     if config.schema_version == 2 {
         let authority =
-            wispnet_registry::host::Authority::open(&config.state_dir, identity.endpoint_id())?;
+            wispnet_registry::host::Authority::open(&config.state_dir, identity.endpoint_id())?
+                .with_device_id(&config.device_name);
         let host = tunnel::TunnelHost::bind_host(
             identity.secret_key(),
             config.transport.as_ref().ok_or("host transport required")?,

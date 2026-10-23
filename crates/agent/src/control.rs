@@ -103,6 +103,15 @@ pub(crate) async fn serve_stream(
             Err(_) => return Err(TunnelError::Transport("control unavailable")),
         };
         counts.record_activity(peer);
+        if matches!(request, Request::DeviceId {}) {
+            let bytes = serde_json::to_vec(&serde_json::json!({
+                "host": authority.host(), "device_id": authority.device_id()
+            }))
+            .map_err(|_| TunnelError::Transport("invalid device ID"))?;
+            write_frame(&mut send, &bytes).await?;
+            let _ = send.stopped().await;
+            return Ok(());
+        }
         if matches!(request, Request::RouterMapping {}) {
             let report = crate::diagnostics::router_mapping_report(&diagnostics.endpoint).await;
             if !authority.approved(peer).await {
@@ -203,7 +212,36 @@ pub async fn catalog_on(
     result
 }
 
-/// Display metadata only: the authenticated caller cannot choose another peer ID.
+/// Read the owning host's canonical readable ID over a pinned connection.
+pub async fn device_id_on(
+    connection: &Connection,
+    expected: EndpointId,
+) -> Result<String, TunnelError> {
+    if connection.remote_id() != expected {
+        return Err(TunnelError::Transport("device ID target identity mismatch"));
+    }
+    timeout(HANDSHAKE_TIMEOUT, async {
+        let (mut send, mut recv) = connection
+            .open_bi()
+            .await
+            .map_err(|_| TunnelError::Transport("control stream failed"))?;
+        write_frame(&mut send, br#"{"op":"device_id"}"#).await?;
+        let bytes = read_frame(&mut recv, 1024).await?;
+        let reply: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|_| TunnelError::Transport("invalid device ID response"))?;
+        let id = reply["device_id"]
+            .as_str()
+            .ok_or(TunnelError::Transport("missing device ID"))?;
+        if reply["host"] != expected.to_string() || !wispnet_core::protocol::valid_service_id(id) {
+            return Err(TunnelError::Transport("invalid device ID response"));
+        }
+        Ok(id.to_owned())
+    })
+    .await
+    .map_err(|_| TunnelError::Transport("device ID request timeout"))?
+}
+
+/// Readable ID metadata only: the authenticated caller cannot choose another peer.
 pub async fn set_name_on(
     connection: &Connection,
     expected: EndpointId,

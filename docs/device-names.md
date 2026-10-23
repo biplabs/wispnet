@@ -1,22 +1,37 @@
-# Device display names
+# Readable device and service IDs
 
-Android uses the system device name, falling back to the model name when the
-system setting is unavailable. Manage system → Device name saves an app-specific
-override without changing the Android system setting. Names are limited to 128
-UTF-8 bytes and cannot be blank or contain control characters.
+Devices and services each have one readable ID, used in the UI and in generated
+browser addresses. There are no separate display names or per-client aliases.
+IDs use 1–64 lowercase ASCII letters, digits, dots, underscores or hyphens and
+start with a letter or digit. A service ID is unique within its owning host.
+Device IDs need not be globally unique; generated addresses retain the host-ID
+suffix for disambiguation.
 
-Pairing sends the current name. For existing pairings, the bounded `set_name`
-control RPC updates only the transport-authenticated caller's approved client
-record. It accepts no caller-selected peer ID and cannot create an approval or
-change grants, service incarnations, device keys, or saved browser addresses.
-The host persists the label and advances its revision only when it changes.
+Device settings on desktop and Android label the editable value **Device ID**.
+The protected Ed25519 endpoint identity is labeled **Host ID**. Changing a
+readable device ID does not regenerate the host key, re-pair devices or alter
+service grants. Services are displayed by their existing service IDs; those IDs
+remain fixed when editing their backend, protocol or access list.
 
-Android records each host's acknowledgement separately. Refreshing services and
-online background retries synchronize pending names; acknowledged names cause
-no periodic network request. An unreachable, revoked, or older host never gets
-marked synchronized. Browsing and catalog refresh remain independent of name
-update support. Host apps predating this RPC must be updated to receive renames.
+Android saves the OS device name/model as a readable ID on first use. Existing
+app-specific names are normalized once into that same saved ID. Desktop accepts
+`device_id` in node configuration; `device_name` remains a legacy alias for the
+same field. Legacy device labels are normalized without moving the state directory
+or changing any cryptographic identity. Set `device_id` explicitly on desktop
+to keep the value independent of later OS name changes.
 
-The desktop displays the saved client name with a short identity suffix so two
-devices can use the same name. The full identity remains available in device
-management. Names remain display metadata rather than identity or authority.
+Pairing sends the current readable ID. The existing authenticated `set_name`
+control RPC synchronizes it to approved hosts, updating only the caller's
+existing record. Android records each host's acknowledgement separately and
+retries pending updates while online. Desktop synchronizes during catalog refresh.
+The bounded `device_id` control RPC returns the owning host's ID to approved,
+identity-pinned peers; it updates cached names without creating a pairing or grant.
+An older host may reject this optional RPC without invalidating its catalog.
+
+SQLite schema 11 removes stored service display names. It preserves service IDs,
+incarnations, host authority generation, owner credentials, pairings and grants.
+When a catalog's old display name differs from its ID, the migration advances its
+revision so existing client baselines can accept the changed response. Version-1
+catalogs retain `display_name` solely for installed-client compatibility, always
+derived from the service ID. Legacy owner requests may still send a bounded
+`display_name`, but it is not stored or used by the UI.

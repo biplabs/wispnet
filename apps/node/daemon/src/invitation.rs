@@ -12,11 +12,7 @@ pub fn issue(config: &Config) -> Result<serde_json::Value, Box<dyn std::error::E
         .as_ref()
         .and_then(|t| t.relay_url.as_deref())
         .ok_or("Pairing requires a configured relay")?;
-    let machine = std::process::Command::new("hostname").output()?;
-    let name = std::str::from_utf8(&machine.stdout)?.trim();
-    if !machine.status.success() || !wispnet_core::enrollment::valid_name(name) {
-        return Err("Cannot read a valid machine name".into());
-    }
+    let name = &config.device_name;
     let (mut store, secret) =
         wispnet_registry::host::owner_store(&config.state_dir, identity.endpoint_id())?;
     let mut invitation = store.pairing_invite(

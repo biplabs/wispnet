@@ -146,7 +146,7 @@ fn schema_nine_upgrade_preserves_legacy_pairs_and_policy_without_a_queue() {
     let before = serde_json::to_value(store.host_snapshot(host).unwrap()).unwrap();
     drop(store);
     let db = rusqlite::Connection::open(directory.path().join("host.sqlite3")).unwrap();
-    db.execute_batch("DROP TABLE host_pairing_blocks; DROP TABLE host_legacy_pins; ALTER TABLE host_pairings DROP COLUMN pairing; ALTER TABLE host_pairing_offers DROP COLUMN pairing; PRAGMA user_version=9;").unwrap();
+    db.execute_batch("DROP TABLE host_pairing_blocks; DROP TABLE host_legacy_pins; ALTER TABLE host_pairings DROP COLUMN pairing; ALTER TABLE host_pairing_offers DROP COLUMN pairing; ALTER TABLE host_services ADD COLUMN display_name TEXT NOT NULL DEFAULT ''; UPDATE host_services SET display_name=id; PRAGMA user_version=9;").unwrap();
     drop(db);
     let (mut store, _) = host::owner_store(directory.path(), host).unwrap();
     assert_eq!(

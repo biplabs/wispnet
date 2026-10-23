@@ -89,7 +89,9 @@ public final class FlutterMainActivity extends FlutterActivity {
    case "refreshHost": {
     String peer = args.getString("host");
     if (!store.all().has(peer)) throw new Exception("Machine was removed");
-    try { store.catalog(peer, Native.request(new JSONObject().put("op", "catalog").put("host", peer))); DeviceProfile.syncHost(this, peer); }
+    try { store.catalog(peer, Native.request(new JSONObject().put("op", "catalog").put("host", peer))); DeviceProfile.syncHost(this, peer);
+     try { store.deviceId(peer, Native.request(new JSONObject().put("op", "host_device_id").put("host", peer)).getString("device_id")); } catch (Exception olderHost) {}
+    }
     catch (Exception failure) { store.failed(peer, failure); }
     return new JSONObject();
    }
@@ -99,15 +101,11 @@ public final class FlutterMainActivity extends FlutterActivity {
     try {
      String code = normalized(args.getString("code"));
      JSONObject target = preview(code); String peer = target.getString("host");
-     String name = target.optString("host_name", "").trim(); if (name.isEmpty()) name = "Host " + peer.substring(0, 8);
+     String name = target.optString("host_name", "").trim(); if (name.isEmpty()) name = "device-" + peer.substring(0, 8); name = DeviceProfile.readableId(name);
      Native.request(new JSONObject().put("op", "pair").put("name", DeviceProfile.name(this)).put("host", peer).put("invitation", code));
      store.paired(peer, name);
      return new JSONObject().put("host", peer).put("name", name);
     } finally { pairing.set(false); }
-   }
-   case "renameHost": {
-    store.rename(args.getString("host"), args.getString("name"));
-    return new JSONObject();
    }
    case "removeHost": {
     store.remove(args.getString("host"));
@@ -159,7 +157,7 @@ public final class FlutterMainActivity extends FlutterActivity {
     boolean global = args.isNull("host"); int port = args.getInt("port");
     if ((global || port != 0) && (port < 1024 || port > 65535)) throw new Exception("Port must be between 1024 and 65535.");
     String name = global ? args.getString("name").trim() : null;
-    if (global && !DeviceProfile.valid(name)) throw new Exception("Enter a name up to 128 UTF-8 bytes, without control characters.");
+    if (global && !DeviceProfile.valid(name)) throw new Exception("Enter a valid device ID: 1–64 lowercase letters, numbers, dots, underscores or hyphens.");
     JSONObject settings = Native.command("gateway_settings").getJSONObject("settings");
     boolean changed = !global || settings.getInt("registry_port") != port;
     if (global) settings.put("registry_port", port);

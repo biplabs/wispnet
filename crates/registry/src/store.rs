@@ -83,7 +83,7 @@ impl Store {
                 CREATE TABLE services (id TEXT PRIMARY KEY, host TEXT NOT NULL REFERENCES devices(id));
                 CREATE TABLE grants (service TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE, device TEXT NOT NULL REFERENCES devices(id), PRIMARY KEY(service,device));
                 PRAGMA user_version=1;")?,
-            1..=10 => {},
+            1..=11 => {},
             _ => return Err(Error::UnsupportedSchema),
         }
         if version < 2 {
@@ -158,6 +158,16 @@ impl Store {
                 CREATE TABLE host_pairing_blocks(peer TEXT PRIMARY KEY, pairing TEXT NOT NULL);
                 CREATE TABLE host_legacy_pins(peer TEXT PRIMARY KEY);
                 PRAGMA user_version=10;",
+            )?;
+        }
+        if version < 11 {
+            // Retire presentation-only names without changing service keys,
+            // incarnations, host identity, pairings, or grants. Advance catalog
+            // revisions so older caches accept the derived compatibility name.
+            tx.execute_batch(
+                "UPDATE revision SET value=value+1 WHERE EXISTS(SELECT 1 FROM host_services WHERE display_name!=id);
+                ALTER TABLE host_services DROP COLUMN display_name;
+                PRAGMA user_version=11;",
             )?;
         }
         tx.commit()?;

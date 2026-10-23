@@ -36,7 +36,7 @@ class FakeBackend implements WispnetBackend {
     switch (method) {
       case 'snapshot':
         return {
-          'name': 'HiBreak',
+          'name': 'hibreak',
           'peer': 'd' * 64,
           'enabled': enabled,
           'relay': 'connected',
@@ -227,7 +227,7 @@ class DesktopFake extends FakeBackend {
         'hosts': {
           ...reply['hosts'] as Map<String, dynamic>,
           'd' * 64: {
-            'name': 'HiBreak',
+            'name': 'hibreak',
             'local': true,
             'state': 'available',
             'status': 'This machine',
@@ -354,7 +354,7 @@ void main() {
         matching: find.byType(WispInkWell),
       ),
       find.ancestor(
-        of: find.text('Website'),
+        of: find.text('website'),
         matching: find.byType(WispInkWell),
       ),
       find.ancestor(
@@ -394,7 +394,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(overlay(controls[2]).a, 0);
     final service = controls[1];
-    final gear = find.byTooltip('Settings for Website on j-strix');
+    final gear = find.byTooltip('Settings for website on j-strix');
     expect(tester.getRect(service).contains(tester.getCenter(gear)), isTrue);
     await mouse.moveTo(tester.getCenter(gear));
     await tester.pumpAndSettle();
@@ -426,7 +426,7 @@ void main() {
       expect(find.text('REMOTE SECTOR'), findsOneWidget);
       expect(find.text('Online · Direct · 15ms'), findsOneWidget);
       await screenshot(tester, 'android-directory');
-      await tester.tap(find.textContaining('Website', findRichText: true));
+      await tester.tap(find.textContaining('website', findRichText: true));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 1000));
       final opened = backend.calls.where((c) => c.$1 == 'open').single.$2;
@@ -605,7 +605,7 @@ void main() {
   ) async {
     final backend = FakeBackend(state: 'host_denied');
     await mount(tester, backend);
-    await tester.tap(find.textContaining('Website', findRichText: true));
+    await tester.tap(find.textContaining('website', findRichText: true));
     await tester.pump();
     expect(backend.calls.where((c) => c.$1 == 'open'), isEmpty);
     await close(tester);
@@ -645,10 +645,10 @@ void main() {
     final backend = FakeBackend();
     await mount(tester, backend);
     final gesture = await tester.startGesture(
-      tester.getCenter(find.text('Website')),
+      tester.getCenter(find.text('website')),
     );
     await tester.pump(const Duration(milliseconds: 650));
-    await gesture.moveTo(tester.getCenter(find.text('Local model')));
+    await gesture.moveTo(tester.getCenter(find.text('llama')));
     await tester.pump();
     await gesture.up();
     await tester.pump();
@@ -702,7 +702,7 @@ void main() {
     expect(backend.calls.where((c) => c.$1 == 'saveSettings'), isEmpty);
     await tester.pageBack();
     await tester.pumpAndSettle();
-    expect(find.widgetWithText(TextField, 'Device name'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Device ID'), findsOneWidget);
     expect(find.text('Save'), findsOneWidget);
   });
   testWidgets('both ends distinguish refreshed discovery from cached reports', (
@@ -813,6 +813,20 @@ void main() {
       find.widgetWithText(TextField, 'Registry port'),
       '18401',
     );
+    for (final invalid in ['has spaces', 'Uppercase', '-prefix', 'a' * 65]) {
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Device ID'),
+        invalid,
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await tester.pump();
+      expect(find.textContaining('Use 1–64 lowercase'), findsOneWidget);
+      expect(backend.calls.where((c) => c.$1 == 'saveSettings'), isEmpty);
+    }
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Device ID'),
+      'my-phone',
+    );
     await tester.tap(find.widgetWithText(FilledButton, 'Save'));
     await tester.pumpAndSettle();
     expect(
@@ -839,25 +853,17 @@ void main() {
     expect(tester.takeException(), isNull);
     await close(tester);
   });
-  testWidgets('Android can save a private machine display name', (
+  testWidgets('paired machines show one readable ID and their host identity', (
     tester,
   ) async {
     final backend = FakeBackend();
     await mount(tester, backend);
     await tester.tap(find.textContaining('j-strix'));
     await tester.pumpAndSettle();
-    await tester.enterText(
-      find.widgetWithText(TextField, 'Display name'),
-      'My workstation',
-    );
-    await tester.tap(find.text('Save name'));
-    await tester.pumpAndSettle();
-    expect(backend.calls.where((call) => call.$1 == 'renameHost').single.$2, {
-      'host': peer,
-      'name': 'My workstation',
-    });
+    expect(find.text('Device ID\nj-strix\n\nHost ID\n$peer'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Display name'), findsNothing);
     expect(find.text('Save name'), findsNothing);
-    expect(tester.takeException(), isNull);
+    expect(backend.calls.where((call) => call.$1 == 'renameHost'), isEmpty);
     await close(tester);
   });
   testWidgets('machine settings controls have consistent spacing', (
@@ -867,18 +873,6 @@ void main() {
     await mount(tester, backend, size: const Size(1000, 850));
     await tester.tap(find.textContaining('j-strix'));
     await tester.pumpAndSettle();
-    final controls = [
-      find.widgetWithText(TextField, 'Display name'),
-      find.widgetWithText(OutlinedButton, 'Save name'),
-      find.widgetWithText(OutlinedButton, 'Remove'),
-    ];
-    for (var i = 1; i < controls.length; i++) {
-      expect(
-        tester.getRect(controls[i]).top -
-            tester.getRect(controls[i - 1]).bottom,
-        closeTo(12, .01),
-      );
-    }
     expect(find.widgetWithText(OutlinedButton, 'Refresh'), findsNothing);
     expect(find.byTooltip('Refresh remote services'), findsOneWidget);
     final remove = find.widgetWithText(OutlinedButton, 'Remove');
@@ -907,10 +901,7 @@ void main() {
       backend.calls.where((call) => call.$1 == 'removeHost').single.$2['host'],
       peer,
     );
-    expect(
-      find.widgetWithText(TextField, 'Display name'),
-      findsNothing,
-    );
+    expect(find.widgetWithText(TextField, 'Display name'), findsNothing);
     expect(tester.takeException(), isNull);
     await close(tester);
   });
@@ -921,7 +912,7 @@ void main() {
     await mount(tester, backend, size: const Size(1000, 850));
     await tester.tap(find.byTooltip('Settings'));
     await tester.pumpAndSettle();
-    expect(find.widgetWithText(TextField, 'Device name'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Device ID'), findsOneWidget);
     expect(find.widgetWithText(TextField, 'Registry port'), findsOneWidget);
     expect(find.text('Device and browser settings'), findsNothing);
     expect(find.text('Share a service'), findsNothing);
@@ -942,81 +933,65 @@ void main() {
     expect(find.byTooltip('Close'), findsNothing);
     await close(tester);
   });
-  testWidgets(
-    'new service suggests editable snake case IDs and saves a numeric port',
-    (tester) async {
-      final backend = DesktopFake();
-      await mount(tester, backend, size: const Size(1000, 850));
-      await tester.tap(
-        find.descendant(
-          of: find.byKey(const ValueKey('local-sector')),
-          matching: find.widgetWithText(OutlinedButton, 'Manage'),
-        ),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Add a new service'));
-      await tester.pumpAndSettle();
-      final name = find.widgetWithText(TextField, 'Service name');
-      final id = find.widgetWithText(TextField, 'Service ID');
-      final port = find.widgetWithText(TextField, 'Port');
-      expect(tester.getRect(name).top, lessThan(tester.getRect(id).top));
-      expect(tester.getRect(id).top, lessThan(tester.getRect(port).top));
-      expect(tester.widget<TextField>(port).controller!.text, '8080');
-      for (final entry in {
-        'L': 'l',
-        'Local': 'local',
-        'Local Model!': 'local_model',
-        'HTTPServer': 'http_server',
-        'Web': 'web_2',
-        '🔥': 'service',
-      }.entries) {
-        await tester.enterText(name, entry.key);
-        await tester.pump();
-        expect(tester.widget<TextField>(id).controller!.text, entry.value);
-      }
-      await tester.enterText(name, 'a' * 100);
-      await tester.pump();
-      expect(tester.widget<TextField>(id).controller!.text.length, 64);
-      await tester.enterText(name, 'Local Model');
-      await tester.enterText(id, 'custom_model');
-      await tester.enterText(name, 'Local Model API');
-      await tester.pump();
-      expect(tester.widget<TextField>(id).controller!.text, 'custom_model');
-      await tester.tap(find.byTooltip('Generate from service name'));
-      await tester.pump();
-      expect(tester.widget<TextField>(id).controller!.text, 'local_model_api');
-      for (final invalid in ['0', '65536']) {
-        await tester.enterText(port, invalid);
-        await tester.ensureVisible(find.text('Save service'));
-        await tester.tap(find.text('Save service'));
-        await tester.pumpAndSettle();
-        expect(find.text('Enter a port between 1 and 65535.'), findsOneWidget);
-        expect(backend.ownerCalls, isEmpty);
-      }
-      expect(
-        tester
-            .widget<DropdownButtonFormField<String>>(
-              find.byType(DropdownButtonFormField<String>),
-            )
-            .decoration
-            .labelText,
-        'Protocol',
-      );
-      await tester.tap(find.byType(DropdownButtonFormField<String>));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('TCP').last);
-      await tester.pumpAndSettle();
-      await tester.enterText(port, '8201');
+  testWidgets('new service accepts one explicit ID and saves a numeric port', (
+    tester,
+  ) async {
+    final backend = DesktopFake();
+    await mount(tester, backend, size: const Size(1000, 850));
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(const ValueKey('local-sector')),
+        matching: find.widgetWithText(OutlinedButton, 'Manage'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Add a new service'));
+    await tester.pumpAndSettle();
+    final id = find.widgetWithText(TextField, 'Service ID');
+    final port = find.widgetWithText(TextField, 'Port');
+    expect(find.widgetWithText(TextField, 'Service name'), findsNothing);
+    expect(tester.getRect(id).top, lessThan(tester.getRect(port).top));
+    expect(tester.widget<TextField>(port).controller!.text, '8080');
+    for (final invalid in ['', 'UpperCase', 'has spaces', 'a' * 65]) {
+      await tester.enterText(id, invalid);
+      await tester.ensureVisible(find.text('Save service'));
       await tester.tap(find.text('Save service'));
       await tester.pumpAndSettle();
-      final operation = backend.ownerCalls.single['operation'];
-      expect(operation['id'], 'local_model_api');
-      expect(operation['display_name'], 'Local Model API');
-      expect(operation['backend'], '127.0.0.1:8201');
-      expect(operation['kind'], 'tcp');
-      await close(tester);
-    },
-  );
+      expect(find.text('Enter a valid service ID.'), findsOneWidget);
+      expect(backend.ownerCalls, isEmpty);
+    }
+    await tester.enterText(id, 'local_model_api');
+    for (final invalid in ['0', '65536']) {
+      await tester.enterText(port, invalid);
+      await tester.ensureVisible(find.text('Save service'));
+      await tester.tap(find.text('Save service'));
+      await tester.pumpAndSettle();
+      expect(find.text('Enter a port between 1 and 65535.'), findsOneWidget);
+      expect(backend.ownerCalls, isEmpty);
+    }
+    expect(
+      tester
+          .widget<DropdownButtonFormField<String>>(
+            find.byType(DropdownButtonFormField<String>),
+          )
+          .decoration
+          .labelText,
+      'Protocol',
+    );
+    await tester.tap(find.byType(DropdownButtonFormField<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('TCP').last);
+    await tester.pumpAndSettle();
+    await tester.enterText(port, '8201');
+    await tester.tap(find.text('Save service'));
+    await tester.pumpAndSettle();
+    final operation = backend.ownerCalls.single['operation'];
+    expect(operation['id'], 'local_model_api');
+    expect(operation.containsKey('display_name'), isFalse);
+    expect(operation['backend'], '127.0.0.1:8201');
+    expect(operation['kind'], 'tcp');
+    await close(tester);
+  });
 
   testWidgets('each local service gear edits only its own service', (
     tester,
@@ -1031,7 +1006,7 @@ void main() {
       'allow': [],
     });
     await mount(tester, backend, size: const Size(1000, 850));
-    await tester.tap(find.byTooltip('Settings for Other service on HiBreak'));
+    await tester.tap(find.byTooltip('Settings for other on hibreak'));
     await tester.pumpAndSettle();
     expect(find.text('Edit'), findsOneWidget);
     expect(find.text('Browser settings'), findsNothing);
@@ -1064,7 +1039,7 @@ void main() {
   ) async {
     final backend = DesktopFake();
     await mount(tester, backend, size: const Size(1000, 850));
-    await tester.tap(find.byTooltip('Settings for Shared web on HiBreak'));
+    await tester.tap(find.byTooltip('Settings for web on hibreak'));
     await tester.pumpAndSettle();
     expect(find.text('Device and browser settings'), findsNothing);
     expect(find.text('Add a new service'), findsNothing);
@@ -1072,10 +1047,7 @@ void main() {
     expect(find.text('Browser settings'), findsNothing);
     await tester.tap(find.text('Edit'));
     await tester.pumpAndSettle();
-    await tester.enterText(
-      find.widgetWithText(TextField, 'Service name'),
-      'Renamed web',
-    );
+    expect(find.widgetWithText(TextField, 'Service name'), findsNothing);
     await tester.ensureVisible(find.text('Save service'));
     await tester.tap(find.text('Save service'));
     await tester.pumpAndSettle();
@@ -1084,42 +1056,36 @@ void main() {
     expect(operation['id'], 'web');
     expect(operation['backend'], '127.0.0.1:8080');
     expect(operation['allow'], [peer]);
-    expect(operation['display_name'], 'Renamed web');
+    expect(operation.containsKey('display_name'), isFalse);
     expect(tester.takeException(), isNull);
     await close(tester);
   });
-  testWidgets(
-    'desktop sharing defaults an empty display name to the service ID',
-    (tester) async {
-      final backend = DesktopFake();
-      await mount(tester, backend, size: const Size(1000, 850));
-      await tester.tap(
-        find
-            .descendant(
-              of: find.byKey(const ValueKey('local-sector')),
-              matching: find.byType(OutlinedButton),
-            )
-            .first,
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Add a new service'));
-      await tester.pumpAndSettle();
-      await tester.enterText(
-        find.widgetWithText(TextField, 'Service ID'),
-        'new-service',
-      );
-      await tester.ensureVisible(find.text('Save service'));
-      await tester.tap(find.text('Save service'));
-      await tester.pumpAndSettle();
-      expect(
-        backend.ownerCalls.single['operation']['display_name'],
-        'new-service',
-      );
-      expect(backend.ownerCalls.single['operation']['allow'], isEmpty);
-      expect(tester.takeException(), isNull);
-      await close(tester);
-    },
-  );
+  testWidgets('desktop sharing saves only the service ID', (tester) async {
+    final backend = DesktopFake();
+    await mount(tester, backend, size: const Size(1000, 850));
+    await tester.tap(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('local-sector')),
+            matching: find.byType(OutlinedButton),
+          )
+          .first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Add a new service'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Service ID'),
+      'new-service',
+    );
+    await tester.ensureVisible(find.text('Save service'));
+    await tester.tap(find.text('Save service'));
+    await tester.pumpAndSettle();
+    expect(backend.ownerCalls.single['operation']['id'], 'new-service');
+    expect(backend.ownerCalls.single['operation']['allow'], isEmpty);
+    expect(tester.takeException(), isNull);
+    await close(tester);
+  });
   testWidgets(
     'section Manage buttons follow their titles at phone and desktop widths',
     (tester) async {
@@ -1171,7 +1137,7 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.descendant(of: local, matching: find.textContaining('HiBreak')),
+      find.descendant(of: local, matching: find.textContaining('hibreak')),
       findsNothing,
     );
     expect(
@@ -1183,7 +1149,7 @@ void main() {
       findsNothing,
     );
     expect(
-      find.descendant(of: local, matching: find.text('Shared web')),
+      find.descendant(of: local, matching: find.text('web')),
       findsOneWidget,
     );
     expect(
@@ -1234,7 +1200,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('Paired machines'), findsOneWidget);
-    expect(find.text('HiBreak · dddddddd'), findsOneWidget);
+    expect(find.text('hibreak · dddddddd'), findsOneWidget);
     expect(find.text('j-strix · aaaaaaaa'), findsNWidgets(2));
     expect(tester.takeException(), isNull);
     await close(tester);
@@ -1269,8 +1235,8 @@ void main() {
       );
       await mount(tester, backend, size: const Size(1000, 850));
       expect(find.text('Public · Online'), findsOneWidget);
-      final copy = find.byTooltip('Copy public URL for Shared web');
-      final gear = find.byTooltip('Settings for Shared web on HiBreak');
+      final copy = find.byTooltip('Copy public URL for web');
+      final gear = find.byTooltip('Settings for web on hibreak');
       expect(
         tester.getRect(copy).right,
         lessThanOrEqualTo(tester.getRect(gear).left),
@@ -1323,7 +1289,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Public · Online'), findsNothing);
       expect(find.text('Public · Offline'), findsNothing);
-      expect(find.byTooltip('Copy public URL for Shared web'), findsNothing);
+      expect(find.byTooltip('Copy public URL for web'), findsNothing);
       await close(tester);
     },
   );
@@ -1342,7 +1308,7 @@ void main() {
     ];
     await mount(tester, backend, size: const Size(360, 844));
     expect(find.text('Public · Online'), findsOneWidget);
-    expect(find.byTooltip('Copy public URL for Shared web'), findsOneWidget);
+    expect(find.byTooltip('Copy public URL for web'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await close(tester);
   });
@@ -1351,7 +1317,7 @@ void main() {
   ) async {
     final backend = DesktopFake();
     await mount(tester, backend, size: const Size(1000, 850));
-    await tester.tap(find.byTooltip('Settings for Shared web on HiBreak'));
+    await tester.tap(find.byTooltip('Settings for web on hibreak'));
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('Enable public access'));
     await tester.tap(find.text('Enable public access'));
@@ -1384,7 +1350,7 @@ void main() {
     (tester) async {
       final backend = DesktopFake();
       await mount(tester, backend, size: const Size(1000, 850));
-      await tester.tap(find.byTooltip('Settings for Shared web on HiBreak'));
+      await tester.tap(find.byTooltip('Settings for web on hibreak'));
       await tester.pumpAndSettle();
       final edit = find.widgetWithText(OutlinedButton, 'Edit');
       final remove = find.widgetWithText(OutlinedButton, 'Remove service');

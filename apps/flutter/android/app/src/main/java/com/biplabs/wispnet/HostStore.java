@@ -7,13 +7,13 @@ final class HostStore {
  final SharedPreferences prefs;
  private final Context context;
  HostStore(Context context){this.context=context.getApplicationContext();prefs=context.getSharedPreferences("hosts",Context.MODE_PRIVATE);}
- JSONObject all()throws JSONException{synchronized(LOCK){return new JSONObject(prefs.getString("records","{}"));}}
+ JSONObject all()throws JSONException{synchronized(LOCK){JSONObject records=new JSONObject(prefs.getString("records","{}"));for(java.util.Iterator<String> it=records.keys();it.hasNext();){String host=it.next();JSONObject row=records.getJSONObject(host);row.put("name",DeviceProfile.readableId(row.optString("name","device-"+host.substring(0,8))));}return records;}}
  void save(JSONObject records)throws Exception{synchronized(LOCK){if(records.length()>128||!prefs.edit().putString("records",records.toString()).commit())throw new Exception("Cannot save host directory");}}
- void paired(String host,String name)throws Exception{synchronized(LOCK){JSONObject records=all();records.put(host,new JSONObject().put("name",name).put("state","approval_pending").put("status","Pending approval on this host"));save(records);}}
- void rename(String host,String name)throws Exception{synchronized(LOCK){
-  name=name.trim();if(!DeviceProfile.valid(name))throw new Exception("Use 1–128 bytes, without control characters");
-  JSONObject records=all();if(!records.has(host))throw new Exception("Machine was removed");
-  records.getJSONObject(host).put("name",name);save(records);
+ void paired(String host,String name)throws Exception{synchronized(LOCK){JSONObject records=all();records.put(host,new JSONObject().put("name",DeviceProfile.readableId(name)).put("state","approval_pending").put("status","Pending approval on this host"));save(records);}}
+ void deviceId(String host,String id)throws Exception{synchronized(LOCK){
+  if(!DeviceProfile.valid(id))throw new Exception("Invalid device ID");
+  JSONObject records=all();if(!records.has(host))return;
+  records.getJSONObject(host).put("name",id);save(records);
  }}
  void nameSynced(String host,String name)throws Exception{synchronized(LOCK){JSONObject records=all();if(!records.has(host))return;records.getJSONObject(host).put("synced_name",name);save(records);}}
  void remove(String host)throws Exception{

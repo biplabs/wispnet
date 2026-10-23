@@ -202,7 +202,7 @@ class TerminalManagement(unittest.TestCase):
         term.send('5')
         term.send(b'\r')
         term.expect('Add service')
-        term.send(b'Dashboard\t8310\t\t\t\r')
+        term.send(b'dashboard\t8310\t\t\t\r')
         term.expect('Save service and grants')
         self.assertIn(pa, term.text)
         term.send(b'\r')
@@ -309,7 +309,7 @@ class TerminalManagement(unittest.TestCase):
         term.expect('+ Add local service')
         term.send(b'\r')
         term.expect('Add service')
-        term.send(b'Dashboard\t8310\t\t\r')  # No clients: Save follows Protocol.
+        term.send(b'dashboard\t8310\t\t\r')  # No clients: Save follows Protocol.
         term.expect('Save service and grants')
         peer = subprocess.check_output([BINARY,'identity-init','--config',self.make_client()], text=True).split('Endpoint ID: ')[1].strip()
         api.request(op='mutate', operation={'op':'approve','peer':peer,'name':'Concurrent client','expected_revision':0})

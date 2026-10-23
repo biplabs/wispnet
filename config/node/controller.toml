@@ -1,5 +1,5 @@
 schema_version = 1
-device_name = "laptop"
+device_id = "laptop"
 state_dir = "/home/CHANGE_ME/.local/state/wispnet"
 log_level = "info"
 

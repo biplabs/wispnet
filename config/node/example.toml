@@ -1,5 +1,5 @@
 # Copy this file and choose a private absolute state directory per component.
 schema_version = 1
-device_name = "development-laptop"
+device_id = "development-laptop"
 state_dir = "/tmp/wispnet-dev-agent"
 log_level = "info"

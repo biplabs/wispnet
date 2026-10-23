@@ -53,6 +53,20 @@ def browser_url(url):
     return url
 
 
+def readable_device_id(value):
+    if re.fullmatch(r'[a-z0-9][a-z0-9._-]{0,63}', value):
+        return value
+    result = ''
+    for c in value.lower():
+        if c.isascii() and (c.isalnum() or result and c in '._-'):
+            result += c
+        elif result and not result.endswith('-'):
+            result += '-'
+        if len(result) == 64:
+            break
+    return result.rstrip('._-') or 'device'
+
+
 class Bridge:
     def __init__(self, config=None):
         self.config = Path(config or Path.home() / '.config/wispnet-node/host.toml')
@@ -70,6 +84,12 @@ class Bridge:
             self.display = saved.get('display', {})
         else:
             self.migrate_webkit()
+        self.preferences.pop('names', None)
+        for row in self.display.get('hosts', {}).values():
+            if 'name' in row:
+                row['name'] = readable_device_id(row['name'])
+        if 'name' in self.display:
+            self.display['name'] = readable_device_id(self.display['name'])
 
     def migrate_webkit(self):
         # Read only; never alter the previous runtime's database or WAL.
@@ -82,11 +102,11 @@ class Bridge:
             try:
                 with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as db:
                     for key, raw in db.execute('SELECT key,value FROM ItemTable'):
-                        if key not in ('peerNames', 'cardOrder'):
+                        if key != 'cardOrder':
                             continue
                         value = json.loads(raw.decode('utf-16-le') if isinstance(raw, bytes) else raw)
                         if isinstance(value, dict):
-                            self.preferences['names' if key == 'peerNames' else 'order'].update(value)
+                            self.preferences['order'].update(value)
             except (sqlite3.Error, ValueError, UnicodeError):
                 # Existing private preferences remain usable if WebKit storage is unavailable.
                 continue
@@ -137,7 +157,7 @@ class Bridge:
         with self.lock:
             self.status = status
             own = status['host']['host']
-            names = self.preferences['names']
+            device_ids = self.preferences.setdefault('device_ids', {})
             publications = {p['service']: p for p in status.get('public_access', {}).get('services', [])}
             owned_services = []
             for service in status['host']['services']:
@@ -162,7 +182,7 @@ class Bridge:
                         cached = None
                     record = {'state': 'unverified', 'status': 'Cached; refresh required',
                               'catalog': cached['catalog'] if cached else {'services': []}}
-                record['name'] = names.get(peer) or clients.get(peer, {}).get('name') or 'Host ' + peer[:8]
+                record['name'] = device_ids.get(peer) or readable_device_id(clients.get(peer, {}).get('name') or 'device-' + peer[:8])
                 hosts[peer] = record
             self.display = {'name': status['host_name'], 'peer': own, 'hosts': hosts,
                             'relay': status['relay'], 'telemetry': {'peers': status['peer_telemetry']}}
@@ -188,6 +208,19 @@ class Bridge:
                 raise ValueError('Wrong catalog host')
             self.cache.save(peer, {'catalog': catalog, 'fetched': time.time()})
             record = {'state': 'available', 'status': 'Available', 'catalog': catalog}
+            # Optional on older hosts; catalog permission checks remain independent.
+            try:
+                device_id = self.api.request(op='host_device_id', host=peer)['device_id']
+                if not re.fullmatch(r'[a-z0-9][a-z0-9._-]{0,63}', device_id):
+                    raise ValueError('Invalid device ID')
+                with self.lock:
+                    self.preferences.setdefault('device_ids', {})[peer] = device_id
+            except (OSError, ValueError, KeyError):
+                pass
+            try:
+                self.api.request(op='set_name', host=peer, name=self.display['name'])
+            except (OSError, ValueError):
+                pass
         except (OSError, ValueError) as error:
             text = str(error)
             with self.lock:
@@ -223,14 +256,14 @@ class Bridge:
                 return preview
             result = self.api.request(op='pair', host=preview['host'], invitation=code)
             with self.lock:
-                self.preferences['names'][preview['host']] = preview.get('host_name') or 'Host ' + preview['host'][:8]
+                self.preferences.setdefault('device_ids', {})[preview['host']] = readable_device_id(preview.get('host_name') or 'device-' + preview['host'][:8])
                 self.records[preview['host']] = {'state': 'approval_pending', 'status': 'Pending owner approval'}
                 self.save()
             return result
         if method == 'open':
             self.api.request(op='enable')
             result = self.api.request(op='open', host=args['host'], service=args['service'], incarnation=args['incarnation'],
-                                      host_name=self.preferences['names'].get(args['host']))
+                                      host_name=self.preferences.get('device_ids', {}).get(args['host']))
             # Desktop uses the token-free local route, as the previous desktop did.
             # The Android bootstrap URL is intentionally not exposed to this runner.
             return {'url': browser_url(result['url'])}
@@ -261,17 +294,9 @@ class Bridge:
             self.api.request(op='unpair', host=args['host'], expected_revision=status['host']['revision'])
             with self.lock:
                 self.records.pop(args['host'], None)
-                self.preferences['names'].pop(args['host'], None)
+                self.preferences.get('device_ids', {}).pop(args['host'], None)
                 self.display.get('hosts', {}).pop(args['host'], None)
                 self.cache.remove(args['host'])
-                self.save()
-            return {}
-        if method == 'renameHost':
-            name = args['name'].strip()
-            if not name or len(name.encode()) > 128 or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in name):
-                raise ValueError('Enter a name up to 128 UTF-8 bytes without control characters')
-            with self.lock:
-                self.preferences['names'][args['host']] = name
                 self.save()
             return {}
         if method == 'saveOrder':
@@ -298,8 +323,8 @@ class Bridge:
             if host is None:
                 # Desktop device names are node configuration, changed explicitly by the owner.
                 name = args['name'].strip()
-                if not name or len(name.encode()) > 128 or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in name):
-                    raise ValueError('Invalid device name')
+                if not re.fullmatch(r'[a-z0-9][a-z0-9._-]{0,63}', name):
+                    raise ValueError('Invalid device ID')
                 settings['registry_port'] = port
             else:
                 settings['service_ports'] = [p for p in settings['service_ports'] if (p['host'], p['service']) != (host, service)]
@@ -329,8 +354,8 @@ class Bridge:
         section = re.search(r'^\s*\[', text, re.M)
         index = section.start() if section else len(text)
         top, rest = text[:index], text[index:]
-        top = re.sub(r'^device_name\s*=.*\n?', '', top, flags=re.M)
-        updated = 'device_name=' + json.dumps(name, ensure_ascii=True) + '\n' + top + rest
+        top = re.sub(r'^(?:device_name|device_id)\s*=.*\n?', '', top, flags=re.M)
+        updated = 'device_id=' + json.dumps(name, ensure_ascii=True) + '\n' + top + rest
         tomllib.loads(updated)
         fd, temporary = tempfile.mkstemp(dir=self.config.parent, prefix='.rename-')
         try:

@@ -217,7 +217,7 @@ class MachineCard extends StatelessWidget {
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
-                              service['display_name'] as String,
+                              service['id'] as String,
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
@@ -282,7 +282,7 @@ class MachineCard extends StatelessWidget {
             ),
             if (publicEnabled && publicUrl != null && publicUrl.isNotEmpty)
               IconButton(
-                tooltip: 'Copy public URL for ${service['display_name']}',
+                tooltip: 'Copy public URL for ${service['id']}',
                 onPressed: busy
                     ? null
                     : () async {
@@ -296,8 +296,7 @@ class MachineCard extends StatelessWidget {
                 icon: const Icon(Icons.copy, size: 20, color: WispColors.cyan),
               ),
             IconButton(
-              tooltip:
-                  'Settings for ${service['display_name']} on ${machine.name}',
+              tooltip: 'Settings for ${service['id']} on ${machine.name}',
               onPressed: busy ? null : () => onSettings(service),
               icon: const Icon(
                 Icons.settings,

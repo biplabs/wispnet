@@ -553,7 +553,7 @@ impl App {
                         Action::Pending(v.clone()),
                     );
                     row.detail = vec![
-                        format!("Client ID: {}", text(&v, "peer")),
+                        format!("Host ID: {}", text(&v, "peer")),
                         format!(
                             "Expires in {} seconds",
                             v["expires_at"].as_u64().unwrap_or(0).saturating_sub(now())
@@ -593,7 +593,7 @@ impl App {
                         text(&service, "id"),
                         format!(
                             "{} · {} · {} · {} permitted devices",
-                            clean(text(&service, "display_name")),
+                            clean(text(&service, "id")),
                             text(&service, "backend"),
                             text(&service, "kind"),
                             array(&service["allow"]).len()
@@ -658,7 +658,7 @@ impl App {
                         "Node diagnostics".into(),
                         vec![
                             format!("Host: {}", text(&s["host"], "host")),
-                            format!("Name: {}", text(&s, "host_name")),
+                            format!("Device ID: {}", text(&s, "host_name")),
                             format!("Revision: {}", s["host"]["revision"]),
                             format!("Relay: {}", text(&s, "relay")),
                             format!("Transport streams: {}", s["transport_streams"]),
@@ -676,7 +676,7 @@ impl App {
     fn service_form(&self, existing: Option<Value>) -> Form {
         let old = existing.clone().unwrap_or_else(|| json!({}));
         let mut fields = vec![
-            Field::text("Service name", text(&old, "display_name"), 128),
+            Field::text("Service ID", text(&old, "id"), 64),
             Field::text("Local port / loopback address", text(&old, "backend"), 128),
             Field::choice(
                 "Protocol",
@@ -803,7 +803,7 @@ impl App {
                     let mut field = Field::check(
                         &format!(
                             "Grant {} · {} · {}",
-                            clean(text(&service, "display_name")),
+                            clean(text(&service, "id")),
                             text(&service, "id"),
                             text(&service, "kind")
                         ),
@@ -855,7 +855,7 @@ impl App {
             }
             Action::Service(service) => {
                 let mut details = vec![
-                    format!("Service: {}", clean(text(&service, "display_name"))),
+                    format!("Service: {}", clean(text(&service, "id"))),
                     format!("ID: {}", text(&service, "id")),
                     format!("Backend: {}", text(&service, "backend")),
                 ];
@@ -953,7 +953,7 @@ impl App {
                 }
                 let mut fields = vec![Field::text("Client public ID", "", 64)];
                 if approve {
-                    fields.push(Field::text("Client name", "", 128));
+                    fields.push(Field::text("Device ID", "", 64));
                 }
                 for target in targets {
                     fields.push(Field::check(
@@ -1041,8 +1041,8 @@ impl App {
             }
             FormKind::Service { existing, revision } => {
                 let name = form.fields[0].value.trim();
-                if !wispnet_core::enrollment::valid_name(name) {
-                    return Err("Enter a valid service name".into());
+                if !wispnet_core::protocol::valid_service_id(name) {
+                    return Err("Enter a valid service ID".into());
                 }
                 let port = form.fields[1].value.trim();
                 let backend = if port.chars().all(|c| c.is_ascii_digit()) {
@@ -1063,20 +1063,10 @@ impl App {
                 let FieldKind::Choice(ref choices, index) = form.fields[2].kind else {
                     return Err("Missing protocol".into());
                 };
-                let mut id = String::new();
-                for c in name.to_lowercase().chars() {
-                    if c.is_ascii_alphanumeric() {
-                        id.push(c);
-                    } else if !id.ends_with('-') {
-                        id.push('-');
-                    }
-                }
-                let id = existing
-                    .clone()
-                    .unwrap_or_else(|| id.trim_matches('-').chars().take(64).collect());
-                if !wispnet_core::protocol::valid_service_id(&id) {
+                let id = name.to_owned();
+                if existing.as_ref().is_some_and(|old| old != &id) {
                     return Err(
-                        "Service name must produce a valid ID; use some ASCII letters or numbers"
+                        "Existing service IDs are used by URLs and grants and cannot be changed"
                             .into(),
                     );
                 }
@@ -1092,7 +1082,7 @@ impl App {
                     .collect::<Result<_, _>>()?;
                 let replace = existing.is_none() && self.services().iter().any(|s| s["id"] == id);
                 let detail = vec![
-                    format!("Service: {name} · {id}"),
+                    format!("Service ID: {id}"),
                     format!("Backend: {backend} · {}", choices[index]),
                     format!(
                         "Permitted devices: {}",
@@ -1109,7 +1099,7 @@ impl App {
                         "Only the selected devices will be allowed.".into()
                     },
                 ];
-                self.confirmation(if replace{"Replace existing service"}else{"Save service and grants"}.into(),detail,self.mutate(json!({"op":"service","id":id,"backend":backend,"display_name":name,"kind":choices[index],"allow":allow,"expected_revision":revision})));
+                self.confirmation(if replace{"Replace existing service"}else{"Save service and grants"}.into(),detail,self.mutate(json!({"op":"service","id":id,"backend":backend,"kind":choices[index],"allow":allow,"expected_revision":revision})));
             }
             FormKind::Pair => {
                 let document: String = form.fields[0].value.split_whitespace().collect();
@@ -1234,11 +1224,7 @@ impl App {
                             .map(|s| {
                                 entry(
                                     text(s, "id"),
-                                    format!(
-                                        "{} · {}",
-                                        clean(text(s, "display_name")),
-                                        text(s, "kind")
-                                    ),
+                                    format!("{} · {}", clean(text(s, "id")), text(s, "kind")),
                                     Action::Remote(peer.clone(), s.clone()),
                                 )
                             })

@@ -64,7 +64,7 @@ There is no master election, required quorum, global registry lease, or mandator
 
 ### Service identity and ownership
 
-Use **`(hosting EndpointId, local service ID)`** as the canonical service identity. A display name such as `Llama` is only a label. Both machines can publish a local service called `llama` without a global naming lock or collision.
+Use **`(hosting EndpointId, local service ID)`** as the canonical service identity. The readable service ID is also its UI label; devices likewise have one readable ID, with no separate display name. Both machines can publish a local service called `llama` without a global naming lock or collision.
 
 Each host publishes only its own service records and versions them independently. For v1, clients synchronize directly with the authenticated owning host. Cached records retain their host identity, version, and provenance. A peer cannot overwrite another host's records, transfer its services to itself, or restore an old deletion by replaying a cached listing.
 

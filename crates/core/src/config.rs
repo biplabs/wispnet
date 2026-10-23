@@ -10,7 +10,8 @@ use std::{
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub schema_version: u16,
-    #[serde(default = "machine_name")]
+    // device_name is the legacy config spelling of the one readable device ID.
+    #[serde(default = "machine_name", alias = "device_id")]
     pub device_name: String,
     pub state_dir: PathBuf,
     pub log_level: LogLevel,
@@ -37,6 +38,31 @@ fn machine_name() -> String {
         .and_then(|output| String::from_utf8(output.stdout).ok())
         .map(|name| name.trim().to_owned())
         .unwrap_or_default()
+}
+
+/// Upgrade old device labels into bounded, URL-friendly readable IDs. Identity
+/// keys and policy records are deliberately independent of this value.
+pub fn readable_device_id(value: &str) -> String {
+    if crate::protocol::valid_service_id(value) {
+        return value.to_owned();
+    }
+    let mut id = String::new();
+    for c in value.chars().flat_map(char::to_lowercase) {
+        if c.is_ascii_alphanumeric() || (!id.is_empty() && matches!(c, '.' | '_' | '-')) {
+            id.push(c);
+        } else if !id.is_empty() && !id.ends_with('-') {
+            id.push('-');
+        }
+        if id.len() == 64 {
+            break;
+        }
+    }
+    let id = id.trim_end_matches(['.', '_', '-']);
+    if id.is_empty() {
+        "device".into()
+    } else {
+        id.into()
+    }
 }
 
 /// Only a trusted local HTTPS reverse proxy may reach this listener.
@@ -270,7 +296,7 @@ impl Config {
         if text.len() > 65536 {
             return Err(ConfigError("configuration exceeds 64 KiB"));
         }
-        let config: Self = toml::from_str(text).map_err(|_| ConfigError("invalid TOML or schema; expected base fields and optional transport/services (see config/node/example.toml)"))?;
+        let mut config: Self = toml::from_str(text).map_err(|_| ConfigError("invalid TOML or schema; expected base fields and optional transport/services (see config/node/example.toml)"))?;
         if !matches!(config.schema_version, 1 | 2) {
             return Err(ConfigError(
                 "schema_version must be 1 (legacy) or 2 (independent host)",
@@ -284,6 +310,7 @@ impl Config {
                 "device_name must contain 1-128 bytes without control characters",
             ));
         }
+        config.device_name = readable_device_id(&config.device_name);
         if !config.state_dir.is_absolute()
             || config
                 .state_dir
@@ -373,6 +400,22 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn readable_device_ids_upgrade_legacy_names_without_changing_state() {
+        for (old, id) in [
+            ("HiBreak", "hibreak"),
+            ("Johnny’s phone", "johnny-s-phone"),
+            ("j-strix", "j-strix"),
+            ("device-1._-", "device-1._-"),
+            ("🔥", "device"),
+        ] {
+            let config = Config::parse(&valid().replace("'laptop'", &format!("'{old}'"))).unwrap();
+            assert_eq!(config.device_name, id);
+            assert_eq!(config.state_dir, PathBuf::from("/tmp/wispnet-test"));
+        }
+        let config = Config::parse(&valid().replace("device_name", "device_id")).unwrap();
+        assert_eq!(config.device_name, "laptop");
+    }
     fn valid() -> String {
         "schema_version = 1
 device_name = 'laptop'

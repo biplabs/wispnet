@@ -489,6 +489,30 @@ impl Client {
                 wispnet_agent::peers::remove(&self.state, host).map_err(|e| e.to_string())?;
                 Ok(json!({"unpaired":host.to_string()}))
             }
+            "set_device_id" => {
+                let id = argument(value, "device_id")?;
+                self.local_authority
+                    .as_ref()
+                    .ok_or("Local host unavailable")?
+                    .set_device_id(id)
+                    .map_err(|e| e.to_string())?;
+                Ok(json!({"device_id":id}))
+            }
+            "host_device_id" => {
+                let host = peer(value)?;
+                if self.saved_host(host).await?.is_none() {
+                    return Err("Pair with this host first".into());
+                }
+                let connection = wispnet_agent::control::connect_target(
+                    &self.endpoint,
+                    self.target(host).await?,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+                let result = wispnet_agent::control::device_id_on(&connection, host).await;
+                connection.close(0u32.into(), b"device ID read complete");
+                Ok(json!({"device_id": result.map_err(|e|e.to_string())?}))
+            }
             "set_name" => {
                 let host = peer(value)?;
                 let name = argument(value, "name")?;

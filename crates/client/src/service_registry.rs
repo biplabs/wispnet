@@ -72,7 +72,7 @@ impl Client {
                     if let Some(items) = c["services"].as_array() {
                         for s in items {
                             if s["kind"] == "http" {
-                                services.push(json!({"host_id":host,"service_id":s["id"],"display_name":s["display_name"],"incarnation":s["incarnation"],"kind":"http"}));
+                                services.push(json!({"host_id":host,"service_id":s["id"],"display_name":s["id"],"incarnation":s["incarnation"],"kind":"http"}));
                             }
                         }
                     }

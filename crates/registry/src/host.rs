@@ -44,6 +44,7 @@ pub enum Mutation {
         backend: std::net::SocketAddr,
         allow: Vec<EndpointId>,
         #[serde(default)]
+        /// Legacy input accepted for installed clients; never stored.
         display_name: Option<String>,
         #[serde(default)]
         kind: Option<ServiceKind>,
@@ -94,6 +95,7 @@ pub struct Client {
 pub struct LocalService {
     pub id: String,
     pub incarnation: String,
+    /// Legacy response field, always derived from id.
     pub display_name: String,
     pub kind: ServiceKind,
     pub backend: std::net::SocketAddr,
@@ -165,25 +167,20 @@ impl Store {
                 }
                 clients.push(Client {
                     peer: peer.parse().map_err(|_| ControlError::Storage)?,
-                    name,
+                    name: wispnet_core::config::readable_device_id(&name),
                 });
             }
-            let mut stmt = tx.prepare(
-                "SELECT id,backend,incarnation,display_name,kind FROM host_services ORDER BY id",
-            )?;
+            let mut stmt =
+                tx.prepare("SELECT id,backend,incarnation,kind FROM host_services ORDER BY id")?;
             for row in stmt.query_map([], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
                     r.get::<_, String>(2)?,
                     r.get::<_, String>(3)?,
-                    r.get::<_, String>(4)?,
                 ))
             })? {
-                let (id, backend, incarnation, display_name, kind) = row?;
-                if !valid_name(&display_name) {
-                    return Err(ControlError::Storage);
-                }
+                let (id, backend, incarnation, kind) = row?;
                 let kind = match kind.as_str() {
                     "http" => ServiceKind::Http,
                     "tcp" => ServiceKind::Tcp,
@@ -210,9 +207,10 @@ impl Store {
                 wispnet_core::config::validate_services(&[service])
                     .map_err(|_| ControlError::Storage)?;
                 services.push(LocalService {
+                    // Legacy wire field for installed clients, always the ID.
+                    display_name: id.clone(),
                     id,
                     incarnation,
-                    display_name,
                     kind,
                     backend,
                     allow,
@@ -357,12 +355,13 @@ pub(crate) fn apply_mutation(
                 ServiceKind::Http => "http",
                 ServiceKind::Tcp => "tcp",
             });
-            tx.execute("INSERT INTO host_services(id,backend,incarnation,display_name,kind)
-                VALUES(?1,?2,lower(hex(randomblob(32))),coalesce(?3,?1),coalesce(?4,'http'))
+            // Accept bounded legacy input, but never persist another name.
+            tx.execute("INSERT INTO host_services(id,backend,incarnation,kind)
+                VALUES(?1,?2,lower(hex(randomblob(32))),coalesce(?3,'http'))
                 ON CONFLICT(id) DO UPDATE SET backend=excluded.backend,
-                incarnation=CASE WHEN ?4 IS NOT NULL AND ?4!=host_services.kind THEN lower(hex(randomblob(32))) ELSE host_services.incarnation END,
-                display_name=coalesce(?3,host_services.display_name),kind=coalesce(?4,host_services.kind)",
-                params![id,backend.to_string(),display_name,kind])?;
+                incarnation=CASE WHEN ?3 IS NOT NULL AND ?3!=host_services.kind THEN lower(hex(randomblob(32))) ELSE host_services.incarnation END,
+                kind=coalesce(?3,host_services.kind)",
+                params![id,backend.to_string(),kind])?;
             tx.execute("DELETE FROM host_grants WHERE service=?1", [&id])?;
             for peer in allow {
                 tx.execute(
@@ -385,6 +384,7 @@ pub(crate) fn apply_mutation(
 pub struct Authority {
     pub(crate) host: EndpointId,
     pub(crate) store: Arc<Mutex<Store>>,
+    device_id: Arc<std::sync::RwLock<String>>,
 }
 impl Authority {
     pub fn open(directory: &Path, host: EndpointId) -> Result<Self, ControlError> {
@@ -402,7 +402,29 @@ impl Authority {
         Ok(Self {
             host,
             store: Arc::new(Mutex::new(store)),
+            device_id: Arc::new(std::sync::RwLock::new(format!(
+                "device-{}",
+                &host.to_string()[..8]
+            ))),
         })
+    }
+    pub fn with_device_id(self, id: &str) -> Self {
+        *self.device_id.write().unwrap_or_else(|e| e.into_inner()) =
+            wispnet_core::config::readable_device_id(id);
+        self
+    }
+    pub fn set_device_id(&self, id: &str) -> Result<(), ControlError> {
+        if !valid_service_id(id) {
+            return Err(ControlError::Invalid);
+        }
+        *self.device_id.write().unwrap_or_else(|e| e.into_inner()) = id.to_owned();
+        Ok(())
+    }
+    pub fn device_id(&self) -> String {
+        self.device_id
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
     pub fn host(&self) -> EndpointId {
         self.host

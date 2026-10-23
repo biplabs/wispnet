@@ -42,7 +42,9 @@ public final class Native {
    key=new String(cipher.doFinal(Base64.decode(envelope[1],Base64.NO_WRAP)),java.nio.charset.StandardCharsets.US_ASCII);
   }
   File state=new File(context.getFilesDir(),"client");if(!state.exists()&&!state.mkdir())throw new Exception("Cannot prepare protected client state");android.system.Os.chmod(state.getAbsolutePath(),0700);
-  request(new JSONObject().put("op","init").put("key",key).put("state",state.getAbsolutePath()).put("relay","https://relay.wispnet.app").put("backup_relays",new org.json.JSONArray().put("https://usw1-1.relay.n0.iroh.link")));ready=true;context.getSharedPreferences("app_access",0).edit().clear().apply();new HostStore(context).reconcile();
+  request(new JSONObject().put("op","init").put("key",key).put("state",state.getAbsolutePath()).put("relay","https://relay.wispnet.app").put("backup_relays",new org.json.JSONArray().put("https://usw1-1.relay.n0.iroh.link")));
+  request(new JSONObject().put("op","set_device_id").put("device_id",DeviceProfile.name(context)));
+  ready=true;context.getSharedPreferences("app_access",0).edit().clear().apply();new HostStore(context).reconcile();
  }
  private Native(){}
 }

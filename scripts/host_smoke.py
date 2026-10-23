@@ -44,7 +44,7 @@ with tempfile.TemporaryDirectory(prefix="wispnet-hosts-") as temporary:
     payload = encoded.removeprefix("wispnet1:")
     invitation = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
     assert invitation["host"] == code_host and invitation["scope"] == "request_access"
-    assert invitation["host_name"] == subprocess.check_output(["hostname"], text=True).strip()
+    assert invitation["host_name"] == "code-host"
     assert invitation["code"] not in result.stdout and encoded not in result.stdout
     run("host-invite", "--config", code_config, "--output", code_path, "--format", "code", ok=False)
     assert a_id != b_id

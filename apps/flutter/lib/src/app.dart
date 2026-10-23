@@ -216,7 +216,7 @@ class _WispHomeState extends State<WispHome>
     if (busy || !online) return;
     final generation = ++launchGeneration;
     setState(() => busy = true);
-    notice('Opening ${service['display_name']}…');
+    notice('Opening ${service['id']}…');
     try {
       final result = await backend.invoke('open', {
         'host': machine.id,
@@ -338,7 +338,7 @@ class _WispHomeState extends State<WispHome>
           ),
           const SizedBox(height: 16),
           SelectableText(
-            'Device ID\n${snapshot['peer'] ?? ''}',
+            'Host ID\n${snapshot['peer'] ?? ''}',
             style: const TextStyle(fontSize: 12, color: WispColors.muted),
           ),
         ],
@@ -395,7 +395,7 @@ class _WispHomeState extends State<WispHome>
   ) async {
     await showWispSheet<void>(
       context,
-      title: service['display_name'] as String,
+      title: service['id'] as String,
       child: DesktopSettings(
         backend: backend,
         servicesOnly: true,
@@ -415,7 +415,7 @@ class _WispHomeState extends State<WispHome>
   }) async {
     await showWispSheet<void>(
       context,
-      title: service?['display_name'] as String? ?? 'Settings',
+      title: service?['id'] as String? ?? 'Settings',
       child: SettingsForm(
         backend: backend,
         deviceName: snapshot['name'] as String? ?? '',

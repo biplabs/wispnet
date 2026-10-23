@@ -58,18 +58,33 @@ class BridgeTests(unittest.TestCase):
 
     def test_upgrade_preserves_private_order_names_and_cache_without_trusting_cache(self):
         self.bridge.dispatch('saveOrder', dict(group='machines', ids=[PEER, OWN]))
-        self.bridge.dispatch('renameHost', dict(host=PEER, name='My server'))
+        self.bridge.preferences.setdefault('names', {})[PEER] = 'Obsolete alias'
         self.bridge.snapshot()
         self.bridge.refresh(PEER)
         self.assertEqual(self.bridge.snapshot()['hosts'][PEER]['state'], 'available')
         next_launch = module.Bridge(self.config)
         snapshot = next_launch.snapshot()
         self.assertEqual(snapshot['order']['machines'], [PEER, OWN])
-        self.assertEqual(snapshot['hosts'][PEER]['name'], 'My server')
+        self.assertEqual(snapshot['hosts'][PEER]['name'], 'saved-host')
         self.assertEqual(snapshot['hosts'][PEER]['state'], 'unverified')
         self.assertEqual(snapshot['hosts'][PEER]['catalog']['services'][0]['incarnation'], INCARNATION)
         self.assertEqual(next_launch.path.stat().st_mode & 0o077, 0)
         self.assertEqual(snapshot['telemetry']['peers'][PEER]['path'], 'direct')
+
+    def test_remote_id_is_owned_by_peer_and_old_alias_operation_is_unavailable(self):
+        self.bridge.snapshot()
+        self.status['host']['clients'][0]['name'] = 'Old device name'
+        original = self.bridge.api.request
+        def request(**args):
+            if args['op'] == 'host_device_id': return {'device_id': 'canonical-device'}
+            return original(**args)
+        with patch.object(self.bridge.api, 'request', side_effect=request):
+            self.bridge.refresh(PEER)
+        self.assertEqual(self.bridge.snapshot()['hosts'][PEER]['name'], 'canonical-device')
+        self.assertIn(dict(op='set_name', host=PEER, name='Desktop'), self.calls)
+        with self.assertRaisesRegex(ValueError, 'Unsupported'):
+            self.bridge.dispatch('renameHost', dict(host=PEER, name='alias'))
+        self.assertNotIn('names', json.loads(self.bridge.path.read_text())['preferences'])
 
     def test_imports_tauri_private_names_and_order_read_only(self):
         import sqlite3
@@ -84,7 +99,7 @@ class BridgeTests(unittest.TestCase):
         db.close()
         original = path.read_bytes()
         migrated = module.Bridge(self.config)
-        self.assertEqual(migrated.preferences['names'][PEER], 'Tauri name')
+        self.assertNotIn(PEER, migrated.preferences.get('names', {}))
         self.assertEqual(migrated.preferences['order']['machines'], [PEER, OWN])
         self.assertEqual(path.read_bytes(), original)
 
@@ -216,7 +231,7 @@ class NativeBridgeTest(unittest.TestCase):
                 bridge.dispatch('desktopRequest', {'payload': {'op': 'mutate', 'operation': {'op': 'service', 'id': 'fixture', 'display_name': 'Flutter fixture', 'kind': 'http', 'backend': f'127.0.0.1:{server.server_port}', 'allow': [], 'expected_revision': status['host']['revision']}}})
                 with socket.socket() as available:
                     available.bind(('127.0.0.1', 0)); port = available.getsockname()[1]
-                bridge.dispatch('saveSettings', dict(host=None, name='Fixture', port=port))
+                bridge.dispatch('saveSettings', dict(host=None, name='fixture', port=port))
                 service = bridge.snapshot()['hosts'][own]['catalog']['services'][0]
                 handoff = bridge.dispatch('open', dict(host=own, service='fixture', incarnation=service['incarnation']))
                 self.assertEqual(set(handoff), {'url'})

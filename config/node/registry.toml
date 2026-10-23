@@ -1,5 +1,5 @@
 schema_version = 1
-device_name = "controller"
+device_id = "controller"
 state_dir = "/home/CHANGE_ME/.local/state/wispnet-controller"
 log_level = "info"
 

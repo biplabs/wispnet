@@ -298,16 +298,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 wispnet_registry::enrollment::now(),
                 300,
             )?;
-            let machine = std::process::Command::new("hostname")
-                .output()
-                .map_err(|_| "cannot read machine name")?;
-            let name = std::str::from_utf8(&machine.stdout)
-                .map_err(|_| "machine name is not UTF-8")?
-                .trim();
-            if !machine.status.success() || !wispnet_core::enrollment::valid_name(name) {
-                return Err("machine name must be a valid display name".into());
-            }
-            invitation.host_name = Some(name.to_owned());
+            invitation.host_name = Some(config.device_name.clone());
             let bytes = zeroize::Zeroizing::new(if args.len() == 7 {
                 wispnet_agent::pairing::encode_invitation(&invitation)?
                     .as_bytes()

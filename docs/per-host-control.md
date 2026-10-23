@@ -99,8 +99,8 @@ Backends must be explicit loopback IPs with nonzero ports. A host allows at most
 clients cannot appear in an allowlist. An empty allowlist exposes nothing.
 A service update replaces its binding/grants atomically; only protected local
 administration can select a backend. No remote RPC accepts an upstream address.
-Optional `display_name` and `kind` (`http`/`tcp`) are supported; omitted metadata
-preserves an existing row. See [versioned complete catalogs](catalog-snapshots.md)
+Optional `kind` (`http`/`tcp`) preserves the existing type when omitted.
+Legacy `display_name` input is accepted but ignored; the service ID is its only label. See [versioned complete catalogs](catalog-snapshots.md)
 for record validation, filtered removal and durable client version checks.
 
 ```json
@@ -146,7 +146,7 @@ only IDs they may access, in a catalog shaped as:
 
 The response is the [version-1 complete catalog](catalog-snapshots.md): explicit
 version/completeness/count plus host generation/revision and sorted typed service
-records containing ID, incarnation and display name. Its canonical service
+records containing ID and incarnation (plus a derived legacy display-name field). Its canonical service
 identity includes `(catalog.host, service.id, service.incarnation)`, verified
 against the transport peer pin. Backend addresses, grants, owner credentials and
 another host's records are not returned. Receiving a catalog never mutates local

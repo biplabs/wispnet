@@ -199,6 +199,8 @@ impl State {
             | "unpair"
             | "preview_invitation"
             | "catalog"
+            | "host_device_id"
+            | "set_name"
             | "telemetry"
             | "enable"
             | "stop"
@@ -287,7 +289,8 @@ pub async fn run(
     let _lease = store.lease()?;
     let identity = store.load()?;
     let authority =
-        wispnet_registry::host::Authority::open(&config.state_dir, identity.endpoint_id())?;
+        wispnet_registry::host::Authority::open(&config.state_dir, identity.endpoint_id())?
+            .with_device_id(&config.device_name);
     // Older installations kept outbound pins in private files rather than the policy DB.
     // Index their authenticated identities for deletion, without adding any clients/grants.
     if let Ok(entries) = std::fs::read_dir(config.state_dir.join("peer-pins")) {

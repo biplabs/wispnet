@@ -11,6 +11,70 @@ fn directory() -> tempfile::TempDir {
     dir
 }
 
+#[test]
+fn removing_display_names_preserves_identity_pairings_grants_and_incarnations() {
+    use wispnet_core::pairing::Bootstrap;
+    let host = Identity::generate().endpoint_id();
+    let peer = Identity::generate().endpoint_id();
+    let dir = directory();
+    host::initialize(dir.path(), host).unwrap();
+    let (mut store, owner) = host::owner_store(dir.path(), host).unwrap();
+    let bootstrap = Bootstrap {
+        version: 1,
+        host: peer,
+        relay_url: "https://relay.example/".into(),
+        direct_hint: None,
+    };
+    store
+        .pairing_accept_host(host, &owner, &bootstrap, "phone")
+        .unwrap();
+    let revision = store.host_snapshot(host).unwrap().revision;
+    store
+        .host_mutate(
+            host,
+            &owner,
+            Mutation::Service {
+                expected_revision: revision,
+                id: "website".into(),
+                backend: "127.0.0.1:8080".parse().unwrap(),
+                allow: vec![peer],
+                display_name: None,
+                kind: None,
+            },
+        )
+        .unwrap();
+    let before = store.host_snapshot(host).unwrap();
+    let pairing = store.pairing_session(host, peer).unwrap();
+    let credential = std::fs::read(dir.path().join("host-owner.token")).unwrap();
+    drop(store);
+    // Reconstruct a schema-10 installation with a separate presentation name.
+    let db = rusqlite::Connection::open(dir.path().join("host.sqlite3")).unwrap();
+    db.execute_batch("ALTER TABLE host_services ADD COLUMN display_name TEXT NOT NULL DEFAULT 'Old website label'; PRAGMA user_version=10;").unwrap();
+    drop(db);
+    let (mut store, _) = host::owner_store(dir.path(), host).unwrap();
+    let after = store.host_snapshot(host).unwrap();
+    assert_eq!(after.host, before.host);
+    assert_eq!(after.generation, before.generation);
+    assert_eq!(after.revision, before.revision + 1);
+    assert_eq!(after.clients[0].peer, peer);
+    assert_eq!(after.services[0].id, "website");
+    assert_eq!(after.services[0].display_name, "website");
+    assert_eq!(
+        after.services[0].incarnation,
+        before.services[0].incarnation
+    );
+    assert_eq!(after.services[0].allow, vec![peer]);
+    assert_eq!(store.paired_hosts(host).unwrap()[0].host, peer);
+    assert_eq!(store.pairing_session(host, peer).unwrap(), pairing);
+    assert_eq!(
+        std::fs::read(dir.path().join("host-owner.token")).unwrap(),
+        credential
+    );
+    drop(store);
+    let (mut store, _) = host::owner_store(dir.path(), host).unwrap();
+    assert_eq!(store.host_snapshot(host).unwrap().revision, after.revision);
+}
+
 #[tokio::test]
 async fn complete_filtered_catalog_metadata_and_type_changes_are_host_local() {
     use wispnet_core::host::ServiceKind;
@@ -53,7 +117,7 @@ async fn complete_filtered_catalog_metadata_and_type_changes_are_host_local() {
         .unwrap();
     assert_eq!(
         store.host_snapshot(id).unwrap().services[0].display_name,
-        "My site"
+        "website"
     );
     assert_eq!(
         store.host_snapshot(id).unwrap().services[0].incarnation,
@@ -77,7 +141,7 @@ async fn complete_filtered_catalog_metadata_and_type_changes_are_host_local() {
     let snapshot = authority.catalog(client).await.unwrap();
     assert!(snapshot.valid(id));
     assert_eq!(snapshot.services[0].kind, ServiceKind::Tcp);
-    assert_eq!(snapshot.services[0].display_name, "My site");
+    assert_eq!(snapshot.services[0].display_name, "website");
     let (mut store, secret) = host::owner_store(dir.path(), id).unwrap();
     store
         .host_mutate(
@@ -143,7 +207,7 @@ fn service_incarnation_persists_on_edit_and_restart_but_not_recreation() {
     // Simulate the real schema-6 table, preserving the authority and grants.
     drop(store);
     let db = rusqlite::Connection::open(dir.path().join("host.sqlite3")).unwrap();
-    db.execute_batch("DROP TABLE host_pairing_blocks; DROP TABLE host_legacy_pins; DROP TABLE host_pairing_offers; DROP TABLE host_pairings; ALTER TABLE host_services DROP COLUMN incarnation; ALTER TABLE host_services DROP COLUMN display_name; ALTER TABLE host_services DROP COLUMN kind; PRAGMA user_version=6;")
+    db.execute_batch("DROP TABLE host_pairing_blocks; DROP TABLE host_legacy_pins; DROP TABLE host_pairing_offers; DROP TABLE host_pairings; ALTER TABLE host_services DROP COLUMN incarnation; ALTER TABLE host_services DROP COLUMN kind; PRAGMA user_version=6;")
         .unwrap();
     drop(db);
     let (mut store, _) = host::owner_store(dir.path(), id).unwrap();
@@ -290,7 +354,7 @@ fn schema_eight_adds_mutual_pairing_without_changing_identity_revision_or_grants
     drop(store);
     let db = rusqlite::Connection::open(dir.path().join("host.sqlite3")).unwrap();
     db.execute_batch(
-        "DROP TABLE host_pairing_blocks; DROP TABLE host_legacy_pins; DROP TABLE host_pairing_offers; DROP TABLE host_pairings; PRAGMA user_version=8;",
+        "DROP TABLE host_pairing_blocks; DROP TABLE host_legacy_pins; DROP TABLE host_pairing_offers; DROP TABLE host_pairings; ALTER TABLE host_services ADD COLUMN display_name TEXT NOT NULL DEFAULT ''; UPDATE host_services SET display_name=id; PRAGMA user_version=8;",
     )
     .unwrap();
     drop(db);

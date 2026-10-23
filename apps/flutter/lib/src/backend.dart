@@ -29,7 +29,7 @@ class Machine {
   Machine(this.id, this.data);
   final String id;
   final Map<String, dynamic> data;
-  String get name => data['name'] as String? ?? 'Host ${id.substring(0, 8)}';
+  String get name => data['name'] as String? ?? 'device-${id.substring(0, 8)}';
   String get state => data['state'] as String? ?? 'unreachable';
   String get status => data['status'] as String? ?? 'Unavailable';
   bool get online => state == 'available';

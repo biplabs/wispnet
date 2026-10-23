@@ -41,7 +41,7 @@ for item in sys.argv[1:]:
         unit=home+'/.config/systemd/user/wispnet-host.service'
         call(['python3','-c',"import os,sys; p=sys.argv[1]; f=os.open(p,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600);os.write(f,sys.stdin.buffer.read());os.close(f)",unit],input=(ROOT/'deploy/node/wispnet-host.service').read_text())
         call(['systemctl','--user','daemon-reload']);call(['systemctl','--user','enable','wispnet-host.service']);call(['systemctl','--user','restart','wispnet-host.service']);call(['systemctl','--user','is-active','wispnet-host.service'])
-        name=call(['python3','-c',"import pathlib,socket,sys,tomllib;print(tomllib.loads(pathlib.Path(sys.argv[1]).read_text()).get('device_name',socket.gethostname()))",config]).stdout.strip()
+        name=call([binary,'status','--config',config]).stdout.split('Device: ',1)[1].splitlines()[0]
         records.append({'host':host,'name':name,'remote':remote,'config':config,'binary':binary,'state':state})
     Path('/tmp/wispnet-app-hosts.json').write_text(json.dumps(records))
     print('Independent host nodes ready; no tablet approval or service grants were inferred')

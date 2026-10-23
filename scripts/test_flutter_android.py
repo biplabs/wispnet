@@ -2,7 +2,8 @@
 """Run the Flutter device checks using upgrade-only installs; restore the normal UI.
 
 Requires an already installed debug app. Never uninstalls or clears application
-state. Native identity/profile hashes and saved host IDs must survive the test.
+state. Native host identity and saved host IDs must survive the test. Legacy profile
+names may migrate to the equivalent canonical readable ID.
 """
 import argparse
 import hashlib
@@ -17,6 +18,20 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = 'app.wispnet.android'
 ACTIVITY = PACKAGE + '/com.biplabs.wispnet.FlutterMainActivity'
+
+
+def readable_id(value):
+    if re.fullmatch(r'[a-z0-9][a-z0-9._-]{0,63}', value):
+        return value
+    result = ''
+    for c in value.lower():
+        if c.isascii() and (c.isalnum() or result and c in '._-'):
+            result += c
+        elif result and not result.endswith('-'):
+            result += '-'
+        if len(result) == 64:
+            break
+    return result.rstrip('._-') or 'device'
 
 
 def main():
@@ -34,9 +49,10 @@ def main():
     def preserved():
         hosts = ET.fromstring(private('shared_prefs/hosts.xml'))
         records = json.loads(next(entry.text for entry in hosts if entry.get('name') == 'records'))
+        profile = {entry.get('name'): entry.text for entry in ET.fromstring(private('shared_prefs/device_profile.xml'))}
         return {
             'identity': hashlib.sha256(private('shared_prefs/identity.xml')).hexdigest(),
-            'profile': hashlib.sha256(private('shared_prefs/device_profile.xml')).hexdigest(),
+            'device_id': readable_id(profile.get('device_id') or profile.get('name') or 'android-device'),
             'hosts': set(records),
         }
     before = preserved()

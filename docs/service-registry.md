@@ -63,7 +63,7 @@ only this device; they never change the remote host's backend or permissions.
 {
   "api_version": 1,
   "services": [
-    {"host_id":"FULL_HOST_ID", "service_id":"llama", "display_name":"Llama",
+    {"host_id":"FULL_HOST_ID", "service_id":"llama", "display_name":"llama",
      "kind":"http", "incarnation":"SERVICE_INCARNATION", "url":"http://HOST_SERVICE.localhost:PORT/"}
   ],
   "errors": []

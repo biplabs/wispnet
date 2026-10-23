@@ -139,9 +139,7 @@ void main() {
             reason:
                 'A live HTTP service is required for the device handoff check',
           );
-          await tester.tap(
-            find.text(selected!['display_name'] as String).first,
-          );
+          await tester.tap(find.text(selected!['id'] as String).first);
           await tester.runAsync(() async {
             for (
               var n = 0;

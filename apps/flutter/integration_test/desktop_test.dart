@@ -90,7 +90,8 @@ void main() {
         await mouse.moveTo(Offset.zero);
         await mouse.removePointer();
         await tester.tap(machineName);
-        await waitFor(find.widgetWithText(TextField, 'Private display name'));
+        await waitFor(find.textContaining('Host ID\n'));
+        expect(find.widgetWithText(TextField, 'Display name'), findsNothing);
         await capture('machine-settings');
         expect(find.widgetWithText(OutlinedButton, 'Refresh'), findsNothing);
         await tester.tap(find.widgetWithText(OutlinedButton, 'Remove'));
@@ -128,10 +129,10 @@ void main() {
         expect(find.text('Enable public access'), findsNothing);
         await capture('local-services');
         await tester.tap(find.text('Add a new service'));
-        await waitFor(find.widgetWithText(TextField, 'Service name'));
+        await waitFor(find.widgetWithText(TextField, 'Service ID'));
         await tester.enterText(
-          find.widgetWithText(TextField, 'Service name'),
-          'Local Model API',
+          find.widgetWithText(TextField, 'Service ID'),
+          'local_model_api',
         );
         await tester.pump();
         expect(
@@ -387,7 +388,7 @@ void main() {
         await tester.tap(
           find
               .textContaining(
-                services.first['display_name'] as String,
+                services.first['id'] as String,
                 findRichText: true,
               )
               .first,
@@ -402,9 +403,10 @@ void main() {
         await tester.runAsync(() async {
           final client = HttpClient();
           try {
-            final response = await (await client.getUrl(
-              Uri.parse(backend.launched!),
-            )).close();
+            final uri = Uri.parse(backend.launched!);
+            final request = await client.getUrl(uri.replace(host: '127.0.0.1'));
+            request.headers.set(HttpHeaders.hostHeader, uri.authority);
+            final response = await request.close();
             expect(response.statusCode, lessThan(500));
             await response.drain<void>();
           } finally {

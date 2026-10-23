@@ -63,6 +63,7 @@ class NativeQrTests(unittest.TestCase):
                 api = module.NodeAPI(config)
                 before = api.request(op='status')['host']
                 result = api.request(op='invite_qr')
+                self.assertEqual(result['host_name'], 'qr-test')
                 matrix = result['matrix']
                 self.assertTrue(all(not cell for row in matrix[:4] for cell in row))
                 self.assertTrue(all(not cell for row in matrix[-4:] for cell in row))
