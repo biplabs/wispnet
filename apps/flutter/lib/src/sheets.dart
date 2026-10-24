@@ -800,7 +800,7 @@ class _ServiceLinksState extends State<ServiceLinks> {
             'Wispnet URL',
             'wispnet://${widget.machine.id}/${widget.service['id']}',
             'Copy Wispnet link',
-            description: 'Opens Wispnet first to prepare the connection, then opens the service in your browser.',
+            description: 'Stays the same across devices, even if their local ports differ. Use this for a consistent link to the service.',
           ),
         if (publication?['enabled'] == true &&
             publicUrl != null &&
