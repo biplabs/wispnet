@@ -235,7 +235,7 @@ Android; see the [registry contract and examples](service-registry.md).
 ## Public access
 
 Local HTTP service settings offer **Enable/Disable public access**. Service cards
-show the public tunnel state and a labelled **Public link** copy button when enabled,
+show the public tunnel state and a labelled **public** copy button when enabled,
 including on paired desktop and Android devices after refreshing the host. Remote
 cards show links without publishing controls. See
 [owner-controlled public services](public-access.md) for authority, deployment,

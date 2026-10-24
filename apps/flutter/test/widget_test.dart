@@ -1316,7 +1316,7 @@ void main() {
       );
       await mount(tester, backend, size: const Size(1000, 850));
       expect(find.text('Public · Online'), findsOneWidget);
-      expect(find.text('Public link'), findsOneWidget);
+      expect(find.text('public'), findsOneWidget);
       final copy = find.byTooltip('Copy public URL for web');
       final gear = find.byTooltip('Settings for web on hibreak');
       expect(
@@ -1405,7 +1405,7 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.text('Public link'), findsOneWidget);
+    expect(find.text('public'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await close(tester);
   });
@@ -1442,10 +1442,30 @@ void main() {
         ),
       );
       await mount(tester, backend, size: const Size(360, 844));
-      expect(find.text('Public link'), findsOneWidget);
+      expect(find.text('public'), findsOneWidget);
       expect(find.text('Public · Online'), findsOneWidget);
       final public = find.byTooltip('Copy public URL for website');
       final private = find.byTooltip('Copy Wispnet link for website');
+      expect(
+        find.descendant(of: public, matching: find.byType(OutlinedButton)),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: private, matching: find.byType(OutlinedButton)),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: public, matching: find.text('public')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: private, matching: find.text('local')),
+        findsOneWidget,
+      );
+      expect(
+        tester.getRect(public).right,
+        lessThan(tester.getRect(private).left),
+      );
       expect(
         find.descendant(of: public, matching: find.byIcon(Icons.link)),
         findsOneWidget,
@@ -1457,6 +1477,9 @@ void main() {
       await tester.tap(public);
       await tester.pumpAndSettle();
       expect(copied, publication['url']);
+      await tester.tap(private);
+      await tester.pumpAndSettle();
+      expect(copied, 'wispnet://$peer/website');
       expect(
         backend.calls.where((c) => ['open', 'saveSettings'].contains(c.$1)),
         isEmpty,
@@ -1464,12 +1487,12 @@ void main() {
       backend.publicAccess!['host'] = 'e' * 64;
       await tester.pump(const Duration(seconds: 2));
       await tester.pumpAndSettle();
-      expect(find.text('Public link'), findsNothing);
+      expect(find.text('public'), findsNothing);
       backend.publicAccess!['host'] = peer;
       publication['incarnation'] = 'e' * 64;
       await tester.pump(const Duration(seconds: 2));
       await tester.pumpAndSettle();
-      expect(find.text('Public link'), findsNothing);
+      expect(find.text('public'), findsNothing);
       await close(tester);
       publication['incarnation'] = incarnation;
       await mount(
@@ -1478,7 +1501,7 @@ void main() {
       );
       expect(find.text('Public · Cached'), findsOneWidget);
       expect(find.text('Public · Online'), findsNothing);
-      expect(find.text('Public link'), findsOneWidget);
+      expect(find.text('public'), findsOneWidget);
       await close(tester);
     },
   );

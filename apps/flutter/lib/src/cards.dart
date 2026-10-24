@@ -289,36 +289,16 @@ class MachineCard extends StatelessWidget {
                 ),
               ),
             );
+            final linkButtonStyle = OutlinedButton.styleFrom(
+              minimumSize: const Size(0, 40),
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+            );
             final controls = <Widget>[
-              if (service['kind'] == 'http')
-                IconButton(
-                  tooltip: 'Copy Wispnet link for ${service['id']}',
-                  onPressed: busy
-                      ? null
-                      : () async {
-                          await Clipboard.setData(
-                            ClipboardData(
-                              text: 'wispnet://${machine.id}/${service['id']}',
-                            ),
-                          );
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Wispnet link copied'),
-                              ),
-                            );
-                          }
-                        },
-                  icon: const Icon(
-                    Icons.link,
-                    size: 20,
-                    color: WispColors.cyan,
-                  ),
-                ),
               if (publicEnabled && publicUrl != null && publicUrl.isNotEmpty)
                 Tooltip(
                   message: 'Copy public URL for ${service['id']}',
-                  child: TextButton.icon(
+                  child: OutlinedButton.icon(
+                    style: linkButtonStyle,
                     onPressed: busy
                         ? null
                         : () async {
@@ -338,7 +318,37 @@ class MachineCard extends StatelessWidget {
                       size: 20,
                       color: WispColors.cyan,
                     ),
-                    label: const Text('Public link'),
+                    label: const Text('public'),
+                  ),
+                ),
+              if (service['kind'] == 'http')
+                Tooltip(
+                  message: 'Copy Wispnet link for ${service['id']}',
+                  child: OutlinedButton.icon(
+                    style: linkButtonStyle,
+                    onPressed: busy
+                        ? null
+                        : () async {
+                            await Clipboard.setData(
+                              ClipboardData(
+                                text:
+                                    'wispnet://${machine.id}/${service['id']}',
+                              ),
+                            );
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Wispnet link copied'),
+                                ),
+                              );
+                            }
+                          },
+                    icon: const Icon(
+                      Icons.link,
+                      size: 20,
+                      color: WispColors.cyan,
+                    ),
+                    label: const Text('local'),
                   ),
                 ),
               if (onSettings != null)
@@ -363,13 +373,25 @@ class MachineCard extends StatelessWidget {
                   Row(children: [content]),
                   Wrap(
                     alignment: WrapAlignment.end,
+                    spacing: 8,
+                    runSpacing: 4,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: controls,
                   ),
                 ],
               );
             }
-            return Row(children: [content, ...controls]);
+            return Row(
+              children: [
+                content,
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: controls,
+                ),
+              ],
+            );
           },
         ),
       ),
