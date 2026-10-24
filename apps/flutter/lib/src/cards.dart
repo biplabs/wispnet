@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import 'backend.dart';
 import 'theme.dart';
@@ -178,7 +177,6 @@ class MachineCard extends StatelessWidget {
     final publicEnabled = publication?['enabled'] == true;
     final publicCached = machine.data['local'] != true && !machine.online;
     final publicOnline = !publicCached && publication?['state'] == 'online';
-    final publicUrl = publication?['url'] as String?;
 
     final subtitle = machine.online
         ? (service['kind'] as String).toUpperCase()
@@ -199,8 +197,8 @@ class MachineCard extends StatelessWidget {
       child: WispInkWell(
         onTap: !busy && allowed ? () => onOpen(service) : null,
         borderRadius: BorderRadius.circular(16),
-        child: LayoutBuilder(
-          builder: (context, constraints) {
+        child: Builder(
+          builder: (context) {
             final content = Expanded(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(12, 8, 0, 8),
@@ -290,38 +288,7 @@ class MachineCard extends StatelessWidget {
                 ),
               ),
             );
-            final linkButtonStyle = OutlinedButton.styleFrom(
-              minimumSize: const Size(0, 40),
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-            );
             final controls = <Widget>[
-              if (publicEnabled && publicUrl != null && publicUrl.isNotEmpty)
-                Tooltip(
-                  message: 'Copy public URL for ${service['id']}',
-                  child: OutlinedButton.icon(
-                    style: linkButtonStyle,
-                    onPressed: busy
-                        ? null
-                        : () async {
-                            await Clipboard.setData(
-                              ClipboardData(text: publicUrl),
-                            );
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Public URL copied'),
-                                ),
-                              );
-                            }
-                          },
-                    icon: const Icon(
-                      Icons.link,
-                      size: 20,
-                      color: WispColors.cyan,
-                    ),
-                    label: const Text('public'),
-                  ),
-                ),
               if (service['kind'] == 'http')
                 Tooltip(
                   message: 'Show links for ${service['id']}',
@@ -345,25 +312,6 @@ class MachineCard extends StatelessWidget {
                   ),
                 ),
             ];
-            if (publicEnabled &&
-                publicUrl != null &&
-                publicUrl.isNotEmpty &&
-                (constraints.maxWidth < 420 ||
-                    MediaQuery.textScalerOf(context).scale(14) > 18)) {
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(children: [content]),
-                  Wrap(
-                    alignment: WrapAlignment.end,
-                    spacing: 8,
-                    runSpacing: 4,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: controls,
-                  ),
-                ],
-              );
-            }
             return Row(
               children: [
                 content,

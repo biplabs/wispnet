@@ -14,9 +14,8 @@ cannot publish: permission to use another host's service is not permission to
 publish it. Android currently owns no hosted services, so it has no publishing
 switch. All services start private unless their owner explicitly enables this.
 
-Both desktop and Android service cards use the link icon for copying URLs.
-The **public** button groups its icon and label together and appears first.
-The unlabelled link icon opens a popup with selectable addresses and copy controls.
+Both desktop and Android service cards have one unlabelled link icon that opens
+a popup with selectable addresses and copy controls.
 It lists the local HTTP URL first, the stable `wispnet://` address second on
 Android, and the public URL last when enabled (the third option on Android).
 Reading or copying these addresses does not launch the browser. If a local route

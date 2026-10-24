@@ -1328,17 +1328,23 @@ void main() {
       );
       await mount(tester, backend, size: const Size(1000, 850));
       expect(find.text('Public · Online'), findsOneWidget);
-      expect(find.text('public'), findsOneWidget);
-      final copy = find.byTooltip('Copy public URL for web');
+      expect(find.text('public'), findsNothing);
+      expect(find.byTooltip('Copy public URL for web'), findsNothing);
+      final links = find.byTooltip('Show links for web');
       final gear = find.byTooltip('Settings for web on hibreak');
       expect(
-        tester.getRect(copy).right,
+        tester.getRect(links).right,
         lessThanOrEqualTo(tester.getRect(gear).left),
       );
-      await tester.tap(copy);
+      await tester.tap(links);
+      await tester.pumpAndSettle();
+      expect(copied, isNull);
+      await tester.tap(find.byTooltip('Copy public URL'));
       await tester.pumpAndSettle();
       expect(copied, publication['url']);
       expect(backend.calls.where((call) => call.$1 == 'open'), isEmpty);
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
       publication['state'] = 'offline';
       await tester.pump(const Duration(seconds: 2));
       await tester.pumpAndSettle();
@@ -1402,7 +1408,8 @@ void main() {
     ];
     await mount(tester, backend, size: const Size(360, 844));
     expect(find.text('Public · Online'), findsOneWidget);
-    expect(find.byTooltip('Copy public URL for web'), findsOneWidget);
+    expect(find.byTooltip('Copy public URL for web'), findsNothing);
+    expect(find.byTooltip('Show links for web'), findsOneWidget);
     expect(tester.takeException(), isNull);
     final card = tester.widget<MachineCard>(find.byType(MachineCard).first);
     await tester.pumpWidget(
@@ -1417,7 +1424,8 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.text('public'), findsOneWidget);
+    expect(find.text('public'), findsNothing);
+    expect(find.byTooltip('Show links for web'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await close(tester);
   });
@@ -1454,48 +1462,21 @@ void main() {
         ),
       );
       await mount(tester, backend, size: const Size(360, 844));
-      expect(find.text('public'), findsOneWidget);
+      expect(find.text('public'), findsNothing);
       expect(find.text('Public · Online'), findsOneWidget);
-      final public = find.byTooltip('Copy public URL for website');
-      final private = find.byTooltip('Show links for website');
+      expect(find.byTooltip('Copy public URL for website'), findsNothing);
+      final links = find.byTooltip('Show links for website');
       expect(
-        find.descendant(of: public, matching: find.byType(OutlinedButton)),
+        find.descendant(of: links, matching: find.byType(IconButton)),
         findsOneWidget,
       );
       expect(
-        find.descendant(of: private, matching: find.byType(OutlinedButton)),
-        findsNothing,
-      );
-      expect(
-        find.descendant(of: private, matching: find.byType(IconButton)),
+        find.descendant(of: links, matching: find.byIcon(Icons.link)),
         findsOneWidget,
       );
-      expect(
-        find.descendant(of: public, matching: find.text('public')),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(of: private, matching: find.text('local')),
-        findsNothing,
-      );
-      expect(
-        tester.getRect(public).right,
-        lessThan(tester.getRect(private).left),
-      );
-      expect(
-        find.descendant(of: public, matching: find.byIcon(Icons.link)),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(of: private, matching: find.byIcon(Icons.link)),
-        findsOneWidget,
-      );
-      await tester.tap(public);
+      await tester.tap(links);
       await tester.pumpAndSettle();
-      expect(copied, publication['url']);
-      await tester.tap(private);
-      await tester.pumpAndSettle();
-      expect(copied, publication['url']);
+      expect(copied, isNull);
       expect(find.text('Links for website'), findsOneWidget);
       expect(find.text('Local URL'), findsOneWidget);
       expect(find.text('Wispnet'), findsOneWidget);
@@ -1526,12 +1507,22 @@ void main() {
       backend.publicAccess!['host'] = 'e' * 64;
       await tester.pump(const Duration(seconds: 2));
       await tester.pumpAndSettle();
-      expect(find.text('public'), findsNothing);
+      expect(find.text('Public · Online'), findsNothing);
+      await tester.tap(find.byTooltip('Show links for website'));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Copy public URL'), findsNothing);
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
       backend.publicAccess!['host'] = peer;
       publication['incarnation'] = 'e' * 64;
       await tester.pump(const Duration(seconds: 2));
       await tester.pumpAndSettle();
-      expect(find.text('public'), findsNothing);
+      expect(find.text('Public · Online'), findsNothing);
+      await tester.tap(find.byTooltip('Show links for website'));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Copy public URL'), findsNothing);
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
       await close(tester);
       publication['incarnation'] = incarnation;
       await mount(
@@ -1540,7 +1531,10 @@ void main() {
       );
       expect(find.text('Public · Cached'), findsOneWidget);
       expect(find.text('Public · Online'), findsNothing);
-      expect(find.text('public'), findsOneWidget);
+      expect(find.text('public'), findsNothing);
+      await tester.tap(find.byTooltip('Show links for website'));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Copy public URL'), findsOneWidget);
       await close(tester);
     },
   );
