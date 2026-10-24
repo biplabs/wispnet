@@ -782,14 +782,14 @@ class _ServiceLinksState extends State<ServiceLinks> {
         if (localUrl == null) const SizedBox(height: 12),
         if (widget.android)
           option(
-            'Wispnet',
+            'Wispnet URL',
             'wispnet://${widget.machine.id}/${widget.service['id']}',
             'Copy Wispnet link',
           ),
         if (publication?['enabled'] == true &&
             publicUrl != null &&
             publicUrl.isNotEmpty)
-          option('public', publicUrl, 'Copy public URL'),
+          option('Public URL', publicUrl, 'Copy public URL'),
       ],
     );
   }

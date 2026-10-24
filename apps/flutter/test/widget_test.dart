@@ -1328,7 +1328,7 @@ void main() {
       );
       await mount(tester, backend, size: const Size(1000, 850));
       expect(find.text('Public · Online'), findsOneWidget);
-      expect(find.text('public'), findsNothing);
+      expect(find.text('Public URL'), findsNothing);
       expect(find.byTooltip('Copy public URL for web'), findsNothing);
       final links = find.byTooltip('Show links for web');
       final gear = find.byTooltip('Settings for web on hibreak');
@@ -1424,7 +1424,7 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.text('public'), findsNothing);
+    expect(find.text('Public URL'), findsNothing);
     expect(find.byTooltip('Show links for web'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await close(tester);
@@ -1462,7 +1462,7 @@ void main() {
         ),
       );
       await mount(tester, backend, size: const Size(360, 844));
-      expect(find.text('public'), findsNothing);
+      expect(find.text('Public URL'), findsNothing);
       expect(find.text('Public · Online'), findsOneWidget);
       expect(find.byTooltip('Copy public URL for website'), findsNothing);
       final links = find.byTooltip('Show links for website');
@@ -1479,14 +1479,14 @@ void main() {
       expect(copied, isNull);
       expect(find.text('Links for website'), findsOneWidget);
       expect(find.text('Local URL'), findsOneWidget);
-      expect(find.text('Wispnet'), findsOneWidget);
+      expect(find.text('Wispnet URL'), findsOneWidget);
       expect(
         tester.getRect(find.text('Local URL')).top,
-        lessThan(tester.getRect(find.text('Wispnet')).top),
+        lessThan(tester.getRect(find.text('Wispnet URL')).top),
       );
       expect(
-        tester.getRect(find.text('Wispnet')).top,
-        lessThan(tester.getRect(find.text('public').last).top),
+        tester.getRect(find.text('Wispnet URL')).top,
+        lessThan(tester.getRect(find.text('Public URL').last).top),
       );
       await tester.tap(find.byTooltip('Copy local URL'));
       await tester.pumpAndSettle();
@@ -1531,7 +1531,7 @@ void main() {
       );
       expect(find.text('Public · Cached'), findsOneWidget);
       expect(find.text('Public · Online'), findsNothing);
-      expect(find.text('public'), findsNothing);
+      expect(find.text('Public URL'), findsNothing);
       await tester.tap(find.byTooltip('Show links for website'));
       await tester.pumpAndSettle();
       expect(find.byTooltip('Copy public URL'), findsOneWidget);
