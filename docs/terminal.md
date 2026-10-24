@@ -142,3 +142,41 @@ In **Local services**, select an HTTP service and choose **Enable public access
 (anyone can connect)**. The service menu shows its public URL and connection state;
 **Disable public access** closes that route and its active streams. Only the
 owning node can publish. See [public access](public-access.md).
+
+## Device settings and service links
+
+Overview → **Device ID and shared HTTP port** edits the same device ID and
+single loopback HTTP port as the desktop app. Changing the ID restarts the
+installed node; keys, pairings and grants remain in its existing state directory.
+The port serves all service hostnames and `registry.wispnet.localhost`.
+
+Local services → a service → **Show service links**, or a remote service →
+**Show Local, Wispnet and Public links**, displays the current local HTTP address,
+`wispnet://<host-id>/<service-id>`, and a public HTTPS address when published.
+Local links use the computer running the CLI. Wispnet links resolve on the
+receiving device and require pairing and permission. Overview → **Open a Wispnet
+service link** resolves a pasted link and opens the browser in a graphical session.
+
+## Scriptable management
+
+These commands use the running node's authenticated owner-local socket. They
+accept an optional `--config /absolute/path/host.toml` and return JSON:
+
+```sh
+wispnet node-status
+wispnet online
+wispnet offline
+wispnet settings
+wispnet settings --port 7842 --device-id my-desktop
+wispnet service-links --host FULL_HOST_ID --service llama
+wispnet resolve-link --link wispnet://FULL_HOST_ID/llama
+wispnet node-request --request /absolute/path/request.json
+```
+
+`node-request` exposes the same node operations as the desktop, including catalogs,
+pairing, revision-checked service/grant mutations, and public-access configuration.
+Use a bounded owner-only JSON request file (`chmod 600`). For example,
+`{"op":"gateway_settings"}` reads access settings. Mutation requests use
+`{"op":"mutate","operation":{...}}` with the current `expected_revision`, exactly
+as the desktop does; rejected or unconfirmed requests are never retried automatically.
+Run `wispnet --help` for the lower-level development commands.

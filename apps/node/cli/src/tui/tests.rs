@@ -273,3 +273,40 @@ fn pairing_text_box_wraps_long_codes_and_normalizes_line_breaks() {
         _ => panic!("Expected pairing preview"),
     }
 }
+
+#[test]
+fn settings_require_valid_values_and_explicit_confirmation() {
+    let (mut app, rx, _) = fixture();
+    let mut form = Form {
+        title: "Settings".into(),
+        kind: FormKind::Settings,
+        fields: vec![
+            Field::text("ID", "my-desktop", 64),
+            Field::text("Port", "80", 5),
+        ],
+        selected: 0,
+    };
+    assert!(app.save_form(form.clone()).is_err());
+    assert!(rx.try_recv().is_err());
+    form.fields[1].value = "7842".into();
+    form.fields[0].value = "Bad ID".into();
+    assert!(app.save_form(form.clone()).is_err());
+    form.fields[0].value = "my-desktop".into();
+    app.save_form(form).unwrap();
+    assert!(rx.try_recv().is_err());
+    app.key(KeyCode::Enter.into());
+    assert!(
+        matches!(rx.try_recv().unwrap().task, Task::SaveSettings { name, port: 7842 } if name == "my-desktop")
+    );
+}
+
+#[test]
+fn remote_service_links_do_not_launch_a_browser() {
+    let (mut app, rx, _) = fixture();
+    let service = json!({"id":"llama","kind":"http","incarnation":"c".repeat(64)});
+    app.action(Action::Remote("b".repeat(64), service));
+    assert!(rx.try_recv().is_err());
+    app.key(KeyCode::Down.into());
+    app.key(KeyCode::Enter.into());
+    assert!(matches!(rx.try_recv().unwrap().task, Task::Links { .. }));
+}

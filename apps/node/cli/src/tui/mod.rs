@@ -1,5 +1,5 @@
 //! Interactive terminal management over the same private API as the desktop.
-mod api;
+pub(crate) mod api;
 use api::Api;
 use crossterm::{
     clipboard::CopyToClipboard,
@@ -86,6 +86,16 @@ enum Task {
         name: String,
         enable: bool,
     },
+    Settings,
+    ResolveLink(String),
+    SaveSettings {
+        name: String,
+        port: u16,
+    },
+    Links {
+        host: String,
+        service: Value,
+    },
     OwnerList,
     OwnerStart(Value),
     OwnerRetry(String),
@@ -101,6 +111,8 @@ enum Kind {
     Open,
     Owners,
     OwnerSaved,
+    Settings,
+    Links,
 }
 #[derive(Clone)]
 struct Work {
@@ -140,37 +152,79 @@ fn perform(api: &Api, task: Task) -> Result<Value, String> {
                 api.request(json!({"op":"enable"}))?;
             }
             let result=api.request(json!({"op":"open","host":host,"service":service["id"],"incarnation":service["incarnation"],"host_name":name}))?;
-            // Stable local URLs contain no capability; never invoke a shell.
-            let url = text(&result, "url");
-            let parsed = url::Url::parse(url).map_err(|_| "Invalid browser handoff")?;
-            if parsed.scheme() != "http"
-                || !parsed.host_str().is_some_and(|h| h.ends_with(".localhost"))
-                || parsed.port().is_none()
-                || parsed.path() != "/"
-                || parsed.fragment().is_some()
-                || parsed.query().is_some()
-                || !parsed.username().is_empty()
-                || parsed.password().is_some()
-            {
-                return Err("Invalid local browser handoff".into());
-            }
-            if cfg!(target_os = "macos")
-                || std::env::var_os("DISPLAY").is_some()
-                || std::env::var_os("WAYLAND_DISPLAY").is_some()
-            {
-                let opener = if cfg!(target_os = "macos") {
-                    "open"
-                } else {
-                    "xdg-open"
-                };
-                api::command(std::process::Command::new(opener).arg(url), None, 10)?;
-            }
+            launch_browser(&result)?;
             Ok(result)
         }
+        Task::ResolveLink(link) => {
+            api.request(json!({"op":"enable"}))?;
+            let result = api.request(json!({"op":"resolve_link","link":link}))?;
+            launch_browser(&result)?;
+            Ok(result)
+        }
+        Task::Settings => api.request(json!({"op":"gateway_settings"})),
+        Task::SaveSettings { name, port } => {
+            api.check_rename(&name)?;
+            let mut settings = api.request(json!({"op":"gateway_settings"}))?["settings"].clone();
+            settings["registry_port"] = json!(port);
+            settings["service_ports"] = json!([]);
+            api.request(json!({"op":"configure_access","settings":settings}))?;
+            api.rename_device(&name)?;
+            Ok(json!({"saved":true}))
+        }
+        Task::Links { host, service } => service_links(api, &host, &service),
         Task::OwnerList => api.owner(&["--operations".into()]),
         Task::OwnerStart(plan) => api.owner_start(&plan),
         Task::OwnerRetry(id) => api.owner(&["--retry".into(), id]),
     }
+}
+fn launch_browser(result: &Value) -> Result<(), String> {
+    // Stable local URLs contain no capability; never invoke a shell.
+    let url = text(result, "url");
+    let parsed = url::Url::parse(url).map_err(|_| "Invalid browser handoff")?;
+    if parsed.scheme() != "http"
+        || !parsed.host_str().is_some_and(|h| h.ends_with(".localhost"))
+        || parsed.port().is_none()
+        || parsed.path() != "/"
+        || parsed.fragment().is_some()
+        || parsed.query().is_some()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return Err("Invalid local browser handoff".into());
+    }
+    if cfg!(target_os = "macos")
+        || std::env::var_os("DISPLAY").is_some()
+        || std::env::var_os("WAYLAND_DISPLAY").is_some()
+    {
+        let opener = if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        };
+        api::command(std::process::Command::new(opener).arg(url), None, 10)?;
+    }
+    Ok(())
+}
+pub(crate) fn service_links(api: &Api, host: &str, service: &Value) -> Result<Value, String> {
+    api.request(json!({"op":"enable"}))?;
+    let route = api.request(json!({"op":"open","host":host,"service":service["id"],"incarnation":service["incarnation"]}))?;
+    let status = api.request(json!({"op":"status"}))?;
+    let publications = if status["host"]["host"] == host {
+        status["public_access"]["services"].clone()
+    } else {
+        // Public metadata is optional; the local route remains usable if unavailable.
+        api.request(json!({"op":"host_public_links","host":host}))
+            .unwrap_or(Value::Null)["services"]
+            .clone()
+    };
+    let public = array(&publications).into_iter().find(|p| {
+        p["service"] == service["id"]
+            && p["incarnation"] == service["incarnation"]
+            && p["enabled"] != false
+    });
+    Ok(
+        json!({"local":route["url"],"wispnet":format!("wispnet://{}/{}",host,text(service,"id")),"public":public.and_then(|p| p["url"].as_str().map(str::to_owned))}),
+    )
 }
 fn worker(api: Api) -> (mpsc::Sender<Work>, mpsc::Receiver<Reply>) {
     let (tx, jobs) = mpsc::channel::<Work>();
@@ -195,6 +249,7 @@ fn worker(api: Api) -> (mpsc::Sender<Work>, mpsc::Receiver<Reply>) {
 enum Action {
     Nav(Page),
     Code,
+    Copy(String),
     Qr,
     Pending(Value),
     Machine(String),
@@ -269,6 +324,8 @@ enum FormKind {
         revision: u64,
     },
     Pair,
+    Settings,
+    Link,
     Owner {
         approve: bool,
     },
@@ -499,6 +556,24 @@ impl App {
                     Action::Nav(Page::Services),
                 ),
                 entry("pair", "Pair a remote host", Action::Nav(Page::Pair)),
+                entry(
+                    "settings",
+                    "Device ID and shared HTTP port",
+                    Action::Run(Work {
+                        kind: Kind::Settings,
+                        task: Task::Settings,
+                    }),
+                ),
+                entry(
+                    "link",
+                    "Open a Wispnet service link",
+                    Action::Form(Form {
+                        title: "Open service link".into(),
+                        kind: FormKind::Link,
+                        fields: vec![Field::text("Wispnet URL", "", 256)],
+                        selected: 0,
+                    }),
+                ),
                 entry(
                     "online",
                     if self.online {
@@ -875,32 +950,63 @@ impl App {
                     choices.push(entry(
                         "open",
                         "Open service / show browser URL",
-                        Action::Remote(text(&self.host(), "host").into(), service.clone()),
+                        Action::Run(Work {
+                            kind: Kind::Open,
+                            task: Task::Open {
+                                host: text(&self.host(), "host").into(),
+                                service: service.clone(),
+                                name: text(&self.status(), "host_name").into(),
+                                enable: self.status()["access_enabled"] != true,
+                            },
+                        }),
                     ));
                 }
                 choices.push(entry("remove","Remove service",Action::Confirm{title:"Remove local service".into(),detail:details.clone(),work:self.mutate(json!({"op":"remove","id":service["id"],"expected_revision":self.revision()}))}));
                 if service["kind"] == "http" {
                     let enabled = array(&self.status()["public_access"]["services"])
                         .iter()
-                        .any(|p| p["service"] == service["id"] && p["enabled"] == true);
+                        .any(|p| p["service"] == service["id"] && p["enabled"] != false);
                     choices.push(entry("public", if enabled {"Disable public access"}else{"Enable public access (anyone can connect)"},Action::Run(Work{kind:Kind::Saved,task:Task::Request(json!({"op":"configure_public","service":service["id"],"incarnation":service["incarnation"],"enabled":!enabled,"name":self.status()["host_name"]}))})));
                 }
                 self.choice("Manage service", details, choices);
             }
+            Action::Copy(value) => {
+                self.message =
+                    match execute!(io::stdout(), CopyToClipboard::to_clipboard_from(value)) {
+                        Ok(()) => {
+                            "Copy requested. Allow clipboard access if your terminal asks.".into()
+                        }
+                        Err(_) => "Cannot copy link. Check terminal clipboard access.".into(),
+                    };
+            }
             Action::Remote(host, service) => {
-                self.send(Work {
-                    kind: Kind::Open,
-                    task: Task::Open {
-                        host: host.clone(),
-                        service,
-                        name: if host == text(&self.host(), "host") {
-                            text(&self.status(), "host_name").into()
-                        } else {
-                            self.name(&host)
-                        },
-                        enable: self.status()["access_enabled"] != true,
-                    },
-                });
+                self.choice(
+                    "Service access",
+                    vec![format!("Service: {}", text(&service, "id"))],
+                    vec![
+                        entry(
+                            "open",
+                            "Open in browser",
+                            Action::Run(Work {
+                                kind: Kind::Open,
+                                task: Task::Open {
+                                    host: host.clone(),
+                                    service: service.clone(),
+                                    name: self.name(&host),
+                                    enable: self.status()["access_enabled"] != true,
+                                },
+                            }),
+                        ),
+                        entry(
+                            "links",
+                            "Show Local, Wispnet and Public links",
+                            Action::Run(Work {
+                                kind: Kind::Links,
+                                task: Task::Links { host, service },
+                            }),
+                        ),
+                    ],
+                );
             }
             Action::OwnerNew(approve) => {
                 let path = self
@@ -1013,6 +1119,40 @@ impl App {
     }
     fn save_form(&mut self, form: Form) -> Result<(), String> {
         match form.kind {
+            FormKind::Settings => {
+                let name = form.fields[0].value.trim().to_owned();
+                if !wispnet_core::protocol::valid_service_id(&name) {
+                    return Err("Invalid device ID".into());
+                }
+                let port: u16 = form.fields[1]
+                    .value
+                    .trim()
+                    .parse()
+                    .map_err(|_| "Port must be between 1024 and 65535")?;
+                if port < 1024 {
+                    return Err("Port must be between 1024 and 65535".into());
+                }
+                self.confirmation(
+                    "Save device settings".into(),
+                    vec![
+                        format!("Device ID: {name}"),
+                        format!("Shared HTTP port: {port}"),
+                        "Changing the device ID restarts the installed node.".into(),
+                    ],
+                    Work {
+                        kind: Kind::Saved,
+                        task: Task::SaveSettings { name, port },
+                    },
+                );
+            }
+            FormKind::Link => {
+                let link = form.fields[0].value.trim();
+                wispnet_core::service_link::ServiceLink::parse(link)?;
+                self.send(Work {
+                    kind: Kind::Open,
+                    task: Task::ResolveLink(link.to_owned()),
+                });
+            }
             FormKind::Approval {
                 invitation,
                 peer,
@@ -1258,6 +1398,51 @@ impl App {
                         self.modal=Some(Modal::Info{title:"Browser service".into(),lines:vec![text(&value,"url").into(),"This URL belongs to this computer. Over SSH, use a browser on this computer or forward its local gateway port; it is not a public URL.".into(),"On a graphical session the browser opens automatically. TCP services use the native tunnel command.".into()],scroll:0});
                         self.message = "Browser route ready".into();
                         self.last_poll = Instant::now() - Duration::from_secs(5);
+                    }
+                    Kind::Settings => {
+                        self.modal = Some(Modal::Form(Form {
+                            title: "Device settings".into(),
+                            kind: FormKind::Settings,
+                            fields: vec![
+                                Field::text("Device ID", text(&self.status(), "host_name"), 64),
+                                Field::text(
+                                    "Shared HTTP port",
+                                    &value["settings"]["registry_port"].to_string(),
+                                    5,
+                                ),
+                            ],
+                            selected: 0,
+                        }));
+                    }
+                    Kind::Links => {
+                        let mut lines = vec![
+                            format!("Local: {}", text(&value, "local")),
+                            format!("Wispnet (Android): {}", text(&value, "wispnet")),
+                        ];
+                        if let Some(url) = value["public"].as_str() {
+                            lines.push(format!("Public: {url}"));
+                        }
+                        lines.push("Local links use this computer's shared HTTP port. Wispnet links resolve on the receiving device and require pairing and permission.".into());
+                        let mut choices = vec![
+                            entry(
+                                "local",
+                                "Copy Local URL",
+                                Action::Copy(text(&value, "local").into()),
+                            ),
+                            entry(
+                                "wispnet",
+                                "Copy Wispnet URL",
+                                Action::Copy(text(&value, "wispnet").into()),
+                            ),
+                        ];
+                        if let Some(url) = value["public"].as_str() {
+                            choices.push(entry(
+                                "public",
+                                "Copy Public URL",
+                                Action::Copy(url.into()),
+                            ));
+                        }
+                        self.choice("Service links", lines, choices);
                     }
                     Kind::Owners => {
                         self.operations = array(&value);

@@ -1,4 +1,5 @@
 use std::{env, path::PathBuf, process::ExitCode};
+mod manage;
 mod retry;
 mod tui;
 use tracing_subscriber::prelude::*;
@@ -8,7 +9,7 @@ use wispnet_core::{
     identity::{EndpointId, IdentityStore},
 };
 
-const USAGE: &str = "Wispnet development CLI
+const USAGE: &str = "Wispnet CLI
 Interactive management: wispnet [--config /absolute/path/host.toml]
 Pairing code: wispnet --pairing-code [--config /absolute/path/host.toml]
 QR pairing: wispnet --qrcode [--config /absolute/path/host.toml]
@@ -77,7 +78,16 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         ]);
     }
     if args.len() == 1 && (args[0] == "--help" || args[0] == "-h") {
-        println!("{USAGE}");
+        println!("{USAGE}\n\n{}", manage::HELP);
+        return Ok(());
+    }
+    if args
+        .first()
+        .and_then(|a| a.to_str())
+        .is_some_and(manage::handles)
+    {
+        let value = manage::run(&args)?;
+        println!("{}", serde_json::to_string_pretty(&value)?);
         return Ok(());
     }
     let host_invite = args.first().is_some_and(|a| a == "host-invite");

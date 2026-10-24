@@ -170,6 +170,45 @@ impl Api {
             std::thread::sleep(Duration::from_millis(100));
         }
     }
+    pub fn check_rename(&self, name: &str) -> Result<(), String> {
+        if !wispnet_core::protocol::valid_service_id(name) {
+            return Err("Invalid device ID".into());
+        }
+        let current = Config::load(&self.config).map_err(|e| e.to_string())?;
+        if current.device_name == name {
+            return Ok(());
+        }
+        let expected = fs::canonicalize(home()?.join(".config/wispnet-node/host.toml"))
+            .map_err(|_| "Installed host configuration unavailable")?;
+        if self.config != expected {
+            return Err("Rename requires the installed node configuration".into());
+        }
+        Ok(())
+    }
+    pub fn rename_device(&self, name: &str) -> Result<(), String> {
+        self.check_rename(name)?;
+        if Config::load(&self.config)
+            .map_err(|e| e.to_string())?
+            .device_name
+            == name
+        {
+            return Ok(());
+        }
+        let source = fs::read_to_string(&self.config).map_err(|e| e.to_string())?;
+        let updated = renamed_config(&source, name)?;
+        let mut file = tempfile::NamedTempFile::new_in(
+            self.config.parent().ok_or("Missing config directory")?,
+        )
+        .map_err(|e| e.to_string())?;
+        file.write_all(updated.as_bytes())
+            .map_err(|e| e.to_string())?;
+        file.as_file().sync_all().map_err(|e| e.to_string())?;
+        file.persist(&self.config).map_err(|e| e.to_string())?;
+        self.online(false)?;
+        self.online(true)?;
+        self.request(json!({"op":"enable"}))?;
+        Ok(())
+    }
     // Reuse the desktop's tested durable cross-host journal, locking and receipts.
     pub fn owner(&self, args: &[String]) -> Result<Value, String> {
         let helper = home()?.join(".local/bin/wispnet-node");
@@ -188,11 +227,26 @@ impl Api {
         self.owner(&["--batch".into(), file.path().to_string_lossy().into_owned()])
     }
     pub fn names(&self) -> Value {
-        read_private(&self.state.join("desktop-peer-names.json"), 65536)
+        let mut names = read_private(&self.state.join("desktop-peer-names.json"), 65536)
             .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
             .filter(Value::is_object)
-            .unwrap_or_else(|| json!({}))
+            .unwrap_or_else(|| json!({}));
+        if let Some(ids) = read_private(&self.state.join("desktop-flutter.json"), 2 * 1024 * 1024)
+            .ok()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            .and_then(|v| v["preferences"]["device_ids"].as_object().cloned())
+        {
+            for (peer, name) in ids {
+                if name
+                    .as_str()
+                    .is_some_and(wispnet_core::protocol::valid_service_id)
+                {
+                    names[peer] = name;
+                }
+            }
+        }
+        names
     }
     pub fn save_pair(&self, host: &str, name: &str) -> Result<(), String> {
         if host.len() != 64 || !host.bytes().all(|c| c.is_ascii_hexdigit()) {
@@ -218,6 +272,17 @@ impl Api {
             Err(_) => Err("Pairing sent; cannot reset display cache".into()),
         }
     }
+}
+fn renamed_config(source: &str, name: &str) -> Result<String, String> {
+    if !wispnet_core::protocol::valid_service_id(name) {
+        return Err("Invalid device ID".into());
+    }
+    let mut value: toml::Value =
+        toml::from_str(source).map_err(|_| "Invalid host configuration")?;
+    let table = value.as_table_mut().ok_or("Invalid host configuration")?;
+    table.remove("device_name");
+    table.insert("device_id".into(), toml::Value::String(name.into()));
+    toml::to_string(&value).map_err(|_| "Cannot serialize host configuration".into())
 }
 pub fn home() -> Result<PathBuf, String> {
     std::env::var_os("HOME")
@@ -316,6 +381,19 @@ pub fn command(cmd: &mut Command, input: Option<&[u8]>, timeout: u64) -> Result<
 mod tests {
     use super::*;
     use std::os::unix::{fs::PermissionsExt, net::UnixListener};
+    #[test]
+    fn rename_preserves_transport_and_removes_legacy_alias() {
+        let source = "schema_version=2\ndevice_name='old'\nstate_dir='/tmp/state'\nlog_level='info'\n[transport]\nbind_addr='127.0.0.1:0'\n";
+        let updated = renamed_config(source, "new-device").unwrap();
+        let value: toml::Value = toml::from_str(&updated).unwrap();
+        assert_eq!(value["device_id"].as_str(), Some("new-device"));
+        assert!(value.get("device_name").is_none());
+        assert_eq!(
+            value["transport"]["bind_addr"].as_str(),
+            Some("127.0.0.1:0")
+        );
+        assert!(renamed_config(source, "Invalid name").is_err());
+    }
     #[test]
     fn owner_socket_and_api_version_are_verified_before_trusting_a_response() {
         let root = tempfile::tempdir().unwrap();

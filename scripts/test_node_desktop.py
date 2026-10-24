@@ -257,6 +257,24 @@ class NodeIntegration(unittest.TestCase):
                     service="website",
                     incarnation=remote_incarnation,
                 )["url"]
+                # Script commands share the same authenticated API and route state.
+                self.assertEqual(json.loads(cli(a, "node-status"))["host"]["host"], pa)
+                settings = json.loads(cli(a, "settings", "--port", str(registry_port)))
+                self.assertEqual(settings["settings"]["registry_port"], registry_port)
+                links = json.loads(cli(a, "service-links", "--host", pb, "--service", "website"))
+                self.assertEqual(links["local"], url)
+                self.assertEqual(links["wispnet"], f"wispnet://{pb}/website")
+                self.assertIsNone(links["public"])
+                resolved = json.loads(cli(a, "resolve-link", "--link", links["wispnet"]))
+                self.assertEqual(resolved["url"], url)
+                request_file = root / "cli-request.json"
+                request_file.write_text(json.dumps({"op": "catalog", "host": pb}))
+                request_file.chmod(0o600)
+                self.assertEqual(json.loads(cli(a, "node-request", "--request", request_file)), catalog)
+                request_file.chmod(0o644)
+                denied = subprocess.run([BINARY, "node-request", "--config", a, "--request", request_file], capture_output=True, text=True)
+                self.assertNotEqual(denied.returncode, 0)
+                self.assertIn("owner-only", denied.stderr)
                 from urllib.parse import urlsplit
 
                 parsed = urlsplit(url)
