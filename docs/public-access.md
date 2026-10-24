@@ -15,8 +15,8 @@ publish it. Android currently owns no hosted services, so it has no publishing
 switch. All services start private unless their owner explicitly enables this.
 
 Both desktop and Android service cards use the link icon for copying URLs.
-The icon and label are grouped inside each button, with **public** first and
-**local** second. The local button copies the stable `wispnet://` address.
+The **public** button groups its icon and label together and appears first.
+The unlabelled link icon follows it and copies the stable `wispnet://` address.
 Paired devices fetch public URLs and tunnel
 state when refreshing a host. Only currently granted HTTP services with the same
 incarnation receive this metadata; a removed or disabled publication disappears

@@ -324,8 +324,7 @@ class MachineCard extends StatelessWidget {
               if (service['kind'] == 'http')
                 Tooltip(
                   message: 'Copy Wispnet link for ${service['id']}',
-                  child: OutlinedButton.icon(
-                    style: linkButtonStyle,
+                  child: IconButton(
                     onPressed: busy
                         ? null
                         : () async {
@@ -348,7 +347,6 @@ class MachineCard extends StatelessWidget {
                       size: 20,
                       color: WispColors.cyan,
                     ),
-                    label: const Text('local'),
                   ),
                 ),
               if (onSettings != null)

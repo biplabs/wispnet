@@ -1452,6 +1452,10 @@ void main() {
       );
       expect(
         find.descendant(of: private, matching: find.byType(OutlinedButton)),
+        findsNothing,
+      );
+      expect(
+        find.descendant(of: private, matching: find.byType(IconButton)),
         findsOneWidget,
       );
       expect(
@@ -1460,7 +1464,7 @@ void main() {
       );
       expect(
         find.descendant(of: private, matching: find.text('local')),
-        findsOneWidget,
+        findsNothing,
       );
       expect(
         tester.getRect(public).right,
