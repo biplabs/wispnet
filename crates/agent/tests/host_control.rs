@@ -1358,6 +1358,8 @@ async fn old_host_without_diagnostic_support_keeps_the_local_report() {
     use wispnet_core::host::ALPN;
     let server = Endpoint::builder(presets::Minimal)
         .alpns(vec![ALPN.to_vec()])
+        .bind_addr("127.0.0.1:0".parse::<std::net::SocketAddr>().unwrap())
+        .unwrap()
         .bind()
         .await
         .unwrap();
