@@ -712,7 +712,12 @@ class _ServiceLinksState extends State<ServiceLinks> {
     }
   }
 
-  Widget option(String label, String url, String tooltip) => Padding(
+  Widget option(
+    String label,
+    String url,
+    String tooltip, {
+    String? description,
+  }) => Padding(
     padding: const EdgeInsets.only(bottom: 12),
     child: WispPanel(
       child: Row(
@@ -725,6 +730,16 @@ class _ServiceLinksState extends State<ServiceLinks> {
                   label,
                   style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
+                if (description != null) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    description,
+                    style: const TextStyle(
+                      color: WispColors.muted,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 6),
                 SelectableText(
                   url,
@@ -785,6 +800,7 @@ class _ServiceLinksState extends State<ServiceLinks> {
             'Wispnet URL',
             'wispnet://${widget.machine.id}/${widget.service['id']}',
             'Copy Wispnet link',
+            description: 'Opens Wispnet first to prepare the connection, then opens the service in your browser.',
           ),
         if (publication?['enabled'] == true &&
             publicUrl != null &&
