@@ -6,12 +6,27 @@ A locally owned HTTP service can be published for anyone to connect over HTTPS:
 https://j-desktop-3102e0ed3280-llama.wispnet.app/
 ```
 
-On Linux, click **Public** on a local service card. The URL and connection state
-appear on the card; click again to disable. The terminal's Local services menu
+On desktop, open a local service's gear and choose **Enable public access**.
+The URL and connection state appear on the card; use the same settings to disable.
+The terminal's Local services menu
 has **Enable/Disable public access** and displays the URL. Remote service cards
 cannot publish: permission to use another host's service is not permission to
 publish it. Android currently owns no hosted services, so it has no publishing
 switch. All services start private unless their owner explicitly enables this.
+
+Both desktop and Android service cards use the link icon for copying URLs.
+The public copy button is labelled **Public link**, while the other link button
+copies the stable `wispnet://` address. Paired devices fetch public URLs and tunnel
+state when refreshing a host. Only currently granted HTTP services with the same
+incarnation receive this metadata; a removed or disabled publication disappears
+on the next successful refresh. Cached links are marked **Public · Cached** when
+the host cannot be verified.
+
+This optional, read-only `public_links` peer request is separate from the strict
+revisioned service catalog. Older peers can reject it without disrupting normal
+service discovery. No backend addresses, gateway configuration, credentials or
+publishing controls are shared. The owner-local API exposes the read as
+`{"op":"host_public_links","host":"FULL_HOST_ID"}`.
 
 The hostname contains the machine-name slug, the first twelve hexadecimal
 characters of the owning endpoint ID, and a service-ID slug. Long or transformed

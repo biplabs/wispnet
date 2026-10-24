@@ -109,6 +109,28 @@ class BridgeTests(unittest.TestCase):
             self.bridge.dispatch('renameHost', dict(host=PEER, name='alias'))
         self.assertNotIn('names', json.loads(self.bridge.path.read_text())['preferences'])
 
+    def test_remote_public_links_are_optional_and_do_not_enter_catalog_baselines(self):
+        self.bridge.snapshot()
+        links = dict(version=1, host=PEER, services=[dict(service='web', incarnation=INCARNATION,
+                    url='https://shared-web.wispnet.test/', state='online')])
+        original = self.bridge.api.request
+        def request(**args):
+            return links if args['op'] == 'host_public_links' else original(**args)
+        with patch.object(self.bridge.api, 'request', side_effect=request):
+            self.bridge.refresh(PEER)
+        row = self.bridge.snapshot()['hosts'][PEER]
+        self.assertEqual(row['public_access'], links)
+        self.assertEqual(row['catalog'], catalog())
+        self.assertEqual(self.bridge.cache.load(PEER)['catalog'], catalog())
+        def old_peer(**args):
+            if args['op'] == 'host_public_links': raise ValueError('Unsupported request')
+            return original(**args)
+        with patch.object(self.bridge.api, 'request', side_effect=old_peer):
+            self.bridge.refresh(PEER)
+        row = self.bridge.snapshot()['hosts'][PEER]
+        self.assertEqual(row['state'], 'available')
+        self.assertNotIn('public_access', row)
+
     def test_imports_tauri_private_names_and_order_read_only(self):
         import sqlite3
         path = self.root / 'data/app.wispnet.desktop/localstorage/tauri_localhost_0.localstorage'

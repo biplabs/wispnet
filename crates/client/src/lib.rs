@@ -548,6 +548,22 @@ impl Client {
                 }
                 self.catalog(host).await
             }
+            "host_public_links" => {
+                let host = peer(value)?;
+                if self.saved_host(host).await?.is_none() {
+                    return Err("Pair with this host first".into());
+                }
+                let connection = wispnet_agent::control::connect_target(
+                    &self.endpoint,
+                    self.target(host).await?,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+                let result = wispnet_agent::control::public_links_on(&connection, host).await;
+                connection.close(0u32.into(), b"public links complete");
+                serde_json::to_value(result.map_err(|e| e.to_string())?)
+                    .map_err(|_| "Invalid public links".into())
+            }
             "diagnose_connection" => {
                 let host = peer(value)?;
                 if self.saved_host(host).await?.is_none() {

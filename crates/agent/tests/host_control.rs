@@ -61,6 +61,103 @@ fn config() -> TransportConfig {
 }
 
 #[tokio::test]
+async fn public_links_are_filtered_read_only_and_do_not_change_catalog_baselines() {
+    use wispnet_core::host::PublicLink;
+    let directory = dir();
+    let host_key = Identity::generate();
+    let client = Identity::generate();
+    let own = host_key.endpoint_id();
+    let peer = client.endpoint_id();
+    host::initialize(directory.path(), own).unwrap();
+    approve(directory.path(), own, peer, 0);
+    let backend = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    service(
+        directory.path(),
+        own,
+        peer,
+        backend.local_addr().unwrap(),
+        1,
+    );
+    mutate(
+        directory.path(),
+        own,
+        Mutation::Service {
+            expected_revision: 2,
+            id: "private".into(),
+            backend: backend.local_addr().unwrap(),
+            allow: vec![],
+            display_name: None,
+            kind: None,
+        },
+    );
+    let authority = Authority::open(directory.path(), own).unwrap();
+    let catalog = authority.catalog(peer).await.unwrap();
+    let links: Vec<_> = authority
+        .services()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|s| PublicLink {
+            service: s.id.clone(),
+            incarnation: s.incarnation,
+            url: format!("https://desktop-{}.wispnet.test/", s.id),
+            state: "online".into(),
+        })
+        .collect();
+    authority.set_public_links(links).unwrap();
+    let server = tunnel::TunnelHost::bind_host(host_key.secret_key(), &config(), authority.clone())
+        .await
+        .unwrap();
+    let endpoint = tunnel::bind_client(client.secret_key()).await.unwrap();
+    let connection = control::connect(&endpoint, own, server.endpoint().bound_sockets()[0])
+        .await
+        .unwrap();
+    let links = control::public_links_on(&connection, own).await.unwrap();
+    assert_eq!(links.services.len(), 1);
+    assert_eq!(links.services[0].service, "llama");
+    assert_eq!(links.services[0].url, "https://desktop-llama.wispnet.test/");
+    assert!(control::public_links_on(&connection, peer).await.is_err());
+    assert_eq!(
+        catalog,
+        control::catalog_on(&connection, own).await.unwrap()
+    );
+    authority.set_public_links(vec![]).unwrap();
+    assert!(
+        control::public_links_on(&connection, own)
+            .await
+            .unwrap()
+            .services
+            .is_empty()
+    );
+    assert_eq!(catalog, authority.catalog(peer).await.unwrap());
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), backend.accept())
+            .await
+            .is_err()
+    );
+    let stranger = tunnel::bind_client(Identity::generate().secret_key())
+        .await
+        .unwrap();
+    if let Ok(connection) =
+        control::connect(&stranger, own, server.endpoint().bound_sockets()[0]).await
+    {
+        assert!(control::public_links_on(&connection, own).await.is_err());
+    }
+    mutate(
+        directory.path(),
+        own,
+        Mutation::Revoke {
+            expected_revision: 3,
+            peer,
+        },
+    );
+    assert!(control::public_links_on(&connection, own).await.is_err());
+    endpoint.close().await;
+    stranger.close().await;
+    server.shutdown().await;
+}
+
+#[tokio::test]
 async fn recreated_same_binding_rejects_old_and_unbound_streams_and_cancels_active() {
     use tokio::{
         net::TcpListener,

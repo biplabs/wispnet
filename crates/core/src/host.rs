@@ -13,6 +13,55 @@ pub enum Request {
     RouterMapping {},
     SetName { name: String },
     DeviceId {},
+    PublicLinks {},
+}
+
+/// Optional display metadata, separate from the revisioned permission catalog.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublicLink {
+    pub service: String,
+    pub incarnation: String,
+    pub url: String,
+    pub state: String,
+}
+impl PublicLink {
+    pub fn valid(&self) -> bool {
+        crate::protocol::valid_service_id(&self.service)
+            && crate::enrollment::valid_code(&self.incarnation)
+            && matches!(self.state.as_str(), "online" | "connecting" | "offline")
+            && self.url.len() <= 2048
+            && url::Url::parse(&self.url).is_ok_and(|u| {
+                u.scheme() == "https"
+                    && matches!(u.host(), Some(url::Host::Domain(_)))
+                    && u.username().is_empty()
+                    && u.password().is_none()
+                    && u.port().is_none()
+                    && u.path() == "/"
+                    && u.query().is_none()
+                    && u.fragment().is_none()
+                    && u.as_str() == self.url
+            })
+    }
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublicLinks {
+    pub version: u16,
+    pub host: EndpointId,
+    pub services: Vec<PublicLink>,
+}
+impl PublicLinks {
+    pub fn valid(&self, expected: EndpointId) -> bool {
+        self.version == 1
+            && self.host == expected
+            && self.services.len() <= 16
+            && self.services.iter().all(PublicLink::valid)
+            && self
+                .services
+                .windows(2)
+                .all(|s| s[0].service < s[1].service)
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -159,6 +208,37 @@ impl DiagnosticSnapshot {
 #[cfg(test)]
 mod mapping_tests {
     use super::*;
+    #[test]
+    fn public_links_reject_unsafe_urls_wrong_hosts_and_duplicate_services() {
+        let host = crate::identity::Identity::generate().endpoint_id();
+        let link = PublicLink {
+            service: "gike".into(),
+            incarnation: "a".repeat(64),
+            url: "https://desktop-gike.wispnet.test/".into(),
+            state: "online".into(),
+        };
+        let mut links = PublicLinks {
+            version: 1,
+            host,
+            services: vec![link.clone()],
+        };
+        assert!(links.valid(host));
+        assert!(!links.valid(crate::identity::Identity::generate().endpoint_id()));
+        for url in [
+            "javascript:alert(1)",
+            "http://desktop.test/",
+            "https://user@desktop.test/",
+            "https://desktop.test:444/",
+            "https://desktop.test/path",
+            "https://desktop.test/?token=secret",
+            "https://127.0.0.1/",
+        ] {
+            links.services[0].url = url.into();
+            assert!(!links.valid(host), "{url}");
+        }
+        links.services = vec![link.clone(), link];
+        assert!(!links.valid(host));
+    }
     #[test]
     fn mapping_report_requires_consistent_lease_and_pinned_host() {
         let host = crate::identity::Identity::generate().endpoint_id();

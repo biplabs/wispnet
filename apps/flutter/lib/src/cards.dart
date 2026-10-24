@@ -174,9 +174,9 @@ class MachineCard extends StatelessWidget {
   ) {
     final allowed = machine.canOpen(service);
     final publication = service['public_access'] as Map?;
-    final publicEnabled =
-        machine.data['local'] == true && publication?['enabled'] == true;
-    final publicOnline = publication?['state'] == 'online';
+    final publicEnabled = publication?['enabled'] == true;
+    final publicCached = machine.data['local'] != true && !machine.online;
+    final publicOnline = !publicCached && publication?['state'] == 'online';
     final publicUrl = publication?['url'] as String?;
 
     final subtitle = machine.online
@@ -198,9 +198,9 @@ class MachineCard extends StatelessWidget {
       child: WispInkWell(
         onTap: !busy && allowed ? () => onOpen(service) : null,
         borderRadius: BorderRadius.circular(16),
-        child: Row(
-          children: [
-            Expanded(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final content = Expanded(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(12, 8, 0, 8),
                 child: Opacity(
@@ -244,7 +244,9 @@ class MachineCard extends StatelessWidget {
                           ),
                           if (publicEnabled)
                             Tooltip(
-                              message: publicOnline
+                              message: publicCached
+                                  ? 'Last known public link; refresh this machine to verify its status'
+                                  : publicOnline
                                   ? 'Public access enabled and online'
                                   : 'Public access enabled but offline',
                               child: Container(
@@ -254,20 +256,26 @@ class MachineCard extends StatelessWidget {
                                 ),
                                 decoration: BoxDecoration(
                                   color:
-                                      (publicOnline
+                                      (publicCached
+                                              ? WispColors.muted
+                                              : publicOnline
                                               ? WispColors.green
                                               : WispColors.error)
                                           .withValues(alpha: .12),
                                   borderRadius: BorderRadius.circular(8),
                                 ),
                                 child: Text(
-                                  publicOnline
+                                  publicCached
+                                      ? 'Public · Cached'
+                                      : publicOnline
                                       ? 'Public · Online'
                                       : 'Public · Offline',
                                   style: TextStyle(
                                     fontSize: 11,
                                     fontWeight: FontWeight.bold,
-                                    color: publicOnline
+                                    color: publicCached
+                                        ? WispColors.muted
+                                        : publicOnline
                                         ? WispColors.green
                                         : WispColors.error,
                                   ),
@@ -280,54 +288,89 @@ class MachineCard extends StatelessWidget {
                   ),
                 ),
               ),
-            ),
-            if (service['kind'] == 'http')
-              IconButton(
-                tooltip: 'Copy Wispnet link for ${service['id']}',
-                onPressed: busy
-                    ? null
-                    : () async {
-                        await Clipboard.setData(
-                          ClipboardData(
-                            text: 'wispnet://${machine.id}/${service['id']}',
-                          ),
-                        );
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Wispnet link copied'),
+            );
+            final controls = <Widget>[
+              if (service['kind'] == 'http')
+                IconButton(
+                  tooltip: 'Copy Wispnet link for ${service['id']}',
+                  onPressed: busy
+                      ? null
+                      : () async {
+                          await Clipboard.setData(
+                            ClipboardData(
+                              text: 'wispnet://${machine.id}/${service['id']}',
                             ),
                           );
-                        }
-                      },
-                icon: const Icon(Icons.link, size: 20, color: WispColors.cyan),
-              ),
-            if (publicEnabled && publicUrl != null && publicUrl.isNotEmpty)
-              IconButton(
-                tooltip: 'Copy public URL for ${service['id']}',
-                onPressed: busy
-                    ? null
-                    : () async {
-                        await Clipboard.setData(ClipboardData(text: publicUrl));
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Public URL copied')),
-                          );
-                        }
-                      },
-                icon: const Icon(Icons.copy, size: 20, color: WispColors.cyan),
-              ),
-            if (onSettings != null)
-              IconButton(
-                tooltip: 'Settings for ${service['id']} on ${machine.name}',
-                onPressed: busy ? null : () => onSettings!(service),
-                icon: const Icon(
-                  Icons.settings,
-                  size: 24,
-                  color: WispColors.muted,
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Wispnet link copied'),
+                              ),
+                            );
+                          }
+                        },
+                  icon: const Icon(
+                    Icons.link,
+                    size: 20,
+                    color: WispColors.cyan,
+                  ),
                 ),
-              ),
-          ],
+              if (publicEnabled && publicUrl != null && publicUrl.isNotEmpty)
+                Tooltip(
+                  message: 'Copy public URL for ${service['id']}',
+                  child: TextButton.icon(
+                    onPressed: busy
+                        ? null
+                        : () async {
+                            await Clipboard.setData(
+                              ClipboardData(text: publicUrl),
+                            );
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Public URL copied'),
+                                ),
+                              );
+                            }
+                          },
+                    icon: const Icon(
+                      Icons.link,
+                      size: 20,
+                      color: WispColors.cyan,
+                    ),
+                    label: const Text('Public link'),
+                  ),
+                ),
+              if (onSettings != null)
+                IconButton(
+                  tooltip: 'Settings for ${service['id']} on ${machine.name}',
+                  onPressed: busy ? null : () => onSettings!(service),
+                  icon: const Icon(
+                    Icons.settings,
+                    size: 24,
+                    color: WispColors.muted,
+                  ),
+                ),
+            ];
+            if (publicEnabled &&
+                publicUrl != null &&
+                publicUrl.isNotEmpty &&
+                (constraints.maxWidth < 420 ||
+                    MediaQuery.textScalerOf(context).scale(14) > 18)) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(children: [content]),
+                  Wrap(
+                    alignment: WrapAlignment.end,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: controls,
+                  ),
+                ],
+              );
+            }
+            return Row(children: [content, ...controls]);
+          },
         ),
       ),
     );

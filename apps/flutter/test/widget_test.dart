@@ -21,8 +21,10 @@ class FakeBackend implements WispnetBackend {
     this.enabled = true,
     this.state = 'available',
     this.diagnosticReport,
+    this.publicAccess,
   });
   final Map<String, dynamic>? diagnosticReport;
+  final Map<String, dynamic>? publicAccess;
   bool paired, enabled;
   final String state;
   final calls = <(String, Map<String, dynamic>)>[];
@@ -51,6 +53,7 @@ class FakeBackend implements WispnetBackend {
                 'status': state == 'available'
                     ? 'Available'
                     : 'Access denied by this host',
+                if (publicAccess != null) 'public_access': publicAccess,
                 'catalog': {
                   'services': [
                     {
@@ -1313,6 +1316,7 @@ void main() {
       );
       await mount(tester, backend, size: const Size(1000, 850));
       expect(find.text('Public · Online'), findsOneWidget);
+      expect(find.text('Public link'), findsOneWidget);
       final copy = find.byTooltip('Copy public URL for web');
       final gear = find.byTooltip('Settings for web on hibreak');
       expect(
@@ -1388,8 +1392,96 @@ void main() {
     expect(find.text('Public · Online'), findsOneWidget);
     expect(find.byTooltip('Copy public URL for web'), findsOneWidget);
     expect(tester.takeException(), isNull);
+    final card = tester.widget<MachineCard>(find.byType(MachineCard).first);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: wispTheme(),
+        home: Scaffold(
+          body: MediaQuery(
+            data: const MediaQueryData(textScaler: TextScaler.linear(2)),
+            child: SizedBox(width: 280, child: card),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('Public link'), findsOneWidget);
+    expect(tester.takeException(), isNull);
     await close(tester);
   });
+  testWidgets(
+    'phone public links use matching host metadata and copy without opening a service',
+    (tester) async {
+      final publication = {
+        'service': 'website',
+        'incarnation': incarnation,
+        'url': 'https://shared-website.wispnet.test/',
+        'state': 'online',
+      };
+      final backend = FakeBackend(
+        publicAccess: {
+          'version': 1,
+          'host': peer,
+          'services': [publication],
+        },
+      );
+      String? copied;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copied = call.arguments['text'] as String;
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
+      await mount(tester, backend, size: const Size(360, 844));
+      expect(find.text('Public link'), findsOneWidget);
+      expect(find.text('Public · Online'), findsOneWidget);
+      final public = find.byTooltip('Copy public URL for website');
+      final private = find.byTooltip('Copy Wispnet link for website');
+      expect(
+        find.descendant(of: public, matching: find.byIcon(Icons.link)),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: private, matching: find.byIcon(Icons.link)),
+        findsOneWidget,
+      );
+      await tester.tap(public);
+      await tester.pumpAndSettle();
+      expect(copied, publication['url']);
+      expect(
+        backend.calls.where((c) => ['open', 'saveSettings'].contains(c.$1)),
+        isEmpty,
+      );
+      backend.publicAccess!['host'] = 'e' * 64;
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+      expect(find.text('Public link'), findsNothing);
+      backend.publicAccess!['host'] = peer;
+      publication['incarnation'] = 'e' * 64;
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+      expect(find.text('Public link'), findsNothing);
+      await close(tester);
+      publication['incarnation'] = incarnation;
+      await mount(
+        tester,
+        FakeBackend(state: 'unreachable', publicAccess: backend.publicAccess),
+      );
+      expect(find.text('Public · Cached'), findsOneWidget);
+      expect(find.text('Public · Online'), findsNothing);
+      expect(find.text('Public link'), findsOneWidget);
+      await close(tester);
+    },
+  );
   testWidgets('desktop public access requires explicit confirmation', (
     tester,
   ) async {

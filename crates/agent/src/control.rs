@@ -103,6 +103,17 @@ pub(crate) async fn serve_stream(
             Err(_) => return Err(TunnelError::Transport("control unavailable")),
         };
         counts.record_activity(peer);
+        if matches!(request, Request::PublicLinks {}) {
+            let links = authority
+                .public_links(peer)
+                .await
+                .map_err(|_| TunnelError::Transport("public links unavailable"))?;
+            let bytes = serde_json::to_vec(&links)
+                .map_err(|_| TunnelError::Transport("invalid public links"))?;
+            write_frame(&mut send, &bytes).await?;
+            let _ = send.stopped().await;
+            return Ok(());
+        }
         if matches!(request, Request::DeviceId {}) {
             let bytes = serde_json::to_vec(&serde_json::json!({
                 "host": authority.host(), "device_id": authority.device_id()
@@ -210,6 +221,36 @@ pub async fn catalog_on(
         return Err(TunnelError::Status(wispnet_core::protocol::Status::Denied));
     }
     result
+}
+
+/// Optional read-only public URLs, filtered by current host grants.
+pub async fn public_links_on(
+    connection: &Connection,
+    expected: EndpointId,
+) -> Result<host::PublicLinks, TunnelError> {
+    if connection.remote_id() != expected {
+        return Err(TunnelError::Transport(
+            "public links target identity mismatch",
+        ));
+    }
+    timeout(std::time::Duration::from_secs(5), async {
+        let (mut send, mut recv) = connection
+            .open_bi()
+            .await
+            .map_err(|_| TunnelError::Transport("public links stream unavailable"))?;
+        write_frame(&mut send, br#"{"op":"public_links"}"#).await?;
+        let bytes = read_frame(&mut recv, host::MAX_RESPONSE).await?;
+        let links: host::PublicLinks = serde_json::from_slice(&bytes)
+            .map_err(|_| TunnelError::Transport("invalid public links"))?;
+        if !links.valid(expected) {
+            return Err(TunnelError::Transport(
+                "public links host or schema mismatch",
+            ));
+        }
+        Ok(links)
+    })
+    .await
+    .map_err(|_| TunnelError::Transport("public links request timeout"))?
 }
 
 /// Read the owning host's canonical readable ID over a pinned connection.

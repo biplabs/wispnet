@@ -29,7 +29,9 @@ final class NetworkController extends ContextWrapper {
    case "refreshHost": {
     String peer = args.getString("host");
     if (!store.all().has(peer)) throw new Exception("Machine was removed");
-    try { store.catalog(peer, Native.request(new JSONObject().put("op", "catalog").put("host", peer))); DeviceProfile.syncHost(this, peer);
+    try { store.catalog(peer, Native.request(new JSONObject().put("op", "catalog").put("host", peer)));
+     try { store.publicLinks(peer, Native.request(new JSONObject().put("op", "host_public_links").put("host", peer))); } catch (Exception olderHost) {}
+     DeviceProfile.syncHost(this, peer);
      try { store.deviceId(peer, Native.request(new JSONObject().put("op", "host_device_id").put("host", peer)).getString("device_id")); } catch (Exception olderHost) {}
     }
     catch (Exception failure) { store.failed(peer, failure); }

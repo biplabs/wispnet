@@ -16,6 +16,11 @@ final class HostStore {
   records.getJSONObject(host).put("name",id);save(records);
  }}
  void nameSynced(String host,String name)throws Exception{synchronized(LOCK){JSONObject records=all();if(!records.has(host))return;records.getJSONObject(host).put("synced_name",name);save(records);}}
+ void publicLinks(String host,JSONObject links)throws Exception{synchronized(LOCK){
+  if(!host.equals(links.getString("host"))||links.getInt("version")!=1)throw new Exception("Wrong public links owner");
+  JSONObject records=all();if(!records.has(host))return;
+  records.getJSONObject(host).put("public_access",links);save(records);
+ }}
  void remove(String host)throws Exception{
   Native.ensure(context);Native.request(new JSONObject().put("op","unpair").put("host",host));
   synchronized(LOCK){if(Native.request(new JSONObject().put("op","pairing_state").put("host",host)).getBoolean("paired"))throw new Exception("Pairing changed; review this machine again");removeSaved(host);}
@@ -48,6 +53,7 @@ final class HostStore {
    long old=previous.getLong("revision"),revision=snapshot.getLong("revision");
    if(revision<old||(revision==old&&!previous.getJSONArray("services").toString().equals(snapshot.getJSONArray("services").toString())))throw new Exception("Catalog rollback or inconsistent snapshot");
   }
+  record.remove("public_access");
   record.put("catalog",snapshot).put("fetched",System.currentTimeMillis()).put("state","available").put("status","Available");save(records);
  }}
  void failed(String host,Exception failure)throws Exception{synchronized(LOCK){

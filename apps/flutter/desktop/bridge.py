@@ -212,6 +212,13 @@ class Bridge:
                 raise ValueError('Wrong catalog host')
             self.cache.save(peer, {'catalog': catalog, 'fetched': time.time()})
             record = {'state': 'available', 'status': 'Available', 'catalog': catalog}
+            # Optional display metadata: old peers may not support this request.
+            try:
+                links = self.api.request(op='host_public_links', host=peer)
+                if links.get('version') == 1 and links.get('host') == peer and isinstance(links.get('services'), list):
+                    record['public_access'] = links
+            except (OSError, ValueError):
+                pass
             # Optional on older hosts; catalog permission checks remain independent.
             try:
                 device_id = self.api.request(op='host_device_id', host=peer)['device_id']

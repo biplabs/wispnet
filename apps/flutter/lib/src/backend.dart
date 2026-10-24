@@ -33,9 +33,32 @@ class Machine {
   String get state => data['state'] as String? ?? 'unreachable';
   String get status => data['status'] as String? ?? 'Unavailable';
   bool get online => state == 'available';
-  List<Map<String, dynamic>> get services =>
-      ((data['catalog'] as Map?)?['services'] as List? ?? [])
-          .cast<Map<String, dynamic>>();
+  List<Map<String, dynamic>> get services {
+    final metadata = data['public_access'] as Map?;
+    final links =
+        (metadata?['host'] == id && metadata?['version'] == 1
+                ? (metadata?['services'] as List? ?? [])
+                : <dynamic>[])
+            .cast<Map<String, dynamic>>();
+    return ((data['catalog'] as Map?)?['services'] as List? ?? [])
+        .cast<Map<String, dynamic>>()
+        .map((service) {
+          final publication = links
+              .where(
+                (link) =>
+                    link['service'] == service['id'] &&
+                    link['incarnation'] == service['incarnation'],
+              )
+              .firstOrNull;
+          return {
+            ...service,
+            if (publication != null && service['kind'] == 'http')
+              'public_access': {...publication, 'enabled': true},
+          };
+        })
+        .toList();
+  }
+
   bool canOpen(Map<String, dynamic> service) =>
       service['kind'] == 'http' &&
       RegExp(r'^[0-9a-f]{64}$')

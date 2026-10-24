@@ -385,6 +385,7 @@ pub struct Authority {
     pub(crate) host: EndpointId,
     pub(crate) store: Arc<Mutex<Store>>,
     device_id: Arc<std::sync::RwLock<String>>,
+    public_links: Arc<std::sync::RwLock<Vec<wispnet_core::host::PublicLink>>>,
 }
 impl Authority {
     pub fn open(directory: &Path, host: EndpointId) -> Result<Self, ControlError> {
@@ -406,6 +407,7 @@ impl Authority {
                 "device-{}",
                 &host.to_string()[..8]
             ))),
+            public_links: Arc::new(std::sync::RwLock::new(Vec::new())),
         })
     }
     pub fn with_device_id(self, id: &str) -> Self {
@@ -428,6 +430,47 @@ impl Authority {
     }
     pub fn host(&self) -> EndpointId {
         self.host
+    }
+    /// Runtime advertisements contain no backend addresses or gateway credentials.
+    pub fn set_public_links(
+        &self,
+        services: Vec<wispnet_core::host::PublicLink>,
+    ) -> Result<(), ControlError> {
+        let links = wispnet_core::host::PublicLinks {
+            version: 1,
+            host: self.host,
+            services,
+        };
+        if !links.valid(self.host) {
+            return Err(ControlError::Invalid);
+        }
+        *self.public_links.write().unwrap_or_else(|e| e.into_inner()) = links.services;
+        Ok(())
+    }
+    pub async fn public_links(
+        &self,
+        peer: EndpointId,
+    ) -> Result<wispnet_core::host::PublicLinks, ControlError> {
+        let catalog = self.catalog(peer).await?;
+        let services = self
+            .public_links
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .filter(|link| {
+                catalog.services.iter().any(|s| {
+                    s.kind == ServiceKind::Http
+                        && s.id == link.service
+                        && s.incarnation == link.incarnation
+                })
+            })
+            .cloned()
+            .collect();
+        Ok(wispnet_core::host::PublicLinks {
+            version: 1,
+            host: self.host,
+            services,
+        })
     }
     pub async fn snapshot(&self) -> Result<Snapshot, ControlError> {
         let host = self.host;

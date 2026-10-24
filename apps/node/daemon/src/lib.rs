@@ -201,6 +201,7 @@ impl State {
             | "preview_invitation"
             | "catalog"
             | "host_device_id"
+            | "host_public_links"
             | "set_name"
             | "telemetry"
             | "enable"

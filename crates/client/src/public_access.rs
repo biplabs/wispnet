@@ -173,6 +173,7 @@ pub struct Publications {
     workers: Mutex<BTreeMap<String, JoinHandle<()>>>,
     states: Mutex<BTreeMap<String, String>>,
     lock: Mutex<()>,
+    links_lock: Mutex<()>,
     slots: Arc<Semaphore>,
 }
 impl Default for Publications {
@@ -186,6 +187,7 @@ impl Publications {
             workers: Mutex::new(BTreeMap::new()),
             states: Mutex::new(BTreeMap::new()),
             lock: Mutex::new(()),
+            links_lock: Mutex::new(()),
             slots: Arc::new(Semaphore::new(32)),
         }
     }
@@ -195,6 +197,50 @@ impl Publications {
         Ok(
             json!({"gateway":saved.gateway,"services":saved.services.iter().map(|s|json!({"service":s.service,"incarnation":s.incarnation,"enabled":true,"url":saved.gateway.as_ref().map(|g|format!("https://{}/",hostname(&s.name,saved.owner,&s.service,&g.domain))),"state":states.get(&s.service).map(String::as_str).unwrap_or("connecting")})).collect::<Vec<_>>()}),
         )
+    }
+    async fn sync_public_links(&self, client: &Client) -> Result<(), String> {
+        let _lock = self.links_lock.lock().await;
+        let Some(authority) = &client.local_authority else {
+            return Ok(());
+        };
+        let saved = match load(&client.state, client.endpoint.id()) {
+            Ok(saved) => saved,
+            Err(error) => {
+                let _ = authority.set_public_links(Vec::new());
+                return Err(error);
+            }
+        };
+        let states = self.states.lock().await;
+        let mut links: Vec<_> = saved
+            .services
+            .iter()
+            .filter_map(|s| {
+                let gateway = saved.gateway.as_ref()?;
+                let state = match states.get(&s.service).map(String::as_str) {
+                    Some("online") => "online",
+                    Some("connecting") | None => "connecting",
+                    _ => "offline",
+                };
+                Some(wispnet_core::host::PublicLink {
+                    service: s.service.clone(),
+                    incarnation: s.incarnation.clone(),
+                    url: format!(
+                        "https://{}/",
+                        hostname(&s.name, saved.owner, &s.service, &gateway.domain)
+                    ),
+                    state: state.into(),
+                })
+            })
+            .collect();
+        links.sort_by(|a, b| a.service.cmp(&b.service));
+        authority.set_public_links(links).map_err(|e| e.to_string())
+    }
+    async fn set_state(&self, client: &Client, service: &str, state: &str) {
+        self.states
+            .lock()
+            .await
+            .insert(service.into(), state.into());
+        let _ = self.sync_public_links(client).await;
     }
     pub async fn stop(&self) {
         for (_, task) in std::mem::take(&mut *self.workers.lock().await) {
@@ -210,7 +256,7 @@ impl Publications {
     async fn reconcile_locked(&self, client: &Client) -> Result<(), String> {
         let mut saved = load(&client.state, client.endpoint.id())?;
         if saved.services.is_empty() {
-            return Ok(());
+            return self.sync_public_links(client).await;
         }
         let authority = client
             .local_authority
@@ -231,7 +277,7 @@ impl Publications {
             .map(|p| p.service.clone())
             .collect();
         if removed.is_empty() {
-            return Ok(());
+            return self.sync_public_links(client).await;
         }
         saved.services.retain(|p| !removed.contains(&p.service));
         save(&client.state, &saved)?;
@@ -242,7 +288,7 @@ impl Publications {
             }
             self.states.lock().await.remove(&id);
         }
-        Ok(())
+        self.sync_public_links(client).await
     }
     pub async fn restore(&self, client: Arc<Client>) -> Result<(), String> {
         let _lock = self.lock.lock().await;
@@ -263,7 +309,7 @@ impl Publications {
                 self.workers.lock().await.insert(id, task);
             }
         }
-        Ok(())
+        self.sync_public_links(&client).await
     }
     pub async fn configure(&self, client: Arc<Client>, value: &Value) -> Result<Value, String> {
         let _lock = self.lock.lock().await;
@@ -350,6 +396,7 @@ impl Publications {
                 self.workers.lock().await.insert(id.into(), task);
             }
         }
+        self.sync_public_links(&client).await?;
         self.status(&client).await
     }
 }
@@ -409,15 +456,17 @@ async fn publish(client: Arc<Client>, gateway: GatewayConfig, publication: Publi
     loop {
         client
             .publications
-            .states
-            .lock()
-            .await
-            .insert(publication.service.clone(), "connecting".into());
+            .set_state(&client, &publication.service, "connecting")
+            .await;
         let result = publish_once(client.clone(), &gateway, &publication).await;
-        client.publications.states.lock().await.insert(
-            publication.service.clone(),
-            result.err().unwrap_or("offline".into()),
-        );
+        client
+            .publications
+            .set_state(
+                &client,
+                &publication.service,
+                &result.err().unwrap_or("offline".into()),
+            )
+            .await;
         tokio::time::sleep(Duration::from_secs(delay)).await;
         delay = (delay * 2).min(30);
     }
@@ -482,10 +531,8 @@ async fn publish_once(
     .map_err(|_| "public registration timed out")??;
     client
         .publications
-        .states
-        .lock()
-        .await
-        .insert(publication.service.clone(), "online".into());
+        .set_state(&client, &publication.service, "online")
+        .await;
     let mut tasks = JoinSet::new();
     let mut timer = tokio::time::interval(Duration::from_millis(500));
     loop {
@@ -752,6 +799,37 @@ mod tests {
                 .allow
                 .is_empty()
         );
+        let viewer = SecretKey::generate().public();
+        policy
+            .host_mutate(
+                own,
+                &secret,
+                Mutation::Approve {
+                    expected_revision: 2,
+                    peer: viewer,
+                    name: "paired viewer".into(),
+                },
+            )
+            .unwrap();
+        policy
+            .host_mutate(
+                own,
+                &secret,
+                Mutation::Service {
+                    expected_revision: 3,
+                    id: "llama".into(),
+                    backend: addr,
+                    allow: vec![viewer],
+                    display_name: None,
+                    kind: None,
+                },
+            )
+            .unwrap();
+        let authority = client.local_authority.as_ref().unwrap();
+        let links = authority.public_links(viewer).await.unwrap();
+        assert_eq!(links.services.len(), 1);
+        assert_eq!(links.services[0].url, format!("https://{name}/"));
+        assert_eq!(links.services[0].state, "online");
         let mut websocket = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
         websocket.write_all(format!("GET /ws HTTP/1.1\r\nHost: {name}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n").as_bytes()).await.unwrap();
         let mut handshake = vec![];
@@ -782,6 +860,14 @@ mod tests {
             .command(&json!({"op":"configure_public","service":"llama","enabled":false}))
             .await
             .unwrap();
+        assert!(
+            authority
+                .public_links(viewer)
+                .await
+                .unwrap()
+                .services
+                .is_empty()
+        );
         let mut remaining = vec![];
         let _ = tokio::time::timeout(Duration::from_secs(2), held.read_to_end(&mut remaining))
             .await
@@ -798,13 +884,17 @@ mod tests {
             .await
             .unwrap();
         client.command(&request).await.unwrap();
+        assert_eq!(
+            authority.public_links(viewer).await.unwrap().services.len(),
+            1
+        );
         tokio::time::sleep(Duration::from_millis(200)).await;
         policy
             .host_mutate(
                 own,
                 &secret,
                 Mutation::Service {
-                    expected_revision: 2,
+                    expected_revision: 4,
                     id: "llama".into(),
                     backend: "127.0.0.1:1".parse().unwrap(),
                     allow: vec![],
@@ -816,6 +906,14 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(700)).await;
         assert!(!http(port, &name, "/").await.ends_with("public"));
         client.publications.reconcile(&client).await.unwrap();
+        assert!(
+            authority
+                .public_links(viewer)
+                .await
+                .unwrap()
+                .services
+                .is_empty()
+        );
         assert!(load(state.path(), own).unwrap().services.is_empty());
         client.publications.stop().await;
         client.endpoint.close().await;
