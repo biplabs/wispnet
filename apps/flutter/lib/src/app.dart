@@ -262,6 +262,25 @@ class _WispHomeState extends State<WispHome>
     }
   }
 
+  Future<void> serviceLinks(
+    Machine machine,
+    Map<String, dynamic> service,
+  ) async {
+    await showWispSheet<void>(
+      context,
+      title: 'Links for ${service['id']}',
+      child: ServiceLinks(
+        backend: backend,
+        machine: machine,
+        service: service,
+        android:
+            snapshot['desktop'] != true &&
+            Theme.of(context).platform == TargetPlatform.android,
+        canResolve: online && machine.canOpen(service),
+      ),
+    );
+  }
+
   Future<void> pair({String? code}) async {
     if (pairingSheet) return;
     pairingSheet = true;
@@ -524,6 +543,7 @@ class _WispHomeState extends State<WispHome>
     busy: busy,
     onManage: () => machineSettings(machine),
     onOpen: (service) => open(machine, service),
+    onLinks: (service) => serviceLinks(machine, service),
     onSettings: local && snapshot['desktop'] == true
         ? localServiceSettings
         : null,

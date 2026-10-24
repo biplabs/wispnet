@@ -14,6 +14,7 @@ class MachineCard extends StatelessWidget {
     required this.busy,
     required this.onManage,
     required this.onOpen,
+    required this.onLinks,
     this.onSettings,
     required this.onReorder,
     this.showHeader = true,
@@ -25,7 +26,7 @@ class MachineCard extends StatelessWidget {
   final Color stateColor;
   final bool busy;
   final VoidCallback onManage;
-  final ValueChanged<Map<String, dynamic>> onOpen;
+  final ValueChanged<Map<String, dynamic>> onOpen, onLinks;
   final ValueChanged<Map<String, dynamic>>? onSettings;
   final void Function(
     String group,
@@ -323,25 +324,9 @@ class MachineCard extends StatelessWidget {
                 ),
               if (service['kind'] == 'http')
                 Tooltip(
-                  message: 'Copy Wispnet link for ${service['id']}',
+                  message: 'Show links for ${service['id']}',
                   child: IconButton(
-                    onPressed: busy
-                        ? null
-                        : () async {
-                            await Clipboard.setData(
-                              ClipboardData(
-                                text:
-                                    'wispnet://${machine.id}/${service['id']}',
-                              ),
-                            );
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Wispnet link copied'),
-                                ),
-                              );
-                            }
-                          },
+                    onPressed: busy ? null : () => onLinks(service),
                     icon: const Icon(
                       Icons.link,
                       size: 20,

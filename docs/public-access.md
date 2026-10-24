@@ -16,7 +16,12 @@ switch. All services start private unless their owner explicitly enables this.
 
 Both desktop and Android service cards use the link icon for copying URLs.
 The **public** button groups its icon and label together and appears first.
-The unlabelled link icon follows it and copies the stable `wispnet://` address.
+The unlabelled link icon opens a popup with selectable addresses and copy controls.
+It lists the local HTTP URL first, the stable `wispnet://` address second on
+Android, and the public URL last when enabled (the third option on Android).
+Reading or copying these addresses does not launch the browser. If a local route
+has not yet been prepared, an online device resolves it through the normal host
+permission checks; failures leave the other addresses available.
 Paired devices fetch public URLs and tunnel
 state when refreshing a host. Only currently granted HTTP services with the same
 incarnation receive this metadata; a removed or disabled publication disappears

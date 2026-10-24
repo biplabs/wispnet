@@ -29,6 +29,7 @@ class FakeBackend implements WispnetBackend {
   final String state;
   final calls = <(String, Map<String, dynamic>)>[];
   bool failPairing = false;
+  bool missingRoute = false, failOpen = false;
   @override
   Future<Map<String, dynamic>> invoke(
     String method, [
@@ -130,11 +131,21 @@ class FakeBackend implements WispnetBackend {
         enabled = arguments['enabled'] as bool;
         return {};
       case 'open':
+        if (failOpen) {
+          throw PlatformException(
+            code: 'unavailable',
+            message: 'Host unavailable',
+          );
+        }
         return {'url': 'http://website.wispnet.localhost:18300'};
       case 'settings':
         return {
           'port': 18400,
-          'url': 'http://registry.wispnet.localhost:18400',
+          'url': arguments['host'] == null
+              ? 'http://registry.wispnet.localhost:18400'
+              : missingRoute
+              ? ''
+              : 'http://j-strix-aaaaaaaaaaaa-${arguments['service']}.localhost:18400/',
         };
       case 'pair':
         if (failPairing) {
@@ -389,6 +400,7 @@ void main() {
                 busy: false,
                 onManage: () {},
                 onOpen: (_) {},
+                onLinks: (_) {},
                 onSettings: (_) {},
                 onReorder: (_, _, _, _) {},
               ),
@@ -473,7 +485,7 @@ void main() {
     expect(overlay(controls[2]).a, 0);
     final service = controls[1];
     expect(find.byTooltip('Settings for website on j-strix'), findsNothing);
-    final copy = find.byTooltip('Copy Wispnet link for website');
+    final copy = find.byTooltip('Show links for website');
     expect(tester.getRect(service).contains(tester.getCenter(copy)), isTrue);
     await mouse.moveTo(tester.getCenter(copy));
     await tester.pumpAndSettle();
@@ -481,9 +493,9 @@ void main() {
     await mouse.down(tester.getCenter(copy));
     await mouse.up();
     await tester.pumpAndSettle();
-    expect(find.byTooltip('Close'), findsNothing);
-    expect(copied, 'wispnet://$peer/website');
-    expect(backend.calls.where((call) => call.$1 == 'settings'), isEmpty);
+    expect(find.byTooltip('Close'), findsOneWidget);
+    expect(copied, isNull);
+    expect(backend.calls.where((call) => call.$1 == 'settings'), hasLength(1));
     expect(backend.calls.where((call) => call.$1 == 'open'), isEmpty);
     await mouse.removePointer();
     await close(tester);
@@ -1445,7 +1457,7 @@ void main() {
       expect(find.text('public'), findsOneWidget);
       expect(find.text('Public · Online'), findsOneWidget);
       final public = find.byTooltip('Copy public URL for website');
-      final private = find.byTooltip('Copy Wispnet link for website');
+      final private = find.byTooltip('Show links for website');
       expect(
         find.descendant(of: public, matching: find.byType(OutlinedButton)),
         findsOneWidget,
@@ -1483,11 +1495,34 @@ void main() {
       expect(copied, publication['url']);
       await tester.tap(private);
       await tester.pumpAndSettle();
+      expect(copied, publication['url']);
+      expect(find.text('Links for website'), findsOneWidget);
+      expect(find.text('Local URL'), findsOneWidget);
+      expect(find.text('Wispnet'), findsOneWidget);
+      expect(
+        tester.getRect(find.text('Local URL')).top,
+        lessThan(tester.getRect(find.text('Wispnet')).top),
+      );
+      expect(
+        tester.getRect(find.text('Wispnet')).top,
+        lessThan(tester.getRect(find.text('public').last).top),
+      );
+      await tester.tap(find.byTooltip('Copy local URL'));
+      await tester.pumpAndSettle();
+      expect(copied, 'http://j-strix-aaaaaaaaaaaa-website.localhost:18400/');
+      await tester.tap(find.byTooltip('Copy Wispnet link'));
+      await tester.pumpAndSettle();
       expect(copied, 'wispnet://$peer/website');
+      await tester.tap(find.byTooltip('Copy public URL'));
+      await tester.pumpAndSettle();
+      expect(copied, publication['url']);
       expect(
         backend.calls.where((c) => ['open', 'saveSettings'].contains(c.$1)),
         isEmpty,
       );
+      expect(backend.calls.where((c) => c.$1 == 'launch'), isEmpty);
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
       backend.publicAccess!['host'] = 'e' * 64;
       await tester.pump(const Duration(seconds: 2));
       await tester.pumpAndSettle();
@@ -1506,6 +1541,73 @@ void main() {
       expect(find.text('Public · Cached'), findsOneWidget);
       expect(find.text('Public · Online'), findsNothing);
       expect(find.text('public'), findsOneWidget);
+      await close(tester);
+    },
+  );
+  testWidgets(
+    'desktop link popup shows local and public URLs without an Android option',
+    (tester) async {
+      final backend = DesktopFake();
+      backend.status['public_access']['services'] = [
+        {
+          'service': 'web',
+          'incarnation': incarnation,
+          'enabled': true,
+          'state': 'online',
+          'url': 'https://shared-web.wispnet.test/',
+        },
+      ];
+      await mount(tester, backend, size: const Size(1000, 850));
+      await tester.tap(find.byTooltip('Show links for web'));
+      await tester.pumpAndSettle();
+      expect(find.text('http://shared-web.localhost:18000/'), findsOneWidget);
+      expect(find.text('https://shared-web.wispnet.test/'), findsOneWidget);
+      expect(find.byTooltip('Copy Wispnet link'), findsNothing);
+      expect(
+        backend.calls.where((c) => ['open', 'launch'].contains(c.$1)),
+        isEmpty,
+      );
+      await close(tester);
+    },
+  );
+  testWidgets(
+    'link popup retains portable addresses when local resolution fails and can retry',
+    (tester) async {
+      final backend =
+          FakeBackend(
+              publicAccess: {
+                'version': 1,
+                'host': peer,
+                'services': [
+                  {
+                    'service': 'website',
+                    'incarnation': incarnation,
+                    'state': 'online',
+                    'url': 'https://shared-web.wispnet.test/',
+                  },
+                ],
+              },
+            )
+            ..missingRoute = true
+            ..failOpen = true;
+      await mount(tester, backend);
+      await tester.tap(find.byTooltip('Show links for website'));
+      await tester.pumpAndSettle();
+      expect(find.text('Host unavailable'), findsOneWidget);
+      expect(find.byTooltip('Copy Wispnet link'), findsOneWidget);
+      expect(find.byTooltip('Copy public URL'), findsOneWidget);
+      backend.failOpen = false;
+      await tester.tap(find.text('Retry'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('http://website.wispnet.localhost:18300'),
+        findsOneWidget,
+      );
+      expect(
+        backend.calls.where((c) => c.$1 == 'open').last.$2['incarnation'],
+        incarnation,
+      );
+      expect(backend.calls.where((c) => c.$1 == 'launch'), isEmpty);
       await close(tester);
     },
   );

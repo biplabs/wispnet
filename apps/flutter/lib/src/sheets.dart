@@ -655,6 +655,146 @@ class _ConnectionDiagnosticsState extends State<ConnectionDiagnostics> {
   );
 }
 
+class ServiceLinks extends StatefulWidget {
+  const ServiceLinks({
+    super.key,
+    required this.backend,
+    required this.machine,
+    required this.service,
+    required this.android,
+    required this.canResolve,
+  });
+  final WispnetBackend backend;
+  final Machine machine;
+  final Map<String, dynamic> service;
+  final bool android, canResolve;
+  @override
+  State<ServiceLinks> createState() => _ServiceLinksState();
+}
+
+class _ServiceLinksState extends State<ServiceLinks> {
+  String? localUrl, error;
+  bool loading = true;
+  @override
+  void initState() {
+    super.initState();
+    load();
+  }
+
+  Future<void> load() async {
+    setState(() {
+      loading = true;
+      error = null;
+    });
+    try {
+      final args = {'host': widget.machine.id, 'service': widget.service['id']};
+      final settings = await widget.backend.invoke('settings', args);
+      if (!mounted) return;
+      var url = settings['url'] as String? ?? '';
+      if (url.isEmpty) {
+        if (!widget.canResolve) {
+          throw const FormatException(
+            'Go online and refresh this service to get its local URL.',
+          );
+        }
+        final route = await widget.backend.invoke('open', {
+          ...args,
+          'incarnation': widget.service['incarnation'],
+        });
+        url = route['url'] as String? ?? '';
+      }
+      if (url.isEmpty) throw const FormatException('Local URL unavailable.');
+      if (mounted) setState(() => localUrl = url);
+    } catch (failure) {
+      if (mounted) setState(() => error = failureMessage(failure));
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
+  }
+
+  Widget option(String label, String url, String tooltip) => Padding(
+    padding: const EdgeInsets.only(bottom: 12),
+    child: WispPanel(
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 6),
+                SelectableText(
+                  url,
+                  style: const TextStyle(color: WispColors.cyan),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            tooltip: tooltip,
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: url));
+              if (mounted) {
+                ScaffoldMessenger.of(context)
+                    .showSnackBar(const SnackBar(content: Text('Link copied')));
+              }
+            },
+            icon: const Icon(Icons.copy, color: WispColors.cyan),
+          ),
+        ],
+      ),
+    ),
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final publication = widget.service['public_access'] as Map?;
+    final publicUrl = publication?['url'] as String?;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (localUrl != null)
+          option('Local URL', localUrl!, 'Copy local URL')
+        else
+          WispPanel(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Local URL',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  loading ? 'Loading…' : error ?? 'Local URL unavailable.',
+                  style: TextStyle(
+                    color: loading ? WispColors.muted : WispColors.error,
+                  ),
+                ),
+                if (!loading)
+                  TextButton(onPressed: load, child: const Text('Retry')),
+              ],
+            ),
+          ),
+        if (localUrl == null) const SizedBox(height: 12),
+        if (widget.android)
+          option(
+            'Wispnet',
+            'wispnet://${widget.machine.id}/${widget.service['id']}',
+            'Copy Wispnet link',
+          ),
+        if (publication?['enabled'] == true &&
+            publicUrl != null &&
+            publicUrl.isNotEmpty)
+          option('public', publicUrl, 'Copy public URL'),
+      ],
+    );
+  }
+}
+
 class SettingsForm extends StatefulWidget {
   const SettingsForm({
     super.key,
