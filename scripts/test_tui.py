@@ -178,7 +178,7 @@ class TerminalManagement(unittest.TestCase):
         invitation['direct_hint'] = f'127.0.0.1:{portb}'
         aapi.request(op='pair', host=pb, invitation=json.dumps(invitation))
         term = self.terminal(b)
-        term.send('3')
+        term.send('5')
         term.expect('fixture-phone')
         term.send(b'\r')
         term.expect('Review pairing request')
@@ -196,10 +196,10 @@ class TerminalManagement(unittest.TestCase):
         self.assertEqual(approved['host']['revision'], 3)
         self.assertEqual({s['id']:s['allow'] for s in approved['host']['services']},
                          {'private':[], 'scan-only':[pa]})
-        term.expect('1 clients')
+        term.expect('1 devices')
 
         # The real form creates a loopback service with its explicitly selected device.
-        term.send('5')
+        term.send('2')
         term.send(b'\r')
         term.expect('Add service')
         term.send(b'dashboard\t8310\t\t\t\r')
@@ -222,7 +222,8 @@ class TerminalManagement(unittest.TestCase):
         term.expect('0 permitted devices')
 
         # Remove a specific approved client, using the same confirmation as the desktop.
-        term.send('4')
+        term.send('1')
+        term.send(b'\x1b[B' * 4)  # This device and its three local services precede remotes.
         term.send(b'\r\x1b[B\r')
         term.expect('Remove this machine')
         self.assertIn(pa, term.text)
@@ -230,7 +231,7 @@ class TerminalManagement(unittest.TestCase):
         self.assertEqual(len(bapi.request(op='status')['host']['clients']), 1)
         term.send(b'\r\x1b[B\r\r')
         self.changed(bapi, lambda s: s['host']['clients'] == [])
-        term.expect('0 clients')
+        term.expect('0 devices')
 
         # Paste a code, review, and explicitly request pairing to the other native endpoint.
         fresh = self.root / 'remote-invitation.json'
@@ -238,7 +239,7 @@ class TerminalManagement(unittest.TestCase):
         document = json.loads(fresh.read_text())
         document['direct_hint'] = f'127.0.0.1:{porta}'
         fresh.write_text(json.dumps(document))
-        term.send('6')
+        term.send('3')
         term.send(b'\r')
         term.expect('Paste pairing code')
         code = 'wispnet1:' + base64.urlsafe_b64encode(json.dumps(document).encode()).decode().rstrip('=')
@@ -251,7 +252,10 @@ class TerminalManagement(unittest.TestCase):
         self.changed(bapi, lambda s: pa in s['peer_pins'])
         self.assertTrue(any(i['peer'] == pb and i['state'] == 'pending' for i in aapi.request(op='status')['invitations']))
         term.expect('Request sent')
-        term.send('4')
+        term.send('1')
+        term.expect('fixture-phone')  # Wait for the refreshed pin, then select it.
+        term.send('1')
+        term.send(b'\x1b[B' * 4)  # This device and its three local services precede remotes.
         term.send(b'\r\x1b[B\r')
         term.expect('Remove this machine')
         term.send(b'\r')
@@ -259,7 +263,7 @@ class TerminalManagement(unittest.TestCase):
         term.expect('Saved')
 
         # Generate and copy inside the TUI, including on a terminal too small for QR.
-        term.send('2')
+        term.send('4')
         term.expect('Pairing code · c: copy')
         term.expect('wispnet1:')
         term.send('c')
@@ -301,11 +305,38 @@ class TerminalManagement(unittest.TestCase):
         term.expect('Expires in')
         term.close(external=True)
 
+    def test_devices_show_remote_services_without_selecting_a_machine(self):
+        a, aapi, pa, porta = self.host('inline-client')
+        b, bapi, pb, portb = self.host('inline-host')
+        bapi.request(op='mutate', operation={'op':'service','expected_revision':0,
+                     'id':'always-visible','kind':'http','backend':'127.0.0.1:8201','allow':[]})
+        invitation_file = self.root / 'inline-invitation.json'
+        subprocess.run([BINARY,'host-invite','--config',b,'--output',invitation_file], capture_output=True, check=True)
+        invitation = json.loads(invitation_file.read_text())
+        invitation['direct_hint'] = f'127.0.0.1:{portb}'
+        aapi.request(op='pair', host=pb, invitation=json.dumps(invitation))
+        pending = next(i for i in bapi.request(op='status')['invitations'] if i['peer'] == pa and i['state'] == 'pending')
+        bapi.request(op='mutate', operation={'op':'approve_invitation','expected_revision':1,
+                     'invitation':pending['invitation'],'services':['always-visible']})
+        term = self.terminal(a)
+        # No selection or catalog-browsing action: startup fetches remote rows.
+        term.expect('always-visible · http')
+        term.expect('No services')  # This client has no local services.
+        self.assertNotIn('Remote services · Esc', term.text)
+        bapi.request(op='mutate', operation={'op':'remove','expected_revision':2,'id':'always-visible'})
+        # Periodic refresh removes stale service rows without input.
+        deadline = time.monotonic() + 25
+        while 'always-visible · http' in term.text:
+            term.read(.1)
+            self.assertLess(time.monotonic(), deadline, 'Removed remote service stayed visible')
+        self.assertGreaterEqual(term.text.count('No services'), 2)
+        term.close()
+
     def test_stale_revision_is_rejected_without_retry_and_mouse_can_navigate(self):
         config, api, _, _ = self.host('revision-fixture')
         term = self.terminal(config)
-        # Actual SGR mouse event opens the fifth sidebar item.
-        term.send(b'\x1b[<0;8;10M\x1b[<0;8;10m')
+        # Actual SGR mouse event opens the second sidebar item.
+        term.send(b'\x1b[<0;8;6M\x1b[<0;8;6m')
         term.expect('+ Add local service')
         term.send(b'\r')
         term.expect('Add service')

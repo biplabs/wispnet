@@ -209,12 +209,7 @@ fn release_version_stays_at_bottom_right_including_small_terminals() {
 #[test]
 fn pairing_code_generation_is_available_and_expired_codes_cannot_be_copied() {
     let (mut app, rx, _) = fixture();
-    assert!(
-        app.entries()
-            .iter()
-            .any(|entry| entry.label == "Generate pairing code")
-    );
-    app.navigate(Page::Qr);
+    app.key(KeyCode::Char('n').into());
     assert!(app.show_code);
     assert!(matches!(rx.try_recv().unwrap().kind, Kind::Qr));
     let code = format!("wispnet1:{}", "a".repeat(700));
@@ -309,4 +304,120 @@ fn remote_service_links_do_not_launch_a_browser() {
     app.key(KeyCode::Down.into());
     app.key(KeyCode::Enter.into());
     assert!(matches!(rx.try_recv().unwrap().task, Task::Links { .. }));
+}
+
+#[test]
+fn devices_always_list_remote_services_and_explicit_empty_states() {
+    let (mut app, _, _) = fixture();
+    let peer = "b".repeat(64);
+    let other = "d".repeat(64);
+    app.snapshot.as_mut().unwrap()["peer_pins"] = json!([peer, other]);
+    app.catalogs.insert(
+        peer.clone(),
+        json!({"host":peer,"services":[{"id":"dashboard","kind":"http","incarnation":"one"}]}),
+    );
+    app.catalogs
+        .insert(other.clone(), json!({"host":other,"services":[]}));
+    let rows = app.entries();
+    assert_eq!(rows[0].id, "this-device");
+    let sector = rows
+        .iter()
+        .position(|row| row.id == "remote-sector")
+        .unwrap();
+    assert!(matches!(rows[sector].action, Action::Section));
+    let machine = rows.iter().position(|row| row.id == peer).unwrap();
+    assert!(machine > sector);
+    assert_eq!(rows[machine + 1].label, "  dashboard · http");
+    app.selected = sector - 1;
+    app.key(KeyCode::Down.into());
+    assert_eq!(app.selected, sector + 1);
+    app.key(KeyCode::Up.into());
+    assert_eq!(app.selected, sector - 1);
+    assert!(
+        matches!(&rows[machine + 1].action, Action::Remote(host, service) if host == &peer && service["incarnation"] == "one")
+    );
+    let empty = rows.iter().position(|row| row.id == other).unwrap();
+    assert_eq!(rows[empty + 1].label, "  No services");
+    let local = rows.iter().position(|row| row.id == "this-device").unwrap();
+    assert_eq!(rows[local + 1].label, "  No services");
+    // A failed or still-loading catalog must not masquerade as an empty one.
+    app.catalogs.remove(&other);
+    assert_eq!(
+        app.remote_service_entries(&other)[0].label,
+        "  Loading services…"
+    );
+    app.catalog_errors.insert(other.clone(), "timed out".into());
+    assert_eq!(
+        app.remote_service_entries(&other)[0].label,
+        "  Services unavailable"
+    );
+    app.catalog_errors
+        .insert(other.clone(), "awaiting approval".into());
+    assert_eq!(
+        app.remote_service_entries(&other)[0].label,
+        "  Awaiting approval"
+    );
+    app.online = false;
+    assert_eq!(
+        app.remote_service_entries(&peer)[0].label,
+        "  Services unavailable · node offline"
+    );
+}
+
+#[test]
+fn background_catalog_results_preserve_selection_and_do_not_interrupt_actions() {
+    let (mut app, _, _) = fixture();
+    let peer = "b".repeat(64);
+    app.snapshot.as_mut().unwrap()["peer_pins"] = json!([peer]);
+    app.catalog_checked.insert(peer.clone(), Instant::now());
+    app.selected = app
+        .entries()
+        .iter()
+        .position(|row| row.id == "this-device")
+        .unwrap();
+    app.busy = true;
+    app.modal = Some(Modal::Info {
+        title: "Keep this open".into(),
+        lines: vec![],
+        scroll: 0,
+    });
+    app.catalog_inflight.insert(peer.clone(), 1);
+    app.catalog_tx
+        .send(CatalogReply {
+            peer: peer.clone(),
+            generation: 1,
+            result: Ok(json!({"host":peer,"services":[{"id":"llama","kind":"http"}]})),
+        })
+        .unwrap();
+    app.refresh_catalogs();
+    assert_eq!(app.entries()[app.selected].id, "this-device");
+    assert!(app.busy);
+    assert!(matches!(&app.modal, Some(Modal::Info { title, .. }) if title == "Keep this open"));
+    assert!(app.catalogs.contains_key(&peer));
+    // A result for a removed machine is discarded, including after re-pairing.
+    app.catalog_inflight.insert(peer.clone(), 2);
+    app.snapshot.as_mut().unwrap()["peer_pins"] = json!([]);
+    app.refresh_catalogs();
+    app.snapshot.as_mut().unwrap()["peer_pins"] = json!([peer]);
+    app.catalog_checked.insert(peer.clone(), Instant::now());
+    app.catalog_tx
+        .send(CatalogReply {
+            peer: peer.clone(),
+            generation: 2,
+            result: Ok(json!({"host":peer,"services":[{"id":"stale","kind":"http"}]})),
+        })
+        .unwrap();
+    app.refresh_catalogs();
+    assert!(!app.catalogs.contains_key(&peer));
+    // A catalog for the wrong host is never rendered as usable services.
+    app.catalog_inflight.insert(peer.clone(), 3);
+    app.catalog_tx
+        .send(CatalogReply {
+            peer: peer.clone(),
+            generation: 3,
+            result: Ok(json!({"host":"wrong-host","services":[]})),
+        })
+        .unwrap();
+    app.refresh_catalogs();
+    assert_eq!(app.catalog_errors[&peer], "Invalid service catalog");
 }

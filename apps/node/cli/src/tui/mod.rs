@@ -30,25 +30,25 @@ use std::{
 };
 
 const PAGES: [&str; 8] = [
-    "Overview",
-    "Pair this machine",
-    "Pending approvals",
-    "Machines & devices",
+    "Devices",
     "Local services",
     "Pair remote host",
-    "Owner operations",
+    "Pair this device",
+    "Requests",
+    "Settings",
     "Diagnostics",
+    "Owner operations",
 ];
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Page {
-    Home,
-    Qr,
-    Pending,
     Machines,
     Services,
     Pair,
-    Owners,
+    Qr,
+    Pending,
+    Home,
     Diagnostics,
+    Owners,
 }
 impl Page {
     fn index(self) -> usize {
@@ -56,14 +56,14 @@ impl Page {
     }
     fn at(n: usize) -> Self {
         [
-            Self::Home,
-            Self::Qr,
-            Self::Pending,
             Self::Machines,
             Self::Services,
             Self::Pair,
-            Self::Owners,
+            Self::Qr,
+            Self::Pending,
+            Self::Home,
             Self::Diagnostics,
+            Self::Owners,
         ][n % 8]
     }
 }
@@ -247,6 +247,7 @@ fn worker(api: Api) -> (mpsc::Sender<Work>, mpsc::Receiver<Reply>) {
 }
 #[derive(Clone)]
 enum Action {
+    Section,
     Nav(Page),
     Code,
     Copy(String),
@@ -359,6 +360,11 @@ enum Hit {
     ModalRow(usize),
     Field(usize),
 }
+struct CatalogReply {
+    peer: String,
+    generation: u64,
+    result: Result<Value, String>,
+}
 struct App {
     api: Api,
     page: Page,
@@ -371,6 +377,12 @@ struct App {
     names: Value,
     catalogs: HashMap<String, Value>,
     catalog_errors: HashMap<String, String>,
+    catalog_tx: mpsc::Sender<CatalogReply>,
+    catalog_rx: mpsc::Receiver<CatalogReply>,
+    catalog_inflight: HashMap<String, u64>,
+    catalog_checked: HashMap<String, Instant>,
+    catalog_generation: u64,
+    catalog_active: usize,
     qr: Option<Value>,
     show_code: bool,
     code_scroll: u16,
@@ -419,10 +431,11 @@ impl App {
     fn new(api: Api) -> Self {
         let names = api.names();
         let (tx, rx) = worker(api.clone());
+        let (catalog_tx, catalog_rx) = mpsc::channel();
         Self {
             api,
-            page: Page::Home,
-            menu_focus: true,
+            page: Page::Machines,
+            menu_focus: false,
             menu: 0,
             selected: 0,
             list_state: ListState::default(),
@@ -431,6 +444,12 @@ impl App {
             names,
             catalogs: HashMap::new(),
             catalog_errors: HashMap::new(),
+            catalog_tx,
+            catalog_rx,
+            catalog_inflight: HashMap::new(),
+            catalog_checked: HashMap::new(),
+            catalog_generation: 0,
+            catalog_active: 0,
             qr: None,
             show_code: false,
             code_scroll: 0,
@@ -538,24 +557,6 @@ impl App {
     fn entries(&self) -> Vec<Entry> {
         match self.page {
             Page::Home => vec![
-                entry("code", "Generate pairing code", Action::Code),
-                entry("qr", "Generate pairing QR", Action::Qr),
-                entry(
-                    "pending",
-                    format!("Pending approvals ({})", self.pending().len()),
-                    Action::Nav(Page::Pending),
-                ),
-                entry(
-                    "machines",
-                    "Manage machines and devices",
-                    Action::Nav(Page::Machines),
-                ),
-                entry(
-                    "services",
-                    "Manage local services and grants",
-                    Action::Nav(Page::Services),
-                ),
-                entry("pair", "Pair a remote host", Action::Nav(Page::Pair)),
                 entry(
                     "settings",
                     "Device ID and shared HTTP port",
@@ -612,11 +613,6 @@ impl App {
                         ),
                     }),
                 ),
-                entry(
-                    "owners",
-                    "Combined owner operations",
-                    Action::Nav(Page::Owners),
-                ),
             ],
             Page::Pending => self
                 .pending()
@@ -648,50 +644,128 @@ impl App {
                 for client in self.clients() {
                     peers.insert(text(&client, "peer").to_owned(), true);
                 }
-                peers.into_iter().map(|(peer,client)|{
-                    let status=self.status();let telemetry=&status["peer_telemetry"][&peer];
-                    let activity=if self.catalog_errors.get(&peer).is_some_and(|e| e=="awaiting approval"){"Awaiting approval".to_string()}else if !self.online{"Node offline".to_string()}else if status["connected_peers"][&peer].as_u64().unwrap_or(0)>0{"Connected".into()}else if let Some(age)=status["recent_peers"][&peer].as_u64(){format!("Seen {age}s ago")}else{"Idle".into()};
-                    let path=if telemetry.is_object(){format!(" · {} · {}ms",text(telemetry,"path").to_uppercase(),telemetry["rtt_ms"])}else{String::new()};
-                    let mut row=entry(&peer,format!("{} · {} · {activity}{path}",self.name(&peer),short(&peer)),Action::Machine(peer.clone()));
-                    row.detail=vec![format!("Machine ID: {peer}"),format!("Approved client here: {}",if client{"yes"}else{"no"}),"Remove revokes this node's grants and forgets its pin/routes; remote permissions are managed there.".into()];
-                    if let Some(error)=self.catalog_errors.get(&peer){row.detail.push(format!("Catalog unavailable: {}",clean(error)));}row
-                }).collect()
-            }
-            Page::Services => {
-                let mut rows = vec![entry(
-                    "+",
-                    "+ Add local service",
-                    Action::Form(self.service_form(None)),
-                )];
-                rows.extend(self.services().into_iter().map(|service| {
-                    let mut row = entry(
-                        text(&service, "id"),
-                        format!(
-                            "{} · {} · {} · {} permitted devices",
-                            clean(text(&service, "id")),
-                            text(&service, "backend"),
-                            text(&service, "kind"),
-                            array(&service["allow"]).len()
-                        ),
-                        Action::Service(service.clone()),
-                    );
-                    row.detail = vec![
-                        format!("Service ID: {}", text(&service, "id")),
-                        format!("Backend: {}", text(&service, "backend")),
-                        format!(
-                            "Permitted devices: {}",
-                            array(&service["allow"])
-                                .iter()
-                                .filter_map(Value::as_str)
-                                .map(|p| self.name(p))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        ),
-                    ];
-                    row
-                }));
+                let remote_rows: Vec<Entry> = peers
+                    .into_iter()
+                    .flat_map(|(peer, client)| {
+                        let status = self.status();
+                        let telemetry = &status["peer_telemetry"][&peer];
+                        let activity = if self
+                            .catalog_errors
+                            .get(&peer)
+                            .is_some_and(|e| e == "awaiting approval")
+                        {
+                            "Awaiting approval".to_string()
+                        } else if !self.online {
+                            "Node offline".to_string()
+                        } else if status["connected_peers"][&peer].as_u64().unwrap_or(0) > 0 {
+                            "Connected".into()
+                        } else if let Some(age) = status["recent_peers"][&peer].as_u64() {
+                            format!("Seen {age}s ago")
+                        } else {
+                            "Idle".into()
+                        };
+                        let path = if telemetry.is_object() {
+                            format!(
+                                " · {} · {}ms",
+                                text(telemetry, "path").to_uppercase(),
+                                telemetry["rtt_ms"]
+                            )
+                        } else {
+                            String::new()
+                        };
+                        let mut row = entry(
+                            &peer,
+                            format!("{}  ·  {activity}{path}", self.name(&peer)),
+                            Action::Machine(peer.clone()),
+                        );
+                        row.detail = vec![
+                            self.name(&peer),
+                            activity.clone(),
+                            String::new(),
+                            format!("Device ID: {peer}"),
+                            format!("Paired client here: {}", if client { "yes" } else { "no" }),
+                            String::new(),
+                            format!("Shared services: {}", {
+                                let shared = self
+                                    .services()
+                                    .into_iter()
+                                    .filter(|service| {
+                                        array(&service["allow"]).contains(&json!(peer))
+                                    })
+                                    .map(|service| clean(text(&service, "id")))
+                                    .collect::<Vec<_>>();
+                                if shared.is_empty() {
+                                    "None".into()
+                                } else {
+                                    shared.join(", ")
+                                }
+                            }),
+                            String::new(),
+                            if array(&status["peer_pins"]).contains(&json!(peer)) {
+                                "Enter  Browse services or manage pairing".into()
+                            } else {
+                                "Enter  Manage pairing".into()
+                            },
+                        ];
+                        if let Some(error) = self.catalog_errors.get(&peer) {
+                            row.detail
+                                .push(format!("Catalog unavailable: {}", clean(error)));
+                        }
+                        let mut rows = vec![row];
+                        rows.extend(self.remote_service_entries(&peer));
+                        rows
+                    })
+                    .collect();
+                let mut local = entry(
+                    "this-device",
+                    format!(
+                        "{}  ·  This device",
+                        clean(text(&self.status(), "host_name"))
+                    ),
+                    Action::Nav(Page::Services),
+                );
+                local.detail = vec![
+                    clean(text(&self.status(), "host_name")),
+                    "This device".into(),
+                    String::new(),
+                    format!(
+                        "{} local services · {} approved devices",
+                        self.services().len(),
+                        self.clients().len()
+                    ),
+                    String::new(),
+                    "Enter  Manage local services and permissions".into(),
+                ];
+                let mut rows = vec![local];
+                if self.services().is_empty() {
+                    rows.push(self.service_state_entry(
+                        "local",
+                        "No services",
+                        "This device has no local services configured.",
+                    ));
+                }
+                for mut service in self.local_service_entries().into_iter().skip(1) {
+                    service.label = format!("  {}", service.label);
+                    service.id = format!("local-service:{}", service.id);
+                    rows.push(service);
+                }
+                rows.push(entry(
+                    "remote-sector",
+                    "── Remote Sector ──",
+                    Action::Section,
+                ));
+                if remote_rows.is_empty() {
+                    rows.push(self.service_state_entry(
+                        "remote-sector",
+                        "No remote machines",
+                        "Pair a remote machine to see its services here.",
+                    ));
+                } else {
+                    rows.extend(remote_rows);
+                }
                 rows
             }
+            Page::Services => self.local_service_entries(),
             Page::Pair => vec![entry("paste", "Paste a pairing code", Action::PairInput)],
             Page::Owners => {
                 let mut rows = vec![
@@ -747,6 +821,189 @@ impl App {
             }
             Page::Qr => vec![],
         }
+    }
+    fn service_state_entry(&self, peer: &str, label: &str, detail: &str) -> Entry {
+        let mut row = entry(
+            &format!("services-state:{peer}"),
+            format!("  {label}"),
+            Action::Info(label.into(), vec![detail.into()]),
+        );
+        row.detail = vec![label.into(), String::new(), detail.into()];
+        row
+    }
+    fn remote_service_entries(&self, peer: &str) -> Vec<Entry> {
+        let state = |label, detail| vec![self.service_state_entry(peer, label, detail)];
+        if !array(&self.status()["peer_pins"]).contains(&json!(peer)) {
+            return state(
+                "No services",
+                "This device is paired as a client; no remote service host is saved here.",
+            );
+        }
+        if !self.online {
+            return state(
+                "Services unavailable · node offline",
+                "Go online to refresh this device’s services.",
+            );
+        }
+        if let Some(error) = self.catalog_errors.get(peer) {
+            return state(
+                if error == "awaiting approval" {
+                    "Awaiting approval"
+                } else {
+                    "Services unavailable"
+                },
+                &clean(error),
+            );
+        }
+        let Some(catalog) = self.catalogs.get(peer) else {
+            return state(
+                "Loading services…",
+                "Fetching the services this device permits you to access.",
+            );
+        };
+        let services = array(&catalog["services"]);
+        if services.is_empty() {
+            return state(
+                "No services",
+                "This device currently shares no services with you.",
+            );
+        }
+        services
+            .into_iter()
+            .map(|service| {
+                let mut row = entry(
+                    &format!("remote-service:{peer}:{}", text(&service, "id")),
+                    format!(
+                        "  {} · {}",
+                        clean(text(&service, "id")),
+                        text(&service, "kind")
+                    ),
+                    Action::Remote(peer.into(), service.clone()),
+                );
+                row.detail = vec![
+                    clean(text(&service, "id")),
+                    format!("On {}", self.name(peer)),
+                    format!("{} service", text(&service, "kind").to_uppercase()),
+                    String::new(),
+                    "Enter  Open or show service links".into(),
+                ];
+                row
+            })
+            .collect()
+    }
+    // Catalog reads have their own bounded workers: an offline peer must not
+    // hold up local status, confirmations, or the other machines’ services.
+    fn refresh_catalogs(&mut self) {
+        let pins = array(&self.status()["peer_pins"]);
+        self.catalogs
+            .retain(|peer, _| self.online && pins.contains(&json!(peer)));
+        self.catalog_errors
+            .retain(|peer, _| self.online && pins.contains(&json!(peer)));
+        self.catalog_inflight
+            .retain(|peer, _| self.online && pins.contains(&json!(peer)));
+        self.catalog_checked
+            .retain(|peer, _| self.online && pins.contains(&json!(peer)));
+        while let Ok(reply) = self.catalog_rx.try_recv() {
+            self.catalog_active = self.catalog_active.saturating_sub(1);
+            if self.catalog_inflight.get(&reply.peer) != Some(&reply.generation) {
+                continue;
+            }
+            self.catalog_inflight.remove(&reply.peer);
+            self.catalog_checked
+                .insert(reply.peer.clone(), Instant::now());
+            let selected = self.entries().get(self.selected).map(|row| row.id.clone());
+            match reply.result.and_then(|value| {
+                if value["host"] != reply.peer || !value["services"].is_array() {
+                    Err("Invalid service catalog".into())
+                } else {
+                    Ok(value)
+                }
+            }) {
+                Ok(value) => {
+                    self.catalog_errors.remove(&reply.peer);
+                    self.catalogs.insert(reply.peer, value);
+                }
+                Err(error) => {
+                    self.catalogs.remove(&reply.peer);
+                    self.catalog_errors.insert(reply.peer, error);
+                }
+            }
+            if let Some(index) =
+                selected.and_then(|id| self.entries().iter().position(|row| row.id == id))
+            {
+                self.selected = index;
+            }
+        }
+        if !self.online {
+            return;
+        }
+        for peer in pins.iter().filter_map(Value::as_str) {
+            if self.catalog_active >= 4 {
+                break;
+            }
+            if self.catalog_inflight.contains_key(peer)
+                || self
+                    .catalog_checked
+                    .get(peer)
+                    .is_some_and(|checked| checked.elapsed() < Duration::from_secs(15))
+            {
+                continue;
+            }
+            self.catalog_active += 1;
+            self.catalog_generation += 1;
+            let generation = self.catalog_generation;
+            self.catalog_inflight.insert(peer.into(), generation);
+            let api = self.api.clone();
+            let done = self.catalog_tx.clone();
+            let peer = peer.to_owned();
+            std::thread::spawn(move || {
+                let result = api.request(json!({"op":"catalog", "host":peer}));
+                let _ = done.send(CatalogReply {
+                    peer,
+                    generation,
+                    result,
+                });
+            });
+        }
+    }
+    fn local_service_entries(&self) -> Vec<Entry> {
+        let mut rows = vec![entry(
+            "+",
+            "+ Add local service",
+            Action::Form(self.service_form(None)),
+        )];
+        rows[0].detail = vec!["Share a local service".into(), String::new(), "Connect an HTTP or TCP service running on this computer, then choose which paired devices may access it.".into(), String::new(), "Enter  Add service".into()];
+        rows.extend(self.services().into_iter().map(|service| {
+            let mut row = entry(
+                text(&service, "id"),
+                format!(
+                    "{} · {} · {} permitted devices",
+                    clean(text(&service, "id")),
+                    text(&service, "kind"),
+                    array(&service["allow"]).len()
+                ),
+                Action::Service(service.clone()),
+            );
+            row.detail = vec![
+                clean(text(&service, "id")),
+                format!("{} service", text(&service, "kind").to_uppercase()),
+                String::new(),
+                format!("Backend: {}", text(&service, "backend")),
+                format!(
+                    "Permitted devices: {}",
+                    array(&service["allow"])
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(|p| self.name(p))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                String::new(),
+                "Enter  Open, edit or show service links".into(),
+            ];
+            row
+        }));
+        rows
     }
     fn service_form(&self, existing: Option<Value>) -> Form {
         let old = existing.clone().unwrap_or_else(|| json!({}));
@@ -811,13 +1068,14 @@ impl App {
     }
     fn action(&mut self, action: Action) {
         match action {
+            Action::Section => {}
             Action::Nav(page) => self.navigate(page),
             Action::Code | Action::Qr => {
                 self.show_code = matches!(action, Action::Code);
                 self.code_scroll = 0;
                 self.qr = None;
                 self.page = Page::Qr;
-                self.menu = 1;
+                self.menu = Page::Qr.index();
                 self.send(Work {
                     kind: Kind::Qr,
                     task: Task::Request(json!({"op":"invite_qr"})),
@@ -1351,7 +1609,7 @@ impl App {
                     Kind::Qr => {
                         self.qr = Some(value);
                         self.page = Page::Qr;
-                        self.menu = 1;
+                        self.menu = Page::Qr.index();
                         self.menu_focus = false;
                         self.message="Copy the code to another computer or scan its QR on your phone. Requests appear automatically.".into();
                     }
@@ -1496,6 +1754,7 @@ impl App {
                 self.message = "Pairing code expired. Press n to generate another.".into();
             }
         }
+        self.refresh_catalogs();
         if !self.busy && self.last_poll.elapsed() >= Duration::from_secs(3) {
             self.last_poll = Instant::now();
             self.send(Work {
@@ -1628,10 +1887,11 @@ impl App {
             }
             KeyCode::Esc => {
                 self.qr = None;
-                self.navigate(Page::Home);
+                self.navigate(Page::Machines);
             }
             KeyCode::Tab | KeyCode::BackTab => self.menu_focus = !self.menu_focus,
             KeyCode::Char('r') if !self.busy => {
+                self.catalog_checked.clear();
                 self.last_poll = Instant::now() - Duration::from_secs(5);
             }
             KeyCode::Char('g') => self.action(Action::Qr),
@@ -1669,15 +1929,14 @@ impl App {
                 if self.menu_focus {
                     self.menu = (self.menu + 1) % 8;
                 } else {
-                    self.selected = (self.selected + 1) % self.entries().len().max(1);
+                    self.select_row(true);
                 }
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.menu_focus {
                     self.menu = (self.menu + 7) % 8;
                 } else {
-                    let n = self.entries().len().max(1);
-                    self.selected = (self.selected + n - 1) % n;
+                    self.select_row(false);
                 }
             }
             KeyCode::Enter => {
@@ -1690,6 +1949,19 @@ impl App {
             _ => {}
         }
         false
+    }
+    fn select_row(&mut self, forward: bool) {
+        let entries = self.entries();
+        let count = entries.len().max(1);
+        for _ in 0..count {
+            self.selected = (self.selected + if forward { 1 } else { count - 1 }) % count;
+            if !entries
+                .get(self.selected)
+                .is_some_and(|row| matches!(row.action, Action::Section))
+            {
+                break;
+            }
+        }
     }
     fn paste(&mut self, value: &str) {
         if let Some(Modal::Form(form)) = &mut self.modal
@@ -1782,58 +2054,81 @@ impl App {
             return;
         }
         let parts = Layout::vertical([
-            Constraint::Length(4),
-            Constraint::Min(6),
             Constraint::Length(3),
+            Constraint::Min(6),
+            Constraint::Length(2),
         ])
         .split(area);
         let status = self.status();
-        let host = self.host();
-        let heading = vec![
-            Line::from(vec![
-                Span::styled(
-                    " WISPNET ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(format!(
-                    "{} · {}",
-                    clean(text(&status, "host_name")),
-                    short(text(&host, "host"))
-                )),
-            ]),
-            Line::raw(format!(
-                " {} · relay {} · {} pending · {} clients · {} services{}",
-                if self.online { "ONLINE" } else { "OFFLINE" },
+        let heading = Line::from(vec![
+            Span::styled(
+                " WISPNET  ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                clean(text(&status, "host_name")),
+                Style::default().fg(Color::White),
+            ),
+            Span::styled(
+                format!("   {}", if self.online { "ONLINE" } else { "OFFLINE" }),
+                Style::default().fg(if self.online {
+                    Color::Green
+                } else {
+                    Color::Yellow
+                }),
+            ),
+            Span::raw(format!("   ·   {} requests", self.pending().len())),
+        ]);
+        let summary = Line::styled(
+            format!(
+                " relay {}   ·   {} devices   ·   {} services{}",
                 text(&status, "relay"),
-                self.pending().len(),
                 self.clients().len(),
                 self.services().len(),
-                if self.busy { " · working…" } else { "" }
-            )),
-        ];
+                if self.busy {
+                    "   ·   refreshing…"
+                } else {
+                    ""
+                }
+            ),
+            Style::default().fg(Color::DarkGray),
+        );
         frame.render_widget(
-            Paragraph::new(heading)
-                .block(Block::bordered().border_style(Style::default().fg(Color::DarkGray))),
+            Paragraph::new(vec![heading, summary]).block(
+                Block::default()
+                    .borders(Borders::BOTTOM)
+                    .border_style(Style::default().fg(Color::DarkGray)),
+            ),
             parts[0],
         );
         if self.page == Page::Qr {
             self.draw_qr(frame, parts[1]);
         } else {
             let body =
-                Layout::horizontal([Constraint::Length(26), Constraint::Min(20)]).split(parts[1]);
+                Layout::horizontal([Constraint::Length(23), Constraint::Min(20)]).split(parts[1]);
             let menu_items: Vec<ListItem> = PAGES
                 .iter()
                 .enumerate()
-                .map(|(n, s)| ListItem::new(format!("{} {s}", n + 1)))
+                .map(|(n, s)| {
+                    ListItem::new(format!(
+                        "{} {s}{}",
+                        n + 1,
+                        if n == Page::Pending.index() && !self.pending().is_empty() {
+                            format!(" ({})", self.pending().len())
+                        } else {
+                            String::new()
+                        }
+                    ))
+                })
                 .collect();
             let mut menu_state = ListState::default().with_selected(Some(self.menu));
             let block = Block::bordered()
                 .title(if self.menu_focus {
-                    " Menu · Enter to open "
+                    " Navigate · Enter "
                 } else {
-                    " Menu · Tab "
+                    " Navigate · Tab "
                 })
                 .border_style(Style::default().fg(if self.menu_focus {
                     Color::Cyan
@@ -1859,8 +2154,13 @@ impl App {
                     Hit::Nav(n),
                 ));
             }
-            let content =
-                Layout::vertical([Constraint::Min(3), Constraint::Length(6)]).split(body[1]);
+            let content = if full.width >= 110 {
+                Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)])
+                    .split(body[1])
+            } else {
+                Layout::vertical([Constraint::Percentage(55), Constraint::Percentage(45)])
+                    .split(body[1])
+            };
             let entries = self.entries();
             self.selected = self.selected.min(entries.len().saturating_sub(1));
             self.list_state.select(if entries.is_empty() {
@@ -1870,7 +2170,18 @@ impl App {
             });
             let items: Vec<ListItem> = entries
                 .iter()
-                .map(|e| ListItem::new(clean(&e.label)))
+                .map(|e| {
+                    let item = ListItem::new(clean(&e.label));
+                    if matches!(e.action, Action::Section) {
+                        item.style(
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD),
+                        )
+                    } else {
+                        item
+                    }
+                })
                 .collect();
             let mut title = PAGES[self.page.index()].to_owned();
             if self.page == Page::Pending {
@@ -1907,11 +2218,15 @@ impl App {
                     &mut self.list_state,
                 );
             }
-            for n in self.list_state.offset()
-                ..entries.len().min(
-                    self.list_state.offset() + usize::from(content[0].height.saturating_sub(2)),
-                )
+            for (n, row) in entries
+                .iter()
+                .enumerate()
+                .skip(self.list_state.offset())
+                .take(usize::from(content[0].height.saturating_sub(2)))
             {
+                if matches!(row.action, Action::Section) {
+                    continue;
+                }
                 self.hits.push((
                     Rect::new(
                         content[0].x + 1,
@@ -1922,17 +2237,43 @@ impl App {
                     Hit::Row(n),
                 ));
             }
-            let details=entries.get(self.selected).map(|v|v.detail.join("\n")).filter(|s|!s.is_empty()).unwrap_or_else(||"↑/↓ select · Enter review/open · double-click a row\nApprovals and removals always show the full device ID before confirmation.".into());
+            let details = entries
+                .get(self.selected)
+                .map(|v| {
+                    if v.detail.is_empty() {
+                        format!("{}\n\nEnter  Open this action", v.label)
+                    } else {
+                        v.detail.join("\n")
+                    }
+                })
+                .unwrap_or_else(|| {
+                    "No requests to review.\n\nPair a device to share your services.".into()
+                });
             frame.render_widget(
                 Paragraph::new(details).wrap(Wrap { trim: false }).block(
                     Block::bordered()
-                        .title(" Details ")
+                        .title(" Selected ")
                         .border_style(Style::default().fg(Color::DarkGray)),
                 ),
                 content[1],
             );
         }
-        frame.render_widget(Paragraph::new(vec![Line::raw(clean(&self.message)),Line::styled("Tab: switch pane · ↑↓/Enter: select · n: pairing code · g: QR · p: pending · r: refresh · Esc: back · q: quit",Style::default().fg(Color::Cyan))]).wrap(Wrap{trim:false}),parts[2]);
+        let shortcuts = if self.page == Page::Qr {
+            "c copy · n new code · g QR · Esc devices · q quit"
+        } else if self.menu_focus {
+            "↑↓ navigate · Enter open · Tab content · q quit"
+        } else if full.width < 100 {
+            "↑↓ select · Enter open · Tab menu · n pair · r refresh · q quit"
+        } else {
+            "↑↓ select · Enter open · Tab navigate · n pair · p requests · r refresh · q quit"
+        };
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::raw(clean(&self.message)),
+                Line::styled(shortcuts, Style::default().fg(Color::DarkGray)),
+            ]),
+            parts[2],
+        );
         if self.modal.is_some() {
             self.draw_modal(frame, area);
         }

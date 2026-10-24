@@ -22,7 +22,14 @@ A normal local TUI session needs neither Python nor SSH.
 ## Navigation
 
 - Use arrow keys and Enter to select a menu, then a row. Tab switches panes.
-- Keys 1–8 open a view directly; `g` generates a QR and `p` opens pending approvals.
+- The app opens on **Devices**, with this machine and its services first, followed
+  by the other machines and their services under **Remote Sector**.
+  Remote catalogs refresh automatically; empty machines show **No services**.
+  Loading, unavailable and awaiting-approval catalogs have distinct rows.
+  The selected item’s details appear alongside the list on wide terminals and below
+  it on narrow terminals. **Settings** contains node and browser-access controls.
+- Keys 1–8 open Devices, Local services, Pair remote host, Pair this device,
+  Requests, Settings, Diagnostics and Owner operations respectively; `g` generates a QR and `p` opens pending approvals.
 - Click a sidebar item to open it; double-click a row to review it. Confirmation
   choices and form controls also accept mouse clicks. Most terminal emulators
   allow text selection while holding Shift when mouse capture is enabled.
@@ -36,14 +43,13 @@ A normal local TUI session needs neither Python nor SSH.
 
 ## Pair and approve
 
-Choose **Generate pairing code** on Overview, select **Pair this machine**
-(or press `2`), or press `n`. The code and five-minute countdown appear. Press
+Choose **Pair this device** (or press `4`), or press `n`. The code and five-minute countdown appear. Press
 `c` to copy the complete code using your terminal clipboard, including over SSH
 when the terminal permits clipboard access. Use arrow keys or PageUp/PageDown to
 scroll on small terminals. Paste the code into **Pair remote host** on the other
 computer. The standalone `wispnet --pairing-code` command is also available.
 
-For a phone, choose **Generate pairing QR** on Overview, or press `g`. The full host ID, QR and five-minute
+For a phone, press `g`. The full host ID, QR and five-minute
 countdown appear. Enlarge the terminal or reduce its font size if necessary;
 the app refuses to wrap or clip a QR. QR contrast stays black on white even if
 `NO_COLOR` is set. No capability is saved to terminal history or a file by the TUI;
@@ -82,7 +88,7 @@ desktop and clears that host's stale display catalog after explicit re-pairing.
 
 ## Machines and services
 
-**Machines & devices** combines saved hosts and clients approved here, showing
+**Devices** combines saved hosts and clients approved here, showing
 identity, activity and available transport telemetry. Select a host to refresh
 its authenticated catalog and browse permitted services. Catalog errors remain
 explicit, and no stale cached catalog authorizes Open. HTTP services use the
@@ -110,7 +116,7 @@ Taking the node offline closes local browser routes; the relay remains separate.
 
 ## State and owner operations
 
-Overview controls start/stop the installed node and enable/stop browser access.
+Settings controls start/stop the installed node and enable/stop browser access.
 Diagnostics shows the full host ID, revision, relay state and active transport
 count. Network work runs off the event loop. Confirmed actions that arrive during
 a refresh wait for that operation and retain their reviewed revision; conflicts
@@ -145,7 +151,7 @@ owning node can publish. See [public access](public-access.md).
 
 ## Device settings and service links
 
-Overview → **Device ID and shared HTTP port** edits the same device ID and
+Settings → **Device ID and shared HTTP port** edits the same device ID and
 single loopback HTTP port as the desktop app. Changing the ID restarts the
 installed node; keys, pairings and grants remain in its existing state directory.
 The port serves all service hostnames and `wispnet.localhost` (`/registry` for discovery, `/mcp` for authenticated local management).
@@ -154,7 +160,7 @@ Local services → a service → **Show service links**, or a remote service →
 **Show Local, Wispnet and Public links**, displays the current local HTTP address,
 `wispnet://<host-id>/<service-id>`, and a public HTTPS address when published.
 Local links use the computer running the CLI. Wispnet links resolve on the
-receiving device and require pairing and permission. Overview → **Open a Wispnet
+receiving device and require pairing and permission. Settings → **Open a Wispnet
 service link** resolves a pasted link and opens the browser in a graphical session.
 
 ## Scriptable management
