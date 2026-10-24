@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -9,6 +10,7 @@ import 'package:wispnet/src/app.dart';
 import 'package:wispnet/src/backend.dart';
 import 'package:wispnet/src/cards.dart';
 import 'package:wispnet/src/header.dart';
+import 'package:wispnet/src/space.dart';
 import 'package:wispnet/src/desktop_settings.dart';
 import 'package:wispnet/src/theme.dart';
 
@@ -22,9 +24,11 @@ class FakeBackend implements WispnetBackend {
     this.state = 'available',
     this.diagnosticReport,
     this.publicAccess,
+    this.accessReady,
   });
   final Map<String, dynamic>? diagnosticReport;
   final Map<String, dynamic>? publicAccess;
+  Future<void>? accessReady;
   bool paired, enabled;
   final String state;
   final calls = <(String, Map<String, dynamic>)>[];
@@ -128,6 +132,7 @@ class FakeBackend implements WispnetBackend {
           ],
         };
       case 'setAccess':
+        if (arguments['enabled'] == true) await accessReady;
         enabled = arguments['enabled'] as bool;
         return {};
       case 'open':
@@ -591,6 +596,78 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     expect(opacity(), 1);
     expect(find.text('REMOTE SECTOR'), findsOneWidget);
+    await close(tester);
+  });
+  testWidgets('entry starts immediately while access is still starting', (
+    tester,
+  ) async {
+    for (final startupMs in [400, 1200]) {
+      final ready = Completer<void>();
+      final backend = FakeBackend(enabled: false, accessReady: ready.future);
+      await mount(tester, backend, disableAnimations: false);
+      final entry = find.byTooltip('Enter wisp space');
+      await tester.tap(entry);
+      await tester.pump();
+      final warp = tester.widget<WispSpace>(find.byType(WispSpace)).warp;
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(warp.value, closeTo(1 / 9, .01));
+      await tester.tap(entry, warnIfMissed: false);
+      expect(backend.calls.where((c) => c.$1 == 'setAccess'), hasLength(1));
+      await tester.pump(Duration(milliseconds: startupMs - 100));
+      expect(backend.enabled, false);
+      expect(
+        tester
+            .widget<FadeTransition>(find.byKey(const ValueKey('entry-reveal')))
+            .opacity
+            .value,
+        0,
+      );
+      ready.complete();
+      await tester.pump();
+      if (startupMs < 900) {
+        await tester.pump(Duration(milliseconds: 800 - startupMs));
+        expect(
+          tester
+              .widget<FadeTransition>(
+                find.byKey(const ValueKey('entry-reveal')),
+              )
+              .opacity
+              .value,
+          closeTo(.5, .01),
+        );
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      await tester.pump(const Duration(milliseconds: 1));
+      expect(warp.value, 0, reason: 'startup took $startupMs ms');
+      expect(find.text('REMOTE SECTOR'), findsOneWidget);
+      expect(
+        tester.widget<OnlineButton>(find.byType(OnlineButton)).onPressed,
+        isNotNull,
+      );
+      await close(tester);
+    }
+  });
+  testWidgets('failed entry stops the jump and allows an immediate retry', (
+    tester,
+  ) async {
+    final ready = Completer<void>();
+    final backend = FakeBackend(enabled: false, accessReady: ready.future);
+    await mount(tester, backend, disableAnimations: false);
+    await tester.tap(find.byTooltip('Enter wisp space'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    ready.completeError(
+      PlatformException(code: 'access_failed', message: 'Cannot start access'),
+    );
+    await tester.pump();
+    expect(tester.widget<WispSpace>(find.byType(WispSpace)).warp.value, 0);
+    expect(find.text('Cannot start access'), findsOneWidget);
+    backend.accessReady = null;
+    await tester.tap(find.byTooltip('Enter wisp space'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 900));
+    expect(find.text('REMOTE SECTOR'), findsOneWidget);
+    expect(tester.takeException(), isNull);
     await close(tester);
   });
   testWidgets('both launch states show a centered entry and its caption', (

@@ -198,6 +198,7 @@ class _WispHomeState extends State<WispHome>
       busy = true;
       entering = enable && !MediaQuery.disableAnimationsOf(context);
     });
+    final jump = entering ? warp.forward(from: 0) : null;
     try {
       await backend.invoke('setAccess', {'enabled': enable});
       if (enable) {
@@ -211,10 +212,7 @@ class _WispHomeState extends State<WispHome>
           }
           await Future<void>.delayed(const Duration(milliseconds: 200));
         }
-        if (mounted && !MediaQuery.disableAnimationsOf(context)) {
-          await warp.forward(from: 0);
-          if (mounted) warp.reset();
-        }
+        if (mounted && jump != null) await jump;
         unawaited(refresh());
       } else {
         await Future<void>.delayed(const Duration(milliseconds: 100));
@@ -224,6 +222,7 @@ class _WispHomeState extends State<WispHome>
       notice(message(error));
     } finally {
       if (mounted) {
+        if (jump != null) warp.reset();
         setState(() {
           busy = false;
           entering = false;
@@ -652,7 +651,9 @@ class _WispHomeState extends State<WispHome>
           child: FadeTransition(
             key: const ValueKey('entry-reveal'),
             opacity: entering
-                ? warp.drive(CurveTween(curve: const Interval(7 / 9, 1)))
+                ? online
+                      ? warp.drive(CurveTween(curve: const Interval(7 / 9, 1)))
+                      : const AlwaysStoppedAnimation(0.0)
                 : const AlwaysStoppedAnimation(1.0),
             child: SafeArea(
               child: Center(
