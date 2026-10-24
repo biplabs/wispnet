@@ -115,6 +115,7 @@ api_package.mkdir(exist_ok=True)
 for name in ["__init__.py", "api.py", "combined.py", "catalog_cache.py"]:
     shutil.copy2(ROOT / "apps/node/desktop/wispnet_desktop" / name, api_package / name)
 shutil.copy2(ROOT / "scripts/node_request.py", node_binary.parent / "node_request.py")
+shutil.copy2(ROOT / "scripts/mcp_headers.py", node_binary.parent / "mcp_headers.py")
 node_launcher = home / ".local/bin/wispnet-node"
 node_launcher.parent.mkdir(parents=True, exist_ok=True)
 node_launcher.write_text(

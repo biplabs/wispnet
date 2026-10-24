@@ -148,7 +148,7 @@ owning node can publish. See [public access](public-access.md).
 Overview → **Device ID and shared HTTP port** edits the same device ID and
 single loopback HTTP port as the desktop app. Changing the ID restarts the
 installed node; keys, pairings and grants remain in its existing state directory.
-The port serves all service hostnames and `registry.wispnet.localhost`.
+The port serves all service hostnames and `wispnet.localhost` (`/registry` for discovery, `/mcp` for authenticated local management).
 
 Local services → a service → **Show service links**, or a remote service →
 **Show Local, Wispnet and Public links**, displays the current local HTTP address,

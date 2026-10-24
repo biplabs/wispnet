@@ -54,6 +54,7 @@ def package(binary, output, desktop_binary=None):
             "apps/flutter/assets/fonts/Roboto_LICENSE.txt",
             "scripts/install_node_desktop.py",
             "scripts/node_request.py",
+            "scripts/mcp_headers.py",
             "scripts/firewall_helper.py",
             "scripts/install_firewall_helper.py",
             "scripts/uninstall_firewall_helper.py",

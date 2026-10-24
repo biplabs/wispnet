@@ -863,8 +863,7 @@ class _SettingsFormState extends State<SettingsForm> {
     }
   }
 
-  String get browserAddress =>
-      Uri.parse(address).replace(path: '/v1/services').toString();
+  String get browserAddress => address;
 
   Future<void> openAddress() async {
     if (opening || address.isEmpty) return;

@@ -11,10 +11,13 @@ No Android package queries, Binder connection or app permission prompt is needed
 Open **Settings** in either app. The registry and every HTTP service share port **7842** by default:
 
 ```
-http://registry.wispnet.localhost:7842
+http://wispnet.localhost:7842/registry
 ```
 
-`http://127.0.0.1:7842` and `http://localhost:7842` are also accepted. It binds
+The previous `http://registry.wispnet.localhost:7842`, `http://127.0.0.1:7842`
+and `http://localhost:7842` addresses remain accepted with their `/v1/...` paths.
+`GET /registry` returns the service directory. The new base also supports
+`/registry/v1/services` and `/registry/v1/resolve`. It binds
 only to IPv4 loopback, never the LAN. All website origins are allowed without
 an origin list. Native clients without browser Origin/Fetch Metadata headers use
 device-level access. This is discovery/access only; the
@@ -93,7 +96,7 @@ catalogs do not authorize access. `POST /v1/resolve` remains available to rechec
 authority and obtain a route explicitly:
 
 ```js
-const registry = 'http://127.0.0.1:7842';
+const registry = 'http://wispnet.localhost:7842/registry';
 const directory = await fetch(`${registry}/v1/services`).then(r => r.json());
 const service = directory.services.find(s => s.service_id === 'llama');
 if (!service) throw new Error('Llama is unavailable');
@@ -156,3 +159,53 @@ instead of `host_id` and `service_id`. Directory and resolve records include a
 clients still call the resolved HTTP address; a custom-scheme link is not itself
 a REST transport. Linux registration is installed through the updated desktop
 launcher (`MimeType=x-scheme-handler/wispnet`).
+
+## Local MCP configuration
+
+The same loopback listener serves **`http://wispnet.localhost:7842/mcp`** for
+Codex and other local MCP clients. Service hostnames remain isolated. MCP is
+stateless Streamable HTTP (JSON responses; no server event stream). It supports
+initialize, ping, tools/list and tools/call. GET and DELETE return 405. Send
+`Accept: application/json, text/event-stream` and `Content-Type: application/json`.
+
+Every MCP request needs `Authorization: Bearer <token>`. The token is generated
+once in private `state_dir/mcp-token` (0600) and survives restarts and port changes.
+It is separate from Wispnet host identity, pairings and service grants. Never
+publish the token, put it in a URL, or share it with websites. MCP rejects all
+browser Origin/Fetch Metadata headers, sends no CORS permission, and rejects
+missing/duplicate credentials. The discovery API retains its existing CORS policy.
+
+After installing the updated desktop/node and bringing local access online, add
+the following to your private Codex config (`~/.codex/config.toml`). Replace
+`/home/YOU` with your actual home directory:
+
+```toml
+[mcp_servers.wispnet]
+url = "http://wispnet.localhost:7842/mcp"
+http_headers_helper = "python3 /home/YOU/.local/libexec/wispnet-node/mcp_headers.py"
+startup_timeout_sec = 15
+tool_timeout_sec = 35
+```
+
+The header helper reads the private token on demand; the Codex config contains
+no token. It accepts `--config /absolute/path/host.toml` for another local node.
+Restart/reconnect the Codex MCP client after registration. Other MCP clients can
+read the same private token and send the bearer header themselves. See the
+[Codex MCP configuration documentation](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
+
+Tools include service discovery/link resolution, gateway settings, port changes
+and local access online/offline. On desktop, the running owner-only `node.sock`
+also enables host status, transport diagnostics, service configuration/removal,
+pairing invitation approval/rejection and client revocation. Policy writes require
+the current `expected_revision` from `wispnet_status` and use the same owner API
+and validation as the app. An explicit service `allow` list replaces the entire
+list; it never implicitly grants every client. Pairing approval requires an
+existing pending invitation. Android exposes discovery and device-local access
+settings through this shared implementation; desktop owner tools are not listed
+without the owner socket.
+
+Changing the shared port moves both registry and MCP: update the client URL
+and reconnect. Going offline closes both endpoints; use the app or owner socket
+to go online again. In-flight MCP port/offline changes finish their bounded reply
+even as the listener closes. An uncertain transport failure is never an instruction
+to repeat a write: inspect status/current revision first. No requests are replayed.

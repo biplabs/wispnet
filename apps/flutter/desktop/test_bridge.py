@@ -224,7 +224,8 @@ class BridgeTests(unittest.TestCase):
 
     def test_handoff_only_accepts_local_service_roots_and_registry_json(self):
         self.assertEqual(module.browser_url('http://web.localhost:18000/'), 'http://web.localhost:18000/')
-        registry = 'http://registry.wispnet.localhost:18400/v1/services'
+        registry = 'http://wispnet.localhost:18400/registry'
+        self.assertEqual(module.browser_url('http://registry.wispnet.localhost:18400/v1/services'), 'http://registry.wispnet.localhost:18400/v1/services')
         self.assertEqual(module.browser_url(registry), registry)
         for invalid in ['http://web.localhost:18400/v1/services', 'http://registry.wispnet.localhost:18400/v1/resolve', registry + '?token=x', registry + '#fragment']:
             with self.assertRaises(ValueError): module.browser_url(invalid)

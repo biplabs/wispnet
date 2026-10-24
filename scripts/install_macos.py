@@ -124,6 +124,7 @@ def main():
     shutil.copy2(
         ROOT / "scripts/node_request.py", node_binary.parent / "node_request.py"
     )
+    shutil.copy2(ROOT / "scripts/mcp_headers.py", node_binary.parent / "mcp_headers.py")
     owner_command = home / ".local/bin/wispnet-node"
     owner_command.write_text(
         "#!"

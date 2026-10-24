@@ -46,7 +46,7 @@ def browser_url(url):
     parsed = urlsplit(url)
     if (parsed.scheme != 'http' or not (parsed.hostname or '').endswith('.localhost')
         or len(parsed.hostname) <= 10 or not parsed.port
-        or not (parsed.path == '/' or (parsed.hostname == 'registry.wispnet.localhost' and parsed.path == '/v1/services'))
+        or not (parsed.path == '/' or (parsed.hostname == 'registry.wispnet.localhost' and parsed.path == '/v1/services') or (parsed.hostname == 'wispnet.localhost' and parsed.path == '/registry'))
         or parsed.query or parsed.fragment or parsed.username or parsed.password
         or any(ord(c) < 33 for c in url)):
         raise ValueError('Invalid local browser handoff')
@@ -326,7 +326,7 @@ class Bridge:
             host, service = args.get('host'), args.get('service')
             if method == 'settings':
                 if host is None:
-                    return {'port': settings['registry_port'], 'url': f"http://registry.wispnet.localhost:{settings['registry_port']}"}
+                    return {'port': settings['registry_port'], 'url': f"http://wispnet.localhost:{settings['registry_port']}/registry"}
                 route = next((p for p in data['routes'] if p['host'] == host and p['service'] == service), {})
                 return {'port': settings['registry_port'], 'url': route.get('url', '')}
             port = args['port']

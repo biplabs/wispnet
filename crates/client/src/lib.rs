@@ -1,6 +1,7 @@
 //! Shared peer browser client. One identity/endpoint shared by pairing, catalogs and gateway.
 pub mod access_settings;
 pub mod gateway;
+mod mcp;
 pub mod public_access;
 mod service_registry;
 use iroh::Endpoint;

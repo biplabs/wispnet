@@ -147,7 +147,7 @@ class FakeBackend implements WispnetBackend {
         return {
           'port': 18400,
           'url': arguments['host'] == null
-              ? 'http://registry.wispnet.localhost:18400'
+              ? 'http://wispnet.localhost:18400/registry'
               : missingRoute
               ? ''
               : 'http://j-strix-aaaaaaaaaaaa-${arguments['service']}.localhost:18400/',
@@ -1088,14 +1088,14 @@ void main() {
     expect(find.text('Share a service'), findsNothing);
     expect(find.byType(DropdownButton<String>), findsNothing);
     expect(
-      find.text('http://registry.wispnet.localhost:18400/v1/services'),
+      find.text('http://wispnet.localhost:18400/registry'),
       findsOneWidget,
     );
     await tester.tap(find.byKey(const ValueKey('settings-address')));
     await tester.pumpAndSettle();
     expect(
       backend.calls.where((call) => call.$1 == 'launch').single.$2['url'],
-      'http://registry.wispnet.localhost:18400/v1/services',
+      'http://wispnet.localhost:18400/registry',
     );
     expect(find.byTooltip('Close'), findsOneWidget);
     await tester.tap(find.byTooltip('Close'));

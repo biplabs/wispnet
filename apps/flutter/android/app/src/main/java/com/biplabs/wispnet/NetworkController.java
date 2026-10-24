@@ -88,7 +88,7 @@ final class NetworkController extends ContextWrapper {
    case "settings": {
     JSONObject data = Native.command("gateway_settings"), settings = data.getJSONObject("settings");
     JSONObject reply = new JSONObject().put("port", settings.getInt("registry_port"));
-    if (args.isNull("host")) return reply.put("url", "http://registry.wispnet.localhost:" + settings.getInt("registry_port"));
+    if (args.isNull("host")) return reply.put("url", "http://wispnet.localhost:" + settings.getInt("registry_port") + "/registry");
     JSONArray routes = data.getJSONArray("routes");
     for (int i = 0; i < routes.length(); i++) { JSONObject row = routes.getJSONObject(i); if (args.getString("host").equals(row.getString("host")) && args.getString("service").equals(row.getString("service"))) reply.put("url", row.getString("url")); }
     return reply;
