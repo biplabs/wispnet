@@ -4,14 +4,28 @@ use std::io;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 pub const MAX_FRAME: usize = 64 * 1024;
+pub const MAX_EXEC_COMMAND_BYTES: usize = 8192;
+pub const MAX_EXEC_TIMEOUT_MS: u32 = 300_000;
+pub const MAX_EXEC_OUTPUT_BYTES: u32 = 1024 * 1024;
+pub const DEFAULT_EXEC_TIMEOUT_MS: u32 = 30_000;
+pub const DEFAULT_EXEC_OUTPUT_BYTES: u32 = 65_536;
 const JSON: u8 = 0;
 const INPUT: u8 = 1;
 const OUTPUT: u8 = 2;
 const SCROLLBACK: u8 = 3;
+const STDOUT: u8 = 4;
+const STDERR: u8 = 5;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ClientFrame {
+    /// One-shot Unix /bin/sh -c execution, without an interactive PTY.
+    Exec {
+        command: String,
+        cwd: Option<String>,
+        timeout_ms: u32,
+        max_output_bytes: u32,
+    },
     Attach {
         session: String,
         cols: u16,
@@ -30,13 +44,38 @@ pub enum ClientFrame {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ServerFrame {
-    Attached { session: String, username: String },
-    Output { data: Vec<u8> },
-    Scrollback { data: Vec<u8> },
-    TerminalState { echo: bool, canonical: bool },
-    Exited { code: u32 },
+    Attached {
+        session: String,
+        username: String,
+    },
+    Output {
+        data: Vec<u8>,
+    },
+    Stdout {
+        data: Vec<u8>,
+    },
+    Stderr {
+        data: Vec<u8>,
+    },
+    ExecFinished {
+        code: u32,
+        timed_out: bool,
+        output_truncated: bool,
+    },
+    Scrollback {
+        data: Vec<u8>,
+    },
+    TerminalState {
+        echo: bool,
+        canonical: bool,
+    },
+    Exited {
+        code: u32,
+    },
     Pong,
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 fn invalid(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
@@ -107,12 +146,17 @@ pub async fn read_server(reader: &mut (impl AsyncRead + Unpin)) -> io::Result<Op
     match kind {
         OUTPUT => Ok(Some(ServerFrame::Output { data: bytes })),
         SCROLLBACK => Ok(Some(ServerFrame::Scrollback { data: bytes })),
+        STDOUT => Ok(Some(ServerFrame::Stdout { data: bytes })),
+        STDERR => Ok(Some(ServerFrame::Stderr { data: bytes })),
         JSON => {
             let frame: ServerFrame =
                 serde_json::from_slice(&bytes).map_err(|_| invalid("invalid shell response"))?;
             if matches!(
                 frame,
-                ServerFrame::Output { .. } | ServerFrame::Scrollback { .. }
+                ServerFrame::Output { .. }
+                    | ServerFrame::Scrollback { .. }
+                    | ServerFrame::Stdout { .. }
+                    | ServerFrame::Stderr { .. }
             ) {
                 return Err(invalid("output must use binary frame"));
             }
@@ -128,6 +172,8 @@ pub async fn write_server(
     match frame {
         ServerFrame::Output { data } => write_frame(writer, OUTPUT, data).await,
         ServerFrame::Scrollback { data } => write_frame(writer, SCROLLBACK, data).await,
+        ServerFrame::Stdout { data } => write_frame(writer, STDOUT, data).await,
+        ServerFrame::Stderr { data } => write_frame(writer, STDERR, data).await,
         _ => {
             write_frame(
                 writer,
@@ -184,6 +230,30 @@ mod tests {
         );
     }
     #[tokio::test]
+    async fn command_request_round_trips_without_changing_attach_frames() {
+        let frame = ClientFrame::Exec {
+            command: "printf 'two words'\nexit 3".into(),
+            cwd: Some("/tmp".into()),
+            timeout_ms: DEFAULT_EXEC_TIMEOUT_MS,
+            max_output_bytes: DEFAULT_EXEC_OUTPUT_BYTES,
+        };
+        let mut bytes = Vec::new();
+        write_client(&mut bytes, &frame).await.unwrap();
+        assert_eq!(
+            read_client(&mut bytes.as_slice()).await.unwrap(),
+            Some(frame)
+        );
+        for frame in [
+            ServerFrame::Stdout { data: vec![0, 255] },
+            ServerFrame::Stderr { data: vec![0, 255] },
+        ] {
+            let mut bytes = Vec::new();
+            write_server(&mut bytes, &frame).await.unwrap();
+            assert_eq!(bytes.len(), 7);
+            assert!(read_client(&mut bytes.as_slice()).await.is_err());
+        }
+    }
+    #[tokio::test]
     async fn control_and_binary_events_round_trip() {
         for frame in [
             ServerFrame::Attached {
@@ -196,6 +266,13 @@ mod tests {
             },
             ServerFrame::Scrollback { data: vec![1, 255] },
             ServerFrame::Exited { code: 7 },
+            ServerFrame::Stdout { data: vec![0, 255] },
+            ServerFrame::Stderr { data: vec![0, 255] },
+            ServerFrame::ExecFinished {
+                code: 9,
+                timed_out: false,
+                output_truncated: true,
+            },
             ServerFrame::Pong,
         ] {
             let mut bytes = Vec::new();

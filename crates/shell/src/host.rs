@@ -25,12 +25,14 @@ pub struct SessionManager {
 struct ManagerState {
     sessions: Mutex<HashMap<SessionKey, Arc<Session>>>,
     shell: String,
+    executors: crate::exec::Executors,
 }
 impl Default for ManagerState {
     fn default() -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
             shell: default_shell(),
+            executors: crate::exec::Executors::default(),
         }
     }
 }
@@ -270,12 +272,14 @@ impl SessionManager {
             inner: Arc::new(ManagerState {
                 sessions: Mutex::new(HashMap::new()),
                 shell: shell.into(),
+                executors: crate::exec::Executors::default(),
             }),
         }
     }
     /// End sessions after owner revocation/removal; an ordinary mobile detach
     /// intentionally does not invoke this operation.
     pub fn close_scope(&self, scope: &str) {
+        self.inner.executors.close_scope(scope);
         let mut sessions = self
             .inner
             .sessions
@@ -307,7 +311,7 @@ impl SessionManager {
                 false
             }
         });
-        before - sessions.len()
+        before - sessions.len() + self.inner.executors.retain_scopes(&mut allowed)
     }
     fn attach(
         &self,
@@ -363,6 +367,27 @@ impl SessionManager {
         let first = tokio::time::timeout(Duration::from_secs(5), read_client(&mut reader))
             .await
             .map_err(|_| error("Shell attach timeout"))??;
+        if let Some(ClientFrame::Exec {
+            command,
+            cwd,
+            timeout_ms,
+            max_output_bytes,
+        }) = first
+        {
+            return self
+                .inner
+                .executors
+                .serve(
+                    reader,
+                    writer,
+                    scope,
+                    command,
+                    cwd,
+                    timeout_ms,
+                    max_output_bytes,
+                )
+                .await;
+        }
         let Some(ClientFrame::Attach {
             session: name,
             cols,

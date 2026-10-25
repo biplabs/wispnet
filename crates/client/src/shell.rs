@@ -21,8 +21,9 @@ type BoxStream = Box<dyn Stream>;
 pub(crate) struct Shells {
     sessions: Mutex<BTreeMap<String, Arc<Session>>>,
     slots: Arc<tokio::sync::Semaphore>,
+    pub(crate) execs: crate::shell_exec::ExecRegistry,
     #[cfg(not(target_os = "android"))]
-    local: wispnet_shell::SessionManager,
+    pub(crate) local: wispnet_shell::SessionManager,
     #[cfg(not(target_os = "android"))]
     local_scopes: Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
     #[cfg(not(target_os = "android"))]
@@ -33,6 +34,7 @@ impl Default for Shells {
         Self {
             sessions: Mutex::new(BTreeMap::new()),
             slots: Arc::new(tokio::sync::Semaphore::new(16)),
+            execs: Default::default(),
             #[cfg(not(target_os = "android"))]
             local: wispnet_shell::SessionManager::default(),
             #[cfg(not(target_os = "android"))]
@@ -95,24 +97,7 @@ impl Client {
         }
         let (cols, rows) = size(value)?;
         // Reserve a slot before any connection/session side effect.
-        let mut sessions = self.shells.sessions.lock().await;
-        sessions.retain(|_, s| {
-            s.last_poll
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .elapsed()
-                < Duration::from_secs(120)
-        });
-        if sessions.len() >= 16 {
-            return Err("Close a terminal before opening another".into());
-        }
-        drop(sessions);
-        let permit = self
-            .shells
-            .slots
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| "Close a terminal before opening another")?;
+        let permit = self.shells.reserve_slot().await?;
         let connection;
         #[allow(unused_mut)] // Only desktop hosts spawn the local PTY adapter.
         let mut local_worker: Option<tokio::task::JoinHandle<()>> = None;
@@ -309,8 +294,11 @@ impl Client {
                             json!({"type":"error","message":message})
                         }
                         ServerFrame::Pong => continue,
-                        ServerFrame::Attached { .. } => {
-                            return Err(std::io::Error::other("Unexpected shell attachment"));
+                        ServerFrame::Attached { .. }
+                        | ServerFrame::Stdout { .. }
+                        | ServerFrame::Stderr { .. }
+                        | ServerFrame::ExecFinished { .. } => {
+                            return Err(std::io::Error::other("Unexpected terminal response"));
                         }
                     };
                     drop(meta);
@@ -369,14 +357,37 @@ impl Client {
     }
 }
 impl Shells {
+    pub(crate) async fn reserve_slot(&self) -> Result<tokio::sync::OwnedSemaphorePermit, String> {
+        self.sessions.lock().await.retain(|_, session| {
+            session
+                .last_poll
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .elapsed()
+                < Duration::from_secs(120)
+        });
+        self.slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| "Close a terminal or wait for a running command to finish".into())
+    }
     pub(crate) async fn close_host(&self, host: wispnet_core::identity::EndpointId) {
         self.sessions
             .lock()
             .await
             .retain(|_, session| session.peer != host);
+        self.execs.lock().await.retain(|_, execution| {
+            if execution.host == host {
+                let _ = execution.cancel.send(true);
+                false
+            } else {
+                true
+            }
+        });
     }
     pub(crate) async fn close_all(&self) {
         self.sessions.lock().await.clear();
+        self.execs.lock().await.clear();
     }
     pub(crate) async fn command(&self, value: &Value) -> Result<Value, String> {
         let id = argument(value, "session")?;

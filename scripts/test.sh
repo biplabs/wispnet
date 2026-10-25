@@ -30,6 +30,7 @@ python3 scripts/smoke.py
 python3 scripts/registry_smoke.py
 python3 scripts/host_smoke.py
 python3 -m unittest discover -s scripts -p test_mcp.py
+python3 -m unittest discover -s scripts -p test_mcp_exec.py
 python3 scripts/test_node_desktop.py
 python3 scripts/shell_smoke.py
 python3 scripts/test_mutual_deletion.py

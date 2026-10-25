@@ -56,6 +56,26 @@ tool works for HTTP and TCP services. It does not create services or pair device
 Use `wispnet_revoke_service_access` with the same fields to remove just that
 device's shell grant while keeping it paired and preserving its other access.
 
+## MCP commands
+
+`wispnet_run_shell_command` runs a command on a paired desktop host using the
+same Shell grant as an interactive terminal. Supply `host` (a full public ID or
+an unambiguous paired device ID, such as `j-desktop`) and `command`, for example
+`pwd; git status --short`. Optional `cwd` must be an absolute remote directory;
+the default is the remote account's HOME.
+
+Each call starts a separate `/bin/sh -c` process with stdin closed and no PTY.
+Commands do not reuse interactive sessions or retain shell variables between
+calls. The result contains separate stdout/stderr strings, the resolved host
+ID, exit status, and timeout/truncation flags; nonzero exits remain result data.
+Output uses lossy UTF-8 decoding. `timeout_seconds` defaults to 30 (1–300), and
+`max_output_bytes` limits combined output to 65536 bytes by default (1–1048576).
+A timeout, disconnected MCP request, Shell revocation, or local unpairing ends
+the command and its children. Commands run with the remote host account's
+permissions, and revoking Shell access prevents further calls.
+MCP permits four concurrent command requests, reserving capacity for status and
+access controls. The native host's shared limit remains 16 shell operations.
+
 ## Android
 
 Tap Shell under a paired desktop host. The native terminal retains WispShell's

@@ -5,6 +5,8 @@
 mod protocol;
 pub use protocol::*;
 #[cfg(feature = "host")]
+mod exec;
+#[cfg(feature = "host")]
 mod host;
 #[cfg(feature = "host")]
 pub use host::SessionManager;

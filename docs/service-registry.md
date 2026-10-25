@@ -230,6 +230,29 @@ The device stays paired, and its access to other services remains unchanged.
 Both tools require an existing service and an approved device; repeating a grant
 or revocation is safe when submitted with the current revision.
 
+Use `wispnet_run_shell_command` to run a command on a paired desktop host that
+has granted this device Shell access:
+
+```json
+{
+  "name": "wispnet_run_shell_command",
+  "arguments": {
+    "host": "j-desktop",
+    "command": "pwd; git status --short",
+    "cwd": "/home/johnny/playground/wispnet"
+  }
+}
+```
+
+`host` accepts a full public ID or an unambiguous paired device ID. The result
+includes the resolved host ID, separate `stdout` and `stderr`, `exit_code`,
+`timed_out`, and `output_truncated`. A nonzero command exit is returned as data.
+Optional `timeout_seconds` defaults to 30 (range 1–300), and `max_output_bytes`
+defaults to 65536 (range 1–1048576). See [Shell access](shell.md) for execution
+semantics. Running a command does not change grants or policy revision.
+At most four MCP command requests can run concurrently; additional command
+requests return HTTP 503 while status and access controls remain available.
+
 Changing the shared port moves both registry and MCP: update the client URL
 and reconnect. Going offline closes both endpoints; use the app or owner socket
 to go online again. In-flight MCP port/offline changes finish their bounded reply
