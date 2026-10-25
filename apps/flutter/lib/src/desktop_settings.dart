@@ -164,6 +164,61 @@ class _DesktopSettingsState extends State<DesktopSettings> {
     await load();
   }
 
+  Future<void> editShell(Map<String, dynamic> service) async {
+    final revision = status!['host']['revision'] as int;
+    final allowed = (service['allow'] as List? ?? []).cast<String>().toSet();
+    final devices = List<Map<String, dynamic>>.of(clients);
+    await showWispSheet<void>(
+      context,
+      title: 'Shell access',
+      child: _ActionForm(
+        builder: (context, submit, working, failure) => StatefulBuilder(
+          builder: (context, update) => Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'Shell is built into Wispnet and is always available on this computer. Select which paired devices may open a remote shell as your OS user.',
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Leave all devices unchecked to allow access only from this computer.',
+              ),
+              for (final c in devices)
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(c['name'] as String),
+                  subtitle: Text(c['peer'] as String),
+                  value: allowed.contains(c['peer']),
+                  onChanged: working
+                      ? null
+                      : (value) => update(() {
+                          if (value!) {
+                            allowed.add(c['peer'] as String);
+                          } else {
+                            allowed.remove(c['peer']);
+                          }
+                        }),
+                ),
+              if (failure != null)
+                Text(failure, style: const TextStyle(color: WispColors.error)),
+              FilledButton(
+                onPressed: working
+                    ? null
+                    : () => submit(
+                        () => mutate({
+                          'op': 'shell',
+                          'allow': allowed.toList(),
+                        }, revision),
+                      ),
+                child: const Text('Save access'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> editService([Map<String, dynamic>? service]) async {
     final current = status!;
     final originalId = service?['id'] as String?;
@@ -249,6 +304,11 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                     ? null
                     : () => submit(() async {
                         final serviceId = id.text.trim();
+                        if (serviceId == 'shell') {
+                          throw const FormatException(
+                            '“shell” is reserved for the built-in Shell service. Use Shell access to manage its permissions.',
+                          );
+                        }
                         if (!RegExp(r'^[a-z0-9][a-z0-9._-]{0,63}$')
                             .hasMatch(serviceId)) {
                           throw const FormatException(
@@ -579,6 +639,10 @@ class _DesktopSettingsState extends State<DesktopSettings> {
       else if (section == 'My services') ...[
         if (widget.serviceId == null) ...[
           action('Add a new service', () => run(() => editService())),
+          for (final s in services.where(
+            (s) => s['id'] == 'shell' && s['kind'] == 'shell',
+          ))
+            action('Shell access', () => run(() => editShell(s))),
           if (widget.servicesOnly)
             action('Pair this machine', () => run(invite)),
         ] else if (!services.any((s) => s['id'] == widget.serviceId))
@@ -607,23 +671,29 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                       publicService: s['id'] as String,
                     ),
                   const SizedBox(height: 10),
-                  action('Edit', () => run(() => editService(s))),
-                  action(
-                    'Remove service',
-                    () => run(
-                      () => confirm(
-                        'Remove service?',
-                        'Remove “${s['id']}” from this machine’s shared services? Paired devices will lose Wispnet access, and its public URL will stop working. This does not stop or delete the underlying application.',
-                        () => mutate({
-                          'op': 'remove',
-                          'id': s['id'],
-                        }, status!['host']['revision'] as int),
-                        danger: true,
-                        confirmLabel: 'Remove service',
+                  if (s['kind'] == 'shell') ...[
+                    const Text('Built-in service · available on this computer'),
+                    const SizedBox(height: 8),
+                    action('Manage access', () => run(() => editShell(s))),
+                  ] else ...[
+                    action('Edit', () => run(() => editService(s))),
+                    action(
+                      'Remove service',
+                      () => run(
+                        () => confirm(
+                          'Remove service?',
+                          'Remove “${s['id']}” from this machine’s shared services? Paired devices will lose Wispnet access, and its public URL will stop working. This does not stop or delete the underlying application.',
+                          () => mutate({
+                            'op': 'remove',
+                            'id': s['id'],
+                          }, status!['host']['revision'] as int),
+                          danger: true,
+                          confirmLabel: 'Remove service',
+                        ),
                       ),
+                      danger: true,
                     ),
-                    danger: true,
-                  ),
+                  ],
                   if (s['kind'] == 'http') ..._public(s),
                 ],
               ),

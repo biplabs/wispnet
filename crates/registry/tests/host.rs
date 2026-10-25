@@ -5,6 +5,18 @@ use wispnet_registry::{
     host::{self, Mutation},
     store::Store,
 };
+// These legacy tests compare user-configured services. The permanent builtin
+// is asserted independently in shell.rs and is not a user service fixture.
+fn custom_snapshot(
+    store: &mut Store,
+    host: wispnet_core::identity::EndpointId,
+) -> Result<host::Snapshot, control::ControlError> {
+    let mut snapshot = store.host_snapshot(host)?;
+    snapshot
+        .services
+        .retain(|s| s.kind != wispnet_core::host::ServiceKind::Shell);
+    Ok(snapshot)
+}
 fn directory() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -52,7 +64,7 @@ async fn service_rename_preserves_grants_pairings_and_incarnation_after_restart(
             },
         )
         .unwrap();
-    let before = store.host_snapshot(host).unwrap();
+    let before = custom_snapshot(&mut store, host).unwrap();
     let pairings = serde_json::to_value(store.paired_hosts(host).unwrap()).unwrap();
     // Omitting allow in the owner API preserves the authoritative grants.
     let rename = serde_json::from_value(json!({
@@ -64,7 +76,7 @@ async fn service_rename_preserves_grants_pairings_and_incarnation_after_restart(
     assert_eq!(store.host_mutate(host, &owner, rename).unwrap(), 5);
     drop(store);
     let (mut store, _) = host::owner_store(dir.path(), host).unwrap();
-    let after = store.host_snapshot(host).unwrap();
+    let after = custom_snapshot(&mut store, host).unwrap();
     assert_eq!(after.host, before.host);
     assert_eq!(after.generation, before.generation);
     assert_eq!(after.revision, 5);
@@ -141,7 +153,7 @@ fn service_rename_rejects_conflicts_and_rolls_back_invalid_edits() {
             )
             .unwrap();
     }
-    let before = serde_json::to_value(store.host_snapshot(host).unwrap()).unwrap();
+    let before = serde_json::to_value(custom_snapshot(&mut store, host).unwrap()).unwrap();
     let edit = json!({"op":"edit_service", "expected_revision":3,
         "id":"gike", "new_id":"research", "backend":"127.0.0.1:8311"});
     for changes in [
@@ -165,7 +177,7 @@ fn service_rename_rejects_conflicts_and_rolls_back_invalid_edits() {
                 .is_err()
         );
         assert_eq!(
-            serde_json::to_value(store.host_snapshot(host).unwrap()).unwrap(),
+            serde_json::to_value(custom_snapshot(&mut store, host).unwrap()).unwrap(),
             before
         );
     }
@@ -179,7 +191,7 @@ fn service_rename_rejects_conflicts_and_rolls_back_invalid_edits() {
             .is_err()
     );
     assert_eq!(
-        serde_json::to_value(store.host_snapshot(host).unwrap()).unwrap(),
+        serde_json::to_value(custom_snapshot(&mut store, host).unwrap()).unwrap(),
         before
     );
     // Renaming and explicitly revoking a grant are one atomic owner action.
@@ -188,7 +200,7 @@ fn service_rename_rejects_conflicts_and_rolls_back_invalid_edits() {
     store
         .host_mutate(host, &owner, serde_json::from_value(revoke).unwrap())
         .unwrap();
-    let after = store.host_snapshot(host).unwrap();
+    let after = custom_snapshot(&mut store, host).unwrap();
     let renamed = after.services.iter().find(|s| s.id == "research").unwrap();
     assert!(renamed.allow.is_empty());
     assert_eq!(
@@ -216,7 +228,7 @@ fn service_rename_rejects_conflicts_and_rolls_back_invalid_edits() {
             .unwrap(),
         )
         .unwrap();
-    assert_eq!(store.host_snapshot(host).unwrap().revision, 5);
+    assert_eq!(custom_snapshot(&mut store, host).unwrap().revision, 5);
 }
 
 #[test]
@@ -236,7 +248,7 @@ fn removing_display_names_preserves_identity_pairings_grants_and_incarnations() 
     store
         .pairing_accept_host(host, &owner, &bootstrap, "phone")
         .unwrap();
-    let revision = store.host_snapshot(host).unwrap().revision;
+    let revision = custom_snapshot(&mut store, host).unwrap().revision;
     store
         .host_mutate(
             host,
@@ -251,7 +263,7 @@ fn removing_display_names_preserves_identity_pairings_grants_and_incarnations() 
             },
         )
         .unwrap();
-    let before = store.host_snapshot(host).unwrap();
+    let before = custom_snapshot(&mut store, host).unwrap();
     let pairing = store.pairing_session(host, peer).unwrap();
     let credential = std::fs::read(dir.path().join("host-owner.token")).unwrap();
     drop(store);
@@ -260,7 +272,7 @@ fn removing_display_names_preserves_identity_pairings_grants_and_incarnations() 
     db.execute_batch("ALTER TABLE host_services ADD COLUMN display_name TEXT NOT NULL DEFAULT 'Old website label'; PRAGMA user_version=10;").unwrap();
     drop(db);
     let (mut store, _) = host::owner_store(dir.path(), host).unwrap();
-    let after = store.host_snapshot(host).unwrap();
+    let after = custom_snapshot(&mut store, host).unwrap();
     assert_eq!(after.host, before.host);
     assert_eq!(after.generation, before.generation);
     assert_eq!(after.revision, before.revision + 1);
@@ -280,7 +292,10 @@ fn removing_display_names_preserves_identity_pairings_grants_and_incarnations() 
     );
     drop(store);
     let (mut store, _) = host::owner_store(dir.path(), host).unwrap();
-    assert_eq!(store.host_snapshot(host).unwrap().revision, after.revision);
+    assert_eq!(
+        custom_snapshot(&mut store, host).unwrap().revision,
+        after.revision
+    );
 }
 
 #[tokio::test]
@@ -317,18 +332,18 @@ async fn complete_filtered_catalog_metadata_and_type_changes_are_host_local() {
             operation(1, Some("My site".into()), Some(ServiceKind::Http)),
         )
         .unwrap();
-    let first = store.host_snapshot(id).unwrap().services[0]
+    let first = custom_snapshot(&mut store, id).unwrap().services[0]
         .incarnation
         .clone();
     store
         .host_mutate(id, &secret, operation(2, None, None))
         .unwrap();
     assert_eq!(
-        store.host_snapshot(id).unwrap().services[0].display_name,
+        custom_snapshot(&mut store, id).unwrap().services[0].display_name,
         "website"
     );
     assert_eq!(
-        store.host_snapshot(id).unwrap().services[0].incarnation,
+        custom_snapshot(&mut store, id).unwrap().services[0].incarnation,
         first
     );
     assert!(
@@ -336,12 +351,12 @@ async fn complete_filtered_catalog_metadata_and_type_changes_are_host_local() {
             .host_mutate(id, &secret, operation(3, Some("bad\nname".into()), None))
             .is_err()
     );
-    assert_eq!(store.host_snapshot(id).unwrap().revision, 3);
+    assert_eq!(custom_snapshot(&mut store, id).unwrap().revision, 3);
     store
         .host_mutate(id, &secret, operation(3, None, Some(ServiceKind::Tcp)))
         .unwrap();
     assert_ne!(
-        store.host_snapshot(id).unwrap().services[0].incarnation,
+        custom_snapshot(&mut store, id).unwrap().services[0].incarnation,
         first
     );
     drop(store);
@@ -383,18 +398,18 @@ fn service_incarnation_persists_on_edit_and_restart_but_not_recreation() {
         allow: vec![],
     };
     store.host_mutate(id, &secret, edit(0)).unwrap();
-    let first = store.host_snapshot(id).unwrap().services[0]
+    let first = custom_snapshot(&mut store, id).unwrap().services[0]
         .incarnation
         .clone();
     store.host_mutate(id, &secret, edit(1)).unwrap();
     assert_eq!(
-        store.host_snapshot(id).unwrap().services[0].incarnation,
+        custom_snapshot(&mut store, id).unwrap().services[0].incarnation,
         first
     );
     drop(store);
     let (mut store, secret) = host::owner_store(dir.path(), id).unwrap();
     assert_eq!(
-        store.host_snapshot(id).unwrap().services[0].incarnation,
+        custom_snapshot(&mut store, id).unwrap().services[0].incarnation,
         first
     );
     store
@@ -408,19 +423,19 @@ fn service_incarnation_persists_on_edit_and_restart_but_not_recreation() {
         )
         .unwrap();
     store.host_mutate(id, &secret, edit(3)).unwrap();
-    let new = store.host_snapshot(id).unwrap().services[0]
+    let new = custom_snapshot(&mut store, id).unwrap().services[0]
         .incarnation
         .clone();
     assert_ne!(first, new);
     // Simulate the real schema-6 table, preserving the authority and grants.
     drop(store);
     let db = rusqlite::Connection::open(dir.path().join("host.sqlite3")).unwrap();
-    db.execute_batch("DROP TABLE host_pairing_blocks; DROP TABLE host_legacy_pins; DROP TABLE host_pairing_offers; DROP TABLE host_pairings; ALTER TABLE host_services DROP COLUMN incarnation; ALTER TABLE host_services DROP COLUMN kind; PRAGMA user_version=6;")
+    db.execute_batch("DELETE FROM host_services WHERE id='shell'; DROP TABLE host_pairing_blocks; DROP TABLE host_legacy_pins; DROP TABLE host_pairing_offers; DROP TABLE host_pairings; ALTER TABLE host_services DROP COLUMN incarnation; ALTER TABLE host_services DROP COLUMN kind; PRAGMA user_version=6;")
         .unwrap();
     drop(db);
     let (mut store, _) = host::owner_store(dir.path(), id).unwrap();
-    let migrated = store.host_snapshot(id).unwrap();
-    assert_eq!(migrated.revision, 6);
+    let migrated = custom_snapshot(&mut store, id).unwrap();
+    assert_eq!(migrated.revision, 7);
     assert_eq!(migrated.host, id);
     assert!(wispnet_core::enrollment::valid_code(
         &migrated.services[0].incarnation
@@ -429,7 +444,7 @@ fn service_incarnation_persists_on_edit_and_restart_but_not_recreation() {
     drop(store);
     let (mut store, _) = host::owner_store(dir.path(), id).unwrap();
     assert_eq!(
-        store.host_snapshot(id).unwrap().services[0].incarnation,
+        custom_snapshot(&mut store, id).unwrap().services[0].incarnation,
         generation
     );
 }
@@ -466,7 +481,10 @@ fn host_identity_and_admin_cannot_cross_authority_boundaries() {
             },
         )
         .unwrap();
-    assert_eq!(store.host_snapshot(a).unwrap().clients[0].peer, client);
+    assert_eq!(
+        custom_snapshot(&mut store, a).unwrap().clients[0].peer,
+        client
+    );
     drop(store);
     host::initialize(dir.path(), a).unwrap();
     assert!(host::initialize(dir.path(), b).is_err());
@@ -518,7 +536,7 @@ fn wrong_backend_unapproved_grants_and_legacy_in_place_conversion_fail_closed() 
             )
             .is_err()
     );
-    assert_eq!(store.host_snapshot(host).unwrap().revision, 0);
+    assert_eq!(custom_snapshot(&mut store, host).unwrap().revision, 0);
     let legacy_dir = directory();
     let mut legacy = Store::open(&legacy_dir.path().join("registry.sqlite3")).unwrap();
     legacy.replace(0, &[client], &[]).unwrap();
@@ -558,7 +576,7 @@ fn schema_eight_adds_mutual_pairing_without_changing_identity_revision_or_grants
             },
         )
         .unwrap();
-    let before = serde_json::to_value(store.host_snapshot(host).unwrap()).unwrap();
+    let before = serde_json::to_value(custom_snapshot(&mut store, host).unwrap()).unwrap();
     drop(store);
     let db = rusqlite::Connection::open(dir.path().join("host.sqlite3")).unwrap();
     db.execute_batch(
@@ -568,7 +586,7 @@ fn schema_eight_adds_mutual_pairing_without_changing_identity_revision_or_grants
     drop(db);
     let (mut store, _) = host::owner_store(dir.path(), host).unwrap();
     assert_eq!(
-        serde_json::to_value(store.host_snapshot(host).unwrap()).unwrap(),
+        serde_json::to_value(custom_snapshot(&mut store, host).unwrap()).unwrap(),
         before
     );
     assert!(store.paired_hosts(host).unwrap().is_empty());

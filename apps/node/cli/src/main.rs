@@ -1,6 +1,7 @@
 use std::{env, path::PathBuf, process::ExitCode};
 mod manage;
 mod retry;
+mod shell;
 mod tui;
 use tracing_subscriber::prelude::*;
 use wispnet_agent::{diagnostics, identity::FileIdentityStore, tunnel};
@@ -26,6 +27,16 @@ Tunnel: wispnet tunnel --config /absolute/path/config.toml --peer PUBLIC_ID [--a
 Tunnel mode relays raw stdin/stdout. It is not a browser gateway. Independent hosts use local invitation approval. See docs/pairing-bootstrap.md and docs/per-host-control.md.";
 
 fn main() -> ExitCode {
+    let shell_args: Vec<_> = env::args_os().skip(1).collect();
+    if shell_args.first().is_some_and(|a| a == "shell") {
+        return match shell::run_args(&shell_args[1..]) {
+            Ok(code) => ExitCode::from(code.min(255) as u8),
+            Err(error) => {
+                eprintln!("wispnet: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -78,7 +89,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         ]);
     }
     if args.len() == 1 && (args[0] == "--help" || args[0] == "-h") {
-        println!("{USAGE}\n\n{}", manage::HELP);
+        println!("{USAGE}\n\n{}\n\n{}", manage::HELP, shell::HELP);
         return Ok(());
     }
     if args

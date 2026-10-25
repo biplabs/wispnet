@@ -1,0 +1,73 @@
+# Shell access
+
+Every desktop host includes a built-in service with the reserved ID `shell`.
+It runs the host account's default shell in a PTY over Wispnet's existing Iroh
+connection. SSH and a separate shell daemon are not required. Android accesses
+desktop shells; it does not offer a host shell from the application sandbox.
+
+The built-in service is always present and available to the local owner. New
+hosts grant no remote shell access. Pairing alone does not grant access: select
+Shell when approving a device or edit Shell's permitted devices afterwards.
+The host checks the current grant and exact service incarnation before starting
+a session, and revocation ends access and terminates that peer's sessions.
+`shell` cannot be used for an HTTP/TCP service, renamed, or removed.
+
+## Desktop and terminal
+
+Select Shell under a device in the desktop app. It opens the system terminal.
+In the TUI, selecting Shell temporarily hands the terminal to the remote shell;
+detaching or exiting returns to Wispnet.
+
+```sh
+wispnet shell desktop.home
+wispnet shell --host FULL_PUBLIC_ID --session main
+wispnet shell desktop.home --config /absolute/path/host.toml
+```
+
+Device names must resolve unambiguously among known devices. Public IDs pin the
+target independently of its readable name. The CLI uses the running node's
+private API and existing identity. Colours, interactive terminal applications,
+input bytes, resize events and process exit status pass through the session.
+The local terminal must support the remote application's terminal features.
+
+`Ctrl+]` detaches without ending the shell. `exit` ends the remote shell, and its
+status becomes the CLI exit status. `--session NAME` selects a separate named
+session. Sessions are separate for each requesting device. They survive client
+disconnects and network changes, but not a
+host-node restart. Reconnecting replays up to 64 KiB of recent terminal output;
+this is byte history, not a serialized terminal-screen snapshot.
+
+To inspect or change grants from the CLI:
+
+```sh
+wispnet shell-access
+wispnet shell-access --allow FULL_PAIRED_PUBLIC_ID,ANOTHER_PAIRED_PUBLIC_ID
+wispnet shell-access --allow none
+```
+
+Grant changes replace the allow list using the reviewed host revision. Only
+already approved devices can be selected. Shell access runs with the host
+account's permissions.
+
+## Android
+
+Tap Shell under a paired desktop host. The native terminal retains WispShell's
+Termux renderer, multiple tabs, Android keyboard composition handling, shortcut
+keys, keyboard resize smoothing, and resume/network reconnect handling.
+
+Input modes are Sync, Predictive, Line, and Auto. Predictive typing displays
+supported input locally and reconciles remote echoes; Line offers a local
+command composer. Auto selects Sync up to 80 ms, Predictive through 220 ms, and
+Line on slower paths. Local input modes fall back to Sync when the host reports
+no-echo or noncanonical input, including password prompts and raw terminal apps.
+
+## Implementation and attribution
+
+`crates/shell` contains the WispShell-derived, transport-independent protocol and
+host session engine. `crates/agent` applies service authorization to Iroh streams;
+`crates/client` provides bounded terminal sessions to the CLI and Android Binder
+bridge. The Android terminal is native; Flutter owns device navigation.
+
+Imported WispShell code retains its AGPL-3.0-only notices. The Android Termux
+terminal dependency retains its GPL notices. See `crates/shell/NOTICE.md` and the
+Android terminal's bundled third-party notices for the included license texts.

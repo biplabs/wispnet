@@ -867,7 +867,12 @@ async fn public_pairing_hello_is_bounded_strict_and_never_approves_a_client() {
     let snapshot = store.host_snapshot(key.endpoint_id()).unwrap();
     assert_eq!(snapshot.revision, 0);
     assert!(snapshot.clients.is_empty());
-    assert!(snapshot.services.is_empty());
+    assert!(
+        snapshot
+            .services
+            .iter()
+            .all(|s| s.kind == wispnet_core::host::ServiceKind::Shell)
+    );
     client.close().await;
     let counts = host.counts();
     host.shutdown().await;

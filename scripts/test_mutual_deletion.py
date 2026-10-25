@@ -80,7 +80,7 @@ class MutualDeletion(unittest.TestCase):
         state = a.request(op='status')
         self.assertEqual(state['host']['clients'],[])
         self.assertEqual(state['peer_pins'],[])
-        self.assertEqual(state['host']['services'][0]['allow'],[])
+        self.assertEqual(next(s['allow'] for s in state['host']['services'] if s['id'] == 'private'),[])
         self.assertNotIn('pending_deletions',state)
         # Local removal survives sender downtime; the recipient learns it only on contact.
         self.stop('a')
@@ -92,7 +92,7 @@ class MutualDeletion(unittest.TestCase):
             b.request(op='catalog',host=pa)
         self.assertEqual(b.request(op='status')['host']['clients'],[])
         self.assertEqual(b.request(op='status')['peer_pins'],[])
-        self.assertEqual(b.request(op='status')['host']['services'][0]['allow'],[])
+        self.assertEqual(next(s['allow'] for s in b.request(op='status')['host']['services'] if s['id'] == 'private'),[])
         with self.assertRaises(ValueError): b.request(op='catalog',host=pa)
         self.stop('b')
         b = self.start('b')

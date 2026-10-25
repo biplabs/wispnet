@@ -1,0 +1,15 @@
+Wispnet Android shell terminal
+
+WispTermuxTerminalView.kt is adapted from Biplabs WispShell:
+https://github.com/biplabs/wisp_shell
+Source revision: 70283428404a3fa659f2c24343ff6fbb4858dda1
+The imported source retains GNU Affero General Public License version 3.
+A copy is included in WispShell-AGPL-3.0.txt. WispShell also offers commercial licensing.
+
+Terminal rendering uses Termux terminal-view/terminal-emulator 0.118.0:
+https://github.com/termux/termux-app/tree/v0.118.0
+Termux is licensed under GNU General Public License version 3.
+The JNI helper is rebuilt from pinned v0.118.0 source for 16 KiB Android pages;
+its cwd JNI-string release was corrected in this adaptation.
+A copy of its license is included in Termux-GPL-3.0.txt.
+Third-party terms are independent of Wispnet's Apache-2.0 project license.

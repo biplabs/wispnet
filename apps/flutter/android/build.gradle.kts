@@ -2,6 +2,8 @@ allprojects {
     repositories {
         google()
         mavenCentral()
+        // WispShell uses the upstream Termux terminal renderer.
+        maven("https://jitpack.io")
     }
 }
 

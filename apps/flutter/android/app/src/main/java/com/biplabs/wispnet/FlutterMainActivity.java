@@ -49,6 +49,16 @@ public final class FlutterMainActivity extends FlutterActivity {
     return;
    }
    if ("scanQr".equals(call.method) || "importQr".equals(call.method)) { startQr(call.method, result); return; }
+   if ("openShell".equals(call.method)) {
+    try {
+     String host = arguments.getString("host"), service = arguments.getString("service"), incarnation = arguments.getString("incarnation");
+     if (!host.matches("[0-9a-f]{64}") || !incarnation.matches("[0-9a-f]{64}") || !service.matches("[a-z0-9][a-z0-9._-]{0,63}")) throw new Exception("Invalid shell service");
+     startActivity(new Intent(this, com.biplabs.wispnet.shell.ShellActivity.class)
+      .putExtra("target", arguments.toString()).putExtra("session", arguments.optString("session", "main")));
+     result.success("{}");
+    } catch (Exception failure) { result.error("shell_failed", failure.getMessage(), null); }
+    return;
+   }
    if ("setAccess".equals(call.method) && arguments.optBoolean("enabled")) {
     try { startForegroundService(new Intent(this, AccessService.class)); }
     catch (Exception failure) { result.error("access_failed", failure.getMessage(), null); return; }

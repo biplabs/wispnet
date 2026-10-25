@@ -231,13 +231,13 @@ class TerminalManagement(unittest.TestCase):
         term.send(b' \x1b')
         self.assertEqual(bapi.request(op='status')['host']['clients'], [])
         self.assertTrue(all(not s['allow'] for s in bapi.request(op='status')['host']['services']))
-        term.send(b'\r\r\x1b[B \x1b[B\r')
+        term.send(b'\r\r\x1b[B \x1b[B\x1b[B\r')  # Skip the unchecked builtin Shell grant.
         term.expect('Approve pairing and service access')
         term.send(b'\r')
         approved = self.changed(bapi, lambda s: len(s['host']['clients']) == 1)
         self.assertEqual(approved['host']['revision'], 3)
         self.assertEqual({s['id']:s['allow'] for s in approved['host']['services']},
-                         {'private':[], 'scan-only':[pa]})
+                         {'private':[], 'scan-only':[pa], 'shell':[]})
         term.expect('1 devices')
 
         # The real form creates a loopback service with its explicitly selected device.
@@ -248,9 +248,9 @@ class TerminalManagement(unittest.TestCase):
         term.expect('Save service and grants')
         self.assertIn(pa, term.text)
         term.send(b'\r')
-        state = self.changed(bapi, lambda s: len(s['host']['services']) == 3)
-        self.assertEqual(state['host']['services'][0]['allow'], [pa])
-        term.expect('3 services')
+        state = self.changed(bapi, lambda s: any(service['id'] == 'dashboard' for service in s['host']['services']))
+        self.assertEqual(next(s['allow'] for s in state['host']['services'] if s['id'] == 'dashboard'), [pa])
+        term.expect('4 services')
         term.send(b'\x1b[B\r\x1b[B\r')
         term.expect('Browser service')
         self.assertTrue(bapi.request(op='status')['access_enabled'])
@@ -265,12 +265,12 @@ class TerminalManagement(unittest.TestCase):
         term.send(b'\t\t\t \t\r')
         term.expect('Save service and grants')
         term.send(b'\r')
-        self.changed(bapi, lambda s: s['host']['services'][0]['allow'] == [])
+        self.changed(bapi, lambda s: next(service['allow'] for service in s['host']['services'] if service['id'] == 'dashboard') == [])
         term.expect('0 permitted devices')
 
         # Remove a specific approved client, using the same confirmation as the desktop.
         term.send('1')
-        term.send(b'\x1b[B' * 4)  # This device and its three local services precede remotes.
+        term.send(b'\x1b[B' * 5)  # This device, builtin Shell and three ordinary services precede remotes.
         term.send(b'\r\x1b[B\r')
         term.expect('Remove this machine')
         self.assertIn(pa, term.text)
@@ -302,7 +302,7 @@ class TerminalManagement(unittest.TestCase):
         term.send('1')
         term.expect('fixture-phone')  # Wait for the refreshed pin, then select it.
         term.send('1')
-        term.send(b'\x1b[B' * 4)  # This device and its three local services precede remotes.
+        term.send(b'\x1b[B' * 5)  # This device, builtin Shell and three ordinary services precede remotes.
         term.send(b'\r\x1b[B\r')
         term.expect('Remove this machine')
         term.send(b'\r')
@@ -368,7 +368,7 @@ class TerminalManagement(unittest.TestCase):
         term = self.terminal(a)
         # No selection or catalog-browsing action: startup fetches remote rows.
         term.expect('always-visible · http')
-        term.expect('No services')  # This client has no local services.
+        term.expect('shell · shell')  # Builtin Shell is always present locally.
         self.assertNotIn('Remote services · Esc', term.text)
         bapi.request(op='mutate', operation={'op':'remove','expected_revision':2,'id':'always-visible'})
         # Periodic refresh removes stale service rows without input.
@@ -376,7 +376,8 @@ class TerminalManagement(unittest.TestCase):
         while 'always-visible · http' in term.text:
             term.read(.1)
             self.assertLess(time.monotonic(), deadline, 'Removed remote service stayed visible')
-        self.assertGreaterEqual(term.text.count('No services'), 2)
+        self.assertIn('shell · shell', term.text)
+        self.assertIn('No services', term.text)  # The remote grant was removed.
         term.close()
 
     def test_stale_revision_is_rejected_without_retry_and_mouse_can_navigate(self):
@@ -393,7 +394,10 @@ class TerminalManagement(unittest.TestCase):
         api.request(op='mutate', operation={'op':'approve','peer':peer,'name':'Concurrent client','expected_revision':0})
         term.send(b'\r')
         term.expect('Operation not completed')
-        self.assertEqual(api.request(op='status')['host']['services'], [])
+        services = api.request(op='status')['host']['services']
+        self.assertEqual([service['id'] for service in services], ['shell'])
+        self.assertEqual(services[0]['kind'], 'shell')
+        self.assertEqual(services[0]['allow'], [])
         self.assertEqual(api.request(op='status')['host']['revision'], 1)
         term.close()
 

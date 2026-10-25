@@ -191,6 +191,11 @@ impl State {
                 self.client.command(&value).await
             }
             "public_status"
+            | "shell_open"
+            | "shell_input"
+            | "shell_resize"
+            | "shell_poll"
+            | "shell_close"
             | "configure_public"
             | "configure_public_gateway"
             | "gateway_settings"

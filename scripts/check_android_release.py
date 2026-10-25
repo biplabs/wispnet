@@ -71,7 +71,8 @@ def check_manifest(text):
 def check_libraries(libraries,abi):
     native={f'base/lib/{abi}/libwispnet_android.so'}
     flutter=native|{f'base/lib/{abi}/libflutter.so',f'base/lib/{abi}/libapp.so'}
-    if set(libraries) not in (native,flutter) or len(libraries)!=len(set(libraries)):
+    terminal=flutter|{f'base/lib/{abi}/libtermux.so',f'base/lib/{abi}/libandroidx.graphics.path.so'}
+    if set(libraries) not in (native,flutter,terminal) or len(libraries)!=len(set(libraries)):
         raise ValueError('Unexpected native bundle contents')
 
 

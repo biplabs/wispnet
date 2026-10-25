@@ -10,6 +10,8 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -68,6 +70,38 @@ def readable_device_id(value):
         if len(result) == 64:
             break
     return result.rstrip('._-') or 'device'
+
+
+def launch_terminal(command, state):
+    """Launch the native terminal with a fixed argv, keeping protocol bytes out of pipes."""
+    if sys.platform == 'darwin':
+        fd, name = tempfile.mkstemp(prefix='shell-', suffix='.command', dir=state)
+        try:
+            with os.fdopen(fd, 'w') as output:
+                output.write('#!/bin/sh\nrm -f -- "$0"\nexec ' + shlex.join(command) + '\n')
+            os.chmod(name, 0o700)
+            subprocess.run(['/usr/bin/open', '-a', 'Terminal', name], check=True, timeout=15,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except BaseException:
+            Path(name).unlink(missing_ok=True)
+            raise
+        return
+    for terminal, options in (
+        ('x-terminal-emulator', ['-e']),
+        ('gnome-terminal', ['--']),
+        ('konsole', ['-e']),
+        ('xfce4-terminal', ['-x']),
+        ('kitty', []),
+        ('alacritty', ['-e']),
+        ('xterm', ['-e']),
+    ):
+        executable = shutil.which(terminal)
+        if executable:
+            subprocess.Popen([executable, *options, *command], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True, close_fds=True)
+            return
+    raise ValueError('Install a terminal application, or connect with wispnet shell from a terminal')
 
 
 class Bridge:
@@ -245,6 +279,32 @@ class Bridge:
                 self.records[peer] = record
         return {}
 
+    def open_shell(self, args):
+        host, service, incarnation = (args.get(k) for k in ('host', 'service', 'incarnation'))
+        session = args.get('session', 'main')
+        if (not isinstance(host, str) or not re.fullmatch(r'[0-9a-f]{64}', host)
+            or not isinstance(incarnation, str) or not re.fullmatch(r'[0-9a-f]{64}', incarnation)
+            or not isinstance(service, str) or not re.fullmatch(r'[a-z0-9][a-z0-9._-]{0,63}', service)
+            or not isinstance(session, str) or not re.fullmatch(r'[a-z0-9][a-z0-9._-]{0,63}', session)):
+            raise ValueError('Invalid shell session')
+        self.api.request(op='enable')
+        status = self.api.request(op='status')
+        catalog = status['host'] if status['host']['host'] == host else self.api.request(op='catalog', host=host)
+        if not any(s['id'] == service and s.get('kind') == 'shell' and s.get('incarnation') == incarnation
+                   for s in catalog['services']):
+            raise ValueError('Shell service unavailable or no longer permitted; refresh this machine')
+        installed = Path.home() / '.local/libexec/wispnet-node/wispnet'
+        source = ROOT / 'target/debug/wispnet'
+        executable = str(installed) if installed.is_file() else shutil.which('wispnet')
+        if not executable and source.is_file():
+            executable = str(source)
+        if not executable:
+            raise ValueError('Wispnet CLI unavailable; install the current Wispnet node')
+        launch_terminal([executable, 'shell', '--host', host, '--service', service,
+                         '--incarnation', incarnation, '--session', session,
+                         '--config', str(self.config.resolve())], self.api.state)
+        return {}
+
     def dispatch(self, method, args):
         if method == 'startDesktop':
             self.lifecycle(True)
@@ -283,6 +343,8 @@ class Bridge:
                                       host_name=self.preferences.get('device_ids', {}).get(args['host']))
             # Both platforms launch the stable service address directly.
             return {'url': browser_url(result['url'])}
+        if method == 'openShell':
+            return self.open_shell(args)
         if method == 'launchPublic':
             status = self.api.request(op='status')
             publication = next((p for p in status.get('public_access', {}).get('services', [])
@@ -317,7 +379,7 @@ class Bridge:
             return {}
         if method == 'saveOrder':
             group, ids = args['group'], args['ids']
-            if not (group == 'machines' or re.fullmatch(r'services/[0-9a-f]{64}', group)) or not isinstance(ids, list) or len(ids) > 128 or not all(isinstance(i, str) for i in ids):
+            if not (group == 'machines' or re.fullmatch(r'services/[0-9a-f]{64}', group)) or not isinstance(ids, list) or len(ids) > (128 if group == 'machines' else 129) or not all(isinstance(i, str) for i in ids):
                 raise ValueError('Invalid card order')
             with self.lock:
                 self.preferences['order'][group] = ids

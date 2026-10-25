@@ -11,6 +11,12 @@ This license declaration does not relicense those components:
   see vendor/iroh/LICENSE-BSD3 and existing notices in vendor/iroh.
 - The bundled Roboto font retains its supplied license;
   see apps/flutter/assets/fonts/Roboto_LICENSE.txt.
+- The shell engine and native Android terminal include code adapted from
+  BIP Labs' WispShell, retaining its AGPL-3.0-only community license. See
+  crates/shell/NOTICE.md, crates/shell/LICENSE and the Android assets/licenses.
+- The Android terminal renderer and its rebuilt JNI helper derive from Termux
+  v0.118.0 and retain their GPL-3.0 notices. See the Android terminal notices
+  and apps/flutter/android/app/src/main/cpp for the included native source.
 - Flutter and its dependencies retain the notices generated in the desktop
   bundle's data/flutter_assets/NOTICES.Z and the Android application assets.
 - Other Rust, Dart and system dependencies retain their upstream licenses.

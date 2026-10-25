@@ -209,8 +209,10 @@ class MachineCard extends StatelessWidget {
                     children: [
                       Row(
                         children: [
-                          const Icon(
-                            Icons.north_east,
+                          Icon(
+                            service['kind'] == 'shell'
+                                ? Icons.terminal
+                                : Icons.north_east,
                             size: 16,
                             color: WispColors.cyan,
                           ),

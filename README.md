@@ -20,6 +20,7 @@ Wispnet brings your self-hosted services into one directory and makes them acces
 - `apps/relay`: separate disposable packet relay server.
 - `apps/flutter/android`: Android runner, native services, Gradle wrapper and Rust JNI adapter in `native/`.
 - `crates/core`, `crates/agent`, `crates/registry`, `crates/client`: shared protocol, peer transport, host-local authority and protected browser client/gateway.
+- `crates/shell`: WispShell-derived shell protocol, PTY sessions and reconnect history.
 - `deploy/node`, `deploy/relay`, `config/node`: deployment and example configuration.
 - `experiments/`: browser and Sites compatibility investigations.
 
@@ -118,6 +119,11 @@ Catalog freshness and any explicitly expiring host-issued grant are separate con
 This removes a **mesh-wide registry/authorization single point of failure**, not every dependency. Each service still depends on its own hosting computer and backend; Wispnet does not replicate application execution or wake sleeping computers. v1 has one relay, so relay-dependent connections and some new connections can be interrupted by its outage. Multi-relay resilience is future work, not a v1 availability guarantee.
 
 ## Terminal management
+
+Every desktop host includes the reserved built-in `shell` service. Grant access
+to selected paired devices, then open Shell from desktop/Android or run
+`wispnet shell DEVICE_ID`. See [shell access](docs/shell.md) for terminal modes,
+session persistence and CLI grant management.
 
 Run `wispnet` for interactive QR pairing, pending approvals, machine removal,
 local service grants and owner operations. Use `ssh -t desktop.home wispnet`

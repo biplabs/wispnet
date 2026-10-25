@@ -256,6 +256,7 @@ enum Action {
     Machine(String),
     Service(Value),
     Remote(String, Value),
+    Shell(String, Value),
     PairInput,
     Form(Form),
     Confirm {
@@ -314,6 +315,9 @@ impl Field {
 }
 #[derive(Clone)]
 enum FormKind {
+    Shell {
+        revision: u64,
+    },
     Approval {
         invitation: String,
         peer: String,
@@ -366,6 +370,7 @@ struct CatalogReply {
     result: Result<Value, String>,
 }
 struct App {
+    shell: Option<Value>,
     api: Api,
     page: Page,
     menu_focus: bool,
@@ -433,6 +438,7 @@ impl App {
         let (tx, rx) = worker(api.clone());
         let (catalog_tx, catalog_rx) = mpsc::channel();
         Self {
+            shell: None,
             api,
             page: Page::Machines,
             menu_focus: false,
@@ -1043,6 +1049,31 @@ impl App {
             selected: 0,
         }
     }
+    fn shell_form(&self, service: &Value) -> Form {
+        let fields = self
+            .clients()
+            .iter()
+            .map(|client| {
+                Field::check(
+                    &format!(
+                        "Allow {} · {}",
+                        clean(text(client, "name")),
+                        short(text(client, "peer"))
+                    ),
+                    client["peer"].clone(),
+                    array(&service["allow"]).contains(&client["peer"]),
+                )
+            })
+            .collect();
+        Form {
+            title: "Shell · permitted devices".into(),
+            kind: FormKind::Shell {
+                revision: self.revision(),
+            },
+            fields,
+            selected: 0,
+        }
+    }
     fn choice(&mut self, title: impl Into<String>, detail: Vec<String>, entries: Vec<Entry>) {
         self.modal = Some(Modal::Choice {
             title: title.into(),
@@ -1068,6 +1099,12 @@ impl App {
     }
     fn action(&mut self, action: Action) {
         match action {
+            Action::Shell(host, service) => {
+                self.modal = None;
+                self.shell = Some(
+                    json!({"host":host,"service":service["id"],"incarnation":service["incarnation"],"session":"main"}),
+                );
+            }
             Action::Section => {}
             Action::Nav(page) => self.navigate(page),
             Action::Code | Action::Qr => {
@@ -1187,6 +1224,10 @@ impl App {
                 self.choice("Manage machine", detail, choices);
             }
             Action::Service(service) => {
+                if service["kind"] == "shell" {
+                    self.choice("Built-in Shell",vec!["Shell is included with every desktop host. Choose which paired devices may open a terminal.".into()],vec![entry("open","Open shell",Action::Shell(text(&self.host(),"host").into(),service.clone())),entry("grants","Edit permitted devices",Action::Form(self.shell_form(&service)))]);
+                    return;
+                }
                 let mut details = vec![
                     format!("Service: {}", clean(text(&service, "id"))),
                     format!("ID: {}", text(&service, "id")),
@@ -1204,6 +1245,13 @@ impl App {
                     "Edit service and permitted devices",
                     Action::Form(self.service_form(Some(service.clone()))),
                 )];
+                if service["kind"] == "shell" {
+                    choices.push(entry(
+                        "shell",
+                        "Open shell",
+                        Action::Shell(text(&self.host(), "host").into(), service.clone()),
+                    ));
+                }
                 if service["kind"] == "http" {
                     choices.push(entry(
                         "open",
@@ -1238,6 +1286,10 @@ impl App {
                     };
             }
             Action::Remote(host, service) => {
+                if service["kind"] == "shell" {
+                    self.action(Action::Shell(host, service));
+                    return;
+                }
                 self.choice(
                     "Service access",
                     vec![format!("Service: {}", text(&service, "id"))],
@@ -1437,13 +1489,34 @@ impl App {
                 }
                 self.confirmation("Approve pairing and service access".into(), detail, self.mutate(json!({"op":"approve_invitation","invitation":invitation,"expected_revision":revision,"services":services})));
             }
+            FormKind::Shell { revision } => {
+                let allow = form
+                    .fields
+                    .iter()
+                    .filter(|f| matches!(f.kind, FieldKind::Check(true)))
+                    .map(|f| {
+                        serde_json::from_str::<Value>(&f.value)
+                            .map_err(|_| "Invalid selected device")
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.confirmation("Save Shell access".into(),vec![format!("{} permitted devices",allow.len()),"Only these devices will be allowed to open a shell. Existing remote sessions lose access when their grant is removed.".into()],self.mutate(json!({"op":"shell","allow":allow,"expected_revision":revision})));
+            }
             FormKind::Service { existing, revision } => {
                 let name = form.fields[0].value.trim();
+                if name == "shell" {
+                    return Err("shell is reserved for the built-in Shell service".into());
+                }
                 if !wispnet_core::protocol::valid_service_id(name) {
                     return Err("Enter a valid service ID".into());
                 }
+                let FieldKind::Choice(ref choices, index) = form.fields[2].kind else {
+                    return Err("Missing protocol".into());
+                };
+                let shell = choices[index] == "shell";
                 let port = form.fields[1].value.trim();
-                let backend = if port.chars().all(|c| c.is_ascii_digit()) {
+                let backend = if shell {
+                    "127.0.0.1:0".to_owned()
+                } else if port.chars().all(|c| c.is_ascii_digit()) {
                     format!("127.0.0.1:{port}")
                 } else if port.starts_with(':') {
                     format!("127.0.0.1{port}")
@@ -1453,14 +1526,11 @@ impl App {
                 let address: std::net::SocketAddr = backend
                     .parse()
                     .map_err(|_| "Enter a loopback address or local port (for example 8201)")?;
-                if !address.ip().is_loopback() || address.port() == 0 {
+                if !address.ip().is_loopback() || (!shell && address.port() == 0) {
                     return Err(
                         "Service backend must be a loopback address with a nonzero port".into(),
                     );
                 }
-                let FieldKind::Choice(ref choices, index) = form.fields[2].kind else {
-                    return Err("Missing protocol".into());
-                };
                 let id = name.to_owned();
                 if existing.as_ref().is_some_and(|old| old != &id) {
                     return Err(
@@ -2591,6 +2661,17 @@ pub fn run(config: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let _restore = Restore;
     execute!(io::stdout(), EnableMouseCapture, EnableBracketedPaste)?;
     while !stop.load(Ordering::Relaxed) {
+        if let Some(request) = app.shell.take() {
+            execute!(io::stdout(), DisableMouseCapture, DisableBracketedPaste)?;
+            ratatui::restore();
+            let result = crate::shell::run_selected(&app.api, request);
+            terminal = ratatui::init();
+            execute!(io::stdout(), EnableMouseCapture, EnableBracketedPaste)?;
+            app.message = match result {
+                Ok(code) => format!("Shell detached or exited ({code})"),
+                Err(error) => error,
+            };
+        }
         app.receive();
         // A QR needs explicit black-on-white contrast even with NO_COLOR set.
         crossterm::style::force_color_output(

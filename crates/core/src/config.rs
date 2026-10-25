@@ -216,9 +216,12 @@ pub fn validate_services(services: &[ServiceConfig]) -> Result<(), ConfigError> 
     }
     let mut ids = std::collections::HashSet::new();
     for service in services {
-        if !crate::protocol::valid_service_id(&service.id) || !ids.insert(&service.id) {
+        if service.id == "shell"
+            || !crate::protocol::valid_service_id(&service.id)
+            || !ids.insert(&service.id)
+        {
             return Err(ConfigError(
-                "service IDs must be unique lowercase identifiers of 1-64 bytes",
+                "service IDs must be unique lowercase identifiers of 1-64 bytes; shell is reserved",
             ));
         }
         if !service.backend.ip().is_loopback() || service.backend.port() == 0 {

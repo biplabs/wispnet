@@ -237,6 +237,17 @@ class _WispHomeState extends State<WispHome>
     setState(() => busy = true);
     notice('Opening ${service['id']}…');
     try {
+      if (service['kind'] == 'shell') {
+        await backend.invoke('openShell', {
+          'host': machine.id,
+          'host_name': machine.name,
+          'service': service['id'],
+          'incarnation': service['incarnation'],
+          'session': 'main',
+        });
+        if (mounted) ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        return;
+      }
       final result = await backend.invoke('open', {
         'host': machine.id,
         'service': service['id'],

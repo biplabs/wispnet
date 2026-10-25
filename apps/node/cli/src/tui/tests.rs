@@ -1,5 +1,42 @@
 use super::*;
 use ratatui::{Terminal, backend::TestBackend};
+#[test]
+fn built_in_shell_access_has_explicit_grants_and_reserved_identity() {
+    let (mut app, rx, _root) = fixture();
+    let service = json!({"id":"shell","kind":"shell","incarnation":"c".repeat(64),"allow":[]});
+    let form = app.shell_form(&service);
+    assert!(matches!(form.fields[0].kind, FieldKind::Check(false)));
+    app.save_form(form).unwrap();
+    app.key(KeyCode::Enter.into());
+    let Work {
+        task: Task::Request(request),
+        ..
+    } = rx.try_recv().unwrap()
+    else {
+        panic!("Expected shell grant mutation")
+    };
+    assert_eq!(
+        request["operation"],
+        json!({"op":"shell","allow":[],"expected_revision":7})
+    );
+    app.action(Action::Service(service));
+    let Some(Modal::Choice { entries, .. }) = &app.modal else {
+        panic!("Expected builtin actions")
+    };
+    assert!(!entries.iter().any(|e| e.id == "remove"));
+    let mut form = app.service_form(None);
+    form.fields[0].value = "shell".into();
+    form.fields[1].value = "8201".into();
+    assert!(app.save_form(form).unwrap_err().contains("reserved"));
+}
+#[test]
+fn remote_shell_hands_the_terminal_to_the_shell_client() {
+    let (mut app, rx, _root) = fixture();
+    let service = json!({"id":"shell","kind":"shell","incarnation":"c".repeat(64)});
+    app.action(Action::Remote("b".repeat(64), service.clone()));
+    assert_eq!(app.shell,json!({"host":"b".repeat(64),"service":"shell","incarnation":service["incarnation"],"session":"main"}).into());
+    assert!(rx.try_recv().is_err());
+}
 fn fixture() -> (App, mpsc::Receiver<Work>, tempfile::TempDir) {
     let root = tempfile::tempdir().unwrap();
     let api = Api {

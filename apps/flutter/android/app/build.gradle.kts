@@ -1,4 +1,9 @@
-plugins { id("com.android.application"); id("dev.flutter.flutter-gradle-plugin") }
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
+    id("dev.flutter.flutter-gradle-plugin")
+}
 val releaseVersion = Regex("""VERSION = "([0-9]+\.[0-9]+\.[0-9]+)"""").find(rootProject.file("../../node/desktop/wispnet_desktop/version.py").readText())!!.groupValues[1]
 val sourceIdentity = providers.exec { workingDir(rootProject.file("../../..")); commandLine("python3", "scripts/build_identity.py") }.standardOutput.asText.get().trim()
 val nativeAbis = providers.gradleProperty("target-platform").orElse("android-arm64").get().split(",").map {
@@ -12,14 +17,24 @@ val stageWispnetNative = tasks.register<Sync>("stageWispnetNative") {
         nativeAbis.forEach { require(nativeRoot.resolve("$it/libwispnet_android.so").isFile) { "Build the Rust library with scripts/build_android.sh first ($it)" } }
     }
 }
+// Keep upstream Java code while rebuilding its JNI helper for 16 KiB pages.
+val termuxEmulatorArtifact by configurations.creating
+val termuxEmulatorJava = tasks.register<Zip>("termuxEmulatorJava") {
+    from({ zipTree(termuxEmulatorArtifact.singleFile) })
+    exclude("jni/**")
+    archiveFileName.set("terminal-emulator-java-0.118.0.aar")
+    destinationDirectory.set(layout.buildDirectory.dir("termux-java"))
+}
 android {
     namespace = "com.biplabs.wispnet"
     compileSdk = 36
     ndkVersion = flutter.ndkVersion
+    buildFeatures { compose = true }
+    externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" } }
     sourceSets.getByName("main") {
         jniLibs.setSrcDirs(listOf(layout.buildDirectory.dir("wispnet-jni").get().asFile))
     }
-    defaultConfig { applicationId = "app.wispnet.android"; minSdk = 34; targetSdk = 36; versionCode = flutter.versionCode; versionName = flutter.versionName; ndk { abiFilters += nativeAbis } }
+    defaultConfig { applicationId = "app.wispnet.android"; minSdk = 34; targetSdk = 36; versionCode = flutter.versionCode; versionName = flutter.versionName; ndk { abiFilters.clear(); abiFilters += nativeAbis } }
     val uploadEnvironment = listOf("WISPNET_UPLOAD_KEYSTORE", "WISPNET_UPLOAD_STORE_PASSWORD", "WISPNET_UPLOAD_KEY_ALIAS", "WISPNET_UPLOAD_KEY_PASSWORD")
     val supplied = uploadEnvironment.map { providers.environmentVariable(it).orNull }
     require(supplied.all { it == null } || supplied.all { !it.isNullOrBlank() }) { "Supply all upload signing environment variables, or none for an unsigned build" }
@@ -39,12 +54,35 @@ android {
         }
         create("peercheck") { initWith(getByName("debug")); applicationIdSuffix = ".peercheck"; signingConfig = signingConfigs.getByName("debug") }
     }
-    packaging { jniLibs { useLegacyPackaging = false } }
+    packaging { jniLibs {
+        useLegacyPackaging = false
+        // Flutter and transitive AARs may otherwise add extra ABI payloads.
+        (setOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64") - nativeAbis.toSet()).forEach {
+            excludes += "**/$it/**"
+        }
+    } }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
 }
 
+kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) } }
+
 // ZXing uses AndroidX at runtime but omits it from the published POM.
-dependencies { implementation("androidx.core:core:1.17.0"); implementation("com.journeyapps:zxing-android-embedded:4.3.0"); implementation("com.google.zxing:core:3.4.1") }
+dependencies {
+    implementation("androidx.core:core:1.17.0")
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+    implementation("com.google.zxing:core:3.4.1")
+    implementation(platform("androidx.compose:compose-bom:2024.09.03"))
+    implementation("androidx.activity:activity-compose:1.9.2")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.ui:ui")
+    // The older transitive 1.0.1 has a 4 KiB RELRO boundary despite 16 KiB LOADs.
+    implementation("androidx.graphics:graphics-path:1.1.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.6")
+    implementation("com.termux.termux-app:terminal-view:0.118.0") { isTransitive = false }
+    termuxEmulatorArtifact("com.termux.termux-app:terminal-emulator:0.118.0") { isTransitive = false }
+    implementation(files(termuxEmulatorJava.flatMap { it.archiveFile }))
+    testImplementation("junit:junit:4.13.2")
+}
 
 flutter { source = "../.." }
 

@@ -38,6 +38,11 @@ pub enum Mutation {
         expected_revision: u64,
         invitation: String,
     },
+    /// Built-in shell is permanent; this operation only changes remote grants.
+    Shell {
+        expected_revision: u64,
+        allow: Vec<EndpointId>,
+    },
     Service {
         expected_revision: u64,
         id: String,
@@ -81,6 +86,9 @@ impl Mutation {
             | Self::RejectInvitation {
                 expected_revision, ..
             }
+            | Self::Shell {
+                expected_revision, ..
+            }
             | Self::Service {
                 expected_revision, ..
             }
@@ -116,6 +124,94 @@ pub struct LocalService {
     pub backend: std::net::SocketAddr,
     pub allow: Vec<EndpointId>,
 }
+/// Shell has no loopback listener. The reserved address is durable metadata
+/// only; ordinary TCP/HTTP services still require a nonzero backend port.
+fn validate_local_service(
+    id: &str,
+    backend: std::net::SocketAddr,
+    allow: &[EndpointId],
+    kind: ServiceKind,
+) -> Result<(), ControlError> {
+    let backend = if kind == ServiceKind::Shell {
+        if backend != std::net::SocketAddr::from(([127, 0, 0, 1], 0)) {
+            return Err(ControlError::Invalid);
+        }
+        #[cfg(target_os = "android")]
+        return Err(ControlError::Invalid);
+        #[cfg(not(target_os = "android"))]
+        std::net::SocketAddr::from(([127, 0, 0, 1], 1))
+    } else {
+        backend
+    };
+    wispnet_core::config::validate_services(&[ServiceConfig {
+        id: if kind == ServiceKind::Shell {
+            "builtin-shell".into()
+        } else {
+            id.into()
+        },
+        backend,
+        allow: allow.to_vec(),
+    }])
+    .map_err(|_| ControlError::Invalid)
+}
+/// Install the singleton only on desktop hosts. Preserve an old user-defined
+/// service named shell, including its incarnation and grants, under a free ID.
+pub(crate) fn ensure_builtin_shell(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<bool> {
+    #[cfg(target_os = "android")]
+    {
+        let _ = tx;
+        Ok(false)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let initialized: bool =
+            tx.query_row("SELECT EXISTS(SELECT 1 FROM host_authority)", [], |r| {
+                r.get(0)
+            })?;
+        if !initialized {
+            return Ok(false);
+        }
+        let old = tx
+            .query_row(
+                "SELECT kind,backend FROM host_services WHERE id='shell'",
+                [],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        if old
+            .as_ref()
+            .is_some_and(|(kind, backend)| kind == "shell" && backend == "127.0.0.1:0")
+        {
+            return Ok(false);
+        }
+        if old.is_some() {
+            let mut suffix = 0u32;
+            let renamed = loop {
+                let candidate = if suffix == 0 {
+                    "shell-legacy".to_owned()
+                } else {
+                    format!("shell-legacy-{suffix}")
+                };
+                if !tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM host_services WHERE id=?1)",
+                    [&candidate],
+                    |r| r.get::<_, bool>(0),
+                )? {
+                    break candidate;
+                }
+                suffix += 1;
+            };
+            tx.execute("INSERT INTO host_services(id,backend,incarnation,kind) SELECT ?1,backend,incarnation,kind FROM host_services WHERE id='shell'",[&renamed])?;
+            tx.execute(
+                "UPDATE host_grants SET service=?1 WHERE service='shell'",
+                [&renamed],
+            )?;
+            tx.execute("DELETE FROM host_services WHERE id='shell'", [])?;
+        }
+        tx.execute("INSERT INTO host_services(id,backend,incarnation,kind) VALUES('shell','127.0.0.1:0',lower(hex(randomblob(32))),'shell')",[])?;
+        Ok(true)
+    }
+}
 impl Store {
     pub fn host_initialize(&mut self, host: EndpointId, secret: &str) -> Result<(), ControlError> {
         let tx = self
@@ -136,6 +232,7 @@ impl Store {
             "INSERT INTO host_authority VALUES(1,?1,?2,?3)",
             params![host.to_string(), &*control::token(), control::hash(secret)],
         )?;
+        ensure_builtin_shell(&tx)?;
         tx.commit()?;
         Ok(())
     }
@@ -199,6 +296,7 @@ impl Store {
                 let kind = match kind.as_str() {
                     "http" => ServiceKind::Http,
                     "tcp" => ServiceKind::Tcp,
+                    "shell" => ServiceKind::Shell,
                     _ => return Err(ControlError::Storage),
                 };
                 if !wispnet_core::enrollment::valid_code(&incarnation) {
@@ -214,12 +312,10 @@ impl Store {
                     return Err(ControlError::Storage);
                 }
                 let backend = backend.parse().map_err(|_| ControlError::Storage)?;
-                let service = ServiceConfig {
-                    id: id.clone(),
-                    backend,
-                    allow: allow.clone(),
-                };
-                wispnet_core::config::validate_services(&[service])
+                if (kind == ServiceKind::Shell) != (id == "shell") {
+                    return Err(ControlError::Storage);
+                }
+                validate_local_service(&id, backend, &allow, kind)
                     .map_err(|_| ControlError::Storage)?;
                 services.push(LocalService {
                     // Legacy wire field for installed clients, always the ID.
@@ -278,7 +374,7 @@ pub(crate) fn apply_mutation(
             ..
         } => {
             let unique: std::collections::BTreeSet<_> = services.iter().collect();
-            if services.len() > 128 || unique.len() != services.len() {
+            if services.len() > 129 || unique.len() != services.len() {
                 return Err(ControlError::Invalid);
             }
             for service in &services {
@@ -336,7 +432,12 @@ pub(crate) fn apply_mutation(
             allow,
             kind,
         } => {
-            if !valid_service_id(&id) || !valid_service_id(&new_id) {
+            if id == "shell"
+                || new_id == "shell"
+                || kind == Some(ServiceKind::Shell)
+                || !valid_service_id(&id)
+                || !valid_service_id(&new_id)
+            {
                 return Err(ControlError::Invalid);
             }
             let exists: bool = tx.query_row(
@@ -395,6 +496,33 @@ pub(crate) fn apply_mutation(
                 },
             )?;
         }
+        Mutation::Shell { allow, .. } => {
+            if allow.len() > 128
+                || allow.iter().collect::<std::collections::HashSet<_>>().len() != allow.len()
+            {
+                return Err(ControlError::Invalid);
+            }
+            let builtin:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM host_services WHERE id='shell' AND kind='shell' AND backend='127.0.0.1:0')",[],|r|r.get(0))?;
+            if !builtin {
+                return Err(ControlError::Invalid);
+            }
+            for peer in &allow {
+                if !tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM host_clients WHERE id=?1)",
+                    [peer.to_string()],
+                    |r| r.get::<_, bool>(0),
+                )? {
+                    return Err(ControlError::Forbidden);
+                }
+            }
+            tx.execute("DELETE FROM host_grants WHERE service='shell'", [])?;
+            for peer in allow {
+                tx.execute(
+                    "INSERT INTO host_grants VALUES('shell',?1)",
+                    [peer.to_string()],
+                )?;
+            }
+        }
         Mutation::Service {
             id,
             backend,
@@ -403,14 +531,26 @@ pub(crate) fn apply_mutation(
             kind,
             ..
         } => {
-            wispnet_core::config::validate_services(&[ServiceConfig {
-                id: id.clone(),
-                backend,
-                allow: allow.clone(),
-            }])
-            .map_err(|_| ControlError::Invalid)?;
+            if id == "shell" || kind == Some(ServiceKind::Shell) {
+                return Err(ControlError::Invalid);
+            }
+            let effective_kind = match kind {
+                Some(kind) => kind,
+                None => match tx
+                    .query_row("SELECT kind FROM host_services WHERE id=?1", [&id], |r| {
+                        r.get::<_, String>(0)
+                    })
+                    .optional()?
+                    .as_deref()
+                {
+                    Some("shell") => ServiceKind::Shell,
+                    Some("tcp") => ServiceKind::Tcp,
+                    _ => ServiceKind::Http,
+                },
+            };
+            validate_local_service(&id, backend, &allow, effective_kind)?;
             let count: i64 = tx.query_row(
-                "SELECT count(*) FROM host_services WHERE id!=?1",
+                "SELECT count(*) FROM host_services WHERE id!=?1 AND id!='shell'",
                 [&id],
                 |r| r.get(0),
             )?;
@@ -436,6 +576,7 @@ pub(crate) fn apply_mutation(
             let kind = kind.map(|k| match k {
                 ServiceKind::Http => "http",
                 ServiceKind::Tcp => "tcp",
+                ServiceKind::Shell => "shell",
             });
             // Accept bounded legacy input, but never persist another name.
             tx.execute("INSERT INTO host_services(id,backend,incarnation,kind)
@@ -453,7 +594,8 @@ pub(crate) fn apply_mutation(
             }
         }
         Mutation::Remove { id, .. } => {
-            if !valid_service_id(&id)
+            if id == "shell"
+                || !valid_service_id(&id)
                 || tx.execute("DELETE FROM host_services WHERE id=?1", [id])? == 0
             {
                 return Err(ControlError::Invalid);

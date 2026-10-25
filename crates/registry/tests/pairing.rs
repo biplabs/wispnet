@@ -9,6 +9,18 @@ use wispnet_registry::{
     store::Store,
 };
 
+// Pairing fixtures below assert user-service grants; the builtin starts with
+// no grants and is checked independently in tests/shell.rs.
+fn custom_snapshot(
+    store: &mut wispnet_registry::store::Store,
+    host: wispnet_core::identity::EndpointId,
+) -> Result<wispnet_registry::host::Snapshot, wispnet_registry::control::ControlError> {
+    let mut snapshot = store.host_snapshot(host)?;
+    snapshot
+        .services
+        .retain(|s| s.kind != wispnet_core::host::ServiceKind::Shell);
+    Ok(snapshot)
+}
 #[test]
 fn target_local_proofs_are_single_use_and_owner_approval_is_separate() {
     let directory = tempfile::tempdir().unwrap();
@@ -91,7 +103,12 @@ fn target_local_proofs_are_single_use_and_owner_approval_is_separate() {
         .pairing_prove(host, device.endpoint_id(), &proof, now)
         .unwrap();
     assert_eq!(pending.peer, device.endpoint_id());
-    assert!(store.host_snapshot(host).unwrap().clients.is_empty());
+    assert!(
+        custom_snapshot(&mut store, host)
+            .unwrap()
+            .clients
+            .is_empty()
+    );
     assert!(
         store
             .pairing_prove(host, device.endpoint_id(), &proof, now)
@@ -131,7 +148,7 @@ fn target_local_proofs_are_single_use_and_owner_approval_is_separate() {
             .unwrap(),
         1
     );
-    let snapshot = store.host_snapshot(host).unwrap();
+    let snapshot = custom_snapshot(&mut store, host).unwrap();
     assert_eq!(snapshot.clients[0].peer, device.endpoint_id());
     assert!(snapshot.services.is_empty());
     assert!(
@@ -165,7 +182,12 @@ fn target_local_proofs_are_single_use_and_owner_approval_is_separate() {
             .pairing_prove(host, device.endpoint_id(), &proof, now)
             .is_err()
     );
-    assert!(store.host_snapshot(host).unwrap().clients.is_empty());
+    assert!(
+        custom_snapshot(&mut store, host)
+            .unwrap()
+            .clients
+            .is_empty()
+    );
     let db = rusqlite::Connection::open(directory.path().join("host.sqlite3")).unwrap();
     let digest: String = db
         .query_row(
@@ -355,8 +377,13 @@ fn revocation_cancels_unfinished_requests_and_expired_proofs_cannot_be_approved(
             )
             .is_err()
     );
-    assert!(store.host_snapshot(host).unwrap().clients.is_empty());
-    assert_eq!(store.host_snapshot(host).unwrap().revision, 2);
+    assert!(
+        custom_snapshot(&mut store, host)
+            .unwrap()
+            .clients
+            .is_empty()
+    );
+    assert_eq!(custom_snapshot(&mut store, host).unwrap().revision, 2);
 }
 
 #[test]
@@ -419,7 +446,7 @@ fn approval_and_selected_grants_commit_together_and_preserve_other_access() {
             .unwrap();
     }
     let invitation = pending(&mut store, host, &owner, &device);
-    let before = serde_json::to_value(store.host_snapshot(host).unwrap()).unwrap();
+    let before = serde_json::to_value(custom_snapshot(&mut store, host).unwrap()).unwrap();
     for services in [
         vec!["alpha".into(), "missing".into()],
         vec!["alpha".into(), "alpha".into()],
@@ -438,7 +465,7 @@ fn approval_and_selected_grants_commit_together_and_preserve_other_access() {
                 .is_err()
         );
         assert_eq!(
-            serde_json::to_value(store.host_snapshot(host).unwrap()).unwrap(),
+            serde_json::to_value(custom_snapshot(&mut store, host).unwrap()).unwrap(),
             before
         );
         assert_eq!(
@@ -476,7 +503,7 @@ fn approval_and_selected_grants_commit_together_and_preserve_other_access() {
         )
         .unwrap();
     assert_eq!(approved, revision + 1);
-    let snapshot = store.host_snapshot(host).unwrap();
+    let snapshot = custom_snapshot(&mut store, host).unwrap();
     assert_eq!(snapshot.clients.len(), 2);
     for (index, service) in snapshot.services.iter().enumerate() {
         assert!(service.allow.contains(&other.endpoint_id()));
@@ -506,7 +533,10 @@ fn approval_and_selected_grants_commit_together_and_preserve_other_access() {
             )
             .is_err()
     );
-    assert_eq!(store.host_snapshot(host).unwrap().revision, approved);
+    assert_eq!(
+        custom_snapshot(&mut store, host).unwrap().revision,
+        approved
+    );
     // Old callers omit services; re-pairing never withdraws or restores any other grant.
     let re_pair = pending(&mut store, host, &owner, &device);
     let old_request: Mutation = serde_json::from_value(serde_json::json!({"op":"approve_invitation","expected_revision":approved,"invitation":re_pair})).unwrap();
@@ -568,7 +598,7 @@ fn approval_and_selected_grants_commit_together_and_preserve_other_access() {
     );
     drop(store);
     let (mut store, _) = host::owner_store(directory.path(), host).unwrap();
-    let snapshot = store.host_snapshot(host).unwrap();
+    let snapshot = custom_snapshot(&mut store, host).unwrap();
     assert_eq!(snapshot.revision, revision);
     assert_eq!(snapshot.clients.len(), 2);
     assert!(
@@ -637,7 +667,12 @@ fn mutual_bootstrap_requires_proof_and_owner_consent_and_never_grants_services()
         .pairing_prove_with_bootstrap(host, peer, &proof, Some(&bootstrap), now)
         .unwrap();
     assert!(store.paired_hosts(host).unwrap().is_empty());
-    assert!(store.host_snapshot(host).unwrap().clients.is_empty());
+    assert!(
+        custom_snapshot(&mut store, host)
+            .unwrap()
+            .clients
+            .is_empty()
+    );
     assert!(store.pairing_list(host, &owner, now).unwrap()[0].mutual);
     // A failed owner transaction cannot expose the reverse pin either.
     assert!(
@@ -689,7 +724,7 @@ fn mutual_bootstrap_requires_proof_and_owner_consent_and_never_grants_services()
         )
         .unwrap();
     assert!(
-        store.host_snapshot(host).unwrap().services[0]
+        custom_snapshot(&mut store, host).unwrap().services[0]
             .allow
             .is_empty()
     );
@@ -712,7 +747,7 @@ fn mutual_bootstrap_requires_proof_and_owner_consent_and_never_grants_services()
         .pairing_accept_host(host, &owner, &bootstrap, "Requester")
         .unwrap();
     assert_eq!(
-        store.host_snapshot(host).unwrap().services[0].allow,
+        custom_snapshot(&mut store, host).unwrap().services[0].allow,
         vec![peer]
     );
     store

@@ -44,6 +44,10 @@ class ReleaseChecks(unittest.TestCase):
         flutter=native+['base/lib/arm64-v8a/libflutter.so','base/lib/arm64-v8a/libapp.so']
         check_libraries(native,'arm64-v8a')
         check_libraries(flutter,'arm64-v8a')
+        terminal=flutter+['base/lib/arm64-v8a/libtermux.so','base/lib/arm64-v8a/libandroidx.graphics.path.so']
+        check_libraries(terminal,'arm64-v8a')
+        for invalid in [terminal[:-1],terminal+['base/lib/arm64-v8a/extra.so']]:
+            with self.assertRaises(ValueError):check_libraries(invalid,'arm64-v8a')
         for invalid in [flutter[:-1],flutter+['base/lib/arm64-v8a/unexpected.so'],flutter+native,[p.replace('arm64-v8a','x86_64') for p in flutter]]:
             with self.assertRaises(ValueError):check_libraries(invalid,'arm64-v8a')
     def test_private_state_excluded_from_cloud_and_device_transfer(self):

@@ -4,6 +4,7 @@ pub mod gateway;
 mod mcp;
 pub mod public_access;
 mod service_registry;
+mod shell;
 use iroh::Endpoint;
 use serde_json::{Value, json};
 use std::{
@@ -28,6 +29,7 @@ fn runtime() -> &'static Runtime {
     })
 }
 pub struct Client {
+    shells: shell::Shells,
     pub endpoint: Endpoint,
     key: SecretKey,
     config: TransportConfig,
@@ -132,6 +134,7 @@ impl Client {
         authority: wispnet_registry::host::Authority,
     ) -> Arc<Self> {
         Arc::new(Self {
+            shells: shell::Shells::default(),
             endpoint,
             key,
             state,
@@ -157,6 +160,7 @@ impl Client {
             .await
             .map_err(|e| e.to_string())?;
         Ok(Arc::new(Self {
+            shells: shell::Shells::default(),
             endpoint,
             key,
             config,
@@ -212,6 +216,7 @@ impl Client {
             .await
             .map_err(|e| e.to_string())?;
         Ok(Arc::new(Self {
+            shells: shell::Shells::default(),
             endpoint: host.endpoint().clone(),
             key,
             config,
@@ -363,6 +368,7 @@ impl Client {
         .await
         .map_err(|_| "Cannot apply remote removal")??;
         if removed {
+            self.shells.close_host(host).await;
             self.gateway.forget(self, host).await?;
             return Err("Pairing removed by remote machine".into());
         }
@@ -370,6 +376,10 @@ impl Client {
     }
     pub async fn command(self: &Arc<Self>, value: &Value) -> Result<Value, String> {
         match argument(value, "op")? {
+            "shell_open" => self.shell_open(value).await,
+            "shell_input" | "shell_resize" | "shell_poll" | "shell_close" => {
+                self.shells.command(value).await
+            }
             "identity" => Ok(json!({"peer":self.endpoint.id().to_string()})),
             "pairing_state" => {
                 let host = peer(value)?;
@@ -506,6 +516,7 @@ impl Client {
                     .await
                     .map_err(|_| "Cannot remove pairing")??;
                 }
+                self.shells.close_host(host).await;
                 self.gateway.forget(self, host).await?;
                 wispnet_agent::peers::remove(&self.state, host).map_err(|e| e.to_string())?;
                 Ok(json!({"unpaired":host.to_string()}))
@@ -635,11 +646,13 @@ impl Client {
                 Ok(json!({"enabled":true}))
             }
             "stop" => {
+                self.shells.close_all().await;
                 let _guard = self.gateway.settings_lock.lock().await;
                 self.gateway.stop().await;
                 Ok(json!({"enabled":false}))
             }
             "network" => {
+                self.shells.close_all().await;
                 let _guard = self.gateway.settings_lock.lock().await;
                 let interrupted = self.gateway.interrupt().await;
                 self.endpoint.network_change().await;

@@ -25,11 +25,13 @@ class FakeBackend implements WispnetBackend {
     this.diagnosticReport,
     this.publicAccess,
     this.accessReady,
+    this.shellService = false,
   });
   final Map<String, dynamic>? diagnosticReport;
   final Map<String, dynamic>? publicAccess;
   Future<void>? accessReady;
   bool paired, enabled;
+  final bool shellService;
   final String state;
   final calls = <(String, Map<String, dynamic>)>[];
   bool failPairing = false;
@@ -62,9 +64,9 @@ class FakeBackend implements WispnetBackend {
                 'catalog': {
                   'services': [
                     {
-                      'id': 'website',
+                      'id': shellService ? 'shell' : 'website',
                       'display_name': 'Website',
-                      'kind': 'http',
+                      'kind': shellService ? 'shell' : 'http',
                       'incarnation': incarnation,
                     },
                     {
@@ -206,6 +208,14 @@ class DesktopFake extends FakeBackend {
           'incarnation': incarnation,
           'allow': [peer],
         },
+        {
+          'id': 'shell',
+          'display_name': 'Shell',
+          'kind': 'shell',
+          'backend': '127.0.0.1:0',
+          'incarnation': incarnation,
+          'allow': <String>[],
+        },
       ],
       'clients': [
         {'peer': peer, 'name': 'Existing device'},
@@ -245,6 +255,13 @@ class DesktopFake extends FakeBackend {
     if (method == 'desktopRequest') {
       ownerCalls.add(arguments['payload'] as Map<String, dynamic>);
       final operation = arguments['payload']['operation'];
+      if (operation?['op'] == 'shell') {
+        final shell = (status['host']['services'] as List).singleWhere(
+          (s) => s['id'] == 'shell',
+        );
+        shell['allow'] = operation['allow'];
+        status['host']['revision']++;
+      }
       if (operation?['op'] == 'edit_service') {
         final service = (status['host']['services'] as List).singleWhere(
           (s) => s['id'] == operation['id'],
@@ -1868,7 +1885,7 @@ void main() {
     await tester.tap(find.text('Approve device'));
     await tester.pumpAndSettle();
     final grant = tester.widget<CheckboxListTile>(
-      find.byType(CheckboxListTile),
+      find.widgetWithText(CheckboxListTile, 'web'),
     );
     expect(grant.value, true);
     expect(grant.onChanged, isNull);
@@ -1881,6 +1898,124 @@ void main() {
       'expected_revision': 7,
     });
     await close(tester);
+  });
+  testWidgets('shell opens the native terminal without a browser handoff', (
+    tester,
+  ) async {
+    final backend = FakeBackend(shellService: true);
+    await mount(tester, backend);
+    await tester.tap(find.text('shell'));
+    await tester.pumpAndSettle();
+    expect(backend.calls.where((c) => c.$1 == 'openShell').single.$2, {
+      'host': peer,
+      'host_name': 'j-strix',
+      'service': 'shell',
+      'incarnation': incarnation,
+      'session': 'main',
+    });
+    expect(
+      backend.calls.where((c) => c.$1 == 'open' || c.$1 == 'launch'),
+      isEmpty,
+    );
+    expect(find.byIcon(Icons.terminal), findsOneWidget);
+    await close(tester);
+  });
+  testWidgets('built-in shell grants are managed without editing the service', (
+    tester,
+  ) async {
+    final backend = DesktopFake();
+    await mount(tester, backend, size: const Size(1000, 850));
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(const ValueKey('local-sector')),
+        matching: find.widgetWithText(OutlinedButton, 'Manage'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Enable Shell'), findsNothing);
+    await tester.tap(find.text('Shell access'));
+    await tester.pumpAndSettle();
+    expect(backend.ownerCalls, isEmpty);
+    expect(find.widgetWithText(TextField, 'Port'), findsNothing);
+    expect(find.byType(TextField), findsNothing);
+    expect(find.byType(DropdownButtonFormField<String>), findsNothing);
+    expect(
+      tester.widget<CheckboxListTile>(find.byType(CheckboxListTile)).value,
+      false,
+    );
+    await tester.tap(find.byType(CheckboxListTile));
+    await tester.ensureVisible(find.text('Save access'));
+    await tester.tap(find.text('Save access'));
+    await tester.pumpAndSettle();
+    expect(backend.ownerCalls.single['operation'], {
+      'op': 'shell',
+      'allow': [peer],
+      'expected_revision': 7,
+    });
+    await close(tester);
+  });
+  testWidgets(
+    'built-in shell cannot be removed, renamed or changed to a user service',
+    (tester) async {
+      final backend = DesktopFake();
+      await mount(tester, backend, size: const Size(1000, 850));
+      await tester.tap(find.byTooltip('Settings for shell on hibreak'));
+      await tester.pumpAndSettle();
+      expect(find.text('Manage access'), findsOneWidget);
+      expect(find.text('Remove service'), findsNothing);
+      expect(find.text('Edit'), findsNothing);
+      expect(
+        find.text('Built-in service · available on this computer'),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('Manage access'));
+      await tester.pumpAndSettle();
+      expect(find.byType(TextField), findsNothing);
+      await close(tester);
+    },
+  );
+  testWidgets('ordinary services reject the reserved shell ID', (tester) async {
+    final backend = DesktopFake();
+    await mount(tester, backend, size: const Size(1000, 850));
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(const ValueKey('local-sector')),
+        matching: find.widgetWithText(OutlinedButton, 'Manage'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Add a new service'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Service ID'),
+      'shell',
+    );
+    await tester.ensureVisible(find.text('Save service'));
+    await tester.tap(find.text('Save service'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        '“shell” is reserved for the built-in Shell service. Use Shell access to manage its permissions.',
+      ),
+      findsOneWidget,
+    );
+    expect(backend.ownerCalls, isEmpty);
+    await tester.tap(find.byType(DropdownButtonFormField<String>));
+    await tester.pumpAndSettle();
+    expect(find.text('Shell'), findsNothing);
+    await close(tester);
+  });
+  test('shell remains unavailable when owner approval is pending', () {
+    final shell = {'kind': 'shell', 'incarnation': incarnation};
+    expect(Machine(peer, {'state': 'available'}).canOpen(shell), true);
+    expect(Machine(peer, {'state': 'approval_pending'}).canOpen(shell), false);
+    expect(Machine(peer, {'state': 'host_denied'}).canOpen(shell), false);
+    expect(
+      Machine(peer, {
+        'state': 'available',
+      }).canOpen({'kind': 'tcp', 'incarnation': incarnation}),
+      false,
+    );
   });
   test('saved order ignores missing and duplicate entries', () {
     expect(orderedIds(['a', 'b', 'c'], ['b', 'gone', 'b']), ['b', 'a', 'c']);

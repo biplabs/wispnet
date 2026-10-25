@@ -1158,7 +1158,13 @@ mod tests {
                 .unwrap();
         }
         let authority = Authority::open(state.path(), peer).unwrap();
-        let service = authority.services().await.unwrap().remove(0);
+        let service = authority
+            .services()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|service| service.id == "site")
+            .expect("HTTP fixture service");
         let config =
             serde_json::from_value(serde_json::json!({"bind_addr":"127.0.0.1:0"})).unwrap();
         let endpoint = wispnet_agent::tunnel::bind_configured_client(&key, Some(&config))
@@ -1284,7 +1290,13 @@ mod tests {
                 .unwrap();
         }
         let authority = Authority::open(state.path(), peer).unwrap();
-        let service = authority.services().await.unwrap().remove(0);
+        let service = authority
+            .services()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|service| service.id == "site")
+            .expect("HTTP fixture service");
         let config =
             serde_json::from_value(serde_json::json!({"bind_addr":"127.0.0.1:0"})).unwrap();
         let endpoint = wispnet_agent::tunnel::bind_configured_client(&key, Some(&config))
@@ -1400,7 +1412,13 @@ mod tests {
                 .unwrap();
         }
         let authority = Authority::open(state.path(), peer).unwrap();
-        let service = authority.services().await.unwrap().remove(0);
+        let service = authority
+            .services()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|service| service.id == "site")
+            .expect("HTTP fixture service");
         let config =
             serde_json::from_value(serde_json::json!({"bind_addr":"127.0.0.1:0"})).unwrap();
         let endpoint = wispnet_agent::tunnel::bind_configured_client(&key, Some(&config))

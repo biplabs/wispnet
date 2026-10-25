@@ -58,6 +58,47 @@ class BridgeTests(unittest.TestCase):
                 self.bridge.dispatch('setAccess', {'enabled': False})
         self.assertNotIn({'op': 'enable'}, self.calls)
 
+    def test_shell_launch_uses_authoritative_kind_incarnation_and_pinned_cli_arguments(self):
+        self.status['host']['services'] = [dict(id='shell', kind='shell', incarnation=INCARNATION)]
+        args = dict(host=OWN, service='shell', incarnation=INCARNATION, session='main')
+        with patch.object(module, 'launch_terminal') as launch:
+            self.assertEqual(self.bridge.dispatch('openShell', args), {})
+            command, state = launch.call_args.args
+            self.assertEqual(command[1:], ['shell', '--host', OWN, '--service', 'shell',
+                '--incarnation', INCARNATION, '--session', 'main', '--config', str(self.config.resolve())])
+            self.assertEqual(state, self.state)
+            self.assertNotIn('shell_open', [c['op'] for c in self.calls])
+            launch.reset_mock()
+            for invalid in [dict(args, incarnation='f' * 64), dict(args, service='web'),
+                            dict(args, session='main; touch /tmp/injected')]:
+                with self.assertRaises(ValueError):
+                    self.bridge.dispatch('openShell', invalid)
+            launch.assert_not_called()
+            self.status['host']['services'][0]['kind'] = 'http'
+            with self.assertRaises(ValueError):
+                self.bridge.dispatch('openShell', args)
+
+    def test_terminal_launch_preserves_argument_boundaries_and_requires_an_installed_terminal(self):
+        command = ['/tmp/Wispnet CLI', 'shell', '--config', '/tmp/with spaces/host.toml']
+        with patch.object(module.sys, 'platform', 'linux'), patch.object(module.shutil, 'which',
+             side_effect=lambda name: '/usr/bin/gnome-terminal' if name == 'gnome-terminal' else None), \
+             patch.object(module.subprocess, 'Popen') as popen:
+            module.launch_terminal(command, self.state)
+            self.assertEqual(popen.call_args.args[0], ['/usr/bin/gnome-terminal', '--', *command])
+            self.assertNotIn('shell', popen.call_args.kwargs)
+        with patch.object(module.sys, 'platform', 'linux'), patch.object(module.shutil, 'which', return_value=None):
+            with self.assertRaisesRegex(ValueError, 'Install a terminal'):
+                module.launch_terminal(command, self.state)
+
+    def test_macos_terminal_script_is_private_and_quotes_every_argument(self):
+        command = ['/tmp/Wispnet CLI', 'shell', '--config', '/tmp/$(touch injected); quote\'/host.toml']
+        with patch.object(module.sys, 'platform', 'darwin'), patch.object(module.subprocess, 'run') as run:
+            module.launch_terminal(command, self.state)
+        script = Path(run.call_args.args[0][-1])
+        self.assertEqual(script.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(module.shlex.split(script.read_text().splitlines()[-1])[1:], command)
+        self.assertEqual(script.parent, self.state)
+
     def test_online_requires_saved_listeners_and_recovers_after_node_restart(self):
         self.status['access_enabled'] = False
         self.assertTrue(self.bridge.snapshot()['enabled'])

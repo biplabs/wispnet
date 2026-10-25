@@ -5,6 +5,35 @@ from wispnet_desktop.catalog_cache import CatalogCache, MAX_BYTES
 
 
 class CacheChecks(unittest.TestCase):
+    def test_builtin_shell_preserves_capacity_for_128_custom_services(self):
+        with tempfile.TemporaryDirectory() as directory:
+            peer = 'a' * 64
+            cache = CatalogCache(directory)
+            services = [dict(id=f'app-{i:03}', incarnation='c' * 64,
+                             display_name=f'Application {i}', kind='http') for i in range(128)]
+            services.append(dict(id='shell', incarnation='d' * 64, display_name='Shell', kind='shell'))
+            catalog = dict(host=peer, version=1, complete=True, service_count=129,
+                           generation='b' * 64, revision=1, services=services)
+            cache.save(peer, dict(catalog=catalog, fetched=1))
+            self.assertEqual(len(cache.load(peer)['catalog']['services']), 129)
+            catalog['services'].append(dict(id='too-many', incarnation='e' * 64,
+                                            display_name='Beyond capacity', kind='http'))
+            catalog['service_count'] = 130
+            with self.assertRaises(ValueError):
+                cache.save(peer, dict(catalog=catalog, fetched=1))
+
+    def test_shell_catalog_roundtrip_remains_display_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            peer = 'a' * 64
+            cache = CatalogCache(directory)
+            catalog = dict(host=peer, version=1, complete=True, service_count=1,
+                           generation='b' * 64, revision=1,
+                           services=[dict(id='shell', incarnation='c' * 64, display_name='Shell', kind='shell')])
+            cache.save(peer, dict(catalog=catalog, fetched=1))
+            saved = cache.load(peer)
+            self.assertEqual(saved['catalog'], catalog)
+            self.assertEqual(saved['state'], 'Cached; refresh required')
+
     def test_private_roundtrip_corruption_and_cache_deletion_leave_pins_intact(self):
         with tempfile.TemporaryDirectory() as directory:
             peer = "a" * 64

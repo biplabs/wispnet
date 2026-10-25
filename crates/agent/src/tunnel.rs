@@ -212,10 +212,16 @@ fn quic_config(streams: usize) -> QuicTransportConfig {
         .build()
 }
 
+#[cfg(not(target_os = "android"))]
+type ShellSessions = wispnet_shell::SessionManager;
+#[cfg(target_os = "android")]
+#[derive(Clone, Default)]
+struct ShellSessions;
+
 #[derive(Clone)]
 enum Services {
     Static(Arc<Vec<ServiceConfig>>),
-    Host(wispnet_registry::host::Authority),
+    Host(wispnet_registry::host::Authority, ShellSessions),
 }
 impl Services {
     async fn load(&self) -> Result<Vec<wispnet_registry::host::LocalService>, Status> {
@@ -231,19 +237,19 @@ impl Services {
                     allow: s.allow.clone(),
                 })
                 .collect()),
-            Self::Host(host) => host.services().await.map_err(|_| Status::Denied),
+            Self::Host(host, _) => host.services().await.map_err(|_| Status::Denied),
         }
     }
     async fn pending(&self, peer: EndpointId) -> bool {
         match self {
             Self::Static(_) => false,
-            Self::Host(host) => host.pairing_pending(peer).await.unwrap_or(false),
+            Self::Host(host, _) => host.pairing_pending(peer).await.unwrap_or(false),
         }
     }
     async fn approved(&self, peer: EndpointId) -> bool {
         match self {
             Self::Static(services) => services.iter().any(|s| s.allow.contains(&peer)),
-            Self::Host(host) => host.approved(peer).await,
+            Self::Host(host, _) => host.approved(peer).await,
         }
     }
 }
@@ -283,7 +289,12 @@ impl TunnelHost {
         if authority.host() != secret.public() {
             return Err(TunnelError::Transport("host authority identity mismatch"));
         }
-        Self::bind_services(secret, config, Services::Host(authority)).await
+        Self::bind_services(
+            secret,
+            config,
+            Services::Host(authority, ShellSessions::default()),
+        )
+        .await
     }
     async fn bind_services(
         secret: &SecretKey,
@@ -298,7 +309,7 @@ impl TunnelHost {
         builder: iroh::endpoint::Builder,
     ) -> Result<Self, TunnelError> {
         let mut alpns = vec![protocol::ALPN.to_vec()];
-        if matches!(services, Services::Host(_)) {
+        if matches!(services, Services::Host(_, _)) {
             alpns.push(wispnet_core::host::ALPN.to_vec());
             alpns.push(wispnet_core::pairing::ALPN.to_vec());
         }
@@ -383,10 +394,26 @@ async fn serve(
     let connections = Arc::new(Semaphore::new(config.max_connections));
     let streams = Arc::new(Semaphore::new(config.max_streams));
     let mut tasks = JoinSet::new();
+    let mut shell_policy_tick = tokio::time::interval(Duration::from_secs(1));
     loop {
         tokio::select! {
             biased;
             _ = stop.changed() => break,
+            _ = shell_policy_tick.tick() => {
+                #[cfg(not(target_os = "android"))]
+                if let Services::Host(_, sessions) = &services {
+                    // Disconnected phones no longer have a stream monitor. The
+                    // host still owns their PTYs and rechecks durable authority.
+                    let allowed = timeout(HANDSHAKE_TIMEOUT, services.load()).await;
+                    let mut scopes = std::collections::HashSet::new();
+                    if let Ok(Ok(current)) = allowed {
+                        for service in current.into_iter().filter(|s| s.kind == wispnet_core::host::ServiceKind::Shell) {
+                            for peer in service.allow { scopes.insert(format!("{}/{peer}", service.incarnation)); }
+                        }
+                    }
+                    sessions.retain_scopes(|scope| scopes.contains(scope));
+                }
+            },
             Some(_) = tasks.join_next(), if !tasks.is_empty() => {},
             incoming = endpoint.accept() => {
                 let Some(incoming) = incoming else { break };
@@ -414,7 +441,7 @@ async fn serve(
                         let Ok(Ok((send, recv))) = timeout(HANDSHAKE_TIMEOUT, connection.accept_bi()).await else { return };
                         let Ok(_stream_permit) = streams.try_acquire_owned() else { return };
                         let _stream_guard = CountGuard::new(counts.streams.clone());
-                        if let Services::Host(authority) = services {
+                        if let Services::Host(authority, _) = services {
                             crate::pairing::serve_stream(send, recv, peer, authority).await;
                         }
                         return;
@@ -477,7 +504,7 @@ async fn serve_connection(
                     let _permit = permit;
                     let _guard = guard;
                     if connection_control {
-                        if let Services::Host(host)=services {crate::control::serve_stream(send,recv,peer,host,counts,diagnostics,observed_connection).await;}
+                        if let Services::Host(host, _)=services {crate::control::serve_stream(send,recv,peer,host,counts,diagnostics,observed_connection).await;}
                     } else {
                         serve_stream(send, recv, peer, &services, &counts).await;
                     }
@@ -542,19 +569,26 @@ async fn serve_stream(
         }
         counts.record_activity(peer);
         // This is deliberately after parsing + authenticating + checking the host-local grant.
-        timeout(BACKEND_TIMEOUT, TcpStream::connect(service.backend))
-            .await
-            .map_err(|_| Status::BackendUnavailable)?
-            .map_err(|_| Status::BackendUnavailable)
-            .map(|backend| {
-                (
-                    backend,
-                    id.to_owned(),
-                    service.backend,
-                    service.incarnation.clone(),
-                    service.kind,
-                )
-            })
+        let backend = if service.kind == wispnet_core::host::ServiceKind::Shell {
+            #[cfg(target_os = "android")]
+            return Err(Status::BackendUnavailable);
+            #[cfg(not(target_os = "android"))]
+            None
+        } else {
+            Some(
+                timeout(BACKEND_TIMEOUT, TcpStream::connect(service.backend))
+                    .await
+                    .map_err(|_| Status::BackendUnavailable)?
+                    .map_err(|_| Status::BackendUnavailable)?,
+            )
+        };
+        Ok((
+            backend,
+            id.to_owned(),
+            service.backend,
+            service.incarnation.clone(),
+            service.kind,
+        ))
     };
     let (backend, service_id, binding, incarnation, kind) =
         match timeout(HANDSHAKE_TIMEOUT, opened).await {
@@ -580,18 +614,8 @@ async fn serve_stream(
         return;
     }
     let mut tunnel = ServiceStream::new(send, recv);
-    let (mut reader, mut writer) = backend.into_split();
-    let (mut tunnel_read, mut tunnel_write) = tokio::io::split(&mut tunnel);
-    let activity = AtomicUsize::new(0);
-    let transfer = timeout(MAX_SESSION, async {
-        tokio::try_join!(
-            pump(&mut tunnel_read, &mut writer, &activity, IDLE_TIMEOUT),
-            pump(&mut reader, &mut tunnel_write, &activity, IDLE_TIMEOUT)
-        )
-    });
-    // Host-local durable policy also governs already-open streams. Revocation,
-    // deletion, backend replacement, and unreadable policy fail closed. Static
-    // configurations are immutable for the lifetime of their host endpoint.
+    // Every built-in shell stream has the same durable grant/incarnation guard
+    // as TCP services. Revocation cancels the attached stream, not the daemon.
     let policy = async {
         if matches!(services, Services::Static(_)) {
             std::future::pending::<()>().await;
@@ -605,6 +629,28 @@ async fn serve_stream(
             }
         }
     };
+    if kind == wispnet_core::host::ServiceKind::Shell {
+        #[cfg(not(target_os = "android"))]
+        if let Services::Host(_, sessions) = services {
+            let scope = format!("{incarnation}/{peer}");
+            tokio::select! {
+                _ = timeout(MAX_SESSION, sessions.serve(tunnel, scope.clone())) => {},
+                _ = policy => { sessions.close_scope(&scope); },
+            }
+        }
+        counts.record_activity(peer);
+        return;
+    }
+    let Some(backend) = backend else { return };
+    let (mut reader, mut writer) = backend.into_split();
+    let (mut tunnel_read, mut tunnel_write) = tokio::io::split(&mut tunnel);
+    let activity = AtomicUsize::new(0);
+    let transfer = timeout(MAX_SESSION, async {
+        tokio::try_join!(
+            pump(&mut tunnel_read, &mut writer, &activity, IDLE_TIMEOUT),
+            pump(&mut reader, &mut tunnel_write, &activity, IDLE_TIMEOUT)
+        )
+    });
     tokio::select! { _ = transfer => {}, _ = policy => {} }
     counts.record_activity(peer);
 }

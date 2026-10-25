@@ -354,9 +354,8 @@ class NodeIntegration(unittest.TestCase):
                         "allow": [],
                     },
                 )
-                local_incarnation = api.request(op="status")["host"]["services"][0][
-                    "incarnation"
-                ]
+                local_incarnation = next(s["incarnation"] for s in
+                    api.request(op="status")["host"]["services"] if s["id"] == "website")
                 with self.assertRaises(ValueError):
                     api.request(
                         op="open",
@@ -449,9 +448,8 @@ class NodeIntegration(unittest.TestCase):
                         service="website",
                         incarnation=local_incarnation,
                     )
-                new_incarnation = api.request(op="status")["host"]["services"][0][
-                    "incarnation"
-                ]
+                new_incarnation = next(s["incarnation"] for s in
+                    api.request(op="status")["host"]["services"] if s["id"] == "website")
                 self.assertNotEqual(new_incarnation, local_incarnation)
                 api.request(
                     op="open", host=pa, service="website", incarnation=new_incarnation
@@ -476,7 +474,8 @@ class NodeIntegration(unittest.TestCase):
                 self.assertEqual(renamed["services"][0]["incarnation"], remote_incarnation)
                 after_rename = bapi.request(op="status")["host"]
                 self.assertEqual(after_rename["clients"], before_rename["clients"])
-                self.assertEqual(after_rename["services"][0]["allow"], [pa])
+                self.assertEqual(next(s["allow"] for s in after_rename["services"]
+                                      if s["id"] == "renamed-website"), [pa])
                 self.assertIn(pb, api.request(op="status")["peer_pins"])
                 with self.assertRaises(ValueError):
                     api.request(op="resolve_service", host=pb, service="website")

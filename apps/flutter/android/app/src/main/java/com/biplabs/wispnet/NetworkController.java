@@ -16,6 +16,15 @@ final class NetworkController extends ContextWrapper {
  JSONObject dispatch(String method, JSONObject args) throws Exception {
   HostStore store = new HostStore(this);
   switch (method) {
+   case "shell_open":
+   case "shell_input":
+   case "shell_resize":
+   case "shell_poll":
+   case "shell_close": {
+    if (!service.enabled && !"shell_close".equals(method)) throw new Exception("Go online before opening a shell");
+    JSONObject request = new JSONObject(args.toString()).put("op", method);
+    return Native.request(request);
+   }
    case "snapshot": {
     JSONObject order = new JSONObject();
     for (java.util.Map.Entry<String, ?> entry : getSharedPreferences("card-order", 0).getAll().entrySet())

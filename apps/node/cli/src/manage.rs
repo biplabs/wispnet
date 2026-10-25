@@ -7,6 +7,7 @@ pub const HELP: &str = "Management (uses the running node; --config is optional)
   wispnet node-status
   wispnet online | offline
   wispnet settings [--port 7842] [--device-id my-computer]
+  wispnet shell-access [--allow PUBLIC_ID,PUBLIC_ID | --allow none]
   wispnet service-links --host HOST_ID --service SERVICE_ID
   wispnet resolve-link --link wispnet://HOST_ID/SERVICE_ID
   wispnet node-request --request /absolute/path/request.json
@@ -25,6 +26,7 @@ pub fn handles(mode: &str) -> bool {
             | "service-links"
             | "resolve-link"
             | "node-request"
+            | "shell-access"
     )
 }
 pub fn run(args: &[OsString]) -> Result<Value, String> {
@@ -42,6 +44,7 @@ pub fn run(args: &[OsString]) -> Result<Value, String> {
                 "service-links" => matches!(key, "--host" | "--service"),
                 "resolve-link" => key == "--link",
                 "node-request" => key == "--request",
+                "shell-access" => key == "--allow",
                 _ => false,
             };
         if !valid || options.insert(key, value).is_some() {
@@ -60,6 +63,33 @@ pub fn run(args: &[OsString]) -> Result<Value, String> {
             .ok_or_else(|| format!("Missing {key}\n{HELP}"))
     };
     match mode {
+        "shell-access" => {
+            let status = api.request(json!({"op":"status"}))?;
+            let service = status["host"]["services"]
+                .as_array()
+                .and_then(|ss| {
+                    ss.iter()
+                        .find(|s| s["id"] == "shell" && s["kind"] == "shell")
+                })
+                .ok_or("Built-in Shell unavailable; update and restart the node")?;
+            let Some(allow) = options.get("--allow") else {
+                return Ok(service.clone());
+            };
+            let allow = if *allow == "none" {
+                vec![]
+            } else {
+                allow
+                    .split(',')
+                    .map(|id| {
+                        id.parse::<wispnet_core::identity::EndpointId>()
+                            .map(|p| json!(p))
+                            .map_err(|_| "Invalid allowed device ID")
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+            };
+            let result=api.request(json!({"op":"mutate","operation":{"op":"shell","allow":allow,"expected_revision":status["host"]["revision"]}}))?;
+            Ok(json!({"service":"shell","revision":result["revision"],"allow":allow}))
+        }
         "node-status" => api.request(json!({"op":"status","refresh_clients":true})),
         "online" => {
             api.online(true)?;

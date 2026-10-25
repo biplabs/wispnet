@@ -85,7 +85,7 @@ class MCPTests(unittest.TestCase):
                 after = call('wispnet_status')['structuredContent']['host']
                 self.assertEqual(after['host'], before['host'])
                 self.assertEqual(after['clients'], before['clients'])
-                self.assertEqual(after['services'][0]['allow'], [])
+                self.assertEqual(next(s['allow'] for s in after['services'] if s['id'] == 'mcp-fixture'), [])
                 self.assertEqual(request(method='GET', path='/registry', authenticated=False)[0], 200)
                 self.assertEqual(request(method='GET', path='/registry/v1/services', authenticated=False)[0], 200)
                 self.assertEqual(request(method='GET', path='/v1/services', authenticated=False, authority=f'registry.wispnet.localhost:{port}')[0], 200)
