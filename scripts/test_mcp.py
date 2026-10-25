@@ -24,6 +24,124 @@ def unused_port():
 
 
 class MCPTests(unittest.TestCase):
+    def test_generic_grant_preserves_existing_services_and_grants_for_every_kind(self):
+        with tempfile.TemporaryDirectory(prefix='wispnet-mcp-grants-') as temporary:
+            root = Path(temporary)
+            binary = ROOT / 'target/debug/wispnet'
+
+            def host(name):
+                config = root / (name + '.toml')
+                state = root / name
+                config.write_text(f'schema_version=2\ndevice_name="{name}"\nstate_dir="{state}"\nlog_level="info"\n[transport]\nbind_addr="127.0.0.1:0"\n')
+                result = subprocess.run([binary, 'host-init', '--config', config],
+                                        check=True, capture_output=True, text=True)
+                peer = result.stdout.split('Endpoint ID: ')[1].strip()
+                return config, state, peer
+
+            config, state, _ = host('owner')
+            _, _, existing_peer = host('existing')
+            _, _, recipient = host('recipient')
+            _, _, unapproved = host('unapproved')
+            process = subprocess.Popen([binary, 'agent', '--config', config],
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                deadline = time.monotonic() + 10
+                while not (state / 'node.sock').exists():
+                    self.assertIsNone(process.poll())
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(.05)
+                api = NodeAPI(config)
+
+                def snapshot():
+                    return api.request(op='status')['host']
+
+                def mutate(**operation):
+                    return api.request(op='mutate', operation={
+                        'expected_revision': snapshot()['revision'], **operation})
+
+                for peer in [existing_peer, recipient]:
+                    mutate(op='approve', peer=peer, name='paired-test-device')
+                mutate(op='service', id='web', backend='127.0.0.1:18888',
+                       allow=[existing_peer], kind='http')
+                mutate(op='service', id='raw', backend='127.0.0.1:18889',
+                       allow=[existing_peer], kind='tcp')
+                mutate(op='shell', allow=[existing_peer])
+                port = unused_port()
+                api.request(op='configure_access', settings={'registry_port': port})
+                api.request(op='enable')
+                secret_headers = headers(config)
+                request_id = 0
+
+                def rpc(method, params=None):
+                    nonlocal request_id
+                    request_id += 1
+                    connection = http.client.HTTPConnection('127.0.0.1', port, timeout=35)
+                    fields = {'Host': f'wispnet.localhost:{port}',
+                              'Content-Type': 'application/json',
+                              'Accept': 'application/json, text/event-stream', **secret_headers}
+                    connection.request('POST', '/mcp', body=json.dumps({
+                        'jsonrpc': '2.0', 'id': request_id,
+                        'method': method, 'params': params or {}}), headers=fields)
+                    reply = connection.getresponse()
+                    self.assertEqual(reply.status, 200)
+                    result = json.loads(reply.read())
+                    connection.close()
+                    return result
+
+                def grant(service, peer, revision=None, **extra):
+                    return rpc('tools/call', {'name': 'wispnet_grant_service_access',
+                        'arguments': {'service': service, 'peer': peer,
+                                      'expected_revision': snapshot()['revision'] if revision is None else revision,
+                                      **extra}})
+
+                advertised = rpc('tools/list')['result']['tools']
+                schema = next(t['inputSchema'] for t in advertised
+                              if t['name'] == 'wispnet_grant_service_access')
+                self.assertEqual(set(schema['properties']), {'service', 'peer', 'expected_revision'})
+                self.assertEqual(set(schema['required']), {'service', 'peer', 'expected_revision'})
+                self.assertFalse(schema['additionalProperties'])
+
+                for service in ['web', 'raw', 'shell']:
+                    before = snapshot()
+                    result = grant(service, recipient, revision=before['revision'])
+                    self.assertNotIn('error', result)
+                    self.assertFalse(result['result']['isError'], result)
+                    self.assertEqual(result['result']['structuredContent']['revision'], before['revision'] + 1)
+                    after = snapshot()
+                    self.assertEqual(after['clients'], before['clients'])
+                    self.assertEqual(after['generation'], before['generation'])
+                    for old in before['services']:
+                        current = next(s for s in after['services'] if s['id'] == old['id'])
+                        if old['id'] == service:
+                            self.assertEqual(set(current['allow']), {existing_peer, recipient})
+                            self.assertEqual({k: v for k, v in current.items() if k != 'allow'},
+                                             {k: v for k, v in old.items() if k != 'allow'})
+                        else:
+                            self.assertEqual(current, old)
+                    stale = grant(service, recipient, revision=before['revision'])
+                    self.assertTrue(stale['result']['isError'], stale)
+                    self.assertEqual(snapshot(), after)
+
+                # Repeated grants do not duplicate or replace existing grants.
+                repeated = grant('shell', recipient)
+                self.assertFalse(repeated['result']['isError'], repeated)
+                shell = next(s for s in snapshot()['services'] if s['id'] == 'shell')
+                self.assertEqual(set(shell['allow']), {existing_peer, recipient})
+                self.assertEqual(len(shell['allow']), 2)
+
+                for service, peer in [('missing', recipient), ('web', unapproved)]:
+                    before = snapshot()
+                    rejected = grant(service, peer)
+                    self.assertTrue(rejected['result']['isError'], rejected)
+                    self.assertEqual(snapshot(), before)
+                before = snapshot()
+                invalid = grant('shell', recipient, backend='127.0.0.1:22')
+                self.assertEqual(invalid['error']['code'], -32602)
+                self.assertEqual(snapshot(), before)
+            finally:
+                process.terminate()
+                process.wait(timeout=10)
+
     def test_authenticated_owner_changes_revision_conflicts_and_listener_lifecycle(self):
         with tempfile.TemporaryDirectory(prefix='wispnet-mcp-') as temporary:
             root = Path(temporary)

@@ -196,13 +196,33 @@ read the same private token and send the bearer header themselves. See the
 Tools include service discovery/link resolution, gateway settings, port changes
 and local access online/offline. On desktop, the running owner-only `node.sock`
 also enables host status, transport diagnostics, service configuration/removal,
-pairing invitation approval/rejection and client revocation. Policy writes require
+pairing invitation approval/rejection, service access grants and client revocation. Policy writes require
 the current `expected_revision` from `wispnet_status` and use the same owner API
 and validation as the app. An explicit service `allow` list replaces the entire
 list; it never implicitly grants every client. Pairing approval requires an
 existing pending invitation. Android exposes discovery and device-local access
 settings through this shared implementation; desktop owner tools are not listed
 without the owner socket.
+
+Use `wispnet_grant_service_access` to add one approved device to an existing
+service's access list. It works for every service kind, including the built-in
+`shell`, and preserves other grants, the backend, and the service incarnation:
+
+```json
+{
+  "name": "wispnet_grant_service_access",
+  "arguments": {
+    "expected_revision": 61,
+    "service": "shell",
+    "peer": "FULL_PAIRED_DEVICE_ID"
+  }
+}
+```
+
+Read `wispnet_status` first and use its current revision. This operation grants
+access only; it does not create a service or approve a new device. By contrast,
+`wispnet_set_service` configures ordinary HTTP/TCP services and replaces their
+complete `allow` list.
 
 Changing the shared port moves both registry and MCP: update the client URL
 and reconnect. Going offline closes both endpoints; use the app or owner socket

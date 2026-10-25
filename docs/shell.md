@@ -49,6 +49,11 @@ Grant changes replace the allow list using the reviewed host revision. Only
 already approved devices can be selected. Shell access runs with the host
 account's permissions.
 
+MCP clients can add a device without replacing other grants by calling
+`wispnet_grant_service_access` with `service: "shell"`, the paired device's
+`peer` ID, and the current `expected_revision` from `wispnet_status`. The same
+tool works for HTTP and TCP services. It does not create services or pair devices.
+
 ## Android
 
 Tap Shell under a paired desktop host. The native terminal retains WispShell's
