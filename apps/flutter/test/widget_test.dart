@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -856,6 +857,28 @@ void main() {
       'ids': ['llama', 'website'],
     });
     await close(tester);
+  });
+  testWidgets('desktop service cards reorder without a long press', (
+    tester,
+  ) async {
+    final backend = FakeBackend();
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    await mount(tester, backend);
+    final gesture = await tester.startGesture(
+      tester.getCenter(find.text('website')),
+    );
+    await gesture.moveBy(const Offset(0, 20));
+    await tester.pump();
+    await gesture.moveTo(tester.getCenter(find.text('llama')));
+    await tester.pump();
+    await gesture.up();
+    await tester.pump();
+    expect(backend.calls.where((c) => c.$1 == 'saveOrder').single.$2, {
+      'group': 'services/$peer',
+      'ids': ['llama', 'website'],
+    });
+    await close(tester);
+    debugDefaultTargetPlatformOverride = null;
   });
   testWidgets('Diagnostic below Save opens a page and runs automatically', (
     tester,

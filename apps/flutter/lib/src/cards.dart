@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'backend.dart';
@@ -348,19 +349,35 @@ class ReorderTile extends StatelessWidget {
     onWillAcceptWithDetails: (d) =>
         d.data.startsWith('$group\n') && d.data != '$group\n$id',
     onAcceptWithDetails: (d) => onDrop(d.data.substring(group.length + 1)),
-    builder: (context, candidates, rejected) => LongPressDraggable<String>(
-      data: '$group\n$id',
-      maxSimultaneousDrags: 1,
-      feedback: Material(
+    builder: (context, candidates, rejected) {
+      final feedback = Material(
         color: Colors.transparent,
         child: WispPanel(child: Text(id)),
-      ),
-      childWhenDragging: Opacity(opacity: .4, child: child),
-      child: AnimatedOpacity(
+      );
+      final content = AnimatedOpacity(
         duration: const Duration(milliseconds: 120),
         opacity: candidates.isEmpty ? 1 : .65,
         child: child,
-      ),
-    ),
+      );
+      final touchPlatform =
+          defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS;
+      if (touchPlatform) {
+        return LongPressDraggable<String>(
+          data: '$group\n$id',
+          maxSimultaneousDrags: 1,
+          feedback: feedback,
+          childWhenDragging: Opacity(opacity: .4, child: child),
+          child: content,
+        );
+      }
+      return Draggable<String>(
+        data: '$group\n$id',
+        maxSimultaneousDrags: 1,
+        feedback: feedback,
+        childWhenDragging: Opacity(opacity: .4, child: child),
+        child: content,
+      );
+    },
   );
 }
