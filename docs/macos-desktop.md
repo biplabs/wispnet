@@ -50,8 +50,11 @@ scripts/test.sh
 
 The desktop build script bundles the Flutter engine/assets, private Python
 adapter and shared owner/cache helpers. The installer stages the app and retains
-`Wispnet.previous.app` when replacing an existing installation. Signing is local
-and ad hoc; notarization and App Store distribution are not implemented.
+`Wispnet.previous.app` under `~/Library/Application Support/Wispnet/Backups/`
+when replacing an existing installation, keeping backups out of Applications.
+Extra launches reveal the existing desktop instead of starting a second copy.
+Signing is local and ad hoc; notarization and App Store distribution are not
+implemented.
 
 The local test suite covers shared Rust protocols, node API integration,
 Flutter widgets, desktop adapters, cache validation and owner operations.

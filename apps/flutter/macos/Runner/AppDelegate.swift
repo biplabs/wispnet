@@ -3,6 +3,7 @@ import FlutterMacOS
 
 @main
 class AppDelegate: FlutterAppDelegate {
+  private static let revealNotification = Notification.Name("app.wispnet.desktop.reveal")
   private var links: [String] = []
   func takeLink() -> String? { links.isEmpty ? nil : links.removeFirst() }
   override func application(_ application: NSApplication, open urls: [URL]) {
@@ -13,6 +14,25 @@ class AppDelegate: FlutterAppDelegate {
   private let status = NSMenuItem(title: "Wispnet", action: nil, keyEquivalent: "")
   private let menu = NSMenu()
   override func applicationDidFinishLaunching(_ notification: Notification) {
+    // The login agent and LaunchServices can launch the same bundle independently.
+    let current = NSRunningApplication.current
+    let existing = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier!)
+      .filter { app in
+        guard app.processIdentifier != current.processIdentifier, !app.isTerminated else { return false }
+        let started = app.launchDate ?? .distantPast
+        let ours = current.launchDate ?? .distantPast
+        return started < ours || (started == ours && app.processIdentifier < current.processIdentifier)
+      }
+    if !existing.isEmpty {
+      DistributedNotificationCenter.default().postNotificationName(Self.revealNotification, object: nil, userInfo: nil, deliverImmediately: true)
+      NSApp.terminate(nil)
+      return
+    }
+    DistributedNotificationCenter.default().addObserver(self, selector: #selector(reveal), name: Self.revealNotification, object: nil)
+    if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+       let icon = NSImage(contentsOf: url) {
+      NSApp.applicationIconImage = icon
+    }
     item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     item?.button?.title = "W"
     menu.addItem(status)

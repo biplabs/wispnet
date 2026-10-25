@@ -98,7 +98,8 @@ def main():
         shutil.rmtree(staged)
     shutil.copytree(app_source, staged, symlinks=True)
     if app.exists():
-        old = app.with_name("Wispnet.previous.app")
+        old = home / "Library/Application Support/Wispnet/Backups/Wispnet.previous.app"
+        old.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         if old.exists():
             shutil.rmtree(old)
         os.replace(app, old)
@@ -158,6 +159,11 @@ def main():
         "WispnetStateDirectory": str(state),
     })
     run("codesign", "--force", "--deep", "--sign", "-", app)
+    # Only the installed bundle should be registered as a launchable app.
+    register = Path("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister")
+    # Unregistering an already unregistered development build can return nonzero.
+    subprocess.run([str(register), "-u", str(app_source)], capture_output=True)
+    run(register, "-f", app)
     agents = home / "Library/LaunchAgents"
     agents.mkdir(parents=True, exist_ok=True)
     logs = home / "Library/Logs/Wispnet"
