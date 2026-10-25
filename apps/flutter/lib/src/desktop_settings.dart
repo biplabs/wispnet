@@ -207,12 +207,12 @@ class _DesktopSettingsState extends State<DesktopSettings> {
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
                 initialValue: kind,
-                decoration: const InputDecoration(labelText: 'Protocol'),
+                decoration: const InputDecoration(labelText: 'Service type'),
                 items: ['http', 'tcp']
                     .map(
                       (k) => DropdownMenuItem(
                         value: k,
-                        child: Text(k.toUpperCase()),
+                        child: Text(k == 'http' ? 'Web / HTTP' : 'Raw TCP'),
                       ),
                     )
                     .toList(),
