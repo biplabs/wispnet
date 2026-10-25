@@ -49,6 +49,18 @@ pub enum Mutation {
         #[serde(default)]
         kind: Option<ServiceKind>,
     },
+    /// Edit an existing service, optionally renaming it in the same transaction.
+    EditService {
+        expected_revision: u64,
+        id: String,
+        new_id: String,
+        backend: std::net::SocketAddr,
+        /// Omission preserves the current grants; a supplied list replaces them.
+        #[serde(default)]
+        allow: Option<Vec<EndpointId>>,
+        #[serde(default)]
+        kind: Option<ServiceKind>,
+    },
     Remove {
         expected_revision: u64,
         id: String,
@@ -70,6 +82,9 @@ impl Mutation {
                 expected_revision, ..
             }
             | Self::Service {
+                expected_revision, ..
+            }
+            | Self::EditService {
                 expected_revision, ..
             }
             | Self::Remove {
@@ -311,6 +326,73 @@ pub(crate) fn apply_mutation(
                 "UPDATE host_invitations SET state='revoked',challenge=NULL
                     WHERE peer=?1 AND state IN ('issued','challenged','pending')",
                 [peer.to_string()],
+            )?;
+        }
+        Mutation::EditService {
+            expected_revision,
+            id,
+            new_id,
+            backend,
+            allow,
+            kind,
+        } => {
+            if !valid_service_id(&id) || !valid_service_id(&new_id) {
+                return Err(ControlError::Invalid);
+            }
+            let exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM host_services WHERE id=?1)",
+                [&id],
+                |r| r.get(0),
+            )?;
+            if !exists {
+                return Err(ControlError::Invalid);
+            }
+            if id != new_id {
+                let occupied: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM host_services WHERE id=?1)",
+                    [&new_id],
+                    |r| r.get(0),
+                )?;
+                if occupied {
+                    return Err(ControlError::Conflict);
+                }
+                // Both parent rows exist while grants move, so immediate foreign
+                // keys remain valid without changing the schema or dropping grants.
+                tx.execute(
+                    "INSERT INTO host_services(id,backend,incarnation,kind)
+                     SELECT ?2,backend,incarnation,kind FROM host_services WHERE id=?1",
+                    params![id, new_id],
+                )?;
+                tx.execute(
+                    "UPDATE host_grants SET service=?2 WHERE service=?1",
+                    params![id, new_id],
+                )?;
+                tx.execute("DELETE FROM host_services WHERE id=?1", [&id])?;
+            }
+            let allow = match allow {
+                Some(allow) => allow,
+                None => {
+                    let mut statement = tx.prepare(
+                        "SELECT client FROM host_grants WHERE service=?1 ORDER BY client",
+                    )?;
+                    statement
+                        .query_map([&new_id], |r| r.get::<_, String>(0))?
+                        .map(|row| row?.parse().map_err(|_| ControlError::Storage))
+                        .collect::<Result<Vec<_>, ControlError>>()?
+                }
+            };
+            // Reuse the usual backend, peer and protocol checks. Any failure
+            // rolls back the rename and grant migration along with the edit.
+            apply_mutation(
+                tx,
+                Mutation::Service {
+                    expected_revision,
+                    id: new_id,
+                    backend,
+                    allow,
+                    display_name: None,
+                    kind,
+                },
             )?;
         }
         Mutation::Service {

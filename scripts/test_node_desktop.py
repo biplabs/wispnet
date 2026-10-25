@@ -456,6 +456,45 @@ class NodeIntegration(unittest.TestCase):
                 api.request(
                     op="open", host=pa, service="website", incarnation=new_incarnation
                 )
+                # A remote rename keeps the pairing and grants, but moves URLs
+                # to the new ID. The old saved route must no longer serve it.
+                before_rename = bapi.request(op="status")["host"]
+                bapi.request(
+                    op="mutate",
+                    operation={
+                        "op": "edit_service",
+                        "expected_revision": before_rename["revision"],
+                        "id": "website",
+                        "new_id": "renamed-website",
+                        "backend": f"127.0.0.1:{backend.server_port}",
+                        "allow": [pa],
+                        "kind": "http",
+                    },
+                )
+                renamed = api.request(op="catalog", host=pb)
+                self.assertEqual([s["id"] for s in renamed["services"]], ["renamed-website"])
+                self.assertEqual(renamed["services"][0]["incarnation"], remote_incarnation)
+                after_rename = bapi.request(op="status")["host"]
+                self.assertEqual(after_rename["clients"], before_rename["clients"])
+                self.assertEqual(after_rename["services"][0]["allow"], [pa])
+                self.assertIn(pb, api.request(op="status")["peer_pins"])
+                with self.assertRaises(ValueError):
+                    api.request(op="resolve_service", host=pb, service="website")
+                old_address = urlsplit(url)
+                connection = http.client.HTTPConnection("127.0.0.1", old_address.port, timeout=5)
+                connection.request("GET", "/", headers={"Host": old_address.netloc})
+                response = connection.getresponse()
+                self.assertEqual(response.status, 403)
+                response.read()
+                connection.close()
+                renamed_url = api.request(op="resolve_service", host=pb, service="renamed-website")["url"]
+                renamed_address = urlsplit(renamed_url)
+                connection = http.client.HTTPConnection("127.0.0.1", renamed_address.port, timeout=5)
+                connection.request("GET", "/", headers={"Host": renamed_address.netloc})
+                response = connection.getresponse()
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response.read(), b"node-gateway-ok")
+                connection.close()
                 api.request(op="stop")
                 with self.assertRaises(OSError):
                     socket.create_connection(("127.0.0.1", parsed.port), timeout=1)
@@ -474,7 +513,7 @@ class NodeIntegration(unittest.TestCase):
                 self.assertIn(pa, bapi.request(op="status")["recent_peers"])
                 bapi.request(
                     op="mutate",
-                    operation={"op": "revoke", "expected_revision": 2, "peer": pa},
+                    operation={"op": "revoke", "expected_revision": 3, "peer": pa},
                 )
                 self.assertNotIn(pa, bapi.request(op="status")["recent_peers"])
                 with self.assertRaises(ValueError):

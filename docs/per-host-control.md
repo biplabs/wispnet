@@ -103,9 +103,21 @@ Optional `kind` (`http`/`tcp`) preserves the existing type when omitted.
 Legacy `display_name` input is accepted but ignored; the service ID is its only label. See [versioned complete catalogs](catalog-snapshots.md)
 for record validation, filtered removal and durable client version checks.
 
+To rename and edit an existing service atomically:
+
 ```json
-{"op":"remove","expected_revision":2,"id":"llama"}
-{"op":"revoke","expected_revision":3,"peer":"PUBLIC_CLIENT_ID"}
+{"op":"edit_service","expected_revision":2,"id":"llama","new_id":"local-model","backend":"127.0.0.1:8201"}
+```
+
+Omitting `allow` preserves existing permissions; an explicit `allow` list replaces
+them. The old ID must exist, and the new ID must be unused unless unchanged.
+The rename preserves pairings and incarnation (unless `kind` also changes), and
+advances the revision once. Refresh other devices' catalogs to see the new name;
+saved URLs using the old name need updating. See [service lifecycle](service-lifecycle.md).
+
+```json
+{"op":"remove","expected_revision":3,"id":"local-model"}
+{"op":"revoke","expected_revision":4,"peer":"PUBLIC_CLIENT_ID"}
 ```
 
 Revocation removes the local approval and cascades its service grants. New control

@@ -9,6 +9,20 @@ same local ID again generates a new incarnation even if its backend address and
 explicitly supplied grants are identical. Another host's same local ID remains
 independent. Incarnations persist in the host's SQLite authority across restart.
 
+The desktop Edit service dialog can rename the service ID while retaining the
+backend port field and selected device grants. Its owner-only `edit_service`
+operation takes the current `id`, `new_id`, `backend`, and `expected_revision`;
+optional `allow` replaces the grant list, and omitting it preserves existing
+grants. The rename, grants and backend/protocol edits commit in one transaction
+and advance the revision once. The source must exist and another service cannot
+already use the destination ID. A rename preserves the incarnation unless the
+protocol also changes. Pairings and host identity remain unchanged.
+
+Other devices see the new name on catalog refresh and keep their access. URLs
+contain the service ID, so saved links and browser routes using the old ID need
+updating; there is no old-name alias. Existing public publications are also bound
+to the old ID and must be explicitly published again under the new name.
+
 ## Listings, sessions and enforcement
 
 Filtered catalog records now contain `id` and `incarnation`. Desktop and Android

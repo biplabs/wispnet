@@ -244,6 +244,17 @@ class DesktopFake extends FakeBackend {
     }
     if (method == 'desktopRequest') {
       ownerCalls.add(arguments['payload'] as Map<String, dynamic>);
+      final operation = arguments['payload']['operation'];
+      if (operation?['op'] == 'edit_service') {
+        final service = (status['host']['services'] as List).singleWhere(
+          (s) => s['id'] == operation['id'],
+        );
+        service['id'] = operation['new_id'];
+        service['backend'] = operation['backend'];
+        service['kind'] = operation['kind'];
+        service['allow'] = operation['allow'];
+        status['host']['revision']++;
+      }
       if (arguments['payload']['op'] == 'invite_qr') {
         return {
           'host': 'd' * 64,
@@ -1194,14 +1205,81 @@ void main() {
       tester
           .widget<TextField>(find.widgetWithText(TextField, 'Service ID'))
           .enabled,
-      false,
+      true,
     );
     await tester.ensureVisible(find.text('Save service'));
     await tester.tap(find.text('Save service'));
     await tester.pumpAndSettle();
     expect(backend.ownerCalls.single['operation']['id'], 'other');
+    expect(backend.ownerCalls.single['operation']['op'], 'edit_service');
+    expect(backend.ownerCalls.single['operation']['new_id'], 'other');
     expect(backend.ownerCalls.single['operation']['backend'], '[::1]:8090');
     expect(backend.ownerCalls.single['operation']['allow'], isEmpty);
+    await close(tester);
+  });
+  testWidgets('service rename retains grants and allows editing the port', (
+    tester,
+  ) async {
+    final backend = DesktopFake();
+    (backend.status['host']['services'] as List).add({
+      'id': 'taken',
+      'kind': 'http',
+      'backend': '127.0.0.1:8090',
+      'incarnation': incarnation,
+      'allow': [],
+    });
+    await mount(tester, backend, size: const Size(1000, 850));
+    await tester.tap(find.byTooltip('Settings for web on hibreak'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Edit'));
+    await tester.pumpAndSettle();
+    final id = find.widgetWithText(TextField, 'Service ID');
+    final port = find.widgetWithText(TextField, 'Port');
+    expect(tester.widget<TextField>(id).enabled, true);
+    expect(tester.widget<TextField>(port).enabled, true);
+    expect(
+      tester.widget<CheckboxListTile>(find.byType(CheckboxListTile)).value,
+      true,
+    );
+    for (final invalid in ['UpperCase', 'taken']) {
+      await tester.enterText(id, invalid);
+      await tester.ensureVisible(find.text('Save service'));
+      await tester.tap(find.text('Save service'));
+      await tester.pumpAndSettle();
+      expect(backend.ownerCalls, isEmpty);
+      expect(
+        find.text(
+          invalid == 'taken'
+              ? 'This ID exists. Edit that service instead.'
+              : 'Enter a valid service ID.',
+        ),
+        findsOneWidget,
+      );
+    }
+    await tester.enterText(id, 'renamed-web');
+    await tester.enterText(port, '8310');
+    await tester.ensureVisible(find.text('Save service'));
+    await tester.tap(find.text('Save service'));
+    await tester.pumpAndSettle();
+    expect(backend.ownerCalls.single, {
+      'op': 'mutate',
+      'operation': {
+        'op': 'edit_service',
+        'expected_revision': 7,
+        'id': 'web',
+        'new_id': 'renamed-web',
+        'backend': '127.0.0.1:8310',
+        'kind': 'http',
+        'allow': [peer],
+      },
+    });
+    expect(find.byType(DesktopSettings), findsNothing);
+    expect(
+      find.byTooltip('Settings for renamed-web on hibreak'),
+      findsOneWidget,
+    );
+    expect(find.byTooltip('Settings for web on hibreak'), findsNothing);
+    expect(tester.takeException(), isNull);
     await close(tester);
   });
   testWidgets('desktop owner tools use sheets and retain service grants', (

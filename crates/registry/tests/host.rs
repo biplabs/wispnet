@@ -11,6 +11,214 @@ fn directory() -> tempfile::TempDir {
     dir
 }
 
+#[tokio::test]
+async fn service_rename_preserves_grants_pairings_and_incarnation_after_restart() {
+    use serde_json::json;
+    let host = Identity::generate().endpoint_id();
+    let peers = [
+        Identity::generate().endpoint_id(),
+        Identity::generate().endpoint_id(),
+        Identity::generate().endpoint_id(),
+    ];
+    let dir = directory();
+    host::initialize(dir.path(), host).unwrap();
+    let (mut store, owner) = host::owner_store(dir.path(), host).unwrap();
+    for peer in peers {
+        store
+            .pairing_accept_host(
+                host,
+                &owner,
+                &wispnet_core::pairing::Bootstrap {
+                    version: 1,
+                    host: peer,
+                    relay_url: "https://relay.example/".into(),
+                    direct_hint: None,
+                },
+                "computer",
+            )
+            .unwrap();
+    }
+    store
+        .host_mutate(
+            host,
+            &owner,
+            Mutation::Service {
+                expected_revision: 3,
+                id: "gike".into(),
+                backend: "127.0.0.1:8310".parse().unwrap(),
+                allow: peers[..2].to_vec(),
+                display_name: None,
+                kind: None,
+            },
+        )
+        .unwrap();
+    let before = store.host_snapshot(host).unwrap();
+    let pairings = serde_json::to_value(store.paired_hosts(host).unwrap()).unwrap();
+    // Omitting allow in the owner API preserves the authoritative grants.
+    let rename = serde_json::from_value(json!({
+        "op": "edit_service", "expected_revision": 4,
+        "id": "gike", "new_id": "research",
+        "backend": "127.0.0.1:8311"
+    }))
+    .unwrap();
+    assert_eq!(store.host_mutate(host, &owner, rename).unwrap(), 5);
+    drop(store);
+    let (mut store, _) = host::owner_store(dir.path(), host).unwrap();
+    let after = store.host_snapshot(host).unwrap();
+    assert_eq!(after.host, before.host);
+    assert_eq!(after.generation, before.generation);
+    assert_eq!(after.revision, 5);
+    assert_eq!(after.services.len(), 1);
+    assert_eq!(after.services[0].id, "research");
+    assert_eq!(after.services[0].display_name, "research");
+    assert_eq!(after.services[0].backend, "127.0.0.1:8311".parse().unwrap());
+    assert_eq!(after.services[0].allow, before.services[0].allow);
+    assert_eq!(
+        after.services[0].incarnation,
+        before.services[0].incarnation
+    );
+    assert_eq!(
+        serde_json::to_value(&after.clients).unwrap(),
+        serde_json::to_value(&before.clients).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(store.paired_hosts(host).unwrap()).unwrap(),
+        pairings
+    );
+    drop(store);
+    let authority = host::Authority::open(dir.path(), host).unwrap();
+    for peer in peers[..2].iter().copied() {
+        let catalog = authority.catalog(peer).await.unwrap();
+        assert_eq!(catalog.services.len(), 1);
+        assert_eq!(catalog.services[0].id, "research");
+        assert_eq!(
+            catalog.services[0].incarnation,
+            before.services[0].incarnation
+        );
+    }
+    assert!(
+        authority
+            .catalog(peers[2])
+            .await
+            .unwrap()
+            .services
+            .is_empty()
+    );
+}
+
+#[test]
+fn service_rename_rejects_conflicts_and_rolls_back_invalid_edits() {
+    use serde_json::json;
+    let host = Identity::generate().endpoint_id();
+    let peer = Identity::generate().endpoint_id();
+    let dir = directory();
+    host::initialize(dir.path(), host).unwrap();
+    let (mut store, owner) = host::owner_store(dir.path(), host).unwrap();
+    store
+        .host_mutate(
+            host,
+            &owner,
+            Mutation::Approve {
+                expected_revision: 0,
+                peer,
+                name: "computer".into(),
+            },
+        )
+        .unwrap();
+    for (revision, id) in [(1, "gike"), (2, "taken")] {
+        store
+            .host_mutate(
+                host,
+                &owner,
+                Mutation::Service {
+                    expected_revision: revision,
+                    id: id.into(),
+                    backend: "127.0.0.1:8310".parse().unwrap(),
+                    allow: vec![peer],
+                    display_name: None,
+                    kind: None,
+                },
+            )
+            .unwrap();
+    }
+    let before = serde_json::to_value(store.host_snapshot(host).unwrap()).unwrap();
+    let edit = json!({"op":"edit_service", "expected_revision":3,
+        "id":"gike", "new_id":"research", "backend":"127.0.0.1:8311"});
+    for changes in [
+        json!({"new_id":"taken"}),
+        json!({"new_id":"UpperCase"}),
+        json!({"id":"missing"}),
+        json!({"expected_revision":2}),
+        json!({"backend":"192.168.1.1:80"}),
+        json!({"backend":"127.0.0.1:0"}),
+        json!({"allow":[Identity::generate().endpoint_id()]}),
+        json!({"allow":[peer,peer]}),
+    ] {
+        let mut operation = edit.clone();
+        operation
+            .as_object_mut()
+            .unwrap()
+            .extend(changes.as_object().unwrap().clone());
+        assert!(
+            store
+                .host_mutate(host, &owner, serde_json::from_value(operation).unwrap())
+                .is_err()
+        );
+        assert_eq!(
+            serde_json::to_value(store.host_snapshot(host).unwrap()).unwrap(),
+            before
+        );
+    }
+    assert!(
+        store
+            .host_mutate(
+                host,
+                &control::token(),
+                serde_json::from_value(edit.clone()).unwrap()
+            )
+            .is_err()
+    );
+    assert_eq!(
+        serde_json::to_value(store.host_snapshot(host).unwrap()).unwrap(),
+        before
+    );
+    // Renaming and explicitly revoking a grant are one atomic owner action.
+    let mut revoke = edit;
+    revoke["allow"] = json!([]);
+    store
+        .host_mutate(host, &owner, serde_json::from_value(revoke).unwrap())
+        .unwrap();
+    let after = store.host_snapshot(host).unwrap();
+    let renamed = after.services.iter().find(|s| s.id == "research").unwrap();
+    assert!(renamed.allow.is_empty());
+    assert_eq!(
+        renamed.incarnation,
+        before["services"][0]["incarnation"].as_str().unwrap()
+    );
+    assert_eq!(
+        after
+            .services
+            .iter()
+            .find(|s| s.id == "taken")
+            .unwrap()
+            .allow,
+        vec![peer]
+    );
+    // Saving without a name change is still an edit, not a conflicting create.
+    store
+        .host_mutate(
+            host,
+            &owner,
+            serde_json::from_value(json!({
+                "op":"edit_service", "expected_revision":4, "id":"research",
+                "new_id":"research", "backend":"127.0.0.1:8312"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(store.host_snapshot(host).unwrap().revision, 5);
+}
+
 #[test]
 fn removing_display_names_preserves_identity_pairings_grants_and_incarnations() {
     use wispnet_core::pairing::Bootstrap;

@@ -166,12 +166,14 @@ class _DesktopSettingsState extends State<DesktopSettings> {
 
   Future<void> editService([Map<String, dynamic>? service]) async {
     final current = status!;
-    final id = TextEditingController(text: service?['id'] as String?);
+    final originalId = service?['id'] as String?;
+    final id = TextEditingController(text: originalId);
     final endpoint = Uri.parse(
       'tcp://${service?['backend'] ?? '127.0.0.1:8080'}',
     );
     final portField = TextEditingController(text: endpoint.port.toString());
     var kind = service?['kind'] as String? ?? 'http';
+    var renamed = false;
     final allowed = (service?['allow'] as List? ?? []).cast<String>().toSet();
     final devices = List<Map<String, dynamic>>.of(clients);
     await showWispSheet<void>(
@@ -185,12 +187,13 @@ class _DesktopSettingsState extends State<DesktopSettings> {
             children: [
               TextField(
                 controller: id,
-                enabled: service == null && !working,
+                enabled: !working,
                 decoration: InputDecoration(
                   labelText: 'Service ID',
+                  helperMaxLines: 3,
                   helperText: service == null
                       ? '1–64 lowercase letters, numbers, dots, underscores or hyphens'
-                      : 'Used in URLs and access grants',
+                      : 'Renaming keeps device permissions. Update saved URLs afterward.',
                 ),
               ),
               const SizedBox(height: 12),
@@ -248,10 +251,10 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                             'Enter a valid service ID.',
                           );
                         }
-                        if (service == null &&
-                            (current['host']['services'] as List).any(
-                              (s) => s['id'] == serviceId,
-                            )) {
+                        if ((current['host']['services'] as List).any(
+                          (s) =>
+                              s['id'] == serviceId && s['id'] != originalId,
+                        )) {
                           throw const FormatException(
                             'This ID exists. Edit that service instead.',
                           );
@@ -268,12 +271,14 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                         final address =
                             '${host.contains(':') ? '[$host]' : host}:$port';
                         await mutate({
-                          'op': 'service',
-                          'id': serviceId,
+                          'op': service == null ? 'service' : 'edit_service',
+                          'id': originalId ?? serviceId,
+                          if (service != null) 'new_id': serviceId,
                           'backend': address,
                           'kind': kind,
                           'allow': allowed.toList(),
                         }, current['host']['revision'] as int);
+                        renamed = service != null && serviceId != originalId;
                       }),
                 child: const Text('Save service'),
               ),
@@ -283,6 +288,12 @@ class _DesktopSettingsState extends State<DesktopSettings> {
       ),
     );
     widget.onChanged();
+    if (renamed && widget.serviceId != null && mounted) {
+      // Return to the refreshed directory rather than leaving settings pointed
+      // at the old service ID.
+      Navigator.pop(context);
+      return;
+    }
     await load();
   }
 
