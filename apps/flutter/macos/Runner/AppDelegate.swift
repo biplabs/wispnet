@@ -53,9 +53,12 @@ class AppDelegate: FlutterAppDelegate {
     item?.button?.toolTip = status.title
   }
   @objc private func trayClicked() {
-    if let button = item?.button {
-      menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.minY), in: button)
-    }
+    guard let item = item, let button = item.button else { return }
+    // Let AppKit anchor the menu below the menu bar. Detach it after tracking
+    // so right-click does not acquire the status item's default menu behavior.
+    item.menu = menu
+    button.performClick(nil)
+    item.menu = nil
   }
   @objc private func reveal() {
     NSApp.setActivationPolicy(.regular)
