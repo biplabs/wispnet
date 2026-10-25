@@ -12,6 +12,7 @@ import select
 import signal
 import socket
 import struct
+import sys
 import subprocess
 import termios
 import time
@@ -27,15 +28,55 @@ spec = importlib.util.spec_from_file_location('tui_node_api', ROOT / 'apps/node/
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
+class BrowserCapture:
+    """Intercept both platform openers without changing application behavior."""
+    def __init__(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='wispnet-browser-test-')
+        self.root = Path(self.temp.name)
+        self.log = self.root / 'requests.jsonl'
+        self.log.touch()
+        # Absolute interpreter/log paths keep the stub independent of PATH and
+        # shell metacharacters in URLs. Each invocation records its exact argv.
+        script = (f'#!{sys.executable}\nimport json, sys\n'
+                  f'with open({str(self.log)!r}, "a") as log:\n'
+                  '    log.write(json.dumps(sys.argv[1:]) + "\\n")\n')
+        for opener in ('open', 'xdg-open'):
+            path = self.root / opener
+            path.write_text(script)
+            path.chmod(0o700)
+
+    def environment(self):
+        # Exercise Linux handoff even on headless runners; both openers are
+        # shadowed before the TUI starts, including macOS open without DISPLAY.
+        return dict(os.environ, PATH=str(self.root) + os.pathsep + os.environ.get('PATH', ''),
+                    DISPLAY='wispnet-test-stub', WAYLAND_DISPLAY='wispnet-test-stub')
+
+    @property
+    def requests(self):
+        return [json.loads(line) for line in self.log.read_text().splitlines()]
+
+    def close(self):
+        self.temp.cleanup()
+
+
+class BrowserCaptureTests(unittest.TestCase):
+    def test_both_platform_openers_capture_exact_url(self):
+        capture = BrowserCapture()
+        self.addCleanup(capture.close)
+        url = 'http://dashboard.fixture-host.localhost:8310/'
+        for opener in ('open', 'xdg-open'):
+            subprocess.run([opener, url], env=capture.environment(), check=True)
+        self.assertEqual(capture.requests, [[url], [url]])
+
+
 class Terminal:
     def __init__(self, config, width=140, height=75, monochrome=True):
+        self.browser = BrowserCapture()
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
-            env = dict(os.environ, TERM='xterm-256color')
+            env = dict(self.browser.environment(), TERM='xterm-256color')
             if monochrome: env['NO_COLOR'] = '1'
             else: env.pop('NO_COLOR', None)
-            env.pop('DISPLAY', None)
-            env.pop('WAYLAND_DISPLAY', None)
             os.execve(BINARY, [str(BINARY), '--config', str(config)], env)
         self.before = termios.tcgetattr(self.fd)
         self.raw = bytearray()
@@ -107,6 +148,7 @@ class Terminal:
         assert after[3] & (termios.ICANON | termios.ECHO) == self.before[3] & (termios.ICANON | termios.ECHO), 'Terminal raw mode was not restored'
         assert b'\x1b[?1049l' in self.raw, 'Alternate screen was not restored'
         os.close(self.fd)
+        self.browser.close()
 
 class TerminalManagement(unittest.TestCase):
     def setUp(self):
@@ -212,7 +254,12 @@ class TerminalManagement(unittest.TestCase):
         term.send(b'\x1b[B\r\x1b[B\r')
         term.expect('Browser service')
         self.assertTrue(bapi.request(op='status')['access_enabled'])
-        self.assertIn('.localhost:', term.text)
+        expected_url = re.search(r'http://[^\s]+\.localhost:\d+/', term.text).group(0)
+        deadline = time.monotonic() + 12
+        while not term.browser.requests:
+            term.read()
+            self.assertLess(time.monotonic(), deadline, 'Browser handoff was not requested')
+        self.assertEqual(term.browser.requests, [[expected_url]])
         term.send(b'\r\r\r')
         term.expect('Edit service and device grants')
         term.send(b'\t\t\t \t\r')
