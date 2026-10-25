@@ -1157,12 +1157,11 @@ void main() {
           )
           .decoration
           .labelText,
-      'Service type',
+      'Protocol',
     );
-    expect(find.text('Web / HTTP'), findsOneWidget);
     await tester.tap(find.byType(DropdownButtonFormField<String>));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Raw TCP').last);
+    await tester.tap(find.text('TCP').last);
     await tester.pumpAndSettle();
     await tester.enterText(port, '8201');
     await tester.tap(find.text('Save service'));

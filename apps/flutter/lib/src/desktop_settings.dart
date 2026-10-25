@@ -207,12 +207,16 @@ class _DesktopSettingsState extends State<DesktopSettings> {
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
                 initialValue: kind,
-                decoration: const InputDecoration(labelText: 'Service type'),
+                decoration: const InputDecoration(
+                  labelText: 'Protocol',
+                  helperText: 'HTTP: websites and APIs with browser links. TCP: raw connections for native apps. UDP services are not supported yet.',
+                  helperMaxLines: 5,
+                ),
                 items: ['http', 'tcp']
                     .map(
                       (k) => DropdownMenuItem(
                         value: k,
-                        child: Text(k == 'http' ? 'Web / HTTP' : 'Raw TCP'),
+                        child: Text(k.toUpperCase()),
                       ),
                     )
                     .toList(),
@@ -252,8 +256,7 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                           );
                         }
                         if ((current['host']['services'] as List).any(
-                          (s) =>
-                              s['id'] == serviceId && s['id'] != originalId,
+                          (s) => s['id'] == serviceId && s['id'] != originalId,
                         )) {
                           throw const FormatException(
                             'This ID exists. Edit that service instead.',
