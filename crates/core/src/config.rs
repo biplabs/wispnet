@@ -427,7 +427,7 @@ log_level = 'info'"
     fn omitted_device_name_uses_os_name_and_explicit_names_are_preserved() {
         let text = valid().replace("device_name = 'laptop'\n", "");
         let config = Config::parse(&text).unwrap();
-        assert_eq!(config.device_name, machine_name());
+        assert_eq!(config.device_name, readable_device_id(&machine_name()));
         assert!(!config.device_name.is_empty());
         assert_eq!(Config::parse(&valid()).unwrap().device_name, "laptop");
         assert!(Config::parse(&valid().replace("'laptop'", "''")).is_err());
