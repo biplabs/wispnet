@@ -53,6 +53,8 @@ MCP clients can add a device without replacing other grants by calling
 `wispnet_grant_service_access` with `service: "shell"`, the paired device's
 `peer` ID, and the current `expected_revision` from `wispnet_status`. The same
 tool works for HTTP and TCP services. It does not create services or pair devices.
+Use `wispnet_revoke_service_access` with the same fields to remove just that
+device's shell grant while keeping it paired and preserving its other access.
 
 ## Android
 

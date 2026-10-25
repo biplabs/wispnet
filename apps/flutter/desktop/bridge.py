@@ -74,34 +74,36 @@ def readable_device_id(value):
 
 def launch_terminal(command, state):
     """Launch the native terminal with a fixed argv, keeping protocol bytes out of pipes."""
-    if sys.platform == 'darwin':
-        fd, name = tempfile.mkstemp(prefix='shell-', suffix='.command', dir=state)
-        try:
-            with os.fdopen(fd, 'w') as output:
-                output.write('#!/bin/sh\nrm -f -- "$0"\nexec ' + shlex.join(command) + '\n')
-            os.chmod(name, 0o700)
+    fd, name = tempfile.mkstemp(prefix='shell-', suffix='.command', dir=state)
+    try:
+        with os.fdopen(fd, 'w') as output:
+            output.write('#!/bin/sh\nrm -f -- "$0"\nexec ' + shlex.join(command) + '\n')
+        os.chmod(name, 0o700)
+        if sys.platform == 'darwin':
             subprocess.run(['/usr/bin/open', '-a', 'Terminal', name], check=True, timeout=15,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except BaseException:
-            Path(name).unlink(missing_ok=True)
-            raise
-        return
-    for terminal, options in (
-        ('x-terminal-emulator', ['-e']),
-        ('gnome-terminal', ['--']),
-        ('konsole', ['-e']),
-        ('xfce4-terminal', ['-x']),
-        ('kitty', []),
-        ('alacritty', ['-e']),
-        ('xterm', ['-e']),
-    ):
-        executable = shutil.which(terminal)
-        if executable:
-            subprocess.Popen([executable, *options, *command], stdin=subprocess.DEVNULL,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                             start_new_session=True, close_fds=True)
             return
-    raise ValueError('Install a terminal application, or connect with wispnet shell from a terminal')
+        # Qt parses its own --session option even after Konsole's -e. Keep
+        # Wispnet's arguments inside the private script, away from the terminal.
+        for terminal, options in (
+            ('x-terminal-emulator', ['-e']),
+            ('gnome-terminal', ['--']),
+            ('konsole', ['-e']),
+            ('xfce4-terminal', ['-x']),
+            ('kitty', []),
+            ('alacritty', ['-e']),
+            ('xterm', ['-e']),
+        ):
+            executable = shutil.which(terminal)
+            if executable:
+                subprocess.Popen([executable, *options, '/bin/sh', name], stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 start_new_session=True, close_fds=True)
+                return
+        raise ValueError('Install a terminal application, or connect with wispnet shell from a terminal')
+    except BaseException:
+        Path(name).unlink(missing_ok=True)
+        raise
 
 
 class Bridge:

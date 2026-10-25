@@ -49,6 +49,12 @@ pub enum Mutation {
         service: String,
         peer: EndpointId,
     },
+    /// Remove one approved peer's access without changing pairing or other grants.
+    RevokeService {
+        expected_revision: u64,
+        service: String,
+        peer: EndpointId,
+    },
     Service {
         expected_revision: u64,
         id: String,
@@ -96,6 +102,9 @@ impl Mutation {
                 expected_revision, ..
             }
             | Self::GrantService {
+                expected_revision, ..
+            }
+            | Self::RevokeService {
                 expected_revision, ..
             }
             | Self::Service {
@@ -535,6 +544,29 @@ pub(crate) fn apply_mutation(
             }
             tx.execute(
                 "INSERT OR IGNORE INTO host_grants(service,client) VALUES(?1,?2)",
+                params![service, peer],
+            )?;
+        }
+        Mutation::RevokeService { service, peer, .. } => {
+            if !valid_service_id(&service)
+                || !tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM host_services WHERE id=?1)",
+                    [&service],
+                    |r| r.get::<_, bool>(0),
+                )?
+            {
+                return Err(ControlError::Invalid);
+            }
+            let peer = peer.to_string();
+            if !tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM host_clients WHERE id=?1)",
+                [&peer],
+                |r| r.get::<_, bool>(0),
+            )? {
+                return Err(ControlError::Forbidden);
+            }
+            tx.execute(
+                "DELETE FROM host_grants WHERE service=?1 AND client=?2",
                 params![service, peer],
             )?;
         }

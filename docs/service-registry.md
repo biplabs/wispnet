@@ -196,7 +196,7 @@ read the same private token and send the bearer header themselves. See the
 Tools include service discovery/link resolution, gateway settings, port changes
 and local access online/offline. On desktop, the running owner-only `node.sock`
 also enables host status, transport diagnostics, service configuration/removal,
-pairing invitation approval/rejection, service access grants and client revocation. Policy writes require
+pairing invitation approval/rejection, service access grants/revocation and client revocation. Policy writes require
 the current `expected_revision` from `wispnet_status` and use the same owner API
 and validation as the app. An explicit service `allow` list replaces the entire
 list; it never implicitly grants every client. Pairing approval requires an
@@ -223,6 +223,12 @@ Read `wispnet_status` first and use its current revision. This operation grants
 access only; it does not create a service or approve a new device. By contrast,
 `wispnet_set_service` configures ordinary HTTP/TCP services and replaces their
 complete `allow` list.
+
+Use `wispnet_revoke_service_access` with the same `service`, `peer`, and current
+`expected_revision` fields to remove only that device's grant for one service.
+The device stays paired, and its access to other services remains unchanged.
+Both tools require an existing service and an approved device; repeating a grant
+or revocation is safe when submitted with the current revision.
 
 Changing the shared port moves both registry and MCP: update the client URL
 and reconnect. Going offline closes both endpoints; use the app or owner socket

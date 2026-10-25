@@ -92,6 +92,7 @@ fn tools(owner: bool) -> Vec<Value> {
             tool("wispnet_status", "Read local host ID, policy revision, configured services, paired clients, invitations and access state. Read before changing policy.",json!({}),&[],true),
             tool("wispnet_transport", "Inspect local network, relay and peer transport diagnostics.",json!({}),&[],true),
             tool("wispnet_grant_service_access", "Grant an already paired device access to an existing service of any kind, including Shell. Preserves all other grants and service settings. Read status first and supply its current revision.",json!({"expected_revision":revision,"service":{"type":"string"},"peer":peer}),&["expected_revision","service","peer"],false),
+            tool("wispnet_revoke_service_access", "Revoke one paired device's access to an existing service of any kind, including Shell. Preserves pairing, other grants and service settings. Read status first and supply its current revision.",json!({"expected_revision":revision,"service":{"type":"string"},"peer":peer}),&["expected_revision","service","peer"],false),
             tool("wispnet_set_service", "Create/update a local service and its complete device allow list. Read status first; supply its current revision. Existing service IDs preserve identity. Empty allow grants no remote devices.",json!({"expected_revision":revision,"id":{"type":"string"},"backend":{"type":"string"},"allow":{"type":"array","items":peer},"kind":{"type":"string","enum":["http","tcp"]}}),&["expected_revision","id","backend","allow","kind"],false),
             tool("wispnet_remove_service", "Remove a local service at the current policy revision.",json!({"expected_revision":revision,"id":{"type":"string"}}),&["expected_revision","id"],false),
             tool("wispnet_approve_invitation", "Approve a pending pairing invitation and grant the explicitly supplied existing services. Read status and inspect the invitation first.",json!({"expected_revision":revision,"invitation":{"type":"string"},"services":{"type":"array","items":{"type":"string"}}}),&["expected_revision","invitation","services"],false),
@@ -202,6 +203,7 @@ async fn call(client: Arc<Client>, name: &str, args: Value) -> Result<Value, Str
         _ => {
             let op = match name {
                 "wispnet_grant_service_access" => "grant_service",
+                "wispnet_revoke_service_access" => "revoke_service",
                 "wispnet_set_service" => "service",
                 "wispnet_remove_service" => "remove",
                 "wispnet_approve_invitation" => "approve_invitation",
@@ -447,36 +449,34 @@ mod tests {
         );
     }
     #[test]
-    fn generic_service_grant_is_owner_only_and_has_no_type_or_backend_input() {
+    fn generic_service_access_tools_are_owner_only_and_have_no_type_or_backend_input() {
         let list = tools(true);
-        let grant = list
-            .iter()
-            .find(|t| t["name"] == "wispnet_grant_service_access")
-            .unwrap();
-        assert_eq!(grant["annotations"]["readOnlyHint"], false);
-        let schema = &grant["inputSchema"];
-        let args = json!({"expected_revision":2,"service":"shell","peer":"ab".repeat(32)});
-        assert!(valid(&args, schema));
-        for service in ["website", "database", "shell"] {
-            let mut args = args.clone();
-            args["service"] = json!(service);
+        for name in [
+            "wispnet_grant_service_access",
+            "wispnet_revoke_service_access",
+        ] {
+            let tool = list.iter().find(|t| t["name"] == name).unwrap();
+            assert_eq!(tool["annotations"]["readOnlyHint"], false);
+            let schema = &tool["inputSchema"];
+            let args = json!({"expected_revision":2,"service":"shell","peer":"ab".repeat(32)});
             assert!(valid(&args, schema));
+            for service in ["website", "database", "shell"] {
+                let mut args = args.clone();
+                args["service"] = json!(service);
+                assert!(valid(&args, schema));
+            }
+            for key in ["expected_revision", "service", "peer"] {
+                let mut missing = args.clone();
+                missing.as_object_mut().unwrap().remove(key);
+                assert!(!valid(&missing, schema));
+            }
+            let mut extra = args.clone();
+            extra["backend"] = json!("127.0.0.1:22");
+            assert!(!valid(&extra, schema));
+            let mut extra = args;
+            extra["kind"] = json!("shell");
+            assert!(!valid(&extra, schema));
+            assert!(!tools(false).iter().any(|t| t["name"] == name));
         }
-        for key in ["expected_revision", "service", "peer"] {
-            let mut missing = args.clone();
-            missing.as_object_mut().unwrap().remove(key);
-            assert!(!valid(&missing, schema));
-        }
-        let mut extra = args.clone();
-        extra["backend"] = json!("127.0.0.1:22");
-        assert!(!valid(&extra, schema));
-        let mut extra = args;
-        extra["kind"] = json!("shell");
-        assert!(!valid(&extra, schema));
-        assert!(
-            !tools(false)
-                .iter()
-                .any(|t| t["name"] == "wispnet_grant_service_access")
-        );
     }
 }

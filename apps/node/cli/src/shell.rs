@@ -115,9 +115,16 @@ impl Drop for Restore {
             .request(json!({"op":"shell_close","session":self.handle}));
     }
 }
+fn terminal_size() -> Option<(u16, u16)> {
+    // A new terminal can report 0x0 before its window is mapped. Keep using a
+    // valid size until the terminal has dimensions the remote PTY can accept.
+    crossterm::terminal::size()
+        .ok()
+        .filter(|(cols, rows)| (2..=1000).contains(cols) && (2..=1000).contains(rows))
+}
 pub(crate) fn run_selected(api: &Api, mut request: Value) -> Result<u32, String> {
     let raw = io::stdin().is_terminal() && io::stdout().is_terminal();
-    let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+    let (cols, rows) = terminal_size().unwrap_or((80, 24));
     request["op"] = json!("shell_open");
     request["cols"] = json!(cols);
     request["rows"] = json!(rows);
@@ -229,7 +236,7 @@ pub(crate) fn run_selected(api: &Api, mut request: Value) -> Result<u32, String>
                 }
             }
             if raw
-                && let Ok((cols, rows)) = crossterm::terminal::size()
+                && let Some((cols, rows)) = terminal_size()
                 && last_size != (cols, rows)
             {
                 api.request(json!({"op":"shell_resize","session":handle,"cols":cols,"rows":rows}))?;

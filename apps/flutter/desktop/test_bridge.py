@@ -78,17 +78,51 @@ class BridgeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.bridge.dispatch('openShell', args)
 
-    def test_terminal_launch_preserves_argument_boundaries_and_requires_an_installed_terminal(self):
-        command = ['/tmp/Wispnet CLI', 'shell', '--config', '/tmp/with spaces/host.toml']
+    def test_terminal_launch_keeps_cli_options_out_of_terminal_arguments(self):
+        command = ['/tmp/Wispnet CLI', 'shell', '--session', 'main', '--config', '/tmp/with spaces/host.toml']
         with patch.object(module.sys, 'platform', 'linux'), patch.object(module.shutil, 'which',
              side_effect=lambda name: '/usr/bin/gnome-terminal' if name == 'gnome-terminal' else None), \
              patch.object(module.subprocess, 'Popen') as popen:
             module.launch_terminal(command, self.state)
-            self.assertEqual(popen.call_args.args[0], ['/usr/bin/gnome-terminal', '--', *command])
+            terminal_command = popen.call_args.args[0]
+            self.assertEqual(terminal_command[:-1], ['/usr/bin/gnome-terminal', '--', '/bin/sh'])
+            self.assertNotIn('--session', terminal_command)
+            script = Path(terminal_command[-1])
+            self.assertEqual(script.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(script.parent, self.state)
+            self.assertEqual(module.shlex.split(script.read_text().splitlines()[-1])[1:], command)
             self.assertNotIn('shell', popen.call_args.kwargs)
+
+    def test_terminal_script_preserves_literal_arguments_and_removes_itself(self):
+        captured = self.root / 'captured.json'
+        injected = self.root / 'injected'
+        arguments = ['with spaces', 'single\'quote', 'semi; colon', f'$(touch {injected})', '--session', 'main']
+        command = [module.sys.executable, '-c',
+                   'import json,sys; open(sys.argv[1], "w").write(json.dumps(sys.argv[2:]))',
+                   str(captured), *arguments]
+        with patch.object(module.sys, 'platform', 'linux'), patch.object(module.shutil, 'which',
+             side_effect=lambda name: '/usr/bin/konsole' if name == 'konsole' else None), \
+             patch.object(module.subprocess, 'Popen') as popen:
+            module.launch_terminal(command, self.state)
+            terminal_command = popen.call_args.args[0]
+        self.assertEqual(terminal_command[:-1], ['/usr/bin/konsole', '-e', '/bin/sh'])
+        script = Path(terminal_command[-1])
+        module.subprocess.run(terminal_command[-2:], check=True, timeout=5)
+        self.assertEqual(json.loads(captured.read_text()), arguments)
+        self.assertFalse(injected.exists())
+        self.assertFalse(script.exists())
+
+    def test_terminal_launch_failure_removes_private_script(self):
+        with patch.object(module.sys, 'platform', 'linux'), patch.object(module.shutil, 'which',
+             return_value='/usr/bin/konsole'), \
+             patch.object(module.subprocess, 'Popen', side_effect=OSError('Cannot launch terminal')):
+            with self.assertRaisesRegex(OSError, 'Cannot launch terminal'):
+                module.launch_terminal(['wispnet', 'shell'], self.state)
+        self.assertEqual(list(self.state.glob('shell-*.command')), [])
         with patch.object(module.sys, 'platform', 'linux'), patch.object(module.shutil, 'which', return_value=None):
             with self.assertRaisesRegex(ValueError, 'Install a terminal'):
-                module.launch_terminal(command, self.state)
+                module.launch_terminal(['wispnet', 'shell'], self.state)
+        self.assertEqual(list(self.state.glob('shell-*.command')), [])
 
     def test_macos_terminal_script_is_private_and_quotes_every_argument(self):
         command = ['/tmp/Wispnet CLI', 'shell', '--config', '/tmp/$(touch injected); quote\'/host.toml']

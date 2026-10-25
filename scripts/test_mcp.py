@@ -24,7 +24,7 @@ def unused_port():
 
 
 class MCPTests(unittest.TestCase):
-    def test_generic_grant_preserves_existing_services_and_grants_for_every_kind(self):
+    def test_generic_grant_and_revoke_preserve_services_and_other_grants_for_every_kind(self):
         with tempfile.TemporaryDirectory(prefix='wispnet-mcp-grants-') as temporary:
             root = Path(temporary)
             binary = ROOT / 'target/debug/wispnet'
@@ -94,12 +94,18 @@ class MCPTests(unittest.TestCase):
                                       'expected_revision': snapshot()['revision'] if revision is None else revision,
                                       **extra}})
 
+                def revoke(service, peer, revision=None, **extra):
+                    return rpc('tools/call', {'name': 'wispnet_revoke_service_access',
+                        'arguments': {'service': service, 'peer': peer,
+                                      'expected_revision': snapshot()['revision'] if revision is None else revision,
+                                      **extra}})
+
                 advertised = rpc('tools/list')['result']['tools']
-                schema = next(t['inputSchema'] for t in advertised
-                              if t['name'] == 'wispnet_grant_service_access')
-                self.assertEqual(set(schema['properties']), {'service', 'peer', 'expected_revision'})
-                self.assertEqual(set(schema['required']), {'service', 'peer', 'expected_revision'})
-                self.assertFalse(schema['additionalProperties'])
+                for name in ['wispnet_grant_service_access', 'wispnet_revoke_service_access']:
+                    schema = next(t['inputSchema'] for t in advertised if t['name'] == name)
+                    self.assertEqual(set(schema['properties']), {'service', 'peer', 'expected_revision'})
+                    self.assertEqual(set(schema['required']), {'service', 'peer', 'expected_revision'})
+                    self.assertFalse(schema['additionalProperties'])
 
                 for service in ['web', 'raw', 'shell']:
                     before = snapshot()
@@ -136,6 +142,42 @@ class MCPTests(unittest.TestCase):
                     self.assertEqual(snapshot(), before)
                 before = snapshot()
                 invalid = grant('shell', recipient, backend='127.0.0.1:22')
+                self.assertEqual(invalid['error']['code'], -32602)
+                self.assertEqual(snapshot(), before)
+
+                # Revoke one service at a time while other grants and pairings remain.
+                for service in ['web', 'raw', 'shell']:
+                    before = snapshot()
+                    result = revoke(service, recipient, revision=before['revision'])
+                    self.assertNotIn('error', result)
+                    self.assertFalse(result['result']['isError'], result)
+                    self.assertEqual(result['result']['structuredContent']['revision'], before['revision'] + 1)
+                    after = snapshot()
+                    self.assertEqual(after['clients'], before['clients'])
+                    self.assertEqual(after['generation'], before['generation'])
+                    for old in before['services']:
+                        current = next(s for s in after['services'] if s['id'] == old['id'])
+                        if old['id'] == service:
+                            self.assertEqual(current['allow'], [existing_peer])
+                            self.assertEqual({k: v for k, v in current.items() if k != 'allow'},
+                                             {k: v for k, v in old.items() if k != 'allow'})
+                        else:
+                            self.assertEqual(current, old)
+                    stale = revoke(service, recipient, revision=before['revision'])
+                    self.assertTrue(stale['result']['isError'], stale)
+                    self.assertEqual(snapshot(), after)
+                    repeated = revoke(service, recipient)
+                    self.assertFalse(repeated['result']['isError'], repeated)
+                    self.assertEqual(repeated['result']['structuredContent']['revision'], after['revision'] + 1)
+                    self.assertEqual(snapshot(), {**after, 'revision': after['revision'] + 1})
+
+                for service, peer in [('missing', recipient), ('web', unapproved), ('shell', 'invalid-peer')]:
+                    before = snapshot()
+                    rejected = revoke(service, peer)
+                    self.assertTrue(rejected['result']['isError'], rejected)
+                    self.assertEqual(snapshot(), before)
+                before = snapshot()
+                invalid = revoke('shell', recipient, backend='127.0.0.1:22')
                 self.assertEqual(invalid['error']['code'], -32602)
                 self.assertEqual(snapshot(), before)
             finally:
