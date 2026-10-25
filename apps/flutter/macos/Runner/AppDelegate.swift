@@ -36,11 +36,13 @@ class AppDelegate: FlutterAppDelegate {
     item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     item?.button?.title = "W"
     menu.addItem(status)
+    menu.addItem(withTitle: "Open Wispnet", action: #selector(reveal), keyEquivalent: "")
+    menu.addItem(.separator())
     menu.addItem(withTitle: "Exit", action: #selector(quit), keyEquivalent: "q")
     for entry in menu.items { entry.target = self }
     item?.button?.target = self
     item?.button?.action = #selector(trayClicked)
-    item?.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+    item?.button?.sendAction(on: [.leftMouseUp])
     if CommandLine.arguments.contains("--background") || CommandLine.arguments.contains("--tray") {
       mainFlutterWindow?.orderOut(nil)
       NSApp.setActivationPolicy(.accessory)
@@ -51,10 +53,8 @@ class AppDelegate: FlutterAppDelegate {
     item?.button?.toolTip = status.title
   }
   @objc private func trayClicked() {
-    if NSApp.currentEvent?.type == .rightMouseUp, let button = item?.button {
+    if let button = item?.button {
       menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.minY), in: button)
-    } else {
-      reveal()
     }
   }
   @objc private func reveal() {

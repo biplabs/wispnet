@@ -53,6 +53,8 @@ adapter and shared owner/cache helpers. The installer stages the app and retains
 `Wispnet.previous.app` under `~/Library/Application Support/Wispnet/Backups/`
 when replacing an existing installation, keeping backups out of Applications.
 Extra launches reveal the existing desktop instead of starting a second copy.
+On macOS, left-clicking the menu-bar item opens its menu; right-click has no
+action. Choose **Open Wispnet** from the menu to show the desktop window.
 Signing is local and ad hoc; notarization and App Store distribution are not
 implemented.
 
