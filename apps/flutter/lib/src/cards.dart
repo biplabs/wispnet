@@ -179,13 +179,7 @@ class MachineCard extends StatelessWidget {
     final publicCached = machine.data['local'] != true && !machine.online;
     final publicOnline = !publicCached && publication?['state'] == 'online';
 
-    final subtitle = machine.online
-        ? (service['kind'] as String).toUpperCase()
-        : '${machine.name} · ${machine.state == 'unreachable'
-              ? 'Offline · cached'
-              : machine.state == 'approval_pending'
-              ? 'Pending'
-              : 'Unavailable'}';
+    final subtitle = (service['kind'] as String).toUpperCase();
     return Container(
       constraints: const BoxConstraints(minHeight: 64),
       decoration: BoxDecoration(
