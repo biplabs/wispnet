@@ -510,13 +510,7 @@ private fun ShellScreen(
                 val path = paths[currentId]
                 val state = states[currentId] ?: ConnectionState.Connecting
                 val statusText = when (state) {
-                    ConnectionState.Attached -> buildString {
-                        append("Connected")
-                        path?.let {
-                            append(" · ${it.path}")
-                            it.latencyMs?.let { latency -> append(" · ${latency} ms") }
-                        }
-                    }
+                    ConnectionState.Attached -> path?.latencyMs?.let { "$it ms" }.orEmpty()
                     ConnectionState.Connecting -> "Connecting…"
                     ConnectionState.Disconnected -> errors[currentId] ?: "Disconnected"
                     ConnectionState.Exited -> "Shell exited"
@@ -541,7 +535,7 @@ private fun ShellScreen(
                         maxLines = 1,
                     )
                     Text(
-                        text = " · $statusText",
+                        text = if (statusText.isNotEmpty()) " · $statusText" else "",
                         color = MutedColor,
                         fontSize = 12.sp,
                         maxLines = 1,
