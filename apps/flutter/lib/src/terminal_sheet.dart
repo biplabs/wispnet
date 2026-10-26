@@ -1177,6 +1177,34 @@ class _DesktopTerminalSheetState extends State<DesktopTerminalSheet> {
     _popSheet();
   }
 
+  Future<void> _confirmClose() async {
+    final confirmed = await showWispSheet<bool>(
+      context,
+      title: 'Close terminal?',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Close all terminal sessions on ${workspace.hostName}? Running commands in those tabs will be terminated.',
+          ),
+          const SizedBox(height: 16),
+          FilledButton(
+            key: const ValueKey('desktop-shell-confirm-close'),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Close sessions'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) {
+      widget.manager.closeHost(workspace.host, terminate: true);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (workspace.tabs.isEmpty) return const SizedBox.shrink();
@@ -1310,6 +1338,13 @@ class _DesktopTerminalSheetState extends State<DesktopTerminalSheet> {
                     tooltip: 'Minimize',
                     icon: Icons.remove,
                     onTap: _minimize,
+                  ),
+                  const SizedBox(width: 6),
+                  _HeaderCircleButton(
+                    key: const ValueKey('desktop-shell-terminate'),
+                    tooltip: 'Close sessions',
+                    icon: Icons.close,
+                    onTap: () => unawaited(_confirmClose()),
                   ),
                 ],
               ),

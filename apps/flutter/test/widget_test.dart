@@ -2157,6 +2157,43 @@ void main() {
       await close(tester);
     },
   );
+  testWidgets(
+    'desktop terminal close confirms termination and can be cancelled',
+    (tester) async {
+      final backend = DesktopFake();
+      await mount(tester, backend, size: const Size(1200, 900));
+      await tester.tap(find.text('shell'));
+      await tester.pumpAndSettle();
+      final closeButton = find.byKey(const ValueKey('desktop-shell-terminate'));
+      expect(
+        find.descendant(of: closeButton, matching: find.byIcon(Icons.close)),
+        findsOneWidget,
+      );
+      await tester.tap(closeButton);
+      await tester.pumpAndSettle();
+      expect(find.text('Close terminal?'), findsOneWidget);
+      expect(backend.calls.where((call) => call.$1 == 'shellClose'), isEmpty);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(closeButton, findsOneWidget);
+      await tester.tap(closeButton);
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('desktop-shell-confirm-close')),
+      );
+      await tester.pumpAndSettle();
+      expect(closeButton, findsNothing);
+      expect(find.byKey(const ValueKey('shell-dock')), findsNothing);
+      expect(
+        backend.calls
+            .where((call) => call.$1 == 'shellClose')
+            .single
+            .$2['terminate'],
+        isTrue,
+      );
+      await close(tester);
+    },
+  );
   test('terminal emulator buffer strips DCS/private CSI and answers fish startup queries', () {
     final replies = <String>[];
     final buffer = TerminalEmulatorBuffer(
