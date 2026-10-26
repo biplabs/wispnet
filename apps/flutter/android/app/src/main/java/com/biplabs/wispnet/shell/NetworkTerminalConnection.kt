@@ -49,6 +49,7 @@ internal class NetworkTerminalConnection(
             handle = opened
             deliver { onState(ConnectionState.Attached) }
             consume(reply)
+            if (handle == null) return@execute
             poll = work.scheduleWithFixedDelay({
                 val active = handle
                 if (closed || active == null) return@scheduleWithFixedDelay
@@ -88,15 +89,17 @@ internal class NetworkTerminalConnection(
                     val notice = "\r\n[Shell exited with status ${event.optInt("code", 0)}]\r\n".toByteArray()
                     deliver { onBytes(notice, false); onState(ConnectionState.Exited) }
                     release()
+                    return
                 }
                 "error" -> {
                     val message = event.optString("message", "Shell connection failed")
-                    deliver { onConnectionError(message) }
+                    disconnected(IllegalStateException(message))
+                    return
                 }
             }
         }
         when (reply.optString("state")) {
-            "disconnected" -> disconnected(IllegalStateException("Shell disconnected. Reconnect to resume."))
+            "disconnected" -> disconnected(IllegalStateException("Shell disconnected"))
             // The exit event follows any queued output. Keep polling until it
             // arrives even if the process's metadata already says exited.
             "exited" -> Unit
@@ -116,7 +119,8 @@ internal class NetworkTerminalConnection(
         deliver {
             onTerminalState(false, false)
             onConnectionError(error.message ?: "Shell connection failed")
-            onState(ConnectionState.Disconnected)
+            onState(if (shellFailureNeedsAction(error.message.orEmpty())) ConnectionState.Failed
+                else ConnectionState.Disconnected)
         }
     }
 

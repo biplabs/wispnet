@@ -30,7 +30,7 @@ enum class TerminalInputMode { Auto, Sync, Predictive, Line;
         if (echo != true || canonical != true) Sync else effective(latencyMs)
 }
 
-enum class ConnectionState { Connecting, Attached, Disconnected, Exited }
+enum class ConnectionState { Connecting, Attached, Disconnected, Exited, Failed }
 
 interface WispTerminalConnection {
     fun connect()

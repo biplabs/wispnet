@@ -64,7 +64,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.core.view.WindowCompat
 import com.biplabs.wispnet.ShellRpc
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -91,7 +90,10 @@ internal data class ShellTab(val target: ShellTarget, val session: String) {
 /** Keeps terminal tabs and PTY streams alive while the sheet is minimized. */
 object ShellWorkspace {
     private var rpc: ShellRpc? = null
-    private val holders = mutableMapOf<String, Pair<Int, TermuxTerminalHolder>>()
+    private val holders = mutableMapOf<String, TermuxTerminalHolder>()
+    private var networkManager: ConnectivityManager? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private val networkHandler by lazy { Handler(Looper.getMainLooper()) }
     internal var tabs by mutableStateOf<List<ShellTab>>(emptyList())
     internal var selected by mutableStateOf("")
     internal var minimized by mutableStateOf(false)
@@ -101,12 +103,24 @@ object ShellWorkspace {
     internal val inputStates = mutableStateMapOf<String, Pair<Boolean, Boolean>>()
     internal val errors = mutableStateMapOf<String, String>()
     internal val senders = mutableStateMapOf<String, (String) -> Unit>()
-    internal val retry = mutableStateMapOf<String, Int>()
     internal val lines = mutableStateMapOf<String, String>()
 
     @Synchronized
-    internal fun ensureRpc(context: Context): ShellRpc =
-        rpc ?: ShellRpc(context.applicationContext).also { rpc = it }
+    internal fun ensureRpc(context: Context): ShellRpc {
+        if (networkCallback == null) {
+            val manager = context.applicationContext.getSystemService(ConnectivityManager::class.java)
+            val callback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    // Also works while the sheet is minimized. A healthy stream is left alone.
+                    networkHandler.post { holders.values.toList().forEach { it.reconnectIfDisconnected() } }
+                }
+            }
+            manager.registerDefaultNetworkCallback(callback)
+            networkManager = manager
+            networkCallback = callback
+        }
+        return rpc ?: ShellRpc(context.applicationContext).also { rpc = it }
+    }
 
     @Synchronized
     fun openRequest(context: Context, initial: ShellTarget, requestedSession: String) {
@@ -139,14 +153,10 @@ object ShellWorkspace {
     internal fun holderFor(
         context: Context,
         tab: ShellTab,
-        reconnectNonce: Int,
         inputMode: TerminalInputMode,
     ): TermuxTerminalHolder {
         val current = holders[tab.id]
-        if (current != null && current.first == reconnectNonce) {
-            return current.second
-        }
-        current?.second?.close()
+        if (current != null) return current
         val holder = TermuxTerminalHolder(
             target = tab.target,
             rpc = ensureRpc(context),
@@ -159,7 +169,7 @@ object ShellWorkspace {
             onTerminalModeChanged = { _, _ -> },
             onKeyboardRequest = {},
         )
-        holders[tab.id] = reconnectNonce to holder
+        holders[tab.id] = holder
         return holder
     }
 
@@ -176,14 +186,13 @@ object ShellWorkspace {
     @Synchronized
     internal fun closeTab(context: Context, id: String): Boolean {
         val next = tabs.filterNot { it.id == id }
-        holders.remove(id)?.second?.close()
+        holders.remove(id)?.close()
         senders.remove(id)
         paths.remove(id)
         errors.remove(id)
         states.remove(id)
         inputStates.remove(id)
         titles.remove(id)
-        retry.remove(id)
         lines.remove(id)
         if (next.isEmpty()) {
             closeAll(context)
@@ -213,9 +222,15 @@ object ShellWorkspace {
 
     @Synchronized
     fun closeAll(context: Context? = null) {
-        val activeHolders = holders.values.map { it.second }
+        val activeHolders = holders.values.toList()
         holders.clear()
         activeHolders.forEach { it.close() }
+        networkCallback?.let {
+            networkManager?.unregisterNetworkCallback(it)
+            networkHandler.removeCallbacksAndMessages(null)
+        }
+        networkCallback = null
+        networkManager = null
         val activeRpc = rpc
         rpc = null
         activeRpc?.close()
@@ -228,7 +243,6 @@ object ShellWorkspace {
         inputStates.clear()
         errors.clear()
         senders.clear()
-        retry.clear()
         lines.clear()
         context?.applicationContext
             ?.getSharedPreferences("shell-terminal", Context.MODE_PRIVATE)
@@ -249,6 +263,7 @@ object ShellWorkspace {
             ConnectionState.Connecting -> "connecting"
             ConnectionState.Disconnected -> "disconnected"
             ConnectionState.Exited -> "exited"
+            ConnectionState.Failed -> "failed"
         }
         return JSONObject()
             .put("host", current.target.host)
@@ -353,7 +368,6 @@ private fun ShellScreen(
     }
     var modeMenu by remember { mutableStateOf(false) }
     var keyboardNonce by remember { mutableIntStateOf(0) }
-    val networkNonce = rememberNetworkChanges()
 
     val sheetProgress = remember { Animatable(0f) }
     var dragOffsetPx by remember { mutableFloatStateOf(0f) }
@@ -369,7 +383,6 @@ private fun ShellScreen(
     val inputStates = ShellWorkspace.inputStates
     val errors = ShellWorkspace.errors
     val senders = ShellWorkspace.senders
-    val retry = ShellWorkspace.retry
     val lines = ShellWorkspace.lines
 
     val current = tabs.firstOrNull { it.id == selected } ?: tabs.firstOrNull()
@@ -512,13 +525,14 @@ private fun ShellScreen(
                 val statusText = when (state) {
                     ConnectionState.Attached -> path?.latencyMs?.let { "$it ms" }.orEmpty()
                     ConnectionState.Connecting -> "Connecting…"
-                    ConnectionState.Disconnected -> errors[currentId] ?: "Disconnected"
+                    ConnectionState.Disconnected -> "Disconnected · retrying…"
+                    ConnectionState.Failed -> errors[currentId] ?: "Connection needs attention"
                     ConnectionState.Exited -> "Shell exited"
                 }
                 val dotColor = when (state) {
                     ConnectionState.Attached -> GreenColor
                     ConnectionState.Connecting -> AmberColor
-                    ConnectionState.Disconnected, ConnectionState.Exited -> ErrorColor
+                    ConnectionState.Disconnected, ConnectionState.Exited, ConnectionState.Failed -> ErrorColor
                 }
 
                 Row(
@@ -542,17 +556,17 @@ private fun ShellScreen(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
-                    if (state == ConnectionState.Disconnected || state == ConnectionState.Exited) {
+                    if (state == ConnectionState.Disconnected || state == ConnectionState.Exited || state == ConnectionState.Failed) {
                         Spacer(Modifier.width(6.dp))
                         Text(
-                            text = "Reconnect",
+                            text = if (state == ConnectionState.Exited) "Restart" else "Reconnect",
                             color = CyanColor,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(6.dp))
                                 .clickable {
-                                    current?.let { retry[it.id] = (retry[it.id] ?: 0) + 1 }
+                                    current?.let { ShellWorkspace.holderFor(context, it, modeFor(it.id)).reconnectExplicitly() }
                                 }
                                 .padding(horizontal = 4.dp, vertical = 2.dp),
                         )
@@ -735,23 +749,9 @@ private fun ShellScreen(
                 tabs.forEach { tab ->
                     key(tab.id) {
                         val active = tab.id == current?.id
-                        var reconnectAttempts by remember { mutableIntStateOf(0) }
-                        LaunchedEffect(networkNonce) { reconnectAttempts = 0 }
-                        LaunchedEffect(states[tab.id]) {
-                            when (states[tab.id]) {
-                                ConnectionState.Attached -> reconnectAttempts = 0
-                                ConnectionState.Disconnected -> if (reconnectAttempts < 3) {
-                                    delay(1_000L shl reconnectAttempts)
-                                    reconnectAttempts++
-                                    retry[tab.id] = (retry[tab.id] ?: 0) + 1
-                                }
-                                else -> Unit
-                            }
-                        }
-                        val nonce = (retry[tab.id] ?: 0) + networkNonce
                         val tabMode = modeFor(tab.id)
-                        val holder = remember(tab.id, nonce) {
-                            ShellWorkspace.holderFor(context, tab, nonce, tabMode)
+                        val holder = remember(tab.id) {
+                            ShellWorkspace.holderFor(context, tab, tabMode)
                         }
                         WispTermuxTerminalView(
                             modifier = Modifier
@@ -764,7 +764,6 @@ private fun ShellScreen(
                             retainOnDispose = true,
                             sessionName = tab.session,
                             active = active && sheetSettled && !dismissing,
-                            reconnectNonce = nonce,
                             inputMode = tabMode,
                             onConnectionState = { state ->
                                 states[tab.id] = state
@@ -1034,35 +1033,4 @@ private fun LineComposer(value: String, focusNonce: Int, onChange: (String) -> U
             Text("Send", fontWeight = FontWeight.Bold)
         }
     }
-}
-
-@Composable
-private fun rememberNetworkChanges(): Int {
-    val context = LocalContext.current
-    var nonce by remember { mutableIntStateOf(0) }
-    DisposableEffect(context) {
-        val manager = context.getSystemService(ConnectivityManager::class.java)
-        val main = Handler(Looper.getMainLooper())
-        var previous = manager.activeNetwork
-        val callback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
-                main.post {
-                    if (network != previous) {
-                        previous = network
-                        // Give the shared networking process time to rebind its endpoint.
-                        main.postDelayed({ nonce++ }, 750)
-                    }
-                }
-            }
-            override fun onLost(network: Network) {
-                main.post { if (previous == network) previous = null }
-            }
-        }
-        manager.registerDefaultNetworkCallback(callback)
-        onDispose {
-            manager.unregisterNetworkCallback(callback)
-            main.removeCallbacksAndMessages(null)
-        }
-    }
-    return nonce
 }

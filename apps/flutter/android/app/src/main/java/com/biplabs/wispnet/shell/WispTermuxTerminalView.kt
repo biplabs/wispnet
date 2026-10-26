@@ -55,7 +55,6 @@ internal fun WispTermuxTerminalView(
     modifier: Modifier = Modifier,
     sessionName: String = "main",
     active: Boolean = true,
-    reconnectNonce: Int = 0,
     target: ShellTarget,
     rpc: ShellRpc,
     existingHolder: TermuxTerminalHolder? = null,
@@ -70,7 +69,7 @@ internal fun WispTermuxTerminalView(
     onKeyboardRequest: () -> Unit = {},
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
-    val holder = remember(sessionName, reconnectNonce, target, rpc, existingHolder) {
+    val holder = remember(sessionName, target, rpc, existingHolder) {
         existingHolder ?: TermuxTerminalHolder(
             target,
             rpc,
@@ -188,6 +187,16 @@ internal class TermuxTerminalHolder(
     private var echoEnabled = false
     private var canonicalInput = false
     private var replayStarted = false
+    private var closed = false
+    private val reconnect = ShellReconnectController(
+        schedule = { delay, action ->
+            val task = Runnable { action() }
+            mainHandler.postDelayed(task, delay)
+            val cancel: () -> Unit = { mainHandler.removeCallbacks(task) }
+            cancel
+        },
+        connect = { emulator?.let { startConnection(it) } },
+    )
 
     fun updateCallbacks(
         onState: (ConnectionState) -> Unit,
@@ -294,17 +303,22 @@ internal class TermuxTerminalHolder(
 
     @Synchronized
     fun reconnectIfDisconnected() {
-        if (connectionState != ConnectionState.Disconnected) return
-        val remoteEmulator = emulator ?: return
-        startConnection(remoteEmulator)
+        reconnect.retryNow()
+    }
+
+    fun reconnectExplicitly() {
+        reconnect.retryNow(explicit = true)
     }
 
     @Synchronized
     private fun startConnection(
         remoteEmulator: TerminalEmulator,
     ) {
+        if (closed) return
         connection?.close()
         connectionState = ConnectionState.Connecting
+        reconnect.onState(connectionState)
+        onConnectionState(connectionState)
         echoEnabled = false
         canonicalInput = false
         replayStarted = false
@@ -361,6 +375,7 @@ internal class TermuxTerminalHolder(
         }
         val onState: (ConnectionState) -> Unit = { state ->
             connectionState = state
+            reconnect.onState(state)
             if (state == ConnectionState.Attached) {
                 resizeConnectionToView()
             }
@@ -394,6 +409,8 @@ internal class TermuxTerminalHolder(
     }
 
     fun close() {
+        closed = true
+        reconnect.close()
         hideKeyboard()
         view?.let { terminalView ->
             layoutListener?.let(terminalView::removeOnLayoutChangeListener)
@@ -508,7 +525,10 @@ internal class TermuxTerminalHolder(
     }
 
     override fun onTextChanged(changedSession: TerminalSession?) {
-        view?.onScreenUpdated()
+        view?.let { terminalView ->
+            emulator?.let { terminalView.mEmulator = it }
+            terminalView.onScreenUpdated()
+        }
     }
 
     override fun onTitleChanged(changedSession: TerminalSession?) = Unit
