@@ -18,10 +18,11 @@ Select Shell under a device in the desktop app to open that host's built-in
 terminal sheet. Each host has its own isolated terminal workspace with multiple
 tabs, side-by-side and top-and-bottom split panes, an input mode selector
 (Auto, Predictive, Sync, Line), a button to hand off the active pane to the
-system terminal, a popup `×` button that minimizes the sheet into a docked bar
-at the bottom of the window while keeping sessions connected, and explicit close
-(`×`) on each tab, split pane, or docked bar (with confirmation) to terminate
-the remote shell session(s).
+system terminal, a popup `−` button that minimizes the sheet into a docked bar
+at the bottom of the window while keeping sessions connected, and a separate
+popup `×` button that closes all sessions for that host after confirmation.
+The `×` on a tab or split pane terminates that session; the docked bar’s `×`
+closes all sessions for that host after confirmation.
 In the TUI, selecting Shell temporarily hands the terminal to the remote shell;
 detaching or exiting returns to Wispnet.
 
@@ -86,7 +87,7 @@ access controls. The native host's shared limit remains 16 shell operations.
 ## Android
 
 Tap Shell under a paired desktop host to slide up that host's isolated terminal
-sheet. Tap the sheet's `×` button (or swipe down) to minimize it into a docked
+sheet. Tap the sheet's `−` button (or swipe down) to minimize it into a docked
 bar for that host at the bottom of the screen while keeping its sessions
 connected (when multiple hosts have minimized terminals, each host gets its own
 dock bar), tap a docked bar to expand that host's terminal again, or tap `×` on
