@@ -865,6 +865,8 @@ class _SettingsFormState extends State<SettingsForm> {
 
   String get browserAddress => address;
 
+  String get mcpAddress => Uri.parse(address).replace(path: '/mcp').toString();
+
   Future<void> openAddress() async {
     if (opening || address.isEmpty) return;
     setState(() {
@@ -936,31 +938,6 @@ class _SettingsFormState extends State<SettingsForm> {
           hintText: '7842',
         ),
       ),
-      if (address.isNotEmpty)
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Semantics(
-              link: true,
-              child: Tooltip(
-                message: 'Open registry JSON in browser',
-                child: WispInkWell(
-                  key: const ValueKey('settings-address'),
-                  onTap: opening || saving ? null : openAddress,
-                  child: Text(
-                    browserAddress,
-                    style: const TextStyle(
-                      color: WispColors.cyan,
-                      decoration: TextDecoration.underline,
-                      decorationColor: WispColors.cyan,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
       if (error != null)
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 12),
@@ -992,6 +969,57 @@ class _SettingsFormState extends State<SettingsForm> {
                   );
                 },
           child: const Text('Diagnostic'),
+        ),
+      ],
+      if (address.isNotEmpty) ...[
+        const SizedBox(height: 16),
+        const Text('Service registry'),
+        const SizedBox(height: 4),
+        const Text(
+          'Lists the services this device can access and their local URLs. Apps can use it to find and connect to services.',
+          style: TextStyle(color: WispColors.muted),
+        ),
+        const SizedBox(height: 8),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Semantics(
+            link: true,
+            child: Tooltip(
+              message: 'Open registry JSON in browser',
+              child: WispInkWell(
+                key: const ValueKey('settings-address'),
+                onTap: opening || saving ? null : openAddress,
+                child: Text(
+                  browserAddress,
+                  style: const TextStyle(
+                    color: WispColors.cyan,
+                    decoration: TextDecoration.underline,
+                    decorationColor: WispColors.cyan,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        const Text('MCP (Model Context Protocol)'),
+        const SizedBox(height: 4),
+        const Text(
+          'Connect AI assistants to Wispnet to discover services and manage access. Add this URL to your MCP client with your private bearer token. Both URLs work only on this device while local access is online.',
+          style: TextStyle(color: WispColors.muted),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(child: SelectableText(mcpAddress)),
+            IconButton(
+              key: const ValueKey('settings-mcp-copy'),
+              tooltip: 'Copy MCP URL',
+              onPressed: () =>
+                  Clipboard.setData(ClipboardData(text: mcpAddress)),
+              icon: const Icon(Icons.copy, color: WispColors.cyan),
+            ),
+          ],
         ),
       ],
     ],
