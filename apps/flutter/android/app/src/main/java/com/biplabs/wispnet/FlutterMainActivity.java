@@ -60,7 +60,9 @@ public final class FlutterMainActivity extends FlutterActivity {
     return;
    }
    if ("closeShell".equals(call.method)) {
-    com.biplabs.wispnet.shell.ShellWorkspace.INSTANCE.closeAll(this);
+    String host = arguments.optString("host", "");
+    if (!host.isEmpty()) com.biplabs.wispnet.shell.ShellWorkspace.INSTANCE.closeHost(this, host, true);
+    else com.biplabs.wispnet.shell.ShellWorkspace.INSTANCE.closeAll(this, true);
     result.success("{}");
     return;
    }
@@ -69,7 +71,7 @@ public final class FlutterMainActivity extends FlutterActivity {
      try { startForegroundService(new Intent(this, AccessService.class)); }
      catch (Exception failure) { result.error("access_failed", failure.getMessage(), null); return; }
     } else {
-     com.biplabs.wispnet.shell.ShellWorkspace.INSTANCE.closeAll(this);
+     com.biplabs.wispnet.shell.ShellWorkspace.INSTANCE.closeAll(this, true);
     }
    }
    if ("launch".equals(call.method)) {
@@ -85,12 +87,14 @@ public final class FlutterMainActivity extends FlutterActivity {
     try {
      JSONObject reply = network.request(call.method, arguments);
      if ("removeHost".equals(call.method)) {
-      com.biplabs.wispnet.shell.ShellWorkspace.INSTANCE.closeHost(this, arguments.optString("host"));
+      com.biplabs.wispnet.shell.ShellWorkspace.INSTANCE.closeHost(this, arguments.optString("host"), true);
      }
      if ("snapshot".equals(call.method)) {
       reply.put("ui_pid", android.os.Process.myPid());
       JSONObject shell = com.biplabs.wispnet.shell.ShellWorkspace.INSTANCE.snapshotJson();
       if (shell != null) reply.put("shell", shell);
+      JSONArray shells = com.biplabs.wispnet.shell.ShellWorkspace.INSTANCE.snapshotsJson();
+      if (shells.length() > 0) reply.put("shells", shells);
      }
      runOnUiThread(() -> result.success(reply.toString()));
     } catch (Exception failure) {
@@ -143,7 +147,7 @@ public final class FlutterMainActivity extends FlutterActivity {
  @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); receiveInvitation(intent); }
  @Override protected void onDestroy() {
   if (qrResult != null) { qrResult.error("activity_closed", "QR request interrupted. Try again.", null); qrResult = null; }
-  com.biplabs.wispnet.shell.ShellWorkspace.INSTANCE.closeAll(this);
+  com.biplabs.wispnet.shell.ShellWorkspace.INSTANCE.closeAll(this, false);
   network.close(); work.shutdown(); state.shutdown(); super.onDestroy();
  }
 }

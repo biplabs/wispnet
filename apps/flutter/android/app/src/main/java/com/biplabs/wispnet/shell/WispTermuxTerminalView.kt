@@ -408,7 +408,7 @@ internal class TermuxTerminalHolder(
         )
     }
 
-    fun close() {
+    fun close(terminate: Boolean = false) {
         closed = true
         reconnect.close()
         hideKeyboard()
@@ -430,7 +430,7 @@ internal class TermuxTerminalHolder(
         pendingRemoteInput.clear()
         pendingLocalEcho.clear()
         pendingLocalErases = 0
-        connection?.close()
+        connection?.close(terminate)
         onTransportPathChanged(null)
         dummySession?.finishIfRunning()
         connection = null

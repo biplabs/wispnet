@@ -39,6 +39,7 @@ pub enum ClientFrame {
         rows: u16,
     },
     Detach,
+    Terminate,
     Ping,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

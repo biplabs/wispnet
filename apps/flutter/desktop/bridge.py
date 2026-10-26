@@ -347,6 +347,34 @@ class Bridge:
             return {'url': browser_url(result['url'])}
         if method == 'openShell':
             return self.open_shell(args)
+        if method == 'shellOpen':
+            self.api.request(op='enable')
+            return self.api.request(
+                op='shell_open',
+                host=args['host'],
+                service=args.get('service', 'shell'),
+                incarnation=args['incarnation'],
+                session=args.get('session', 'main'),
+                cols=int(args.get('cols', 80)),
+                rows=int(args.get('rows', 24)),
+            )
+        if method == 'shellPoll':
+            return self.api.request(op='shell_poll', session=args['session'])
+        if method == 'shellInput':
+            return self.api.request(op='shell_input', session=args['session'], data_b64=args['data_b64'])
+        if method == 'shellResize':
+            return self.api.request(
+                op='shell_resize',
+                session=args['session'],
+                cols=int(args['cols']),
+                rows=int(args['rows']),
+            )
+        if method == 'shellClose':
+            return self.api.request(
+                op='shell_close',
+                session=args['session'],
+                terminate=bool(args.get('terminate', False)),
+            )
         if method == 'launchPublic':
             status = self.api.request(op='status')
             publication = next((p for p in status.get('public_access', {}).get('services', [])

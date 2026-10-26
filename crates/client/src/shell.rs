@@ -322,21 +322,33 @@ impl Client {
                             ClientFrame::Ping
                         }
                     };
-                    let detach = matches!(frame, ClientFrame::Detach);
+                    let closing = matches!(frame, ClientFrame::Detach | ClientFrame::Terminate);
                     tokio::time::timeout(Duration::from_secs(10), write_client(&mut write, &frame))
                         .await
                         .map_err(|_| std::io::Error::other("Shell write timed out"))??;
-                    if detach {
+                    if closing {
+                        let _ = tokio::time::timeout(
+                            Duration::from_secs(2),
+                            tokio::io::AsyncWriteExt::shutdown(&mut write),
+                        )
+                        .await;
                         break;
                     }
                 }
                 Ok::<_, std::io::Error>(())
             });
-            let outcome = tokio::select! {r=&mut reader=>r,r=&mut writer=>r,_=cancelled.changed()=>Ok(Ok(()))};
+            let (outcome, wait_reader) = tokio::select! {
+                r = &mut reader => (r, false),
+                r = &mut writer => (r, true),
+                _ = cancelled.changed() => (Ok(Ok(())), false),
+            };
+            if wait_reader {
+                let _ = tokio::time::timeout(Duration::from_millis(200), &mut reader).await;
+            }
             reader.abort();
             writer.abort();
             if let Some(task) = local_worker {
-                task.abort();
+                let _ = tokio::time::timeout(Duration::from_millis(200), task).await;
             }
             if let Some(c) = connection {
                 c.close(0u32.into(), b"terminal detached");
@@ -392,11 +404,20 @@ impl Shells {
     pub(crate) async fn command(&self, value: &Value) -> Result<Value, String> {
         let id = argument(value, "session")?;
         if value["op"] == "shell_close" {
+            let terminate = value["terminate"].as_bool().unwrap_or(false);
             let session = self.sessions.lock().await.remove(id);
             if let Some(s) = session {
-                let _ = s.commands.try_send(ClientFrame::Detach);
+                let frame = if terminate {
+                    ClientFrame::Terminate
+                } else {
+                    ClientFrame::Detach
+                };
+                if s.commands.try_send(frame).is_ok() {
+                    let _ =
+                        tokio::time::timeout(Duration::from_millis(250), s.commands.closed()).await;
+                }
             }
-            return Ok(json!({"closed":true}));
+            return Ok(json!({"closed":true,"terminated":terminate}));
         }
         let session = self
             .sessions

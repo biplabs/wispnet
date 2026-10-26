@@ -78,6 +78,24 @@ class BridgeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.bridge.dispatch('openShell', args)
 
+    def test_in_app_shell_session_operations_forward_to_node_api(self):
+        self.calls.clear()
+        self.bridge.dispatch('shellOpen', dict(host=OWN, service='shell', incarnation=INCARNATION, session='main', cols=100, rows=30))
+        self.assertEqual(self.calls[-2:], [
+            {'op': 'enable'},
+            {'op': 'shell_open', 'host': OWN, 'service': 'shell', 'incarnation': INCARNATION, 'session': 'main', 'cols': 100, 'rows': 30},
+        ])
+        self.bridge.dispatch('shellPoll', dict(session='s-1'))
+        self.assertEqual(self.calls[-1], {'op': 'shell_poll', 'session': 's-1'})
+        self.bridge.dispatch('shellInput', dict(session='s-1', data_b64='bHM='))
+        self.assertEqual(self.calls[-1], {'op': 'shell_input', 'session': 's-1', 'data_b64': 'bHM='})
+        self.bridge.dispatch('shellResize', dict(session='s-1', cols=120, rows=40))
+        self.assertEqual(self.calls[-1], {'op': 'shell_resize', 'session': 's-1', 'cols': 120, 'rows': 40})
+        self.bridge.dispatch('shellClose', dict(session='s-1', terminate=True))
+        self.assertEqual(self.calls[-1], {'op': 'shell_close', 'session': 's-1', 'terminate': True})
+        self.bridge.dispatch('shellClose', dict(session='s-1'))
+        self.assertEqual(self.calls[-1], {'op': 'shell_close', 'session': 's-1', 'terminate': False})
+
     def test_terminal_launch_keeps_cli_options_out_of_terminal_arguments(self):
         command = ['/tmp/Wispnet CLI', 'shell', '--session', 'main', '--config', '/tmp/with spaces/host.toml']
         with patch.object(module.sys, 'platform', 'linux'), patch.object(module.shutil, 'which',

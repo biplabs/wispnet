@@ -396,7 +396,7 @@ impl SessionManager {
         else {
             return Err(error("First shell request must attach"));
         };
-        let session = match self.attach(scope, name.clone(), cols, rows) {
+        let session = match self.attach(scope.clone(), name.clone(), cols, rows) {
             Ok(s) => s,
             Err(e) => {
                 send_frame(
@@ -409,6 +409,7 @@ impl SessionManager {
                 return Err(e);
             }
         };
+        let session_key = (scope, name.clone());
         send_frame(
             &mut writer,
             &ServerFrame::Attached {
@@ -506,6 +507,15 @@ impl SessionManager {
                 biased;
                 request=commands.recv()=>match request {
                     Some(Ok(Some(ClientFrame::Ping)))=>{send_frame(&mut writer,&ServerFrame::Pong).await?;state_tick=0;},
+                    Some(Ok(Some(ClientFrame::Terminate)))=>{
+                        self.inner
+                            .sessions
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .remove(&session_key);
+                        session.terminate();
+                        return Ok(());
+                    }
                     Some(Ok(Some(ClientFrame::Detach)))|Some(Ok(None))|None=>return Ok(()),
                     Some(Err(e))=>return Err(e),
                     _=>return Err(error("Shell already attached")),
@@ -920,5 +930,37 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+    #[tokio::test]
+    async fn terminate_frame_ends_remote_session() {
+        let manager = SessionManager::with_shell("/bin/sh");
+        let mut first = attached(&manager, "inc/peer").await;
+        write_client(
+            &mut first,
+            &ClientFrame::Input {
+                data: b"WISP_TERMINATED=keep; printf 'SET\\n'\n".to_vec(),
+            },
+        )
+        .await
+        .unwrap();
+        output_until(&mut first, "SET").await;
+        write_client(&mut first, &ClientFrame::Terminate)
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while read_server(&mut first).await.unwrap().is_some() {}
+        })
+        .await
+        .unwrap();
+        let mut second = attached(&manager, "inc/peer").await;
+        write_client(
+            &mut second,
+            &ClientFrame::Input {
+                data: b"printf 'after:%s\\n' \"${WISP_TERMINATED-gone}\"\n".to_vec(),
+            },
+        )
+        .await
+        .unwrap();
+        output_until(&mut second, "after:gone").await;
     }
 }

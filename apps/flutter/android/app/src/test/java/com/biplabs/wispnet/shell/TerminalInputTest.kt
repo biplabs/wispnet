@@ -57,4 +57,30 @@ class TerminalInputTest {
         assertEquals(emptyList<ShellTab>(), ShellWorkspace.tabs)
         assertEquals(true, ShellWorkspace.titles.isEmpty())
     }
+
+    @Test fun workspaceIsolatesHostsAndMinimizesPerHost() {
+        ShellWorkspace.closeAll()
+        val hostA = ShellTarget("a".repeat(64), "shell", "b".repeat(64), "j-strix")
+        val hostB = ShellTarget("c".repeat(64), "shell", "d".repeat(64), "j-desktop")
+        val tabA = ShellTab(hostA, "main")
+        val tabB = ShellTab(hostB, "main")
+        ShellWorkspace.tabs = listOf(tabA, tabB)
+        ShellWorkspace.selectTab(tabA)
+        ShellWorkspace.selectTab(tabB)
+        ShellWorkspace.minimize(hostA.host)
+        ShellWorkspace.minimize(hostB.host)
+        val snapshots = ShellWorkspace.snapshots()
+        assertEquals(2, snapshots.size)
+        assertEquals("j-strix · main", snapshots[0]["title"])
+        assertEquals(true, snapshots[0]["minimized"])
+        assertEquals("j-desktop · main", snapshots[1]["title"])
+        assertEquals(true, snapshots[1]["minimized"])
+        ShellWorkspace.closeHost(null, hostA.host, terminate = true)
+        assertEquals(listOf(tabB), ShellWorkspace.tabs)
+        assertEquals(true, ShellWorkspace.minimized)
+        assertEquals(1, ShellWorkspace.snapshots().size)
+        ShellWorkspace.closeHost(null, hostB.host, terminate = true)
+        assertEquals(false, ShellWorkspace.minimized)
+        assertEquals(emptyList<ShellTab>(), ShellWorkspace.tabs)
+    }
 }

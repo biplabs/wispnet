@@ -10,6 +10,7 @@ import 'sheets.dart';
 import 'cards.dart';
 import 'header.dart';
 import 'desktop_settings.dart';
+import 'terminal_sheet.dart';
 
 class WispnetApp extends StatelessWidget {
   const WispnetApp({super.key, required this.backend});
@@ -48,12 +49,30 @@ class _WispHomeState extends State<WispHome>
     vsync: this,
     duration: const Duration(milliseconds: 900),
   );
+  late final DesktopShellManager desktopShells =
+      DesktopShellManager(widget.backend)..addListener(() {
+        if (mounted) setState(() {});
+      });
   bool get online => snapshot['enabled'] == true;
-  Map<String, dynamic>? get minimizedShell {
+  List<Map<String, dynamic>> get minimizedShells {
+    if (!online) return const [];
+    if (snapshot['desktop'] == true) {
+      return desktopShells.minimizedSnapshots;
+    }
+    final shells = snapshot['shells'];
+    if (shells is List) {
+      return shells
+          .whereType<Map>()
+          .map((e) => e.cast<String, dynamic>())
+          .where((e) => e['minimized'] == true)
+          .toList();
+    }
     final shell = snapshot['shell'];
-    if (!online || snapshot['desktop'] == true || shell is! Map) return null;
-    final data = shell.cast<String, dynamic>();
-    return data['minimized'] == true ? data : null;
+    if (shell is Map) {
+      final data = shell.cast<String, dynamic>();
+      if (data['minimized'] == true) return [data];
+    }
+    return const [];
   }
   Map<String, dynamic> get records =>
       (snapshot['hosts'] as Map?)?.cast<String, dynamic>() ?? {};
@@ -107,6 +126,8 @@ class _WispHomeState extends State<WispHome>
   @override
   void dispose() {
     timer?.cancel();
+    desktopShells.closeAll(terminate: false, notify: false);
+    desktopShells.dispose();
     WidgetsBinding.instance.removeObserver(this);
     warp.dispose();
     super.dispose();
@@ -141,6 +162,12 @@ class _WispHomeState extends State<WispHome>
         notice(network);
       }
       lastNetwork = network;
+      if (next['desktop'] == true && next['hosts'] is Map) {
+        final validHosts = (next['hosts'] as Map).keys
+            .whereType<String>()
+            .toSet();
+        desktopShells.pruneRemovedHosts(validHosts);
+      }
       setState(() {
         snapshot = next;
         if (next['desktop'] == true &&
@@ -229,6 +256,7 @@ class _WispHomeState extends State<WispHome>
         if (mounted && jump != null) await jump;
         unawaited(refresh());
       } else {
+        desktopShells.closeAll(terminate: true);
         await Future<void>.delayed(const Duration(milliseconds: 100));
         await poll();
       }
@@ -245,11 +273,65 @@ class _WispHomeState extends State<WispHome>
     }
   }
 
+  Future<void> showDesktopShell({
+    required String host,
+    required String hostName,
+    required String service,
+    required String incarnation,
+    String session = 'main',
+  }) async {
+    final workspace = desktopShells.openHost(
+      host: host,
+      hostName: hostName,
+      service: service,
+      incarnation: incarnation,
+      session: session,
+    );
+    if (!mounted) return;
+    await showWispSheet<void>(
+      context,
+      title: hostName,
+      showHeader: false,
+      scrollable: false,
+      maxWidth: 1120,
+      child: DesktopTerminalSheet(
+        manager: desktopShells,
+        workspace: workspace,
+        onOpenExternal: (pane) async {
+          try {
+            await backend.invoke('openShell', {
+              'host': pane.host,
+              'host_name': pane.hostName,
+              'service': pane.service,
+              'incarnation': pane.incarnation,
+              'session': pane.session,
+            });
+          } catch (error) {
+            notice('Cannot open terminal: ${message(error)}');
+          }
+        },
+      ),
+    );
+    if (workspace.tabs.isNotEmpty) {
+      workspace.minimized = true;
+    }
+    if (mounted) setState(() {});
+  }
+
   Future<void> open(Machine machine, Map<String, dynamic> service) async {
     if (busy || !online) return;
+    if (service['kind'] == 'shell' && snapshot['desktop'] == true) {
+      await showDesktopShell(
+        host: machine.id,
+        hostName: machine.name,
+        service: service['id'] as String? ?? 'shell',
+        incarnation: service['incarnation'] as String,
+      );
+      return;
+    }
     final generation = ++launchGeneration;
     setState(() => busy = true);
-    if (service['kind'] != 'shell' || snapshot['desktop'] == true) {
+    if (service['kind'] != 'shell') {
       notice('Opening ${service['id']}…');
     }
     try {
@@ -290,6 +372,16 @@ class _WispHomeState extends State<WispHome>
 
   Future<void> expandShell(Map<String, dynamic> shell) async {
     if (busy || !online) return;
+    if (snapshot['desktop'] == true) {
+      await showDesktopShell(
+        host: shell['host'] as String,
+        hostName: shell['host_name'] as String? ?? 'Shell',
+        service: shell['service'] as String? ?? 'shell',
+        incarnation: shell['incarnation'] as String,
+        session: shell['session'] as String? ?? 'main',
+      );
+      return;
+    }
     setState(() => busy = true);
     try {
       await backend.invoke('openShell', {
@@ -309,13 +401,76 @@ class _WispHomeState extends State<WispHome>
     }
   }
 
-  Future<void> closeShell() async {
+  Future<void> confirmCloseShell(Map<String, dynamic> shell) async {
     if (busy) return;
+    final host = shell['host'] as String? ?? '';
+    final hostName = shell['host_name'] as String? ?? 'this machine';
+    final confirmed = await showWispSheet<bool>(
+      context,
+      title: 'Close terminal?',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Close all terminal sessions on $hostName? Running commands in those tabs will be terminated.',
+          ),
+          const SizedBox(height: 16),
+          FilledButton(
+            key: const ValueKey('confirm-close-shell'),
+            onPressed: () => Navigator.pop(context, true),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: WispColors.error,
+              side: const BorderSide(color: WispColors.error),
+            ).copyWith(
+              backgroundColor: wispButtonBackground(const Color(0xff401e2a)),
+            ),
+            child: const Text('Close sessions'),
+          ),
+          const SizedBox(height: 8),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) {
+      await closeShell(host);
+    }
+  }
+
+  Future<void> closeShell([String? host]) async {
+    if (busy) return;
+    if (snapshot['desktop'] == true) {
+      if (host != null && host.isNotEmpty) {
+        desktopShells.closeHost(host, terminate: true);
+      } else {
+        desktopShells.closeAll(terminate: true);
+      }
+      return;
+    }
     setState(() {
-      snapshot = {...snapshot}..remove('shell');
+      final next = {...snapshot};
+      if (host != null && host.isNotEmpty) {
+        final shells = (next['shells'] as List?)
+            ?.whereType<Map>()
+            .where((e) => e['host'] != host)
+            .toList();
+        if (shells != null) next['shells'] = shells;
+        if ((next['shell'] as Map?)?['host'] == host) {
+          next.remove('shell');
+        }
+      } else {
+        next.remove('shell');
+        next.remove('shells');
+      }
+      snapshot = next;
     });
     try {
-      await backend.invoke('closeShell');
+      await backend.invoke(
+        'closeShell',
+        host != null && host.isNotEmpty ? {'host': host} : const {},
+      );
     } catch (error) {
       notice(message(error));
     } finally {
@@ -702,7 +857,7 @@ class _WispHomeState extends State<WispHome>
   }
 
   Widget shellDock() {
-    final shell = minimizedShell;
+    final shells = minimizedShells;
     final animate = !MediaQuery.disableAnimationsOf(context);
     return AnimatedSwitcher(
       duration: animate ? const Duration(milliseconds: 220) : Duration.zero,
@@ -718,83 +873,101 @@ class _WispHomeState extends State<WispHome>
           child: child,
         ),
       ),
-      child: shell == null
+      child: shells.isEmpty
           ? const SizedBox.shrink()
           : Padding(
-              key: ValueKey('shell-dock-${shell['host']}-${shell['session']}'),
+              key: ValueKey(
+                'shell-docks-${shells.map((s) => s['host']).join(',')}',
+              ),
               padding: const EdgeInsets.only(top: 4, bottom: 8),
-              child: WispPanel(
-                key: const ValueKey('shell-dock'),
-                color: WispColors.sheet,
-                radius: 16,
-                padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Semantics(
-                        button: true,
-                        label:
-                            'Expand shell ${shell['title'] ?? shell['host_name'] ?? 'Shell'}',
-                        child: WispInkWell(
-                          key: const ValueKey('shell-dock-expand'),
-                          onTap: busy ? null : () => expandShell(shell),
-                          borderRadius: BorderRadius.circular(12),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 8,
-                            ),
-                            child: Row(
-                              children: [
-                                WispStatusDot(
-                                  color: shell['state'] == 'attached'
-                                      ? WispColors.green
-                                      : shell['state'] == 'connecting'
-                                      ? WispColors.amber
-                                      : WispColors.error,
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Text(
-                                    (shell['title'] as String?)?.isNotEmpty ==
-                                            true
-                                        ? shell['title'] as String
-                                        : '${shell['host_name'] ?? 'Shell'} · ${shell['session'] ?? 'main'}',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                const Icon(
-                                  Icons.keyboard_arrow_up,
-                                  size: 20,
-                                  color: WispColors.cyan,
-                                ),
-                              ],
-                            ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (var i = 0; i < shells.length; i++) ...[
+                    if (i > 0) const SizedBox(height: 6),
+                    _buildDockBar(shells[i], primary: i == 0),
+                  ],
+                ],
+              ),
+            ),
+    );
+  }
+
+  Widget _buildDockBar(Map<String, dynamic> shell, {required bool primary}) {
+    final host = shell['host'] as String? ?? '';
+    return WispPanel(
+      key: ValueKey(primary ? 'shell-dock' : 'shell-dock-$host'),
+      color: WispColors.sheet,
+      radius: 16,
+      padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Semantics(
+              button: true,
+              label:
+                  'Expand shell ${shell['title'] ?? shell['host_name'] ?? 'Shell'}',
+              child: WispInkWell(
+                key: ValueKey(
+                  primary ? 'shell-dock-expand' : 'shell-dock-expand-$host',
+                ),
+                onTap: busy ? null : () => expandShell(shell),
+                borderRadius: BorderRadius.circular(12),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 8,
+                  ),
+                  child: Row(
+                    children: [
+                      WispStatusDot(
+                        color: shell['state'] == 'attached'
+                            ? WispColors.green
+                            : shell['state'] == 'connecting'
+                            ? WispColors.amber
+                            : WispColors.error,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          (shell['title'] as String?)?.isNotEmpty == true
+                              ? shell['title'] as String
+                              : '${shell['host_name'] ?? 'Shell'} · ${shell['session'] ?? 'main'}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
                           ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 4),
-                    IconButton(
-                      key: const ValueKey('shell-dock-close'),
-                      tooltip: 'Close shell',
-                      onPressed: busy ? null : closeShell,
-                      icon: const Icon(
-                        Icons.close,
-                        size: 18,
-                        color: WispColors.muted,
+                      const SizedBox(width: 8),
+                      const Icon(
+                        Icons.keyboard_arrow_up,
+                        size: 20,
+                        color: WispColors.cyan,
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
+          ),
+          const SizedBox(width: 4),
+          IconButton(
+            key: ValueKey(
+              primary ? 'shell-dock-close' : 'shell-dock-close-$host',
+            ),
+            tooltip: 'Close shell',
+            onPressed: busy ? null : () => confirmCloseShell(shell),
+            icon: const Icon(
+              Icons.close,
+              size: 18,
+              color: WispColors.muted,
+            ),
+          ),
+        ],
+      ),
     );
   }
 

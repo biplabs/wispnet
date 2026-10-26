@@ -13,6 +13,7 @@ import 'package:wispnet/src/cards.dart';
 import 'package:wispnet/src/header.dart';
 import 'package:wispnet/src/space.dart';
 import 'package:wispnet/src/desktop_settings.dart';
+import 'package:wispnet/src/terminal_sheet.dart';
 import 'package:wispnet/src/theme.dart';
 
 final peer = 'a' * 64;
@@ -28,10 +29,12 @@ class FakeBackend implements WispnetBackend {
     this.accessReady,
     this.shellService = false,
     this.minimizedShell,
+    this.minimizedShells,
   });
   final Map<String, dynamic>? diagnosticReport;
   final Map<String, dynamic>? publicAccess;
   Map<String, dynamic>? minimizedShell;
+  List<Map<String, dynamic>>? minimizedShells;
   Future<void>? accessReady;
   bool paired, enabled;
   final bool shellService;
@@ -88,6 +91,7 @@ class FakeBackend implements WispnetBackend {
             },
           },
           if (minimizedShell != null) 'shell': minimizedShell,
+          if (minimizedShells != null) 'shells': minimizedShells,
         };
       case 'connectionDiagnostics':
         return {
@@ -171,8 +175,32 @@ class FakeBackend implements WispnetBackend {
         paired = false;
         return {};
       case 'closeShell':
+        final host = arguments['host'] as String?;
+        if (host != null && minimizedShells != null) {
+          minimizedShells = minimizedShells!
+              .where((s) => s['host'] != host)
+              .toList();
+        } else {
+          minimizedShells = null;
+        }
         minimizedShell = null;
         return {};
+      case 'shellOpen':
+        return {
+          'session': 'handle-${arguments['session'] ?? 'main'}',
+          'latency_ms': 9,
+          'path': 'direct',
+          'events': const [],
+        };
+      case 'shellPoll':
+        return {
+          'state': 'attached',
+          'path': 'direct',
+          'latency_ms': 9,
+          'events': const [
+            {'type': 'output', 'data_b64': 'aGVsbG8gd29ybGQ='},
+          ],
+        };
       default:
         return {};
     }
@@ -1982,11 +2010,178 @@ void main() {
 
       await tester.tap(find.byKey(const ValueKey('shell-dock-close')));
       await tester.pumpAndSettle();
+      expect(find.text('Close terminal?'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('confirm-close-shell')));
+      await tester.pumpAndSettle();
       expect(backend.calls.where((c) => c.$1 == 'closeShell'), hasLength(1));
       expect(find.byKey(const ValueKey('shell-dock')), findsNothing);
       await close(tester);
     },
   );
+  testWidgets(
+    'multiple minimized host shells each render their own dock pill',
+    (tester) async {
+      final secondHost = 'e' * 64;
+      final backend = FakeBackend(
+        shellService: true,
+        minimizedShells: [
+          {
+            'host': peer,
+            'host_name': 'j-strix',
+            'service': 'shell',
+            'incarnation': incarnation,
+            'session': 'main',
+            'title': 'j-strix · fish (2)',
+            'state': 'attached',
+            'tab_count': 2,
+            'minimized': true,
+          },
+          {
+            'host': secondHost,
+            'host_name': 'j-desktop',
+            'service': 'shell',
+            'incarnation': incarnation,
+            'session': 'tab-2',
+            'title': 'j-desktop · bash',
+            'state': 'attached',
+            'tab_count': 1,
+            'minimized': true,
+          },
+        ],
+      );
+      await mount(tester, backend);
+      expect(find.text('j-strix · fish (2)'), findsOneWidget);
+      expect(find.text('j-desktop · bash'), findsOneWidget);
+
+      await tester.tap(find.byKey(ValueKey('shell-dock-close-$secondHost')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('confirm-close-shell')));
+      await tester.pumpAndSettle();
+      expect(backend.calls.where((c) => c.$1 == 'closeShell').single.$2, {
+        'host': secondHost,
+      });
+      expect(find.text('j-strix · fish (2)'), findsOneWidget);
+      expect(find.text('j-desktop · bash'), findsNothing);
+      await close(tester);
+    },
+  );
+  testWidgets(
+    'desktop shell opens baked-in terminal sheet with tabs, splits, modes, external launch, and terminate on close',
+    (tester) async {
+      final backend = DesktopFake();
+      await mount(tester, backend, size: const Size(1200, 900));
+      await tester.tap(find.text('shell'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(
+        backend.calls.where((c) => c.$1 == 'shellOpen').single.$2['session'],
+        'main',
+      );
+      expect(find.text(' · 9 ms'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('desktop-shell-mode-button')),
+        findsOneWidget,
+      );
+
+      // Open input mode popover and verify explanations
+      await tester.tap(find.byKey(const ValueKey('desktop-shell-mode-button')));
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey('desktop-shell-mode-popover')),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('Shows typed characters immediately'),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const ValueKey('desktop-shell-mode-sync')));
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey('desktop-shell-mode-popover')),
+        findsNothing,
+      );
+
+      // Split active tab side-by-side
+      await tester.tap(
+        find.byKey(const ValueKey('desktop-shell-split-vertical')),
+      );
+      await tester.pump();
+      expect(backend.calls.where((c) => c.$1 == 'shellOpen'), hasLength(2));
+
+      // Add a second tab on this host and close it explicitly (terminate: true)
+      await tester.tap(find.byKey(const ValueKey('desktop-shell-new-tab')));
+      await tester.pump();
+      expect(backend.calls.where((c) => c.$1 == 'shellOpen'), hasLength(3));
+      await tester.tap(
+        find.byKey(const ValueKey('desktop-shell-close-tab-tab-3')),
+      );
+      await tester.pump();
+      expect(backend.calls.where((c) => c.$1 == 'shellClose').single.$2, {
+        'session': 'handle-tab-3',
+        'terminate': true,
+      });
+
+      // Open in external system terminal
+      await tester.tap(
+        find.byKey(const ValueKey('desktop-shell-open-external')),
+      );
+      await tester.pump();
+      expect(backend.calls.where((c) => c.$1 == 'openShell'), hasLength(1));
+
+      // Popup × button minimizes to dock (does not close or terminate sessions)
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('desktop-shell-close')),
+          matching: find.byIcon(Icons.remove),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const ValueKey('desktop-shell-close')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('shell-dock')), findsOneWidget);
+      expect(backend.calls.where((c) => c.$1 == 'shellClose'), hasLength(1));
+
+      // Clicking × on dock opens confirmation popup; confirming terminates remaining panes
+      await tester.tap(find.byKey(const ValueKey('shell-dock-close')));
+      await tester.pumpAndSettle();
+      expect(find.text('Close terminal?'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('confirm-close-shell')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('shell-dock')), findsNothing);
+      final closeCalls = backend.calls
+          .where((c) => c.$1 == 'shellClose')
+          .toList();
+      expect(closeCalls, hasLength(3));
+      expect(closeCalls.every((c) => c.$2['terminate'] == true), isTrue);
+      await close(tester);
+    },
+  );
+  test('terminal emulator buffer strips DCS/private CSI and answers fish startup queries', () {
+    final replies = <String>[];
+    final buffer = TerminalEmulatorBuffer(
+      cols: 80,
+      rows: 24,
+      onReply: replies.add,
+    );
+    buffer.writeString(
+      '\x1b[?u\x1b[>0q\x1b]11;?\x1b\\\x1b[?1049h'
+      '\x1bP+q696e646e\x1b\\\x1bP+q71756572792d6f732d6e616d65\x1b\\'
+      '\x1b[?1049l\x1b[0c'
+      'Welcome to fish\r\n'
+      '\x1b]0;johnny@j-strix: ~\x07'
+      '\x1b[6n\x1b[?2004h\x1b[>4;1m\x1b[?u'
+      'johnny@j-strix ~> ',
+    );
+    expect(buffer.lastTitle, 'johnny@j-strix: ~');
+    expect(replies, contains('\x1b]11;rgb:0000/0000/0000\x1b\\'));
+    expect(replies, contains('\x1b[?1;2c'));
+    expect(replies, contains('\x1b[2;1R'));
+    final line0 = buffer.lines[0].map((c) => c.char).join().trimRight();
+    final line1 = buffer.lines[1].map((c) => c.char).join().trimRight();
+    expect(line0, 'Welcome to fish');
+    expect(line1, 'johnny@j-strix ~>');
+  });
   testWidgets('popup sheets blur the background behind the modal barrier', (
     tester,
   ) async {

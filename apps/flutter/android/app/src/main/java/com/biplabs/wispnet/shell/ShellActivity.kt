@@ -95,8 +95,11 @@ object ShellWorkspace {
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private val networkHandler by lazy { Handler(Looper.getMainLooper()) }
     internal var tabs by mutableStateOf<List<ShellTab>>(emptyList())
+    internal var activeHost by mutableStateOf("")
     internal var selected by mutableStateOf("")
     internal var minimized by mutableStateOf(false)
+    internal val selectedByHost = mutableStateMapOf<String, String>()
+    internal val minimizedHosts = mutableStateMapOf<String, Boolean>()
     internal val titles = mutableStateMapOf<String, String>()
     internal val paths = mutableStateMapOf<String, TransportPathStatus>()
     internal val states = mutableStateMapOf<String, ConnectionState>()
@@ -144,9 +147,18 @@ object ShellWorkspace {
             (existing.takeLast(15) + requested).distinctBy { it.id }
         }
         tabs = merged
+        activeHost = initial.host
+        selectedByHost[initial.host] = requested.id
         selected = requested.id
-        minimized = false
+        minimizedHosts.remove(initial.host)
+        minimized = minimizedHosts.values.any { it }
         saveTabs(preferences, merged)
+    }
+
+    @Synchronized
+    internal fun selectTab(tab: ShellTab) {
+        selectedByHost[tab.target.host] = tab.id
+        selected = tab.id
     }
 
     @Synchronized
@@ -175,18 +187,22 @@ object ShellWorkspace {
 
     @Synchronized
     internal fun addTab(context: Context, target: ShellTarget) {
-        if (tabs.size >= 16) return
+        val hostCount = tabs.count { it.target.host == target.host }
+        if (hostCount >= 16 || tabs.size >= 32) return
         val tab = ShellTab(target, "tab-${System.currentTimeMillis()}")
         val next = tabs + tab
         tabs = next
+        selectedByHost[target.host] = tab.id
         selected = tab.id
         saveTabs(context.applicationContext.getSharedPreferences("shell-terminal", Context.MODE_PRIVATE), next)
     }
 
     @Synchronized
-    internal fun closeTab(context: Context, id: String): Boolean {
+    internal fun closeTab(context: Context?, id: String, terminate: Boolean = true): Boolean {
+        val closedTab = tabs.firstOrNull { it.id == id }
+        val host = closedTab?.target?.host.orEmpty()
         val next = tabs.filterNot { it.id == id }
-        holders.remove(id)?.close()
+        holders.remove(id)?.close(terminate)
         senders.remove(id)
         paths.remove(id)
         errors.remove(id)
@@ -195,36 +211,62 @@ object ShellWorkspace {
         titles.remove(id)
         lines.remove(id)
         if (next.isEmpty()) {
-            closeAll(context)
+            closeAll(context, terminate = false)
             return true
         }
         tabs = next
-        if ( next.none { it.id == selected } ) {
-            selected = next.first().id
+        val remainingForHost = next.filter { it.target.host == host }
+        if (remainingForHost.isEmpty()) {
+            selectedByHost.remove(host)
+            minimizedHosts.remove(host)
+            minimized = minimizedHosts.values.any { it }
+            if (activeHost == host) {
+                activeHost = next.first().target.host
+            }
+            if (next.none { it.id == selected }) {
+                selected = next.first().id
+            }
+            context?.let {
+                saveTabs(it.applicationContext.getSharedPreferences("shell-terminal", Context.MODE_PRIVATE), next)
+            }
+            return true
         }
-        saveTabs(context.applicationContext.getSharedPreferences("shell-terminal", Context.MODE_PRIVATE), next)
+        if (remainingForHost.none { it.id == selectedByHost[host] }) {
+            selectedByHost[host] = remainingForHost.first().id
+        }
+        if (host == activeHost || next.none { it.id == selected }) {
+            selected = selectedByHost[host] ?: remainingForHost.first().id
+        }
+        context?.let {
+            saveTabs(it.applicationContext.getSharedPreferences("shell-terminal", Context.MODE_PRIVATE), next)
+        }
         return false
     }
 
     @Synchronized
-    fun minimize() {
-        if (tabs.isNotEmpty()) {
+    fun minimize(host: String = activeHost) {
+        val targetHost = host.ifEmpty { tabs.firstOrNull()?.target?.host.orEmpty() }
+        if (targetHost.isNotEmpty() && tabs.any { it.target.host == targetHost }) {
+            minimizedHosts[targetHost] = true
             minimized = true
         }
     }
 
     @Synchronized
-    fun closeHost(context: Context, host: String) {
+    fun closeHost(context: Context?, host: String, terminate: Boolean = true) {
         if (host.isEmpty()) return
         val matching = tabs.filter { it.target.host == host }.map { it.id }
-        matching.forEach { closeTab(context, it) }
+        matching.forEach { closeTab(context, it, terminate) }
+        minimizedHosts.remove(host)
+        selectedByHost.remove(host)
+        minimized = minimizedHosts.values.any { it }
     }
 
     @Synchronized
-    fun closeAll(context: Context? = null) {
+    fun closeAll(context: Context? = null, terminate: Boolean = true) {
         val activeHolders = holders.values.toList()
         holders.clear()
-        activeHolders.forEach { it.close() }
+        activeHolders.forEach { it.close(terminate) }
         networkCallback?.let {
             networkManager?.unregisterNetworkCallback(it)
             networkHandler.removeCallbacksAndMessages(null)
@@ -235,8 +277,11 @@ object ShellWorkspace {
         rpc = null
         activeRpc?.close()
         tabs = emptyList()
+        activeHost = ""
         selected = ""
         minimized = false
+        selectedByHost.clear()
+        minimizedHosts.clear()
         titles.clear()
         paths.clear()
         states.clear()
@@ -252,11 +297,11 @@ object ShellWorkspace {
     }
 
     @Synchronized
-    fun snapshotJson(): JSONObject? {
-        if (tabs.isEmpty()) return null
-        val current = tabs.firstOrNull { it.id == selected } ?: tabs.first()
+    private fun hostSnapshotMap(host: String, hostTabs: List<ShellTab>): Map<String, Any> {
+        val selectedId = selectedByHost[host] ?: selected
+        val current = hostTabs.firstOrNull { it.id == selectedId } ?: hostTabs.first()
         val suffix = titles[current.id] ?: current.session
-        val countBadge = if (tabs.size > 1) " (${tabs.size})" else ""
+        val countBadge = if (hostTabs.size > 1) " (${hostTabs.size})" else ""
         val title = "${current.target.name} · $suffix$countBadge"
         val stateName = when (states[current.id] ?: ConnectionState.Connecting) {
             ConnectionState.Attached -> "attached"
@@ -265,16 +310,50 @@ object ShellWorkspace {
             ConnectionState.Exited -> "exited"
             ConnectionState.Failed -> "failed"
         }
-        return JSONObject()
-            .put("host", current.target.host)
-            .put("host_name", current.target.name)
-            .put("service", current.target.service)
-            .put("incarnation", current.target.incarnation)
-            .put("session", current.session)
-            .put("title", title)
-            .put("state", stateName)
-            .put("tab_count", tabs.size)
-            .put("minimized", minimized)
+        val isMinimized = minimizedHosts[host] == true || (minimized && minimizedHosts.isEmpty())
+        return mapOf(
+            "host" to current.target.host,
+            "host_name" to current.target.name,
+            "service" to current.target.service,
+            "incarnation" to current.target.incarnation,
+            "session" to current.session,
+            "title" to title,
+            "state" to stateName,
+            "tab_count" to hostTabs.size,
+            "minimized" to isMinimized,
+        )
+    }
+
+    @Synchronized
+    fun snapshots(): List<Map<String, Any>> {
+        val list = mutableListOf<Map<String, Any>>()
+        tabs.groupBy { it.target.host }.forEach { (host, hostTabs) ->
+            if (hostTabs.isNotEmpty()) {
+                list.add(hostSnapshotMap(host, hostTabs))
+            }
+        }
+        return list
+    }
+
+    private fun mapToJson(map: Map<String, Any>): JSONObject {
+        val json = JSONObject()
+        map.forEach { (k, v) -> json.put(k, v) }
+        return json
+    }
+
+    @Synchronized
+    fun snapshotsJson(): JSONArray {
+        val array = JSONArray()
+        snapshots().forEach { array.put(mapToJson(it)) }
+        return array
+    }
+
+    @Synchronized
+    fun snapshotJson(): JSONObject? {
+        val all = snapshots()
+        if (all.isEmpty()) return null
+        val entry = all.firstOrNull { it["minimized"] == true } ?: all.first()
+        return mapToJson(entry)
     }
 
     private fun saveTabs(preferences: android.content.SharedPreferences, currentTabs: List<ShellTab>) {
@@ -375,8 +454,15 @@ private fun ShellScreen(
     var sheetSettled by remember { mutableStateOf(false) }
     var dismissing by remember { mutableStateOf(false) }
 
-    val tabs = ShellWorkspace.tabs
-    val selected = ShellWorkspace.selected
+    val allTabs = ShellWorkspace.tabs
+    val activeHost = ShellWorkspace.activeHost.ifEmpty { allTabs.firstOrNull()?.target?.host.orEmpty() }
+    val tabs = remember(allTabs, activeHost) {
+        allTabs.filter { it.target.host == activeHost }.ifEmpty {
+            val fallbackHost = allTabs.firstOrNull()?.target?.host.orEmpty()
+            allTabs.filter { it.target.host == fallbackHost }
+        }
+    }
+    val selected = ShellWorkspace.selectedByHost[activeHost] ?: ShellWorkspace.selected
     val titles = ShellWorkspace.titles
     val paths = ShellWorkspace.paths
     val states = ShellWorkspace.states
@@ -387,6 +473,7 @@ private fun ShellScreen(
 
     val current = tabs.firstOrNull { it.id == selected } ?: tabs.firstOrNull()
     val currentId = current?.id.orEmpty()
+    val currentHost = current?.target?.host ?: activeHost
 
     fun modeFor(id: String?): TerminalInputMode {
         val state = inputStates[id.orEmpty()]
@@ -401,7 +488,7 @@ private fun ShellScreen(
         onBlurProgress(visualProgress)
     }
 
-    fun dismiss(closeAll: Boolean) {
+    fun dismiss(closeAll: Boolean, alreadyClosed: Boolean = false) {
         if (dismissing) return
         dismissing = true
         sheetSettled = false
@@ -409,9 +496,10 @@ private fun ShellScreen(
         focusManager.clearFocus()
         keyboardController?.hide()
         if (closeAll) {
-            ShellWorkspace.minimized = false
-        } else {
-            ShellWorkspace.minimize()
+            ShellWorkspace.minimizedHosts.remove(currentHost)
+            ShellWorkspace.minimized = ShellWorkspace.minimizedHosts.values.any { it }
+        } else if (!alreadyClosed) {
+            ShellWorkspace.minimize(currentHost)
         }
         scope.launch {
             sheetProgress.animateTo(
@@ -419,8 +507,8 @@ private fun ShellScreen(
                 animationSpec = tween(durationMillis = 200, easing = FastOutLinearInEasing),
             )
             onBlurProgress(0f)
-            if (closeAll) {
-                ShellWorkspace.closeAll(context)
+            if (closeAll && !alreadyClosed) {
+                ShellWorkspace.closeHost(context, currentHost, terminate = true)
             }
             onFinish()
         }
@@ -607,34 +695,12 @@ private fun ShellScreen(
                         onClick = { dismiss(closeAll = false) },
                     ) {
                         Canvas(Modifier.size(12.dp)) {
-                            val y = size.height * 0.55f
-                            drawLine(
-                                color = TextColor,
-                                start = Offset(1.5f, y),
-                                end = Offset(size.width - 1.5f, y),
-                                strokeWidth = 1.8.dp.toPx(),
-                                cap = StrokeCap.Round,
-                            )
-                        }
-                    }
-                    Spacer(Modifier.width(6.dp))
-                    HeaderIconButton(
-                        description = "Close",
-                        onClick = { dismiss(closeAll = true) },
-                    ) {
-                        Canvas(Modifier.size(12.dp)) {
                             val pad = 1.5.dp.toPx()
+                            val y = size.height * 0.5f
                             drawLine(
                                 color = TextColor,
-                                start = Offset(pad, pad),
-                                end = Offset(size.width - pad, size.height - pad),
-                                strokeWidth = 1.8.dp.toPx(),
-                                cap = StrokeCap.Round,
-                            )
-                            drawLine(
-                                color = TextColor,
-                                start = Offset(size.width - pad, pad),
-                                end = Offset(pad, size.height - pad),
+                                start = Offset(pad, y),
+                                end = Offset(size.width - pad, y),
                                 strokeWidth = 1.8.dp.toPx(),
                                 cap = StrokeCap.Round,
                             )
@@ -643,8 +709,7 @@ private fun ShellScreen(
                 }
             }
 
-            // Second line: Tabs (each with inline x) + "+" button
-            val multipleHosts = remember(tabs) { tabs.map { it.target.host }.distinct().size > 1 }
+            // Second line: Tabs for this host (each with inline x) + "+" button
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -654,8 +719,7 @@ private fun ShellScreen(
             ) {
                 tabs.forEach { tab ->
                     val isSelected = tab.id == current?.id
-                    val tabTitle = titles[tab.id] ?: tab.session
-                    val label = if (multipleHosts) "${tab.target.name}: $tabTitle" else tabTitle
+                    val label = titles[tab.id] ?: tab.session
                     val chipShape = RoundedCornerShape(8.dp)
                     Row(
                         Modifier
@@ -667,7 +731,7 @@ private fun ShellScreen(
                                 BorderStroke(1.dp, if (isSelected) SelectedBorderColor else BorderColor),
                                 chipShape,
                             )
-                            .clickable { ShellWorkspace.selected = tab.id }
+                            .clickable { ShellWorkspace.selectTab(tab) }
                             .padding(start = 10.dp, end = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -688,8 +752,8 @@ private fun ShellScreen(
                                     role = Role.Button
                                 }
                                 .clickable {
-                                    if (ShellWorkspace.closeTab(context, tab.id)) {
-                                        dismiss(closeAll = true)
+                                    if (ShellWorkspace.closeTab(context, tab.id, terminate = true)) {
+                                        dismiss(closeAll = true, alreadyClosed = true)
                                     }
                                 },
                             contentAlignment = Alignment.Center,

@@ -25,6 +25,7 @@ internal class NetworkTerminalConnection(
     private val work = Executors.newSingleThreadScheduledExecutor()
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var closed = false
+    @Volatile private var terminateOnClose = false
     private var handle: String? = null
     private var poll: ScheduledFuture<*>? = null
     private var columns = 80
@@ -43,7 +44,7 @@ internal class NetworkTerminalConnection(
                 .put("cols", columns).put("rows", rows))
             val opened = reply.getString("session")
             if (closed) {
-                rpc.request("shell_close", JSONObject().put("session", opened))
+                rpc.request("shell_close", JSONObject().put("session", opened).put("terminate", terminateOnClose))
                 return@execute
             }
             handle = opened
@@ -106,16 +107,18 @@ internal class NetworkTerminalConnection(
         }
     }
 
-    private fun release() {
+    private fun release(terminate: Boolean = false) {
         poll?.cancel(false)
         poll = null
         val old = handle
         handle = null
-        if (old != null) try { rpc.request("shell_close", JSONObject().put("session", old)) } catch (_: Exception) {}
+        if (old != null) try {
+            rpc.request("shell_close", JSONObject().put("session", old).put("terminate", terminate))
+        } catch (_: Exception) {}
     }
 
     private fun disconnected(error: Exception) {
-        release()
+        release(false)
         deliver {
             onTerminalState(false, false)
             onConnectionError(error.message ?: "Shell connection failed")
@@ -150,12 +153,13 @@ internal class NetworkTerminalConnection(
         catch (error: Exception) { disconnected(error) }
     }
 
-    override fun close() {
+    override fun close(terminate: Boolean) {
         if (closed) return
         closed = true
+        terminateOnClose = terminate
         main.removeCallbacksAndMessages(null)
         poll?.cancel(false)
-        try { work.execute { release() } } catch (_: RejectedExecutionException) {}
+        try { work.execute { release(terminate) } } catch (_: RejectedExecutionException) {}
         work.shutdown()
     }
 }

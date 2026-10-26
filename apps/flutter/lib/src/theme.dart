@@ -8,6 +8,7 @@ abstract final class WispColors {
   static const panel = Color(0xff101a30);
   static const tile = Color(0xff111e38);
   static const border = Color(0xff294270);
+  static const borderActive = Color(0xff4b73c2);
   static const text = Color(0xffedf2ff);
   static const muted = Color(0xff94a6c4);
   static const cyan = Color(0xff65ceff);
@@ -162,6 +163,9 @@ Future<T?> showWispSheet<T>(
   BuildContext context, {
   required String title,
   required Widget child,
+  bool showHeader = true,
+  bool scrollable = true,
+  double maxWidth = 640,
 }) {
   final navigator = Navigator.of(context);
   final localizations = MaterialLocalizations.of(context);
@@ -171,7 +175,7 @@ Future<T?> showWispSheet<T>(
       useSafeArea: true,
       backgroundColor: Colors.transparent,
       modalBarrierColor: const Color(0x78040812),
-      constraints: const BoxConstraints(maxWidth: 640),
+      constraints: BoxConstraints(maxWidth: maxWidth),
       capturedThemes: InheritedTheme.capture(
         from: context,
         to: navigator.context,
@@ -180,63 +184,68 @@ Future<T?> showWispSheet<T>(
       barrierOnTapHint: localizations.scrimOnTapHint(
         localizations.bottomSheetLabel,
       ),
-      builder: (context) => Padding(
-        padding: EdgeInsets.fromLTRB(
-          12,
-          20,
-          12,
-          12 + MediaQuery.viewInsetsOf(context).bottom,
-        ),
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.sizeOf(context).height * .86,
-          ),
-          child: WispPanel(
-            color: WispColors.sheet,
-            radius: 24,
-            padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+      builder: (context) {
+        final content = Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                margin: EdgeInsets.only(bottom: showHeader ? 12 : 6),
+                decoration: BoxDecoration(
+                  color: WispColors.muted.withValues(alpha: .4),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            if (showHeader) ...[
+              Row(
                 children: [
-                  Center(
-                    child: Container(
-                      width: 40,
-                      height: 4,
-                      margin: const EdgeInsets.only(bottom: 12),
-                      decoration: BoxDecoration(
-                        color: WispColors.muted.withValues(alpha: .4),
-                        borderRadius: BorderRadius.circular(2),
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
                       ),
                     ),
                   ),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          title,
-                          style: const TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: 'Close',
-                        onPressed: () => Navigator.pop(context),
-                        icon: const Icon(Icons.close, size: 20),
-                      ),
-                    ],
+                  IconButton(
+                    tooltip: 'Close',
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close, size: 20),
                   ),
-                  const SizedBox(height: 12),
-                  child,
                 ],
               ),
+              const SizedBox(height: 12),
+            ],
+            child,
+          ],
+        );
+        return Padding(
+          padding: EdgeInsets.fromLTRB(
+            12,
+            20,
+            12,
+            12 + MediaQuery.viewInsetsOf(context).bottom,
+          ),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.sizeOf(context).height * .86,
+            ),
+            child: WispPanel(
+              color: WispColors.sheet,
+              radius: 24,
+              padding: showHeader
+                  ? const EdgeInsets.fromLTRB(20, 12, 20, 24)
+                  : const EdgeInsets.fromLTRB(12, 8, 12, 10),
+              child: scrollable ? SingleChildScrollView(child: content) : content,
             ),
           ),
-        ),
-      ),
+        );
+      },
     ),
   );
 }
