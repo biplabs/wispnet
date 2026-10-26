@@ -27,9 +27,11 @@ class FakeBackend implements WispnetBackend {
     this.publicAccess,
     this.accessReady,
     this.shellService = false,
+    this.minimizedShell,
   });
   final Map<String, dynamic>? diagnosticReport;
   final Map<String, dynamic>? publicAccess;
+  Map<String, dynamic>? minimizedShell;
   Future<void>? accessReady;
   bool paired, enabled;
   final bool shellService;
@@ -85,6 +87,7 @@ class FakeBackend implements WispnetBackend {
               peer: {'path': 'direct', 'rtt_ms': 15},
             },
           },
+          if (minimizedShell != null) 'shell': minimizedShell,
         };
       case 'connectionDiagnostics':
         return {
@@ -166,6 +169,9 @@ class FakeBackend implements WispnetBackend {
         return {};
       case 'removeHost':
         paired = false;
+        return {};
+      case 'closeShell':
+        minimizedShell = null;
         return {};
       default:
         return {};
@@ -1941,6 +1947,58 @@ void main() {
       isEmpty,
     );
     expect(find.byIcon(Icons.terminal), findsOneWidget);
+    await close(tester);
+  });
+  testWidgets(
+    'minimized shell docks at the bottom and can be expanded or closed',
+    (tester) async {
+      final backend = FakeBackend(
+        shellService: true,
+        minimizedShell: {
+          'host': peer,
+          'host_name': 'j-strix',
+          'service': 'shell',
+          'incarnation': incarnation,
+          'session': 'main',
+          'title': 'j-strix · wispnet (2)',
+          'state': 'attached',
+          'tab_count': 2,
+          'minimized': true,
+        },
+      );
+      await mount(tester, backend);
+      expect(find.byKey(const ValueKey('shell-dock')), findsOneWidget);
+      expect(find.text('j-strix · wispnet (2)'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('shell-dock-expand')));
+      await tester.pumpAndSettle();
+      expect(backend.calls.where((c) => c.$1 == 'openShell').single.$2, {
+        'host': peer,
+        'host_name': 'j-strix',
+        'service': 'shell',
+        'incarnation': incarnation,
+        'session': 'main',
+      });
+
+      await tester.tap(find.byKey(const ValueKey('shell-dock-close')));
+      await tester.pumpAndSettle();
+      expect(backend.calls.where((c) => c.$1 == 'closeShell'), hasLength(1));
+      expect(find.byKey(const ValueKey('shell-dock')), findsNothing);
+      await close(tester);
+    },
+  );
+  testWidgets('popup sheets blur the background behind the modal barrier', (
+    tester,
+  ) async {
+    final backend = FakeBackend();
+    await mount(tester, backend);
+    expect(find.byType(BackdropFilter), findsNothing);
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    expect(find.byType(BackdropFilter), findsOneWidget);
+    await tester.tap(find.byTooltip('Close'));
+    await tester.pumpAndSettle();
+    expect(find.byType(BackdropFilter), findsNothing);
     await close(tester);
   });
   testWidgets('built-in shell grants are managed without editing the service', (

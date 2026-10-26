@@ -78,7 +78,10 @@ access controls. The native host's shared limit remains 16 shell operations.
 
 ## Android
 
-Tap Shell under a paired desktop host. The native terminal retains WispShell's
+Tap Shell under a paired desktop host to slide up the terminal sheet. Minimize
+it to dock the active terminal title at the bottom of the screen while keeping
+sessions connected, tap the docked bar to expand it again, or close it to end
+the open sessions. The native terminal retains WispShell's
 Termux renderer, multiple tabs, Android keyboard composition handling, shortcut
 keys, keyboard resize smoothing, and resume/network reconnect handling.
 

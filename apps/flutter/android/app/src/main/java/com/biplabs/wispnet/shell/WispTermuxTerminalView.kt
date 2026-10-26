@@ -5,6 +5,8 @@ package com.biplabs.wispnet.shell
 import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.text.InputType
 import android.util.Log
@@ -49,13 +51,15 @@ data class TransportPathStatus(
 )
 
 @Composable
-fun WispTermuxTerminalView(
+internal fun WispTermuxTerminalView(
     modifier: Modifier = Modifier,
     sessionName: String = "main",
     active: Boolean = true,
     reconnectNonce: Int = 0,
     target: ShellTarget,
     rpc: ShellRpc,
+    existingHolder: TermuxTerminalHolder? = null,
+    retainOnDispose: Boolean = false,
     inputMode: TerminalInputMode = TerminalInputMode.Predictive,
     onConnectionState: (ConnectionState) -> Unit = {},
     onConnectionError: (String) -> Unit = {},
@@ -66,8 +70,8 @@ fun WispTermuxTerminalView(
     onKeyboardRequest: () -> Unit = {},
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
-    val holder = remember(sessionName, reconnectNonce, target, rpc) {
-        TermuxTerminalHolder(
+    val holder = remember(sessionName, reconnectNonce, target, rpc, existingHolder) {
+        existingHolder ?: TermuxTerminalHolder(
             target,
             rpc,
             sessionName,
@@ -80,6 +84,14 @@ fun WispTermuxTerminalView(
             onKeyboardRequest,
         )
     }
+    holder.updateCallbacks(
+        onConnectionState,
+        onConnectionError,
+        onTransportPathChanged,
+        onTitleChanged,
+        onTerminalModeChanged,
+        onKeyboardRequest,
+    )
     LaunchedEffect(holder, inputMode) {
         holder.setInputMode(inputMode)
     }
@@ -94,11 +106,15 @@ fun WispTermuxTerminalView(
             lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
-    DisposableEffect(holder) {
+    DisposableEffect(holder, retainOnDispose) {
         onSendInputReady { input -> holder.sendInput(input) }
         onDispose {
             onSendInputReady(null)
-            holder.close()
+            if (retainOnDispose) {
+                holder.detachView()
+            } else {
+                holder.close()
+            }
         }
     }
 
@@ -136,18 +152,19 @@ fun WispTermuxTerminalView(
     )
 }
 
-private class TermuxTerminalHolder(
+internal class TermuxTerminalHolder(
     private val target: ShellTarget,
     private val rpc: ShellRpc,
     private val sessionName: String,
     private var inputMode: TerminalInputMode,
-    private val onConnectionState: (ConnectionState) -> Unit,
-    private val onConnectionError: (String) -> Unit,
-    private val onTransportPathChanged: (TransportPathStatus?) -> Unit,
-    private val onTitleChanged: (String) -> Unit,
-    private val onTerminalModeChanged: (Boolean, Boolean) -> Unit,
-    private val onKeyboardRequest: () -> Unit,
+    private var onConnectionState: (ConnectionState) -> Unit,
+    private var onConnectionError: (String) -> Unit,
+    private var onTransportPathChanged: (TransportPathStatus?) -> Unit,
+    private var onTitleChanged: (String) -> Unit,
+    private var onTerminalModeChanged: (Boolean, Boolean) -> Unit,
+    private var onKeyboardRequest: () -> Unit,
 ) : TerminalSessionClient, TerminalViewClient {
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var view: TerminalView? = null
     private var inputView: TerminalInputEditText? = null
     private var emulator: TerminalEmulator? = null
@@ -171,6 +188,37 @@ private class TermuxTerminalHolder(
     private var echoEnabled = false
     private var canonicalInput = false
     private var replayStarted = false
+
+    fun updateCallbacks(
+        onState: (ConnectionState) -> Unit,
+        onError: (String) -> Unit,
+        onPath: (TransportPathStatus?) -> Unit,
+        onTitle: (String) -> Unit,
+        onMode: (Boolean, Boolean) -> Unit,
+        onKeyboard: () -> Unit,
+    ) {
+        onConnectionState = onState
+        onConnectionError = onError
+        onTransportPathChanged = onPath
+        onTitleChanged = onTitle
+        onTerminalModeChanged = onMode
+        onKeyboardRequest = onKeyboard
+    }
+
+    fun detachView() {
+        hideKeyboard()
+        view?.let { oldView ->
+            layoutListener?.let(oldView::removeOnLayoutChangeListener)
+            pendingResize?.let(oldView::removeCallbacks)
+            pendingScreenRefresh?.let(oldView::removeCallbacks)
+        }
+        layoutListener = null
+        pendingResize = null
+        pendingScreenRefresh = null
+        keyboardAutoShown = false
+        view = null
+        inputView = null
+    }
 
     fun attachView(newView: TerminalView, newInputView: TerminalInputEditText) {
         view?.let { oldView ->
@@ -199,53 +247,60 @@ private class TermuxTerminalHolder(
             false
         }
 
-        val remoteOutput = RemoteTerminalOutput(
-            onWrite = { bytes ->
-                if (suppressRemoteWrites) return@RemoteTerminalOutput
-                connection?.sendBytes(bytes)
-            },
-            onTitle = { title -> updateTitle(title) },
-        )
-        val remoteEmulator = TerminalEmulator(
-            remoteOutput,
-            80,
-            24,
-            2000,
-            this,
-        )
-        emulator = remoteEmulator
-        dummySession = TerminalSession(
+        val remoteEmulator = emulator ?: run {
+            val remoteOutput = RemoteTerminalOutput(
+                onWrite = { bytes ->
+                    if (suppressRemoteWrites) return@RemoteTerminalOutput
+                    connection?.sendBytes(bytes)
+                },
+                onTitle = { title -> updateTitle(title) },
+            )
+            TerminalEmulator(
+                remoteOutput,
+                80,
+                24,
+                2000,
+                this,
+            ).also { emulator = it }
+        }
+        val session = dummySession ?: TerminalSession(
             "/system/bin/sh",
             "/",
             arrayOf("sh", "-c", "while true; do sleep 3600; done"),
             emptyArray(),
             2000,
             this,
-        )
-        newView.attachSession(dummySession)
+        ).also { dummySession = it }
+        newView.attachSession(session)
         newView.mEmulator = remoteEmulator
         newView.requestFocus()
 
-        startConnection(newView, remoteEmulator)
+        if (connection == null) {
+            startConnection(remoteEmulator)
+        } else {
+            onConnectionState(connectionState)
+            onTerminalModeChanged(echoEnabled, canonicalInput)
+        }
         layoutListener = View.OnLayoutChangeListener { changedView, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
             if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
                 (changedView as? TerminalView)?.let(::scheduleSizeSync)
             }
         }.also(newView::addOnLayoutChangeListener)
-        newView.post { syncSizeFromView(newView) }
+        newView.post {
+            syncSizeFromView(newView)
+            newView.onScreenUpdated()
+        }
     }
 
     @Synchronized
     fun reconnectIfDisconnected() {
         if (connectionState != ConnectionState.Disconnected) return
-        val terminalView = view ?: return
         val remoteEmulator = emulator ?: return
-        startConnection(terminalView, remoteEmulator)
+        startConnection(remoteEmulator)
     }
 
     @Synchronized
     private fun startConnection(
-        terminalView: TerminalView,
         remoteEmulator: TerminalEmulator,
     ) {
         connection?.close()
@@ -253,7 +308,7 @@ private class TermuxTerminalHolder(
         echoEnabled = false
         canonicalInput = false
         replayStarted = false
-        val nextConnection = createConnection(terminalView, remoteEmulator)
+        val nextConnection = createConnection(remoteEmulator)
         connection = nextConnection
         val sizeSource = dummySession?.emulator
         if (sizeSource != null) {
@@ -263,12 +318,11 @@ private class TermuxTerminalHolder(
     }
 
     private fun createConnection(
-        newView: TerminalView,
         remoteEmulator: TerminalEmulator,
     ): WispTerminalConnection {
         val onBytes: (ByteArray, Boolean) -> Unit = { bytes, fromScrollback ->
             inferTitle(bytes)?.let { updateTitle(it) }
-            newView.post {
+            mainHandler.post {
                 val displayBytes = if (fromScrollback) {
                     if (!replayStarted) {
                         remoteEmulator.reset()
@@ -283,7 +337,7 @@ private class TermuxTerminalHolder(
                     reconcileLocalEcho(bytes)
                 }
                 if (displayBytes.isEmpty()) {
-                    newView.onScreenUpdated()
+                    view?.onScreenUpdated()
                     return@post
                 }
                 if (fromScrollback) {
@@ -291,10 +345,12 @@ private class TermuxTerminalHolder(
                 }
                 try {
                     remoteEmulator.append(displayBytes, displayBytes.size)
-                    if (shouldDeferScreenUpdate()) {
-                        scheduleDeferredScreenRefresh(newView)
-                    } else {
-                        newView.onScreenUpdated()
+                    view?.let { currentView ->
+                        if (shouldDeferScreenUpdate()) {
+                            scheduleDeferredScreenRefresh(currentView)
+                        } else {
+                            currentView.onScreenUpdated()
+                        }
                     }
                 } finally {
                     if (fromScrollback) {
@@ -338,12 +394,14 @@ private class TermuxTerminalHolder(
     }
 
     fun close() {
+        hideKeyboard()
         view?.let { terminalView ->
             layoutListener?.let(terminalView::removeOnLayoutChangeListener)
             pendingResize?.let(terminalView::removeCallbacks)
             pendingScreenRefresh?.let(terminalView::removeCallbacks)
-            pendingInputFlush?.let(terminalView::removeCallbacks)
         }
+        pendingInputFlush?.let(mainHandler::removeCallbacks)
+        mainHandler.removeCallbacksAndMessages(null)
         layoutListener = null
         pendingResize = null
         pendingScreenRefresh = null
@@ -538,19 +596,15 @@ private class TermuxTerminalHolder(
     }
 
     private fun scheduleInputFlush() {
-        val terminalView = view ?: return
-        pendingInputFlush?.let(terminalView::removeCallbacks)
+        pendingInputFlush?.let(mainHandler::removeCallbacks)
         pendingInputFlush = Runnable {
             pendingInputFlush = null
             flushPendingInput()
-        }.also { terminalView.postDelayed(it, LOCAL_INPUT_FLUSH_DELAY_MS) }
+        }.also { mainHandler.postDelayed(it, LOCAL_INPUT_FLUSH_DELAY_MS) }
     }
 
     private fun flushPendingInput() {
-        val terminalView = view
-        if (terminalView != null) {
-            pendingInputFlush?.let(terminalView::removeCallbacks)
-        }
+        pendingInputFlush?.let(mainHandler::removeCallbacks)
         pendingInputFlush = null
         if (pendingRemoteInput.isEmpty()) return
         val text = pendingRemoteInput.toString()
@@ -722,7 +776,7 @@ private class TermuxTerminalHolder(
     }
 }
 
-private class TerminalInputEditText(
+internal class TerminalInputEditText(
     context: Context,
     private val onInput: (String) -> Boolean,
 ) : EditText(context) {

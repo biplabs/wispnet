@@ -40,4 +40,21 @@ class TerminalInputTest {
         }
         assertEquals(TerminalInputMode.Line, TerminalInputMode.Line.resolve(5, true, true))
     }
+
+    @Test fun workspaceRetainsTabsWhenMinimizedAndClearsOnClose() {
+        ShellWorkspace.closeAll()
+        val target = ShellTarget("a".repeat(64), "shell", "b".repeat(64), "j-strix")
+        val tab = ShellTab(target, "main")
+        ShellWorkspace.tabs = listOf(tab)
+        ShellWorkspace.selected = tab.id
+        ShellWorkspace.titles[tab.id] = "wispnet"
+        ShellWorkspace.states[tab.id] = ConnectionState.Attached
+        ShellWorkspace.minimize()
+        assertEquals(true, ShellWorkspace.minimized)
+        assertEquals(listOf(tab), ShellWorkspace.tabs)
+        ShellWorkspace.closeAll()
+        assertEquals(false, ShellWorkspace.minimized)
+        assertEquals(emptyList<ShellTab>(), ShellWorkspace.tabs)
+        assertEquals(true, ShellWorkspace.titles.isEmpty())
+    }
 }

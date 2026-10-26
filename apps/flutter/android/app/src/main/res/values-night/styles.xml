@@ -8,4 +8,12 @@
   <item name="android:windowBackground">#070b14</item>
   <item name="android:windowLightStatusBar">false</item>
  </style>
+ <style name="ShellTheme" parent="@android:style/Theme.Translucent.NoTitleBar">
+  <item name="android:windowBackground">@android:color/transparent</item>
+  <item name="android:windowIsTranslucent">true</item>
+  <item name="android:windowAnimationStyle">@null</item>
+  <item name="android:windowLightStatusBar">false</item>
+  <item name="android:statusBarColor">@android:color/transparent</item>
+  <item name="android:navigationBarColor">#0b1324</item>
+ </style>
 </resources>

@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 
 abstract final class WispColors {
@@ -124,74 +126,120 @@ class WispPanel extends StatelessWidget {
   );
 }
 
+class _WispBottomSheetRoute<T> extends ModalBottomSheetRoute<T> {
+  _WispBottomSheetRoute({
+    required super.builder,
+    super.capturedThemes,
+    super.barrierLabel,
+    super.barrierOnTapHint,
+    super.backgroundColor,
+    super.constraints,
+    super.modalBarrierColor,
+    required super.isScrollControlled,
+    super.useSafeArea,
+  });
+
+  @override
+  Widget buildModalBarrier() {
+    final barrier = super.buildModalBarrier();
+    final routeAnimation = animation;
+    if (routeAnimation == null || offstage) return barrier;
+    return AnimatedBuilder(
+      animation: routeAnimation,
+      builder: (context, child) {
+        final sigma = 8 * Curves.easeOut.transform(routeAnimation.value);
+        return BackdropFilter(
+          filter: ui.ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+          child: child,
+        );
+      },
+      child: barrier,
+    );
+  }
+}
+
 Future<T?> showWispSheet<T>(
   BuildContext context, {
   required String title,
   required Widget child,
-}) => showModalBottomSheet<T>(
-  context: context,
-  isScrollControlled: true,
-  useSafeArea: true,
-  backgroundColor: Colors.transparent,
-  constraints: const BoxConstraints(maxWidth: 640),
-  builder: (context) => Padding(
-    padding: EdgeInsets.fromLTRB(
-      12,
-      20,
-      12,
-      12 + MediaQuery.viewInsetsOf(context).bottom,
-    ),
-    child: ConstrainedBox(
-      constraints: BoxConstraints(
-        maxHeight: MediaQuery.sizeOf(context).height * .86,
+}) {
+  final navigator = Navigator.of(context);
+  final localizations = MaterialLocalizations.of(context);
+  return navigator.push(
+    _WispBottomSheetRoute<T>(
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      modalBarrierColor: const Color(0x78040812),
+      constraints: const BoxConstraints(maxWidth: 640),
+      capturedThemes: InheritedTheme.capture(
+        from: context,
+        to: navigator.context,
       ),
-      child: WispPanel(
-        color: WispColors.sheet,
-        radius: 24,
-        padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  margin: const EdgeInsets.only(bottom: 12),
-                  decoration: BoxDecoration(
-                    color: WispColors.muted.withValues(alpha: .4),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              Row(
+      barrierLabel: localizations.scrimLabel,
+      barrierOnTapHint: localizations.scrimOnTapHint(
+        localizations.bottomSheetLabel,
+      ),
+      builder: (context) => Padding(
+        padding: EdgeInsets.fromLTRB(
+          12,
+          20,
+          12,
+          12 + MediaQuery.viewInsetsOf(context).bottom,
+        ),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * .86,
+          ),
+          child: WispPanel(
+            color: WispColors.sheet,
+            radius: 24,
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Expanded(
-                    child: Text(
-                      title,
-                      style: const TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      margin: const EdgeInsets.only(bottom: 12),
+                      decoration: BoxDecoration(
+                        color: WispColors.muted.withValues(alpha: .4),
+                        borderRadius: BorderRadius.circular(2),
                       ),
                     ),
                   ),
-                  IconButton(
-                    tooltip: 'Close',
-                    onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close, size: 20),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          title,
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Close',
+                        onPressed: () => Navigator.pop(context),
+                        icon: const Icon(Icons.close, size: 20),
+                      ),
+                    ],
                   ),
+                  const SizedBox(height: 12),
+                  child,
                 ],
               ),
-              const SizedBox(height: 12),
-              child,
-            ],
+            ),
           ),
         ),
       ),
     ),
-  ),
-);
+  );
+}
 
 /// Same three-layer shape as Android's StatusDot drawable.
 class WispStatusDot extends StatelessWidget {
