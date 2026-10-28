@@ -13,7 +13,12 @@ use hyper::{
 };
 use hyper_util::rt::{TokioIo, TokioTimer};
 use iroh::{Endpoint, EndpointId, endpoint::Connection};
-use std::{collections::BTreeMap, convert::Infallible, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    convert::Infallible,
+    sync::Arc,
+    time::Duration,
+};
 use tokio::{
     net::TcpListener,
     sync::{Mutex, Semaphore},
@@ -39,6 +44,17 @@ pub struct CommandCenterConfig {
     pub base_url: String,
     #[serde(default)]
     pub allow_legacy: bool,
+    /// Missing preserves the explicit historical host-wide migration setting.
+    /// An empty list denies every legacy publication, even with allow_legacy.
+    #[serde(default)]
+    pub legacy_publications: Option<Vec<LegacyPublication>>,
+}
+#[derive(Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LegacyPublication {
+    pub owner: EndpointId,
+    pub service: String,
+    pub hostname: String,
 }
 pub struct Ingress {
     domain: String,
@@ -64,6 +80,32 @@ impl Ingress {
         }
         if let Some(command) = &mut command_center {
             command.base_url = crate::command_center::validate_url(&command.base_url)?;
+            if let Some(publications) = &command.legacy_publications {
+                if publications.len() > 256 {
+                    return Err("Too many legacy publication exceptions".into());
+                }
+                let mut names = BTreeSet::new();
+                let mut services = BTreeSet::new();
+                for publication in publications {
+                    let suffix = format!(".{domain}");
+                    let label = publication.hostname.strip_suffix(&suffix).unwrap_or("");
+                    if !publishers.contains(&publication.owner)
+                        || !wispnet_core::protocol::valid_service_id(&publication.service)
+                        || publication.hostname.len() > 253
+                        || label.is_empty()
+                        || label.len() > 63
+                        || label.starts_with('-')
+                        || label.ends_with('-')
+                        || !label
+                            .bytes()
+                            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+                        || !names.insert(publication.hostname.clone())
+                        || !services.insert((publication.owner, publication.service.clone()))
+                    {
+                        return Err("Invalid or duplicate legacy publication exception".into());
+                    }
+                }
+            }
         }
         Ok(Arc::new(Self {
             domain,
@@ -135,6 +177,13 @@ impl Ingress {
                 return Err(());
             }
             let name = hostname(&record.name, owner, &record.service, &self.domain);
+            if !managed && self.command_center.as_ref()
+                .and_then(|command|command.legacy_publications.as_ref())
+                .is_some_and(|publications|!publications.iter().any(|publication|
+                    publication.owner == owner && publication.service == record.service && publication.hostname == name))
+            {
+                return Err(());
+            }
             let mut routes = self.routes.lock().await;
             if routes.len() >= 1024
                 || routes.values().filter(|r| r.owner == owner).count() >= 16

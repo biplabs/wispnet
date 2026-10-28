@@ -136,8 +136,36 @@ start with fresh protected state for the first deployment.
 
 Upgrade the public gateway and merge `deploy/command-center/gateway.example.toml`.
 `allow_legacy=false` requires registered version-2 publications, including for
-known publisher devices. Migrate existing publications deliberately first.
-Never set `allow_legacy=true` as a fallback for a protected service.
+known publisher devices. Set `legacy_publications=[]` explicitly for a gateway
+that permits no legacy publications.
+
+To retain a specific existing version-1 service with its current native
+authentication during migration, keep its owner in the top-level `publishers`
+list and pin the exact publication:
+
+```toml
+[command_center]
+base_url = "https://cmd.wispnet.app"
+allow_legacy = true
+legacy_publications = [
+  { owner = "FULL_EXISTING_OWNER_ENDPOINT_ID", service = "old-service", hostname = "EXACT_EXISTING_PUBLIC_HOSTNAME" }
+]
+```
+
+The gateway requires all three values to match: the authenticated Iroh owner,
+the local service ID, and the public hostname generated from the registration's
+machine name. A renamed URL, a new service, or a different owner gets no legacy
+exception. At most 256 pins are accepted; owners must already be statically
+allowlisted, hostnames must be single-label service names under the configured
+public domain, and duplicate hostnames or owner/service pairs are rejected.
+An empty list denies all legacy registrations even with `allow_legacy=true`.
+Omitting the list preserves the older explicit host-wide `allow_legacy=true`
+behavior for compatibility; hosted deployments should always provide a list.
+`allow_legacy=false` denies legacy registrations regardless of any pins.
+
+Managed version-2 publications continue to require hub authorization and do not
+use these exceptions or need membership in the static publisher list. They never
+automatically fall back to a legacy registration.
 
 ## GIKE pilot
 

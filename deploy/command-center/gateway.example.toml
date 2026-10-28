@@ -1,6 +1,18 @@
 # Merge this section into the upgraded public gateway's protected configuration.
 # The registered-host path does not require a static publisher allowlist.
-# Existing version-1 publications need explicit migration before this is enabled.
+# Strict default: every publication needs a linked Command Center account.
 [command_center]
 base_url = "https://cmd.wispnet.app"
 allow_legacy = false
+legacy_publications = []
+
+# To preserve a specific existing version-1 publication during migration, keep
+# its owner in the existing top-level publishers list, set allow_legacy=true,
+# and replace the empty list above with exact pins, for example:
+# legacy_publications = [
+#   { owner = "FULL_EXISTING_OWNER_ENDPOINT_ID", service = "old-service", hostname = "EXACT_EXISTING_PUBLIC_HOSTNAME" }
+# ]
+# These pins match the authenticated owner, service ID AND generated hostname.
+# New services or renamed public URLs need registered version-2 publishing.
+# Omitting legacy_publications with allow_legacy=true retains historical
+# host-wide exceptions; always provide an explicit list in hosted deployments.

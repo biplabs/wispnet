@@ -29,6 +29,15 @@ const BACKEND: &str = "backend-fixture";
 const SERVICE: &str = "gike-mcp";
 const NAME: &str = "Desktop fixture";
 const DOMAIN: &str = "wispnet.test";
+const LEGACY_SERVICE: &str = "old-hub";
+
+#[derive(Clone, Copy)]
+enum LegacyMode {
+    Disabled,
+    Pinned,
+    HostWide,
+    Empty,
+}
 
 async fn headers(stream: &mut (impl AsyncRead + Unpin)) -> Vec<u8> {
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -103,6 +112,15 @@ impl Fixture {
     }
 
     async fn with_options(external: Option<SocketAddr>, mcp_path: &str, real: bool) -> Self {
+        Self::with_legacy_options(external, mcp_path, real, LegacyMode::Disabled).await
+    }
+
+    async fn with_legacy_options(
+        external: Option<SocketAddr>,
+        mcp_path: &str,
+        real: bool,
+        legacy: LegacyMode,
+    ) -> Self {
         let state = tempfile::tempdir().unwrap();
         std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let key = SecretKey::generate();
@@ -319,12 +337,25 @@ impl Fixture {
         let port = http_listener.local_addr().unwrap().port();
         let ingress = ingress::Ingress::with_command_center(
             DOMAIN.into(),
-            vec![owner],
+            if matches!(legacy, LegacyMode::Empty) {
+                vec![peer.public()]
+            } else {
+                vec![owner, peer.public()]
+            },
             Some(ingress::CommandCenterConfig {
                 // Accepted origin spellings must advertise and match the same
                 // canonical issuer as the linked host and authorization server.
                 base_url: format!("{base_url}/"),
-                allow_legacy: false,
+                allow_legacy: !matches!(legacy, LegacyMode::Disabled),
+                legacy_publications: match legacy {
+                    LegacyMode::Pinned => Some(vec![ingress::LegacyPublication {
+                        owner,
+                        service: LEGACY_SERVICE.into(),
+                        hostname: hostname(NAME, owner, LEGACY_SERVICE, DOMAIN),
+                    }]),
+                    LegacyMode::Empty => Some(Vec::new()),
+                    LegacyMode::Disabled | LegacyMode::HostWide => None,
+                },
             }),
         )
         .unwrap();
@@ -759,6 +790,198 @@ async fn managed_public_strict_gateway_rejects_legacy_and_version_downgrade() {
     assert!(fixture.public("").await.starts_with("HTTP/1.1 401"));
     assert_eq!(fixture.backend_calls.load(Ordering::SeqCst), 0);
     fixture.shutdown().await;
+}
+
+async fn legacy_registration(
+    fixture: &Fixture,
+    endpoint: &iroh::Endpoint,
+    service: &str,
+    name: &str,
+) -> Result<iroh::endpoint::Connection, ()> {
+    let connection = endpoint
+        .connect(
+            iroh::EndpointAddr::new(fixture.gateway.id()).with_ip_addr(fixture.gateway_address),
+            ALPN,
+        )
+        .await
+        .map_err(|_| ())?;
+    let registered = tokio::time::timeout(Duration::from_secs(5), async {
+        let (mut send, mut recv) = connection.open_bi().await.map_err(|_| ())?;
+        write_json(
+            &mut send,
+            &Registration {
+                version: 1,
+                service: service.into(),
+                incarnation: fixture.incarnation.clone(),
+                name: name.into(),
+            },
+        )
+        .await
+        .map_err(|_| ())?;
+        send.finish().map_err(|_| ())?;
+        let response: Value = read_json(&mut recv).await.map_err(|_| ())?;
+        (response["ok"] == true).then_some(()).ok_or(())
+    })
+    .await
+    .expect("legacy registration did not finish");
+    if registered.is_ok() {
+        Ok(connection)
+    } else {
+        tokio::time::timeout(Duration::from_secs(2), connection.closed())
+            .await
+            .expect("denied legacy connection remained open");
+        Err(())
+    }
+}
+
+async fn certificate_permission(fixture: &Fixture, name: &str) -> u16 {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .unwrap()
+        .get(format!("http://127.0.0.1:{}/_wispnet/allow", fixture.port))
+        .query(&[("domain", name)])
+        .send()
+        .await
+        .unwrap()
+        .status()
+        .as_u16()
+}
+
+#[tokio::test]
+async fn managed_public_legacy_exception_pins_owner_service_and_exact_hostname() {
+    let fixture = Fixture::with_legacy_options(None, "/MCP", false, LegacyMode::Pinned).await;
+    let allowed = legacy_registration(&fixture, &fixture.client.endpoint, LEGACY_SERVICE, NAME)
+        .await
+        .expect("pinned legacy publication was rejected");
+    let pinned_name = hostname(NAME, fixture.client.endpoint.id(), LEGACY_SERVICE, DOMAIN);
+    assert_eq!(certificate_permission(&fixture, &pinned_name).await, 200);
+
+    for (service, name) in [
+        ("new-service", NAME),
+        (LEGACY_SERVICE, "Renamed computer"),
+        (SERVICE, NAME),
+    ] {
+        assert!(
+            legacy_registration(&fixture, &fixture.client.endpoint, service, name)
+                .await
+                .is_err(),
+            "unlisted legacy publication was accepted"
+        );
+    }
+    let other = wispnet_agent::tunnel::bind_configured_client(&fixture.peer, Some(&fixture.config))
+        .await
+        .unwrap();
+    assert!(
+        legacy_registration(&fixture, &other, LEGACY_SERVICE, NAME)
+            .await
+            .is_err(),
+        "different allowlisted owner inherited a legacy exception"
+    );
+    let other_name = hostname(NAME, other.id(), LEGACY_SERVICE, DOMAIN);
+    assert_eq!(certificate_permission(&fixture, &other_name).await, 403);
+    assert_eq!(certificate_permission(&fixture, &pinned_name).await, 200);
+    // The owner cannot replace its protected v2 service with a v1 registration.
+    assert!(fixture.public("").await.starts_with("HTTP/1.1 401"));
+    assert!(
+        fixture
+            .public(&format!("Authorization: Bearer {VISITOR}\r\n"))
+            .await
+            .starts_with("HTTP/1.1 200")
+    );
+    allowed.close(0u32.into(), b"fixture finished");
+    other.close().await;
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn managed_public_legacy_empty_list_denies_v1_without_restricting_v2_publishers() {
+    // The managed publisher is deliberately absent from the static allowlist.
+    let fixture = Fixture::with_legacy_options(None, "/MCP", false, LegacyMode::Empty).await;
+    assert!(fixture.public("").await.starts_with("HTTP/1.1 401"));
+    assert!(
+        fixture
+            .public(&format!("Authorization: Bearer {VISITOR}\r\n"))
+            .await
+            .starts_with("HTTP/1.1 200")
+    );
+    // This endpoint IS statically allowlisted, but no v1 exception was pinned.
+    let legacy =
+        wispnet_agent::tunnel::bind_configured_client(&fixture.peer, Some(&fixture.config))
+            .await
+            .unwrap();
+    assert!(
+        legacy_registration(&fixture, &legacy, LEGACY_SERVICE, NAME)
+            .await
+            .is_err()
+    );
+    legacy.close().await;
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn managed_public_legacy_omitted_list_retains_explicit_host_wide_compatibility() {
+    let fixture = Fixture::with_legacy_options(None, "/MCP", false, LegacyMode::HostWide).await;
+    let allowed = legacy_registration(
+        &fixture,
+        &fixture.client.endpoint,
+        "unlisted-old-service",
+        NAME,
+    )
+    .await
+    .expect("explicit historical host-wide compatibility changed");
+    allowed.close(0u32.into(), b"fixture finished");
+    fixture.shutdown().await;
+}
+
+#[test]
+fn managed_public_legacy_exception_configuration_is_bounded_and_unambiguous() {
+    let owner = SecretKey::generate().public();
+    let other = SecretKey::generate().public();
+    let foreign = SecretKey::generate().public();
+    let entry = json!({"owner":owner,"service":LEGACY_SERVICE,"hostname":hostname(NAME,owner,LEGACY_SERVICE,DOMAIN)});
+    let check = |entries: Value| {
+        let config: ingress::CommandCenterConfig = serde_json::from_value(json!({
+            "base_url":"https://cmd.wispnet.test", "allow_legacy":true,
+            "legacy_publications":entries
+        }))
+        .unwrap();
+        ingress::Ingress::with_command_center(DOMAIN.into(), vec![owner, other], Some(config))
+            .is_ok()
+    };
+    assert!(check(json!([entry.clone()])));
+    assert!(check(json!([])));
+    for host in [
+        "other.example",
+        "nested.host.wispnet.test",
+        "*.wispnet.test",
+        "Upper.wispnet.test",
+        "-bad.wispnet.test",
+        "https://host.wispnet.test",
+    ] {
+        let mut bad = entry.clone();
+        bad["hostname"] = json!(host);
+        assert!(!check(json!([bad])), "invalid legacy hostname accepted");
+    }
+    let mut bad = entry.clone();
+    bad["owner"] = json!(foreign);
+    assert!(!check(json!([bad])));
+    let mut bad = entry.clone();
+    bad["service"] = json!("invalid/service");
+    assert!(!check(json!([bad])));
+    assert!(!check(json!([entry.clone(), entry.clone()])));
+    let mut same_service = entry.clone();
+    same_service["hostname"] = json!(hostname("Other name", owner, LEGACY_SERVICE, DOMAIN));
+    assert!(!check(json!([entry.clone(), same_service])));
+    let mut same_host = entry.clone();
+    same_host["owner"] = json!(other);
+    same_host["service"] = json!("another-service");
+    assert!(!check(json!([entry.clone(), same_host])));
+    assert!(!check(Value::Array(vec![entry; 257])));
+    let omitted: ingress::CommandCenterConfig =
+        serde_json::from_value(json!({"base_url":"https://cmd.wispnet.test"})).unwrap();
+    assert!(!omitted.allow_legacy);
+    assert!(omitted.legacy_publications.is_none());
 }
 
 fn decoded_http_body(response: &str) -> Vec<u8> {
