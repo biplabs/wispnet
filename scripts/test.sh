@@ -14,8 +14,6 @@ if [ "$(uname -s)" = Darwin ]; then
     export TMPDIR=/tmp
 fi
 node --test experiments/relay-compatibility/test/*.test.js
-npm --prefix apps/auth-hub ci --no-audit --no-fund
-npm --prefix apps/auth-hub test
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked

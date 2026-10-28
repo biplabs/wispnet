@@ -22,11 +22,20 @@ device grants, service URLs and Shell remain independent of an account or hub.
   permit the complete service, including any write tools. Separate backend user
   accounts, application data isolation and read-only tools are not synthesized.
 
-Better Auth handles GitHub identities, browser sessions, OAuth, refresh tokens,
-CIMD, explicitly enabled dynamic client registration and hashed API keys.
-Wispnet owns host linking, service registration, owner grants and revocation.
+The optional Rust hub handles GitHub identities, browser sessions, MCP OAuth,
+refresh tokens, Client ID Metadata Documents (CIMD), compatibility Dynamic Client
+Registration (DCR), and hashed API keys. It also owns public host linking,
+service registration, owner grants and revocation. Access and refresh tokens are
+opaque random secrets with hashed, service-bound database records. The supported
+OAuth scopes are `mcp:use` and `offline_access`; the hub is a focused MCP
+authorization server, rather than a general-purpose OpenID Connect identity server.
 API keys are restricted to a single service and expire; their value is shown
 only on creation. The hub checks current grants even for a previously issued key.
+
+OAuth supports public PKCE clients and CIMD clients using RS256
+`private_key_jwt` authentication. The latter verifies a client's signed assertion
+without changing the opaque access-token design. DCR registers public clients;
+the supported token endpoints require an explicit body `client_id`.
 
 The host HTTP mediator checks public authorization every two seconds, with a
 two-second check deadline, and stops active streams if authorization cannot be
@@ -41,8 +50,9 @@ with a link to Command Center so the owner can check the remote account state.
 
 ## Components and removal
 
-- `apps/auth-hub`: independent Node 24+ application, SQLite state and pinned Better
-  Auth dependencies. No private device registry or backend credentials are here.
+- `apps/auth-hub`: independent Rust executable and private SQLite state. Its
+  bundled SQLite engine needs no separate database service. No private device
+  registry or backend credentials are here, and deployment needs no Node runtime.
 - `crates/client/src/command_center.rs`: optional account link and public policy
   adapter. It is not contacted for private service authorization.
 - `crates/agent/src/http_backend.rs`: host HTTP forwarding and credential injection.
@@ -68,7 +78,6 @@ variables in a protected service environment file:
 ```
 WISPNET_COMMAND_URL=https://cmd.wispnet.app
 WISPNET_COMMAND_STATE=/absolute/private/command-state
-WISPNET_COMMAND_SECRET=<persistent random secret, at least 32 characters>
 WISPNET_GITHUB_CLIENT_ID=<GitHub OAuth app client ID>
 WISPNET_GITHUB_CLIENT_SECRET=<GitHub OAuth app client secret>
 WISPNET_PUBLIC_DOMAIN=wispnet.app
@@ -77,23 +86,39 @@ WISPNET_COMMAND_PORT=8325
 
 The process binds IPv4 loopback. Caddy provides HTTPS. Startup fails if the GitHub
 configuration is missing; no development login or password endpoint is exposed.
-Keep the hub database and signing/encryption secret in backups; unlike the opaque
-packet relay, this optional public account service has durable authority.
+Keep a consistent backup of the hub database, including pending WAL data; unlike
+the opaque packet relay, this optional public account service has durable
+authority. The Rust hub does not require a JWT signing key or a separate
+`WISPNET_COMMAND_SECRET` because tokens are validated against stored hashes.
 
 Run locally after configuring the environment:
 
 ```sh
-npm --prefix apps/auth-hub ci
-npm --prefix apps/auth-hub test
-npm --prefix apps/auth-hub start
+cargo test --locked -p wispnet-command-center
+cargo build --release --locked -p wispnet-command-center
+# With the service environment configured:
+target/release/wispnet-command-center
 ```
 
 `scripts/install_command_center.py --ssh-host pi3.home --github-env /absolute/private/github.env`
-installs the official checksum-verified Node runtime and hub user service. The
-input file must be mode 600 and contain only the two GitHub variables. It preserves
-the hub secret across upgrades. Review the generated Caddy fragment and the live
-HTTPS configuration before adding the explicit `cmd.wispnet.app` host. This
-installer does not overwrite relay/gateway/Caddy configuration or publish services.
+builds and installs the Rust binary and hub user service when the local Linux
+architecture matches the gateway. The input file must be mode 600 and contain
+only the two GitHub variables. For `pi3.home` from an x86_64 workstation, supply
+`--binary /absolute/path/wispnet-command-center` built for compatible Linux
+`aarch64`; the installer verifies the ELF architecture and uploaded checksum.
+It stages executable, environment and unit changes, checks `/healthz`, and
+restores their previous versions and service state if the update fails. It
+preserves the database; rollback does not revert schema changes.
+
+Review the generated Caddy fragment and the live HTTPS configuration before
+adding the explicit `cmd.wispnet.app` host. The installer does not overwrite
+relay/gateway/Caddy configuration or publish services. The unit's 320 MiB memory
+limit is a configured ceiling, not a measured runtime requirement.
+
+A legacy Better Auth database is detected and rejected instead of being silently
+overwritten. Existing accounts and tokens need a deliberate migration; preserve
+that state until migration is complete. The Rust replacement is intended to
+start with fresh protected state for the first deployment.
 
 Upgrade the public gateway and merge `deploy/command-center/gateway.example.toml`.
 `allow_legacy=false` requires registered version-2 publications, including for

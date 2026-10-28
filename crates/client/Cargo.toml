@@ -38,3 +38,4 @@ wispnet-shell = { path = "../shell", features = ["host"] }
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
+wispnet-command-center = { path = "../../apps/auth-hub" }

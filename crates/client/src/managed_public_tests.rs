@@ -22,7 +22,8 @@ use wispnet_registry::{
     host::{self, Authority, Mutation},
 };
 
-const PUBLISHER: &str = "host-publisher-fixture-credential-123456789";
+const PUBLISHER: &str = "wph_0123456789abcdefghijklmnopqrstuvwxyzABCDEFG";
+const HUB_SESSION: &str = "hub-session-fixture-0123456789abcdefgh";
 const VISITOR: &str = "visitor-service-fixture-token";
 const BACKEND: &str = "backend-fixture";
 const SERVICE: &str = "gike-mcp";
@@ -86,6 +87,7 @@ struct Fixture {
     allowed: Arc<AtomicBool>,
     backend_calls: Arc<AtomicUsize>,
     authorizations: Arc<AtomicUsize>,
+    real_hub: Option<Arc<wispnet_command_center::Hub>>,
     hub: JoinHandle<()>,
     backend: JoinHandle<()>,
     ingress: JoinHandle<()>,
@@ -97,6 +99,10 @@ impl Fixture {
     }
 
     async fn with_backend(external: Option<SocketAddr>, mcp_path: &str) -> Self {
+        Self::with_options(external, mcp_path, false).await
+    }
+
+    async fn with_options(external: Option<SocketAddr>, mcp_path: &str, real: bool) -> Self {
         let state = tempfile::tempdir().unwrap();
         std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let key = SecretKey::generate();
@@ -200,13 +206,45 @@ impl Fixture {
         let base_url = format!("http://{}", hub_listener.local_addr().unwrap());
         let allowed = Arc::new(AtomicBool::new(true));
         let authorizations = Arc::new(AtomicUsize::new(0));
+        let real_hub = if real {
+            let hub = wispnet_command_center::Hub::open(wispnet_command_center::Config {
+                base_url: base_url.clone(),
+                state_dir: state.path().join("hub"),
+                public_domain: DOMAIN.into(),
+                github_client_id: String::new(),
+                github_client_secret: String::new(),
+                test_mode: true,
+            })
+            .unwrap();
+            {
+                let db = hub.db.lock().unwrap();
+                db.execute("INSERT INTO users(id,github_id,name,email) VALUES('owner','fixture-owner','Owner','owner@example.test')",[]).unwrap();
+                db.execute(
+                    "INSERT INTO sessions(token_hash,user_id,expires) VALUES(?,'owner',?)",
+                    (
+                        wispnet_command_center::digest(HUB_SESSION),
+                        wispnet_command_center::now() + 600,
+                    ),
+                )
+                .unwrap();
+                db.execute("INSERT INTO command_hosts(host,owner_id,name,publisher_hash) VALUES(?,'owner',?,?)",[owner.to_string(), NAME.to_owned(), wispnet_command_center::digest(PUBLISHER)]).unwrap();
+            }
+            Some(hub)
+        } else {
+            None
+        };
         let (allowed_inner, count, incarnation_inner, resource_inner) = (
             allowed.clone(),
             authorizations.clone(),
             incarnation.clone(),
             resource.clone(),
         );
+        let actual_hub = real_hub.clone();
         let hub = tokio::spawn(async move {
+            if let Some(hub) = actual_hub {
+                hub.serve(hub_listener).await.unwrap();
+                return;
+            }
             let mut tasks = JoinSet::new();
             loop {
                 tokio::select! {
@@ -319,6 +357,7 @@ impl Fixture {
             allowed,
             backend_calls,
             authorizations,
+            real_hub,
             hub,
             backend,
             ingress,
@@ -328,6 +367,39 @@ impl Fixture {
     async fn public(&self, extra: &str) -> String {
         let mut stream = TcpStream::connect(("127.0.0.1", self.port)).await.unwrap();
         request(&mut stream, &self.name, "/MCP", extra).await
+    }
+
+    async fn hub_request(&self, path: &str, body: Value) -> Value {
+        assert!(self.real_hub.is_some());
+        let settings =
+            crate::command_center::settings(self.state.path(), self.client.endpoint.id()).unwrap();
+        let response = reqwest::Client::new()
+            .post(format!("{}{path}", settings.base_url))
+            .header("origin", settings.base_url)
+            .header("cookie", format!("wispnet_session={HUB_SESSION}"))
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        let status = response.status();
+        let value: Value = response.json().await.unwrap();
+        assert!(status.is_success(), "hub fixture request failed: {value}");
+        value
+    }
+
+    async fn hub_key(&self) -> Value {
+        let id = {
+            let db = self.real_hub.as_ref().unwrap().db.lock().unwrap();
+            wispnet_command_center::db::resource(&db, &self.resource)
+                .unwrap()
+                .unwrap()
+                .id
+        };
+        self.hub_request(
+            "/api/command/keys/create",
+            json!({"service_id":id,"name":"Public fixture"}),
+        )
+        .await
     }
 
     async fn metadata(&self, path: &str) -> String {
@@ -540,6 +612,85 @@ async fn managed_public_local_unlink_recovers_after_remote_revocation_or_hub_fai
 }
 
 #[tokio::test]
+async fn managed_public_real_rust_hub_keys_revoke_streams_and_private_access_survives() {
+    let fixture = Fixture::with_options(None, "/MCP", true).await;
+    assert!(fixture.public("").await.starts_with("HTTP/1.1 401"));
+    assert_eq!(fixture.backend_calls.load(Ordering::SeqCst), 0);
+    let key = fixture.hub_key().await;
+    let bearer = key["key"].as_str().unwrap();
+    assert!(
+        fixture
+            .public(&format!("Authorization: Bearer {bearer}\r\n"))
+            .await
+            .starts_with("HTTP/1.1 200")
+    );
+    let mut stream = TcpStream::connect(("127.0.0.1", fixture.port))
+        .await
+        .unwrap();
+    stream
+        .write_all(
+            format!(
+                "GET /hold HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {bearer}\r\n\r\n",
+                fixture.name
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let head = String::from_utf8(headers(&mut stream).await).unwrap();
+    assert!(head.starts_with("HTTP/1.1 200"));
+    let mut initial = [0; 16];
+    tokio::time::timeout(Duration::from_secs(1), stream.read_exact(&mut initial))
+        .await
+        .unwrap()
+        .unwrap();
+    fixture
+        .hub_request("/api/command/keys/revoke", json!({"key_id":key["id"]}))
+        .await;
+    let mut rest = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut rest))
+        .await
+        .expect("revoked real-hub stream stayed open");
+    assert!(
+        fixture
+            .public(&format!("Authorization: Bearer {bearer}\r\n"))
+            .await
+            .starts_with("HTTP/1.1 401")
+    );
+    let fresh = fixture.hub_key().await;
+    assert!(
+        fixture
+            .public(&format!(
+                "Authorization: Bearer {}\r\n",
+                fresh["key"].as_str().unwrap()
+            ))
+            .await
+            .starts_with("HTTP/1.1 200")
+    );
+    fixture.hub.abort();
+    while !fixture.hub.is_finished() {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        fixture
+            .public(&format!(
+                "Authorization: Bearer {}\r\n",
+                fresh["key"].as_str().unwrap()
+            ))
+            .await
+            .starts_with("HTTP/1.1 401")
+    );
+    assert!(
+        fixture
+            .private(&fixture.peer)
+            .await
+            .unwrap()
+            .starts_with("HTTP/1.1 200")
+    );
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
 async fn managed_public_revoke_cancels_an_active_sse_stream() {
     let fixture = Fixture::new().await;
     let mut stream = TcpStream::connect(("127.0.0.1", fixture.port))
@@ -659,7 +810,8 @@ async fn managed_public_live_gike_initialize_without_backend_changes() {
     );
     let path = std::env::var("WISPNET_COMMAND_GIKE_PATH").unwrap_or_else(|_| "/mcp".into());
     assert!(valid_mcp_path(&path), "valid GIKE MCP endpoint path");
-    let fixture = Fixture::with_backend(Some(address), &path).await;
+    let fixture = Fixture::with_options(Some(address), &path, true).await;
+    let key = fixture.hub_key().await;
     let initialize = json!({
         "jsonrpc":"2.0", "id":1, "method":"initialize",
         "params": {
@@ -673,10 +825,11 @@ async fn managed_public_live_gike_initialize_without_backend_changes() {
         let path = path.clone();
         let name = fixture.name.clone();
         let port = fixture.port;
+        let key = key["key"].as_str().unwrap().to_owned();
         async move {
             let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
             let auth = if bearer {
-                format!("Authorization: Bearer {VISITOR}\r\n")
+                format!("Authorization: Bearer {key}\r\n")
             } else {
                 String::new()
             };
@@ -723,6 +876,9 @@ async fn managed_public_live_gike_initialize_without_backend_changes() {
         0,
         "real GIKE used, not the fixture backend"
     );
-    assert!(fixture.authorizations.load(Ordering::SeqCst) > 0);
+    assert!(
+        fixture.real_hub.is_some(),
+        "real Rust authorization server used"
+    );
     fixture.shutdown().await;
 }

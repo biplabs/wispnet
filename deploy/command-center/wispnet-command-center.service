@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=%h/.local/libexec/wispnet-command-center
 EnvironmentFile=%h/.config/wispnet-command-center/command.env
-ExecStart=%h/.local/share/wispnet-command-center/node/bin/node --max-old-space-size=192 dist/src/server.js
+ExecStart=%h/.local/libexec/wispnet-command-center/wispnet-command-center
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=15

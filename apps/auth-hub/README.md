@@ -1,9 +1,10 @@
 # Wispnet Command Center
 
-This optional module manages accounts and **public** Wispnet access. It uses
-Better Auth 1.7.14 for GitHub registration, OAuth authorization, signing keys,
-client registration, refresh-token rotation, and hashed API keys. Private device
-pairing and host-local service grants do not depend on this module.
+This optional Rust service manages accounts and **public** Wispnet access. It
+provides GitHub sign-in, browser sessions, the MCP OAuth authorization flow and
+service-scoped bearer keys. Its public interfaces remain independent of the
+desktop and gateway implementations. Private device pairing and host-local
+service grants do not depend on this module.
 
 The command center never receives a service's backend credential. Public callers
 present a command-center OAuth token or service-scoped bearer key; the hosting
@@ -12,14 +13,15 @@ credential. The Rust gateway remains responsible for MCP transport and streaming
 
 ## Run
 
-Requires Node.js 24 or later and a C++ build toolchain when `better-sqlite3` has no
-prebuilt binary for the host.
+Build with the workspace Rust toolchain. The deployed executable needs no Node.js
+or npm runtime and uses a bundled SQLite engine without a separate database
+service.
 
 ```sh
-npm ci
-npm test
-npm run build
-node --env-file=/absolute/private/command.env dist/src/server.js
+cargo test --locked -p wispnet-command-center
+cargo build --release --locked -p wispnet-command-center
+# With the variables below supplied by the service environment:
+target/release/wispnet-command-center
 ```
 
 Create the state directory owned by the service user with mode `0700`. Protect
@@ -29,7 +31,6 @@ the environment file with mode `0600`. Configuration:
 | --- | --- |
 | `WISPNET_COMMAND_URL` | Public HTTPS origin; defaults to `https://cmd.wispnet.app` |
 | `WISPNET_COMMAND_STATE` | Absolute owner-only persistent state directory |
-| `WISPNET_COMMAND_SECRET` | High-entropy persistent secret, at least 32 characters |
 | `WISPNET_GITHUB_CLIENT_ID` | GitHub OAuth application client ID |
 | `WISPNET_GITHUB_CLIENT_SECRET` | GitHub OAuth application client secret |
 | `WISPNET_PUBLIC_DOMAIN` | Published service hostname suffix; defaults to `wispnet.app` |
@@ -43,16 +44,42 @@ login switch.
 
 Put the loopback listener behind HTTPS. Preserve the public Host and scheme,
 forward `/api/auth/*`, `/api/command/*`, `/.well-known/*`, and the dashboard
-routes, and do not log request bodies or authorization values. No API-key
-administration endpoints from Better Auth are exposed directly: the service
-wrappers enforce resource ownership and store authoritative key bindings.
+routes, and do not log request bodies or authorization values. The service
+enforces resource ownership and stores authoritative key bindings.
 
-SQLite stores Better Auth state, signing keys, publisher hashes, public service
-registrations, grants, and key/connection metadata. Preserve this directory and
-secret together across restarts. Use a consistent SQLite backup, including
+SQLite stores accounts, hashed sessions and credentials, public service
+registrations, grants, and OAuth client/connection state. Access and refresh
+tokens are opaque random secrets; their authoritative bindings live in hashed
+database records. No JWT signing key or `WISPNET_COMMAND_SECRET` is needed.
+Preserve the state directory across restarts. Use a consistent SQLite backup, including
 pending WAL data; copying only a live database file is insufficient. Filesystem
 permissions protect the state; the module does not claim that the database is
 encrypted at rest.
+
+The Rust server detects a legacy Better Auth database and refuses to initialize
+over it. There is no automatic account/token migration. Preserve that database
+and plan an explicit migration before changing an existing deployment; never
+delete it merely to make startup succeed.
+
+Deploy to a matching Linux machine with:
+
+```sh
+scripts/install_command_center.py --ssh-host gateway.example \
+  --github-env /absolute/private/github.env
+```
+
+The installer builds locally for a matching architecture. For an ARM64 gateway
+from an x86_64 workstation, build a compatible Linux `aarch64` executable
+separately and pass `--binary /absolute/path/wispnet-command-center`. It checks
+the ELF architecture and upload checksum before installing. The binary must
+also match the gateway's system ABI; checking the CPU architecture alone does
+not establish libc compatibility.
+
+Executable, environment and service-unit updates are staged, then checked via
+`/healthz`. A failed update restores the previous files and running/enabled state.
+The installer preserves the database and does not change live Caddy, gateway,
+relay or publishing policy. A rollback does not revert database schema changes.
+The service's 320 MiB memory limit is a configured ceiling, not measured usage.
 
 ## Link a host
 
@@ -107,22 +134,31 @@ These require `Authorization: Bearer <publisher_token>`:
 
 The root OAuth discovery document advertises issuer `WISPNET_COMMAND_URL` and
 endpoints under `/api/auth/oauth2/`. Authorization-code clients use S256 PKCE and
-one registered public resource. CIMD is enabled with the MCP 2026-07-28 profile;
-bounded unauthenticated DCR is also available for compatibility. Scope
+one registered public resource. Client ID Metadata Documents (CIMD) are supported;
+bounded unauthenticated Dynamic Client Registration (DCR) is also available for
+compatibility. The supported scopes are `mcp:use` and `offline_access`. Scope
 `mcp:use` means access to the whole MCP service, not a claim of per-tool or
 per-user application-data isolation.
+
+Public clients use PKCE without a client secret. CIMD clients may authenticate
+with RS256 `private_key_jwt` assertions, including ChatGPT's current client
+profile. This verifies the client's signed proof; issued access and refresh
+tokens remain opaque. DCR registers public clients only. Token, refresh and
+revocation requests must include an explicit body `client_id`. Remote client
+metadata and JWKS use HTTPS on port 443, checked public addresses and bounded,
+redirect-free fetches.
 
 Service owners automatically have public access. Other users register with
 GitHub and share their account ID, which the owner grants in the dashboard.
 Access requires the current grant even after token issuance. OAuth access
 tokens last five minutes; refresh tokens rotate, and refresh issuance checks
-the grant again. Tokens include durable service/grant/connection generations.
+the grant again. Token records bind durable service/grant/connection generations.
 Disconnecting a client, standard OAuth revocation, unlinking a host, revoking a
 grant, replacing a service, and changing authentication mode invalidate the
 affected credentials. Regranting does not revive old keys or refresh tokens.
 
 The dashboard can create named bearer keys scoped to one service. Complete keys
-appear only in the creation response and are hashed by Better Auth. Revocation
+appear only in the creation response and are stored as hashes. Revocation
 is separate from deleting a local client configuration. The UI creates 30-day
 keys; the API accepts expirations from one hour to one year. Keys cannot act as
 dashboard sessions or administer publishers.
