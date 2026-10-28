@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 from pathlib import Path
 import shutil
@@ -110,6 +111,7 @@ class FakeRemote:
         self.runtime.mkdir()
         self.healthy = healthy
         self.scripts = []
+        self.uploads = []
         for path in [self.app, self.config, self.data, self.unit.parent]:
             path.mkdir(parents=True, exist_ok=True)
         (self.data / 'database-sentinel').write_text('persistent account state')
@@ -155,6 +157,7 @@ esac
                               text=True, check=True).stdout.strip()
 
     def put(self, source, destination):
+        self.uploads.append((source, destination))
         shutil.copy2(source, destination)
 
 
@@ -209,6 +212,82 @@ class DeploymentTests(unittest.TestCase):
                 self.deploy(remote, root)
             for path in [remote.app / 'wispnet-command-center', remote.config / 'command.env', remote.unit, remote.runtime / 'active', remote.runtime / 'enabled']:
                 self.assertFalse(path.exists())
+            self.assert_preserved(remote)
+
+    def remote_environment(self, remote):
+        values = self.github | {'WISPNET_COMMAND_URL': 'https://cmd.wispnet.app',
+                                'WISPNET_COMMAND_STATE': str(remote.data),
+                                'WISPNET_PUBLIC_DOMAIN': 'wispnet.app',
+                                'WISPNET_COMMAND_PORT': '8325'}
+        values['WISPNET_GITHUB_CLIENT_SECRET'] = 'remote-only-literal-$(not-a-command)'
+        content = '# configured on the gateway\n' + ''.join(key + '=' + json.dumps(value) + '\n' for key, value in values.items())
+        path = remote.config / 'command.env'
+        path.write_text(content)
+        path.chmod(0o600)
+        return path, content
+
+    def test_remote_credentials_stay_remote_and_configuration_is_preserved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            remote = FakeRemote(root)
+            path, content = self.remote_environment(remote)
+            binary = executable(root / 'new-binary', 62, b'new executable')
+            with mock.patch.object(INSTALLER.tempfile, 'TemporaryDirectory', side_effect=AssertionError('remote mode must not create a local env staging directory')):
+                INSTALLER.deploy(remote, binary, None, 'https://cmd.wispnet.app', 'wispnet.app')
+            self.assertEqual(path.read_text(), content)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual({Path(destination).name for _, destination in remote.uploads}, {'binary', 'unit', 'Caddyfile.fragment'})
+            self.assertNotIn('remote-only-literal', '\n'.join(remote.scripts))
+            self.assertEqual((remote.app / 'wispnet-command-center').read_bytes(), binary.read_bytes())
+            self.assert_preserved(remote)
+
+    def test_unsafe_or_unset_remote_environment_fails_before_upload_or_mutation(self):
+        for failure in ['missing', 'blank', 'mode', 'symlink', 'hardlink', 'fifo', 'extra', 'mismatched-port']:
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                remote = FakeRemote(root)
+                path, content = self.remote_environment(remote)
+                if failure == 'missing':
+                    path.unlink()
+                elif failure == 'blank':
+                    path.write_text(content.replace('WISPNET_GITHUB_CLIENT_ID="fixture-id"', 'WISPNET_GITHUB_CLIENT_ID='))
+                elif failure == 'mode':
+                    path.chmod(0o644)
+                elif failure == 'symlink':
+                    original = path.with_name('private.env')
+                    path.rename(original)
+                    path.symlink_to(original)
+                elif failure == 'hardlink':
+                    os.link(path, path.with_name('linked.env'))
+                elif failure == 'fifo':
+                    path.unlink()
+                    os.mkfifo(path, 0o600)
+                elif failure == 'extra':
+                    path.write_text(content + 'UNEXPECTED=value\n')
+                else:
+                    path.write_text(content.replace('WISPNET_COMMAND_PORT="8325"', 'WISPNET_COMMAND_PORT="9999"'))
+                binary = executable(root / 'new-binary', 62, b'new executable')
+                original = (remote.app / 'wispnet-command-center').read_bytes()
+                with self.assertRaisesRegex(ValueError, 'Remote command.env'):
+                    INSTALLER.deploy(remote, binary, None, 'https://cmd.wispnet.app', 'wispnet.app')
+                self.assertEqual(remote.uploads, [])
+                self.assertFalse(any('mkdir' in script or 'systemctl' in script or 'mv ' in script for script in remote.scripts))
+                self.assertEqual((remote.app / 'wispnet-command-center').read_bytes(), original)
+                self.assert_preserved(remote)
+
+    def test_remote_environment_rollback_keeps_credentials_on_gateway(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            remote = FakeRemote(root, healthy=False)
+            path, content = self.remote_environment(remote)
+            binary = executable(root / 'new-binary', 62, b'new executable')
+            original = (remote.app / 'wispnet-command-center').read_bytes()
+            with self.assertRaisesRegex(RuntimeError, 'restored'):
+                INSTALLER.deploy(remote, binary, None, 'https://cmd.wispnet.app', 'wispnet.app')
+            self.assertEqual(path.read_text(), content)
+            self.assertEqual((remote.app / 'wispnet-command-center').read_bytes(), original)
+            self.assertEqual({Path(destination).name for _, destination in remote.uploads}, {'binary', 'unit', 'Caddyfile.fragment'})
+            self.assertTrue((remote.runtime / 'active').exists())
             self.assert_preserved(remote)
 
 

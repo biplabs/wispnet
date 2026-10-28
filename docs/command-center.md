@@ -77,7 +77,7 @@ variables in a protected service environment file:
 
 ```
 WISPNET_COMMAND_URL=https://cmd.wispnet.app
-WISPNET_COMMAND_STATE=/absolute/private/command-state
+WISPNET_COMMAND_STATE=/home/johnny/.local/share/wispnet-command-center/state
 WISPNET_GITHUB_CLIENT_ID=<GitHub OAuth app client ID>
 WISPNET_GITHUB_CLIENT_SECRET=<GitHub OAuth app client secret>
 WISPNET_PUBLIC_DOMAIN=wispnet.app
@@ -100,12 +100,26 @@ cargo build --release --locked -p wispnet-command-center
 target/release/wispnet-command-center
 ```
 
-`scripts/install_command_center.py --ssh-host pi3.home --github-env /absolute/private/github.env`
-builds and installs the Rust binary and hub user service when the local Linux
-architecture matches the gateway. The input file must be mode 600 and contain
-only the two GitHub variables. For `pi3.home` from an x86_64 workstation, supply
-`--binary /absolute/path/wispnet-command-center` built for compatible Linux
-`aarch64`; the installer verifies the ELF architecture and uploaded checksum.
+Keep this complete environment file on `pi3.home`, owned by its service user and
+mode `600`. Edit the GitHub values directly there:
+
+```sh
+ssh -t pi3.home 'nano ~/.config/wispnet-command-center/command.env'
+scripts/install_command_center.py --ssh-host pi3.home --use-remote-env \
+  --binary /absolute/path/wispnet-command-center
+```
+
+The installer validates all six settings on the gateway and copies the protected
+file directly into remote staging. It does not download secrets or create a
+local environment file. URL and public domain must match the installer defaults
+or its `--url`/`--public-domain` options, and the supplied service unit uses the
+state path above and port `8325`. The alternative `--github-env` option explicitly
+stages a local protected file containing the two GitHub values; it cannot be
+combined with `--use-remote-env`.
+
+For `pi3.home` from an x86_64 workstation, `--binary` must be built for compatible
+Linux `aarch64`; the installer verifies the ELF architecture and uploaded
+checksum. On a matching Linux architecture, omit `--binary` to build locally.
 It stages executable, environment and unit changes, checks `/healthz`, and
 restores their previous versions and service state if the update fails. It
 preserves the database; rollback does not revert schema changes.

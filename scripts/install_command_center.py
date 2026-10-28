@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Install the Rust Command Center without changing private Wispnet policy.
 
-Provide a mode-600 file containing only WISPNET_GITHUB_CLIENT_ID and
-WISPNET_GITHUB_CLIENT_SECRET. A cross-architecture gateway needs --binary
-pointing to a separately built Linux ELF executable for that machine.
+Use --use-remote-env to keep the complete protected configuration and GitHub
+credentials on the gateway. Alternatively, --github-env explicitly stages a
+local mode-600 file containing the two GitHub values. A cross-architecture
+gateway needs --binary pointing to its separately built Linux ELF executable.
 """
 import argparse
+from contextlib import nullcontext
 import hashlib
 import json
 import os
@@ -35,6 +37,8 @@ def read_environment(path):
                 or info.st_size > 16384):
             raise ValueError('GitHub environment file must be owned, regular, mode 600 and not a link')
         content = source.read(16385)
+    if len(content) > 16384:
+        raise ValueError('GitHub environment file is too large')
     values = {}
     for line in content.splitlines():
         if not line.strip() or line.lstrip().startswith('#'):
@@ -114,10 +118,72 @@ PY
 """
 
 
-def deploy(remote, binary, github, url, public_domain):
+REMOTE_ENV_CHECK = """# wispnet-command-remote-environment
+import os, shlex, stat, sys
+path, expected_url, expected_domain, expected_state, destination = sys.argv[1:]
+try:
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, 'rb') as source:
+        info = os.fstat(source.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o600
+                or info.st_size > 16384):
+            raise ValueError('Remote command.env must be an owned mode-600 regular single-link file')
+        content = source.read(16385)
+    if len(content) > 16384:
+        raise ValueError('Remote command.env is too large')
+    allowed = {'WISPNET_COMMAND_URL', 'WISPNET_COMMAND_STATE', 'WISPNET_GITHUB_CLIENT_ID',
+               'WISPNET_GITHUB_CLIENT_SECRET', 'WISPNET_PUBLIC_DOMAIN', 'WISPNET_COMMAND_PORT'}
+    values = {}
+    for line in content.decode('utf-8').splitlines():
+        if not line.strip() or line.lstrip().startswith('#'):
+            continue
+        key, separator, value = line.partition('=')
+        if not separator or key not in allowed or key in values:
+            raise ValueError('Remote command.env must contain each of the six configuration values exactly once')
+        parsed = shlex.split(value, comments=False)
+        if len(parsed) != 1 or not parsed[0] or any(ord(c) < 32 or ord(c) == 127 for c in parsed[0]):
+            raise ValueError('Complete all six remote configuration values, including both GitHub values')
+        values[key] = parsed[0]
+    if set(values) != allowed:
+        raise ValueError('Complete all six remote configuration values, including both GitHub values')
+    expected = {'WISPNET_COMMAND_URL': expected_url, 'WISPNET_COMMAND_STATE': expected_state,
+                'WISPNET_PUBLIC_DOMAIN': expected_domain, 'WISPNET_COMMAND_PORT': '8325'}
+    if any(values[key] != value for key, value in expected.items()):
+        raise ValueError('Remote command.env URL, state, domain and port must match this installation')
+    if destination:
+        descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(descriptor, 'wb') as staged:
+            staged.write(content)
+            staged.flush()
+            os.fsync(staged.fileno())
+except (OSError, UnicodeError, ValueError):
+    raise SystemExit('Remote command.env is unsafe, incomplete, or does not match the installation; edit it on the gateway') from None
+"""
+
+
+def remote_home_directory(remote):
     remote_home = remote.run('printf "%s" "$HOME"')
     if not remote_home.startswith('/') or any(ord(c) < 32 or ord(c) == 127 for c in remote_home):
         raise ValueError('Invalid remote home directory')
+    return remote_home
+
+
+def remote_environment(remote, remote_home, url, public_domain, destination=''):
+    """Validate/copy on the gateway; stdout and SSH arguments contain no secrets."""
+    config = remote_home + '/.config/wispnet-command-center/command.env'
+    state = remote_home + '/.local/share/wispnet-command-center/state'
+    arguments = [config, url.rstrip('/'), public_domain, state, destination]
+    script = 'python3 - ' + ' '.join(shlex.quote(value) for value in arguments)
+    script += " <<'WISPNET_REMOTE_ENV'\n" + REMOTE_ENV_CHECK + '\nWISPNET_REMOTE_ENV'
+    try:
+        remote.run(script)
+    except subprocess.CalledProcessError:
+        raise ValueError('Remote command.env must be protected, complete and match the requested installation; edit it on the gateway') from None
+
+
+def deploy(remote, binary, github, url, public_domain):
+    remote_home = remote_home_directory(remote)
     if binary_architecture(binary) != ARCHITECTURES.get(remote.run('uname -m')):
         raise ValueError('Command Center binary architecture does not match the gateway')
     app = remote_home + '/.local/libexec/wispnet-command-center'
@@ -126,6 +192,10 @@ def deploy(remote, binary, github, url, public_domain):
     unit = remote_home + '/.config/systemd/user/' + SERVICE
     executable = app + '/wispnet-command-center'
     environment = config + '/command.env'
+    if github is None:
+        # Fail before creating directories, uploading files or changing service
+        # state. A second validation below copies from the same protected fd.
+        remote_environment(remote, remote_home, url, public_domain)
     q = shlex.quote
     directories = [app, data, data + '/state', config, str(Path(unit).parent)]
     remote.run('set -eu\numask 077\n' + '\n'.join('mkdir -p ' + q(p) for p in directories)
@@ -137,17 +207,23 @@ def deploy(remote, binary, github, url, public_domain):
     replaced = False
     cleanup = True
     try:
-        with tempfile.TemporaryDirectory(prefix='wispnet-command-install-') as temporary:
-            envfile = Path(temporary) / 'command.env'
-            values = github | {'WISPNET_COMMAND_URL': url.rstrip('/'),
-                               'WISPNET_COMMAND_STATE': data + '/state',
-                               'WISPNET_PUBLIC_DOMAIN': public_domain,
-                               'WISPNET_COMMAND_PORT': '8325'}
-            envfile.write_text(''.join(key + '=' + json.dumps(value) + '\n' for key, value in values.items()))
-            envfile.chmod(0o600)
-            for source, name in [(binary, 'binary'), (envfile, 'environment'),
-                                 (ROOT / 'deploy/command-center' / SERVICE, 'unit'),
-                                 (ROOT / 'deploy/command-center/Caddyfile.fragment', 'Caddyfile.fragment')]:
+        local_staging = tempfile.TemporaryDirectory(prefix='wispnet-command-install-') if github is not None else nullcontext()
+        with local_staging as temporary:
+            uploads = [(binary, 'binary'),
+                       (ROOT / 'deploy/command-center' / SERVICE, 'unit'),
+                       (ROOT / 'deploy/command-center/Caddyfile.fragment', 'Caddyfile.fragment')]
+            if github is None:
+                remote_environment(remote, remote_home, url, public_domain, staging + '/environment')
+            else:
+                envfile = Path(temporary) / 'command.env'
+                values = github | {'WISPNET_COMMAND_URL': url.rstrip('/'),
+                                   'WISPNET_COMMAND_STATE': data + '/state',
+                                   'WISPNET_PUBLIC_DOMAIN': public_domain,
+                                   'WISPNET_COMMAND_PORT': '8325'}
+                envfile.write_text(''.join(key + '=' + json.dumps(value) + '\n' for key, value in values.items()))
+                envfile.chmod(0o600)
+                uploads.append((envfile, 'environment'))
+            for source, name in uploads:
                 remote.put(source, staging + '/' + name)
             with binary.open('rb') as source:
                 expected = hashlib.file_digest(source, 'sha256').hexdigest()
@@ -198,7 +274,9 @@ def deploy(remote, binary, github, url, public_domain):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--ssh-host', required=True)
-    parser.add_argument('--github-env', type=Path, required=True)
+    credentials = parser.add_mutually_exclusive_group(required=True)
+    credentials.add_argument('--use-remote-env', action='store_true', help='Use existing protected command.env on the gateway; keep credentials remote')
+    credentials.add_argument('--github-env', type=Path, help='Explicitly stage a local file containing the two GitHub configuration values')
     parser.add_argument('--binary', type=Path, help='Prebuilt Linux executable matching the gateway architecture')
     parser.add_argument('--url', default='https://cmd.wispnet.app')
     parser.add_argument('--public-domain', default='wispnet.app')
@@ -206,8 +284,10 @@ def main():
     url = urlsplit(args.url)
     if url.scheme != 'https' or not url.hostname or url.username or url.password or url.path not in ('', '/') or url.query or url.fragment:
         parser.error('--url must be an HTTPS origin')
-    github = read_environment(args.github_env.absolute())
+    github = read_environment(args.github_env.absolute()) if args.github_env else None
     remote = Remote(args.ssh_host)
+    if args.use_remote_env:
+        remote_environment(remote, remote_home_directory(remote), args.url, args.public_domain)
     binary = select_binary(remote.run('uname -m'), args.binary)
     deploy(remote, binary, github, args.url, args.public_domain)
     print('Rust Command Center installed; add the generated Caddyfile.fragment to the existing HTTPS configuration.')

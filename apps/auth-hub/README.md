@@ -61,12 +61,21 @@ over it. There is no automatic account/token migration. Preserve that database
 and plan an explicit migration before changing an existing deployment; never
 delete it merely to make startup succeed.
 
-Deploy to a matching Linux machine with:
+Keep the complete configuration and GitHub credentials on the gateway. Edit its
+mode-600 environment file over SSH, rather than copying secrets to a workstation:
 
 ```sh
-scripts/install_command_center.py --ssh-host gateway.example \
-  --github-env /absolute/private/github.env
+ssh -t pi3.home 'nano ~/.config/wispnet-command-center/command.env'
+scripts/install_command_center.py --ssh-host pi3.home --use-remote-env
 ```
+
+The remote file must contain all six settings in the table. For the supplied
+service unit and installer, set `WISPNET_COMMAND_STATE` to
+`/home/johnny/.local/share/wispnet-command-center/state` and port `8325`; the
+configured URL and public domain must match `--url` and `--public-domain` when
+those are customized. The installer checks ownership, permissions, required
+values and key names on the gateway, then copies the file directly into remote
+staging. It never returns its contents or writes a local environment file.
 
 The installer builds locally for a matching architecture. For an ARM64 gateway
 from an x86_64 workstation, build a compatible Linux `aarch64` executable
@@ -74,6 +83,10 @@ separately and pass `--binary /absolute/path/wispnet-command-center`. It checks
 the ELF architecture and upload checksum before installing. The binary must
 also match the gateway's system ABI; checking the CPU architecture alone does
 not establish libc compatibility.
+
+`--github-env /absolute/private/github.env` remains an explicit alternative for
+operators who choose to stage a local protected file containing only the two
+GitHub variables. It is mutually exclusive with `--use-remote-env`.
 
 Executable, environment and service-unit updates are staged, then checked via
 `/healthz`. A failed update restores the previous files and running/enabled state.
