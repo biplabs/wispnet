@@ -553,8 +553,8 @@ async fn serve_stream(
     let opened = async {
         let frame = read_frame(&mut recv).await?;
         let (id, incarnation) = protocol::decode_bound_request(&frame)?;
-        let services = services.load().await?;
-        let service = services
+        let local_services = services.load().await?;
+        let service = local_services
             .iter()
             .find(|service| service.id == id)
             .ok_or(Status::UnknownService)?;
@@ -574,13 +574,27 @@ async fn serve_stream(
             return Err(Status::BackendUnavailable);
             #[cfg(not(target_os = "android"))]
             None
-        } else {
+        } else if service.kind == wispnet_core::host::ServiceKind::Http
+            && let Services::Host(host, _) = services
+        {
             Some(
+                crate::http_backend::connect(
+                    host.state_directory(),
+                    host.host(),
+                    &service.id,
+                    &service.incarnation,
+                    service.backend,
+                )
+                .await
+                .map_err(|_| Status::BackendUnavailable)?,
+            )
+        } else {
+            Some(crate::http_backend::BackendStream::direct(
                 timeout(BACKEND_TIMEOUT, TcpStream::connect(service.backend))
                     .await
                     .map_err(|_| Status::BackendUnavailable)?
                     .map_err(|_| Status::BackendUnavailable)?,
-            )
+            ))
         };
         Ok((
             backend,
@@ -642,7 +656,7 @@ async fn serve_stream(
         return;
     }
     let Some(backend) = backend else { return };
-    let (mut reader, mut writer) = backend.into_split();
+    let (mut reader, mut writer) = tokio::io::split(backend);
     let (mut tunnel_read, mut tunnel_write) = tokio::io::split(&mut tunnel);
     let activity = AtomicUsize::new(0);
     let transfer = timeout(MAX_SESSION, async {

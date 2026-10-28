@@ -1,0 +1,6 @@
+# Merge this section into the upgraded public gateway's protected configuration.
+# The registered-host path does not require a static publisher allowlist.
+# Existing version-1 publications need explicit migration before this is enabled.
+[command_center]
+base_url = "https://cmd.wispnet.app"
+allow_legacy = false

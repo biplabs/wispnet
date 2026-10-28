@@ -74,3 +74,9 @@ and publisher admission list; live authenticated owner connections register
 transient public routes. It stores no host owner credentials and cannot authorize
 private services. Public traffic trusts the TLS-terminating gateway with plaintext;
 this is explicit and separate from private end-to-end encrypted paired traffic.
+
+The optional [Command Center](../command-center.md) is a separate, durable public
+authorization service. It stores public accounts, proven publisher links and
+public grants only. It cannot create private host grants or enable publication on
+a host. The hosting node keeps backend credentials and checks public authorization
+before forwarding; private device authorization does not contact the hub.

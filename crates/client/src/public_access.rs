@@ -12,7 +12,6 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    net::TcpStream,
     sync::{Mutex, Semaphore},
     task::{JoinHandle, JoinSet},
 };
@@ -20,6 +19,7 @@ use wispnet_core::{host::ServiceKind, protocol};
 #[path = "public_ingress.rs"]
 pub mod ingress;
 pub const ALPN: &[u8] = b"wispnet/public/1";
+pub const AUTH_ALPN: &[u8] = b"wispnet/public/2";
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct GatewayConfig {
@@ -29,6 +29,7 @@ pub struct GatewayConfig {
     #[serde(default)]
     pub direct_addr: Option<std::net::SocketAddr>,
 }
+
 impl GatewayConfig {
     pub fn validate(&self) -> Result<(), String> {
         let url = url::Url::parse(&self.relay_url).map_err(|_| "Invalid public gateway relay")?;
@@ -91,6 +92,21 @@ struct Publication {
     incarnation: String,
     backend: std::net::SocketAddr,
     name: String,
+    #[serde(default)]
+    managed: bool,
+    #[serde(default = "default_mcp_path")]
+    mcp_path: String,
+}
+fn default_mcp_path() -> String {
+    "/mcp".into()
+}
+fn valid_mcp_path(path: &str) -> bool {
+    path.starts_with('/')
+        && !path.starts_with("//")
+        && path.len() <= 512
+        && !path
+            .bytes()
+            .any(|b| b <= 32 || b >= 127 || matches!(b, b'?' | b'#' | b'\\'))
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -144,6 +160,7 @@ fn load(state: &Path, owner: EndpointId) -> Result<Saved, String> {
                 || !s.backend.ip().is_loopback()
                 || s.backend.port() == 0
                 || !wispnet_core::enrollment::valid_name(&s.name)
+                || !valid_mcp_path(&s.mcp_path)
                 || saved.services[..i].iter().any(|r| r.service == s.service)
         })
     {
@@ -182,6 +199,28 @@ impl Default for Publications {
     }
 }
 impl Publications {
+    pub(crate) fn has_unmanaged(&self, client: &Client, service: &str) -> Result<bool, String> {
+        Ok(load(&client.state, client.endpoint.id())?
+            .services
+            .iter()
+            .any(|p| p.service == service && !p.managed))
+    }
+    pub(crate) async fn disable_managed(&self, client: Arc<Client>) -> Result<(), String> {
+        let ids: Vec<_> = load(&client.state, client.endpoint.id())?
+            .services
+            .into_iter()
+            .filter(|p| p.managed)
+            .map(|p| p.service)
+            .collect();
+        for id in ids {
+            self.configure(
+                client.clone(),
+                &json!({"op":"configure_public","service":id,"enabled":false}),
+            )
+            .await?;
+        }
+        Ok(())
+    }
     pub fn new() -> Self {
         Self {
             workers: Mutex::new(BTreeMap::new()),
@@ -195,7 +234,7 @@ impl Publications {
         let saved = load(&client.state, client.endpoint.id())?;
         let states = self.states.lock().await;
         Ok(
-            json!({"gateway":saved.gateway,"services":saved.services.iter().map(|s|json!({"service":s.service,"incarnation":s.incarnation,"enabled":true,"url":saved.gateway.as_ref().map(|g|format!("https://{}/",hostname(&s.name,saved.owner,&s.service,&g.domain))),"state":states.get(&s.service).map(String::as_str).unwrap_or("connecting")})).collect::<Vec<_>>()}),
+            json!({"gateway":saved.gateway,"services":saved.services.iter().map(|s|json!({"service":s.service,"incarnation":s.incarnation,"enabled":true,"managed":s.managed,"mcp_path":s.mcp_path,"url":saved.gateway.as_ref().map(|g|format!("https://{}/",hostname(&s.name,saved.owner,&s.service,&g.domain))),"state":states.get(&s.service).map(String::as_str).unwrap_or("connecting")})).collect::<Vec<_>>()}),
         )
     }
     async fn sync_public_links(&self, client: &Client) -> Result<(), String> {
@@ -338,6 +377,32 @@ impl Publications {
                 .as_bool()
                 .ok_or("Missing public access setting")?;
             let selected = if enabled {
+                if value["managed"] != true {
+                    let candidate = authority
+                        .services()
+                        .await
+                        .map_err(|_| "Cannot inspect owned service")?
+                        .into_iter()
+                        .find(|s| s.id == id)
+                        .ok_or("Unknown service")?;
+                    let mode = wispnet_registry::backend_credentials::status(
+                        &client.state,
+                        client.endpoint.id(),
+                        id,
+                        &candidate.incarnation,
+                        candidate.backend,
+                    )?
+                    .mode;
+                    if mode == wispnet_registry::backend_credentials::Mode::Bearer {
+                        return Err(
+                            "Stored backend credentials require authenticated public publishing"
+                                .into(),
+                        );
+                    }
+                }
+                if value["managed"] == true {
+                    crate::command_center::linked(&client.state, client.endpoint.id())?;
+                }
                 if saved.gateway.is_none() {
                     return Err("Public gateway is not configured".into());
                 }
@@ -372,6 +437,14 @@ impl Publications {
                     incarnation: s.incarnation,
                     backend: s.backend,
                     name: name.into(),
+                    managed: value["managed"] == true,
+                    mcp_path: {
+                        let path = value["mcp_path"].as_str().unwrap_or("/mcp");
+                        if !valid_mcp_path(path) {
+                            return Err("Invalid MCP endpoint path".into());
+                        }
+                        path.into()
+                    },
                 });
             }
         }
@@ -407,6 +480,17 @@ pub struct Registration {
     pub service: String,
     pub incarnation: String,
     pub name: String,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedRegistration {
+    pub version: u8,
+    pub service: String,
+    pub incarnation: String,
+    pub name: String,
+    pub command_center: String,
+    pub resource: String,
+    pub publisher_token: String,
 }
 pub async fn write_json(
     stream: &mut iroh::endpoint::SendStream,
@@ -499,7 +583,9 @@ async fn publish_once(
     .map_err(|e| e.to_string())?;
     let connection = tokio::time::timeout(
         Duration::from_secs(10),
-        client.endpoint.connect(target, ALPN),
+        client
+            .endpoint
+            .connect(target, if publication.managed { AUTH_ALPN } else { ALPN }),
     )
     .await
     .map_err(|_| "public gateway unavailable")?
@@ -510,16 +596,50 @@ async fn publish_once(
             .open_bi()
             .await
             .map_err(|_| "registration failed")?;
-        write_json(
-            &mut send,
-            &Registration {
-                version: 1,
-                service: publication.service.clone(),
-                incarnation: publication.incarnation.clone(),
-                name: publication.name.clone(),
-            },
-        )
-        .await?;
+        if publication.managed {
+            let resource = format!(
+                "https://{}{}",
+                hostname(
+                    &publication.name,
+                    client.endpoint.id(),
+                    &publication.service,
+                    &gateway.domain
+                ),
+                publication.mcp_path
+            );
+            let linked = crate::command_center::register(
+                &client,
+                &publication.service,
+                &publication.incarnation,
+                &publication.name,
+                &resource,
+            )
+            .await?;
+            write_json(
+                &mut send,
+                &ManagedRegistration {
+                    version: 2,
+                    service: publication.service.clone(),
+                    incarnation: publication.incarnation.clone(),
+                    name: publication.name.clone(),
+                    command_center: linked.base_url,
+                    resource,
+                    publisher_token: linked.publisher_token.ok_or("Public account unlinked")?,
+                },
+            )
+            .await?;
+        } else {
+            write_json(
+                &mut send,
+                &Registration {
+                    version: 1,
+                    service: publication.service.clone(),
+                    incarnation: publication.incarnation.clone(),
+                    name: publication.name.clone(),
+                },
+            )
+            .await?;
+        }
         send.finish().map_err(|_| "registration failed")?;
         let response: Value = read_json(&mut recv).await?;
         if response["ok"] != true {
@@ -565,9 +685,50 @@ async fn serve_public(
         {
             return Err(());
         }
-        TcpStream::connect(publication.backend)
+        if publication.managed {
+            let linked = crate::command_center::linked(&client.state, client.endpoint.id())
+                .map_err(|_| ())?;
+            let gateway = load(&client.state, client.endpoint.id())
+                .map_err(|_| ())?
+                .gateway
+                .ok_or(())?;
+            let resource = format!(
+                "https://{}{}",
+                hostname(
+                    &publication.name,
+                    client.endpoint.id(),
+                    &publication.service,
+                    &gateway.domain
+                ),
+                publication.mcp_path
+            );
+            let auth = crate::command_center::PublicAuthorization {
+                base_url: linked.base_url,
+                publisher_token: linked.publisher_token.ok_or(())?,
+                host: client.endpoint.id(),
+                service: publication.service.clone(),
+                incarnation: publication.incarnation.clone(),
+                resource,
+            };
+            wispnet_agent::http_backend::connect_authorized(
+                &client.state,
+                client.endpoint.id(),
+                &publication.service,
+                &publication.incarnation,
+                publication.backend,
+                Arc::new(auth),
+            )
             .await
             .map_err(|_| ())
+        } else {
+            // Legacy public routes are credential-transparent. In particular,
+            // an owner configuration race must never inject a stored secret
+            // into a route without visitor authorization.
+            tokio::net::TcpStream::connect(publication.backend)
+                .await
+                .map(wispnet_agent::http_backend::BackendStream::direct)
+                .map_err(|_| ())
+        }
     })
     .await;
     let Ok(Ok(mut backend)) = open else {
@@ -595,7 +756,7 @@ async fn serve_public(
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
-    use tokio::net::TcpListener;
+    use tokio::net::{TcpListener, TcpStream};
     async fn http(port: u16, host: &str, path: &str) -> String {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
@@ -922,3 +1083,7 @@ mod tests {
         server.abort();
     }
 }
+
+#[cfg(test)]
+#[path = "managed_public_tests.rs"]
+mod managed_public_tests;

@@ -32,6 +32,7 @@ from wispnet_desktop.api import NodeAPI, NodeRejected
 from wispnet_desktop.catalog_cache import CatalogCache
 from wispnet_desktop.combined import Combined
 from desktop_data import dispatch as desktop_data
+import command_center
 
 
 def write_private(path, value):
@@ -308,6 +309,9 @@ class Bridge:
         return {}
 
     def dispatch(self, method, args):
+        command_result = command_center.dispatch(method, args, self.api)
+        if command_result is not command_center.NOT_HANDLED:
+            return command_result
         if method == 'startDesktop':
             self.lifecycle(True)
             self.api.request(op='enable')

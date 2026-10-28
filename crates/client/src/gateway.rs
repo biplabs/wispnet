@@ -122,6 +122,15 @@ impl Gateways {
         guard.clear();
         interrupted
     }
+    /// Cancel only this owned service's active requests. Saved routes and the
+    /// shared listener remain ready to use the updated credential.
+    pub(crate) async fn credentials_changed(&self, host: EndpointId, service: &str) {
+        for worker in self.workers.lock().await.iter() {
+            if worker.binding.peer == host && worker.binding.service == service {
+                worker.cancel.send_replace(());
+            }
+        }
+    }
     /// Remove this host's listeners and bookmarks while preserving other hosts.
     pub async fn forget(&self, client: &Client, peer: EndpointId) -> Result<(), String> {
         let mut workers = self.workers.lock().await;
@@ -596,7 +605,15 @@ impl Route {
                 )
                 .await;
             };
-            match TcpStream::connect(binding).await {
+            match wispnet_agent::http_backend::connect(
+                &self.client.state,
+                self.client.endpoint.id(),
+                &self.service,
+                &self.incarnation,
+                binding,
+            )
+            .await
+            {
                 Ok(stream) => Box::new(stream),
                 Err(_) => {
                     return response(&mut socket, "502 Bad Gateway", "Backend unavailable", "")

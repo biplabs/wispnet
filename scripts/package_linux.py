@@ -61,6 +61,7 @@ def package(binary, output, desktop_binary=None):
             "scripts/uninstall_node_desktop.py",
             "deploy/node/wispnet-firewall.service",
             "apps/flutter/desktop/desktop_data.py",
+            "apps/flutter/desktop/command_center.py",
             "deploy/node/wispnet-host.service",
             "deploy/node/wispnet-desktop.service",
             "config/node/host.toml",

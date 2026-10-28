@@ -288,6 +288,15 @@ class DesktopFake extends FakeBackend {
       };
     }
     if (method == 'desktopRequest') {
+      if (arguments['payload']['op'] == 'command_center_status') {
+        return {
+          'enabled': true,
+          'base_url': 'https://cmd.wispnet.app',
+          'linked': true,
+          'account': {'id': 'fixture-user', 'name': 'Fixture user'},
+          'credentials': <Map<String, dynamic>>[],
+        };
+      }
       ownerCalls.add(arguments['payload'] as Map<String, dynamic>);
       final operation = arguments['payload']['operation'];
       if (operation?['op'] == 'shell') {
@@ -1872,13 +1881,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(backend.ownerCalls, isEmpty);
     expect(
-      find.textContaining('unprotected to the public internet'),
+      find.textContaining('Public callers must be authorized'),
       findsOneWidget,
     );
     expect(
-      find.textContaining(
-        'without pairing, device approval, or Wispnet authentication',
-      ),
+      find.textContaining('OAuth or a service bearer key'),
       findsOneWidget,
     );
     await tester.tap(find.text('Cancel'));
@@ -1891,6 +1898,8 @@ void main() {
     expect(backend.ownerCalls.single['op'], 'configure_public');
     expect(backend.ownerCalls.single['incarnation'], incarnation);
     expect(backend.ownerCalls.single['enabled'], true);
+    expect(backend.ownerCalls.single['managed'], true);
+    expect(backend.ownerCalls.single['mcp_path'], '/mcp');
     await close(tester);
   });
   testWidgets(

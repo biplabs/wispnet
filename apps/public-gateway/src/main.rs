@@ -11,7 +11,9 @@ struct Config {
     state_dir: PathBuf,
     listen: std::net::SocketAddr,
     domain: String,
+    #[serde(default)]
     publishers: Vec<wispnet_core::identity::EndpointId>,
+    command_center: Option<wispnet_client::public_access::ingress::CommandCenterConfig>,
     transport: TransportConfig,
 }
 fn read_config(path: &Path) -> Result<Config, Box<dyn std::error::Error>> {
@@ -70,8 +72,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
     let listener = tokio::net::TcpListener::bind(config.listen).await?;
-    let ingress =
-        wispnet_client::public_access::ingress::Ingress::new(config.domain, config.publishers)?;
+    let ingress = wispnet_client::public_access::ingress::Ingress::with_command_center(
+        config.domain,
+        config.publishers,
+        config.command_center,
+    )?;
     println!("Public ingress ready; endpoint {}", identity.endpoint_id());
     let task = tokio::spawn(ingress.run(endpoint.clone(), listener));
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;

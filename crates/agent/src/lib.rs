@@ -4,6 +4,7 @@ use wispnet_core::config::Config;
 pub mod catalogs;
 pub mod control;
 pub mod diagnostics;
+pub mod http_backend;
 pub mod identity;
 pub mod pairing;
 pub mod peers;

@@ -14,6 +14,8 @@ if [ "$(uname -s)" = Darwin ]; then
     export TMPDIR=/tmp
 fi
 node --test experiments/relay-compatibility/test/*.test.js
+npm --prefix apps/auth-hub ci --no-audit --no-fund
+npm --prefix apps/auth-hub test
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
@@ -22,6 +24,7 @@ cargo build --workspace --locked
 cargo build -p wispnet-cli --example relay_fixture --locked
 python3 -m unittest discover -s scripts -p test_firewall_helper.py
 python3 -m unittest discover -s scripts -p test_uninstall.py
+python3 -m unittest discover -s scripts -p test_install_command_center.py
 python3 -m unittest discover -s scripts -p test_arch_package.py
 python3 -m unittest discover -s scripts -p test_relay_network_audit.py
 python3 -m unittest discover -s scripts -p test_relay_discovery.py

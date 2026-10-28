@@ -1,5 +1,13 @@
 # Owner-controlled public services
 
+The optional [Command Center](command-center.md) adds GitHub account registration,
+owner-managed public grants, MCP OAuth and service-scoped bearer keys. Desktop
+account/publishing controls live in one removable module. A gateway configured
+with Command Center requires registered version-2 publishers; it never downgrades
+a protected publication to the legacy route described below. The existing
+transport and host ownership rules still apply. Legacy publications retain their
+backend-authentication pass-through behavior until explicitly migrated.
+
 A locally owned HTTP service can be published for anyone to connect over HTTPS:
 
 ```

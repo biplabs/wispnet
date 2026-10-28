@@ -43,6 +43,19 @@ def bootstrap(domain, plist):
         time.sleep(0.2)
 
 
+def stage_desktop_helpers(destination):
+    """Stage the checkout-independent Python bridge dependencies in the app."""
+    for name in ["desktop_data.py", "command_center.py"]:
+        shutil.copy2(ROOT / "apps/flutter/desktop" / name, destination / name)
+    helper_package = destination / "wispnet_desktop"
+    helper_package.mkdir(exist_ok=True)
+    for name in ["__init__.py", "api.py", "combined.py", "catalog_cache.py"]:
+        shutil.copy2(
+            ROOT / "apps/node/desktop/wispnet_desktop" / name, helper_package / name
+        )
+    return helper_package
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--init", action="store_true", help="Explicitly initialize a new Mac identity if no configuration exists")
@@ -108,15 +121,7 @@ def main():
     resources = contents / "Resources"
     executable = contents / "MacOS/Wispnet"
     # Qt-free helper retains the existing durable owner-operation journals/cache.
-    shutil.copy2(
-        ROOT / "apps/flutter/desktop/desktop_data.py", executable.parent / "desktop_data.py"
-    )
-    helper_package = executable.parent / "wispnet_desktop"
-    helper_package.mkdir(exist_ok=True)
-    for name in ["__init__.py", "api.py", "combined.py", "catalog_cache.py"]:
-        shutil.copy2(
-            ROOT / "apps/node/desktop/wispnet_desktop" / name, helper_package / name
-        )
+    helper_package = stage_desktop_helpers(executable.parent)
     (executable.parent / "python-path").write_text(str(Path(sys.executable).resolve()))
     # Provide the same owner automation endpoint when this Mac is an SSH target.
     shutil.copytree(

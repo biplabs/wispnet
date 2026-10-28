@@ -11,3 +11,9 @@ keystore.properties
 
 # Generated release/source identifier for packaged desktop clients.
 apps/node/desktop/wispnet_desktop/build_info.py
+
+# Optional Command Center dependencies, build output and operator credentials.
+/apps/auth-hub/node_modules/
+/apps/auth-hub/dist/
+/apps/auth-hub/.env
+/apps/auth-hub/.env.*

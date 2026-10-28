@@ -45,7 +45,7 @@ def prepare(archive, output, version, url, license_id="Apache-2.0", license_file
             path = bundle/name
             if Path(name).is_absolute() or '..' in Path(name).parts or path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
                 raise ValueError('Bundle checksum mismatch: '+name)
-        for name in ['bin/Wispnet', 'bin/wispnet', 'bin/bridge.py', 'bin/desktop_data.py',
+        for name in ['bin/Wispnet', 'bin/wispnet', 'bin/bridge.py', 'bin/desktop_data.py', 'bin/command_center.py',
                      'bin/lib/libflutter_linux_gtk.so', 'bin/wispnet_desktop/api.py',
                      'bin/data/flutter_assets/AssetManifest.bin',
                      'LICENSE', 'NOTICE', 'vendor/iroh/LICENSE-BSD3',

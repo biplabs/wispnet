@@ -190,7 +190,12 @@ impl State {
                 value["name"] = json!(self.device_name);
                 self.client.command(&value).await
             }
-            "public_status"
+            "command_center_status"
+            | "command_center_link"
+            | "command_center_poll"
+            | "command_center_unlink"
+            | "configure_backend_auth"
+            | "public_status"
             | "shell_open"
             | "shell_input"
             | "shell_resize"

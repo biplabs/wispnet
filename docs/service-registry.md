@@ -112,8 +112,11 @@ const models = await fetch(new URL('/v1/models', endpoint.url)).then(r => r.json
 
 Resolve returns `url`, `host_id`, `service_id` and `api_version`. No access token,
 credential header, expiry or renewal is required. Call the URL directly, including
-for POST and SSE requests. A service's own `Authorization` API key remains required
-if that service enforces one. Re-resolve after connection failures or port changes.
+for POST and SSE requests. With default pass-through authentication, a service's
+own `Authorization` API key remains required if that service enforces one. The
+owner can optionally configure a [host-stored backend credential](command-center.md)
+that Wispnet inserts after checking the device grant, so private callers need no
+copy of that key or hub account. Re-resolve after connection failures or port changes.
 For a known fixed service URL, call it directly without contacting the registry.
 The obsolete `/_wispnet/access` token endpoint is removed (404).
 

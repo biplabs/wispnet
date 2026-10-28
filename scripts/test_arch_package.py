@@ -20,7 +20,7 @@ class ArchPackaging(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.bundle = self.root/'wispnet-linux-x86_64'
-        names = ['bin/Wispnet','bin/wispnet','bin/bridge.py','bin/desktop_data.py',
+        names = ['bin/Wispnet','bin/wispnet','bin/bridge.py','bin/desktop_data.py','bin/command_center.py',
                  'bin/lib/libflutter_linux_gtk.so','bin/wispnet_desktop/api.py',
                  'bin/data/flutter_assets/AssetManifest.bin','bin/icon.png',
                  'scripts/firewall_helper.py','scripts/install_firewall_helper.py','scripts/node_request.py',
@@ -55,7 +55,8 @@ class ArchPackaging(unittest.TestCase):
         package=next(out.glob('*.pkg.tar.zst'))
         names=subprocess.check_output(['bsdtar','-tf',str(package)],text=True).splitlines()
         for name in ['usr/bin/wispnet','usr/bin/wispnet-setup','usr/lib/systemd/system/wispnet-firewall.service',
-                     'usr/share/libalpm/hooks/wispnet-remove.hook','opt/wispnet/bin/Wispnet']:
+                     'usr/share/libalpm/hooks/wispnet-remove.hook','opt/wispnet/bin/Wispnet',
+                     'opt/wispnet/bin/command_center.py']:
             self.assertIn(name,names)
         self.assertFalse(any(n.startswith(('home/','usr/local/','etc/')) for n in names))
         info=(out/'.SRCINFO').read_text()
@@ -77,6 +78,14 @@ class ArchPackaging(unittest.TestCase):
         self.manifest['desktop']='headless';self.pack()
         with self.assertRaisesRegex(ValueError,'desktop bundle'):self.generate()
 
+    def test_rejects_desktop_release_missing_command_center_adapter(self):
+        self.manifest['sha256'].pop('bin/command_center.py')
+        (self.bundle / 'bin/command_center.py').unlink()
+        self.pack()
+        with self.assertRaisesRegex(ValueError, 'Missing desktop release payload: bin/command_center.py'):
+            self.generate()
+
+
     def test_rejects_wrong_license_metadata_and_mislabeled_license_payload(self):
         self.manifest['license'] = 'MIT'
         self.pack()
@@ -93,6 +102,26 @@ class ArchPackaging(unittest.TestCase):
         for changes in [dict(url='https://example.com/latest/binary.tar.gz'),dict(url='https://example.com/$(touch-x)'),
                         dict(version="1'; touch x"),dict(license_id="MIT';touch x"),dict(license_id="MIT")]:
             with self.subTest(changes=changes), self.assertRaises(ValueError):self.generate(**changes)
+
+
+class MacDesktopHelpers(unittest.TestCase):
+    def test_staged_helpers_run_without_a_checkout_or_platform_tools(self):
+        import install_macos
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / 'MacOS'
+            destination.mkdir()
+            helper_package = install_macos.stage_desktop_helpers(destination)
+            self.assertEqual(helper_package, destination / 'wispnet_desktop')
+            for name in ['desktop_data.py', 'command_center.py']:
+                self.assertEqual((destination / name).read_bytes(),
+                                 (ROOT / 'apps/flutter/desktop' / name).read_bytes())
+            result = subprocess.run([
+                sys.executable, '-I', '-c',
+                'import sys; sys.path.insert(0, sys.argv[1]); import command_center, desktop_data; '
+                'print(command_center.browser_target({"base_url":"https://cmd.wispnet.app"},"dashboard"))',
+                str(destination),
+            ], cwd=temporary, check=True, capture_output=True, text=True)
+            self.assertEqual(result.stdout.strip(), 'https://cmd.wispnet.app/')
 
 
 class PackageCleanup(unittest.TestCase):
