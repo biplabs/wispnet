@@ -603,6 +603,32 @@ void main() {
       await close(tester);
     },
   );
+  testWidgets('service cards prefer a published public URL', (tester) async {
+    final backend = FakeBackend(
+      publicAccess: {
+        'version': 1,
+        'host': peer,
+        'services': [
+          {
+            'service': 'website',
+            'incarnation': incarnation,
+            'url': 'https://shared-website.wispnet.test/',
+            'state': 'online',
+          },
+        ],
+      },
+    );
+    await mount(tester, backend);
+    await tester.tap(find.text('website'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 1000));
+    expect(backend.calls.where((c) => c.$1 == 'open'), isEmpty);
+    expect(
+      backend.calls.where((c) => c.$1 == 'launch').single.$2['url'],
+      'https://shared-website.wispnet.test/',
+    );
+    await close(tester);
+  });
   testWidgets('settings follows the device label in the directory', (
     tester,
   ) async {

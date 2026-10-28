@@ -74,6 +74,7 @@ class _WispHomeState extends State<WispHome>
     }
     return const [];
   }
+
   Map<String, dynamic> get records =>
       (snapshot['hosts'] as Map?)?.cast<String, dynamic>() ?? {};
   Map<String, dynamic> get order =>
@@ -346,11 +347,19 @@ class _WispHomeState extends State<WispHome>
         if (mounted) ScaffoldMessenger.of(context).hideCurrentSnackBar();
         return;
       }
-      final result = await backend.invoke('open', {
-        'host': machine.id,
-        'service': service['id'],
-        'incarnation': service['incarnation'],
-      });
+      final publication = service['public_access'] as Map?;
+      final publicUrl = publication?['url'] as String?;
+      final result =
+          service['kind'] == 'http' &&
+              publication?['enabled'] == true &&
+              publicUrl != null &&
+              publicUrl.isNotEmpty
+          ? {'url': publicUrl}
+          : await backend.invoke('open', {
+              'host': machine.id,
+              'service': service['id'],
+              'incarnation': service['incarnation'],
+            });
       if (!mounted || !foreground || generation != launchGeneration) return;
       if (!MediaQuery.disableAnimationsOf(context)) {
         await warp.forward(from: 0);
@@ -418,12 +427,15 @@ class _WispHomeState extends State<WispHome>
           FilledButton(
             key: const ValueKey('confirm-close-shell'),
             onPressed: () => Navigator.pop(context, true),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: WispColors.error,
-              side: const BorderSide(color: WispColors.error),
-            ).copyWith(
-              backgroundColor: wispButtonBackground(const Color(0xff401e2a)),
-            ),
+            style:
+                OutlinedButton.styleFrom(
+                  foregroundColor: WispColors.error,
+                  side: const BorderSide(color: WispColors.error),
+                ).copyWith(
+                  backgroundColor: wispButtonBackground(
+                    const Color(0xff401e2a),
+                  ),
+                ),
             child: const Text('Close sessions'),
           ),
           const SizedBox(height: 8),
@@ -960,11 +972,7 @@ class _WispHomeState extends State<WispHome>
             ),
             tooltip: 'Close shell',
             onPressed: busy ? null : () => confirmCloseShell(shell),
-            icon: const Icon(
-              Icons.close,
-              size: 18,
-              color: WispColors.muted,
-            ),
+            icon: const Icon(Icons.close, size: 18, color: WispColors.muted),
           ),
         ],
       ),
