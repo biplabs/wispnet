@@ -37,6 +37,14 @@ const UPLOAD_LIMIT: usize = 16 * 1024 * 1024;
 const AUTH_INTERVAL: Duration = Duration::from_secs(2);
 const AUTH_TIMEOUT: Duration = Duration::from_secs(2);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuthorizationError {
+    /// The visitor's credentials were explicitly rejected.
+    Denied,
+    /// Authorization could not be checked; retry without replacing credentials.
+    Unavailable,
+}
+
 /// Implementations verify the original service token and current public grant.
 /// They must never trust caller-provided identity headers. The same check runs
 /// before each HTTP request and periodically while a stream remains open.
@@ -44,7 +52,7 @@ pub trait RequestAuthorization: Send + Sync {
     fn authorize(
         &self,
         headers: &hyper::HeaderMap,
-    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + '_>>;
+    ) -> Pin<Box<dyn Future<Output = Result<(), AuthorizationError>> + Send + '_>>;
 }
 
 pub trait BackendIo: AsyncRead + AsyncWrite + Unpin + Send {}
@@ -240,14 +248,13 @@ impl Proxy {
         )
         .is_ok_and(|credential| credential.generation == self.credential.generation)
     }
-    async fn allowed(&self, headers: &hyper::HeaderMap) -> bool {
+    async fn allowed(&self, headers: &hyper::HeaderMap) -> Result<(), AuthorizationError> {
         let Some(authorization) = &self.authorization else {
-            return true;
+            return Ok(());
         };
-        matches!(
-            tokio::time::timeout(AUTH_TIMEOUT, authorization.authorize(headers)).await,
-            Ok(Ok(()))
-        )
+        tokio::time::timeout(AUTH_TIMEOUT, authorization.authorize(headers))
+            .await
+            .unwrap_or(Err(AuthorizationError::Unavailable))
     }
     async fn guard(&self) {
         let mut interval = tokio::time::interval(AUTH_INTERVAL);
@@ -262,7 +269,7 @@ impl Proxy {
                 .unwrap_or_else(|e| e.into_inner())
                 .clone();
             if let Some(headers) = headers
-                && !self.allowed(&headers).await
+                && self.allowed(&headers).await.is_err()
             {
                 return;
             }
@@ -294,8 +301,14 @@ impl Proxy {
         if !self.credential_current() || !self.binding_current().await {
             return Ok(error(403, "Service binding unavailable"));
         }
-        if !self.allowed(request.headers()).await {
-            return Ok(error(401, "Service authorization required"));
+        match self.allowed(request.headers()).await {
+            Ok(()) => {}
+            Err(AuthorizationError::Denied) => {
+                return Ok(error(401, "Service authorization required"));
+            }
+            Err(AuthorizationError::Unavailable) => {
+                return Ok(error(503, "Service authorization unavailable"));
+            }
         }
         *self
             .current_headers
@@ -591,12 +604,18 @@ mod tests {
         fn authorize(
             &self,
             headers: &hyper::HeaderMap,
-        ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + '_>> {
+        ) -> Pin<Box<dyn Future<Output = Result<(), AuthorizationError>> + Send + '_>> {
             let valid = self.0.load(Ordering::SeqCst)
                 && headers
                     .get("authorization")
                     .is_some_and(|header| header == "Bearer public-fixture-token");
-            Box::pin(async move { if valid { Ok(()) } else { Err("denied".into()) } })
+            Box::pin(async move {
+                if valid {
+                    Ok(())
+                } else {
+                    Err(AuthorizationError::Denied)
+                }
+            })
         }
     }
     #[tokio::test]
@@ -629,6 +648,109 @@ mod tests {
                 .is_err()
         );
     }
+
+    struct UnavailableAuthorization {
+        unavailable: AtomicBool,
+        timeout: bool,
+    }
+    impl RequestAuthorization for UnavailableAuthorization {
+        fn authorize(
+            &self,
+            headers: &hyper::HeaderMap,
+        ) -> Pin<Box<dyn Future<Output = Result<(), AuthorizationError>> + Send + '_>> {
+            let unavailable = self.unavailable.load(Ordering::SeqCst);
+            let valid = headers
+                .get("authorization")
+                .is_some_and(|header| header == "Bearer public-fixture-token");
+            Box::pin(async move {
+                if unavailable {
+                    if self.timeout {
+                        std::future::pending::<()>().await;
+                    }
+                    Err(AuthorizationError::Unavailable)
+                } else if valid {
+                    Ok(())
+                } else {
+                    Err(AuthorizationError::Denied)
+                }
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn public_authorization_outage_and_timeout_recover_without_new_credentials() {
+        for timeout in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let fixture = Fixture::new(listener.local_addr().unwrap(), Mode::Bearer);
+            let authorization = Arc::new(UnavailableAuthorization {
+                unavailable: AtomicBool::new(true),
+                timeout,
+            });
+            let request = b"GET /mcp HTTP/1.1\r\nHost: mcp.localhost\r\nAuthorization: Bearer public-fixture-token\r\nConnection: close\r\n\r\n";
+            let mut stream = connect_authorized(
+                fixture.state.path(),
+                fixture.host,
+                "mcp",
+                &fixture.incarnation,
+                fixture.backend,
+                authorization.clone(),
+            )
+            .await
+            .unwrap();
+            stream.write_all(request).await.unwrap();
+            let mut response = Vec::new();
+            tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut response))
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(response.starts_with(b"HTTP/1.1 503"));
+            assert!(
+                !String::from_utf8(response)
+                    .unwrap()
+                    .to_ascii_lowercase()
+                    .contains("www-authenticate")
+            );
+            assert!(
+                tokio::time::timeout(Duration::from_millis(50), listener.accept())
+                    .await
+                    .is_err()
+            );
+
+            authorization.unavailable.store(false, Ordering::SeqCst);
+            let backend = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let headers =
+                    String::from_utf8(read_until(&mut stream, b"\r\n\r\n").await).unwrap();
+                assert!(headers.contains("authorization: Bearer backend-fixture-key"));
+                stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .await
+                    .unwrap();
+            });
+            let mut recovered = connect_authorized(
+                fixture.state.path(),
+                fixture.host,
+                "mcp",
+                &fixture.incarnation,
+                fixture.backend,
+                authorization,
+            )
+            .await
+            .unwrap();
+            recovered.write_all(request).await.unwrap();
+            let mut response = Vec::new();
+            tokio::time::timeout(Duration::from_secs(5), recovered.read_to_end(&mut response))
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(response.starts_with(b"HTTP/1.1 200"));
+            assert!(response.ends_with(b"ok"));
+            backend.await.unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn sse_is_streamed_and_public_revocation_closes_active_response() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

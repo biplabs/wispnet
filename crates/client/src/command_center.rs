@@ -10,6 +10,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+use wispnet_agent::http_backend::AuthorizationError;
 use wispnet_core::identity::EndpointId;
 
 pub const DEFAULT_URL: &str = "https://cmd.wispnet.app";
@@ -123,6 +124,19 @@ pub(crate) async fn post(
     token: Option<&str>,
     body: Value,
 ) -> Result<Value, String> {
+    let response = request(base, path, token, body).await?;
+    if !response.status().is_success() {
+        return Err("Command center denied the request".into());
+    }
+    response_json(response).await
+}
+
+async fn request(
+    base: &str,
+    path: &str,
+    token: Option<&str>,
+    body: Value,
+) -> Result<reqwest::Response, String> {
     let base = validate_url(base)?;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(3))
@@ -133,13 +147,13 @@ pub(crate) async fn post(
     if let Some(token) = token {
         request = request.bearer_auth(token);
     }
-    let mut response = request
+    request
         .send()
         .await
-        .map_err(|_| "Command center unavailable")?;
-    if !response.status().is_success() {
-        return Err("Command center denied the request".into());
-    }
+        .map_err(|_| "Command center unavailable".into())
+}
+
+async fn response_json(mut response: reqwest::Response) -> Result<Value, String> {
     if response.content_length().is_some_and(|n| n > 32768) {
         return Err("Invalid command center response".into());
     }
@@ -411,24 +425,39 @@ impl wispnet_agent::http_backend::RequestAuthorization for PublicAuthorization {
     fn authorize(
         &self,
         headers: &hyper::HeaderMap,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + '_>> {
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(), AuthorizationError>> + Send + '_>,
+    > {
         let headers = headers.clone();
         Box::pin(async move {
             if headers.get_all(hyper::header::AUTHORIZATION).iter().count() != 1 {
-                return Err("Authorization required".into());
+                return Err(AuthorizationError::Denied);
             }
             let token = headers
                 .get(hyper::header::AUTHORIZATION)
                 .and_then(|h| h.to_str().ok())
                 .and_then(|h| h.strip_prefix("Bearer "))
                 .filter(|t| !t.is_empty() && t.len() <= 8192)
-                .ok_or("Authorization required")?;
-            let result = post(&self.base_url, "/api/command/authorize", Some(&self.publisher_token),
-                json!({"host":self.host,"service":self.service,"incarnation":self.incarnation,"resource":self.resource,"token":token})).await?;
-            if result["allowed"] != true {
-                return Err("Authorization denied".into());
+                .ok_or(AuthorizationError::Denied)?;
+            let response = request(&self.base_url, "/api/command/authorize", Some(&self.publisher_token),
+                json!({"host":self.host,"service":self.service,"incarnation":self.incarnation,"resource":self.resource,"token":token}))
+                .await.map_err(|_| AuthorizationError::Unavailable)?;
+            let status = response.status();
+            let result = response_json(response)
+                .await
+                .map_err(|_| AuthorizationError::Unavailable)?;
+            if status.is_success() && result["allowed"] == true {
+                return Ok(());
             }
-            Ok(())
+            // Only an explicit service-token denial means the visitor needs new
+            // credentials. Publisher/configuration failures and outages cannot
+            // be repaired by making the visitor reconnect their OAuth account.
+            if status == reqwest::StatusCode::FORBIDDEN
+                && result["error"] == "Service access denied"
+            {
+                return Err(AuthorizationError::Denied);
+            }
+            Err(AuthorizationError::Unavailable)
         })
     }
 }
@@ -511,6 +540,87 @@ mod tests {
             .await
             .unwrap();
         stream.write_all(&body).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn public_authorization_distinguishes_service_denial_from_upstream_failures() {
+        use wispnet_agent::http_backend::RequestAuthorization;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let authorization = PublicAuthorization {
+            base_url,
+            publisher_token: "publisher-fixture".into(),
+            host: wispnet_core::identity::SecretKey::generate().public(),
+            service: "mcp".into(),
+            incarnation: "a".repeat(64),
+            resource: "https://service.example/mcp".into(),
+        };
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert(
+            "authorization",
+            "Bearer original-fixture-token".parse().unwrap(),
+        );
+        let cases = [
+            (
+                503,
+                r#"{"error":"Service access denied"}"#,
+                Err(AuthorizationError::Unavailable),
+            ),
+            (
+                429,
+                r#"{"error":"Try again later"}"#,
+                Err(AuthorizationError::Unavailable),
+            ),
+            (
+                400,
+                r#"{"error":"Invalid request"}"#,
+                Err(AuthorizationError::Unavailable),
+            ),
+            (
+                401,
+                r#"{"error":"Upstream authentication required"}"#,
+                Err(AuthorizationError::Unavailable),
+            ),
+            (
+                403,
+                r#"{"error":"Publisher not authorized"}"#,
+                Err(AuthorizationError::Unavailable),
+            ),
+            (
+                403,
+                "upstream unavailable",
+                Err(AuthorizationError::Unavailable),
+            ),
+            (
+                200,
+                r#"{"allowed":false}"#,
+                Err(AuthorizationError::Unavailable),
+            ),
+            (200, "invalid json", Err(AuthorizationError::Unavailable)),
+            (
+                403,
+                r#"{"error":"Service access denied"}"#,
+                Err(AuthorizationError::Denied),
+            ),
+            (200, r#"{"allowed":true}"#, Ok(())),
+        ];
+        for (status, body, expected) in cases {
+            let check = authorization.authorize(&headers);
+            let reply = async {
+                let (mut stream, request, value) = hub_request(&listener).await;
+                assert!(request.starts_with("POST /api/command/authorize "));
+                assert_eq!(value["token"], "original-fixture-token");
+                stream.write_all(format!("HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            };
+            let (actual, ()) = tokio::join!(check, reply);
+            assert_eq!(actual, expected, "status {status}, body {body}");
+        }
+        drop(listener);
+        assert_eq!(
+            authorization.authorize(&headers).await,
+            Err(AuthorizationError::Unavailable)
+        );
     }
 
     #[tokio::test]
