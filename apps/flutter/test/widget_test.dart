@@ -1384,7 +1384,7 @@ void main() {
       lessThan(tester.getRect(find.text('MCP (Model Context Protocol)')).top),
     );
     expect(
-      find.textContaining('No account sign-in is needed.'),
+      find.textContaining('No token or account sign-in is needed.'),
       findsOneWidget,
     );
     await tester.tap(find.byKey(const ValueKey('settings-address')));

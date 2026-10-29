@@ -1020,7 +1020,7 @@ class _SettingsFormState extends State<SettingsForm> {
         ),
         const SizedBox(height: 8),
         const Text(
-          'Connect AI assistants to Wispnet to discover services and manage access. Use this device’s MCP bearer token to connect. No account sign-in is needed. Both URLs work only on this device while local access is online.',
+          'Connect AI assistants to Wispnet to discover services and manage access. Add this URL to your MCP client. No token or account sign-in is needed. Both URLs work only on this device while local access is online.',
           style: TextStyle(color: WispColors.muted),
         ),
       ],

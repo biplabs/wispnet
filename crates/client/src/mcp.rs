@@ -1,42 +1,20 @@
-//! Authenticated, stateless MCP on the shared loopback listener.
+//! Local, stateless MCP on the shared loopback listener.
 use crate::{
     Client,
     gateway::{Request, http, response},
 };
 use serde_json::{Value, json};
-use std::{io::Write, path::Path, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpStream, UnixStream},
     sync::Semaphore,
 };
-use zeroize::Zeroizing;
 
 const VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26"];
 static CALLS: Semaphore = Semaphore::const_new(8);
 // Keep capacity for status, revocation and other short control operations.
 static EXEC_CALLS: Semaphore = Semaphore::const_new(4);
-
-pub(crate) fn credential(state: &Path) -> Result<Zeroizing<String>, String> {
-    let path = state.join("mcp-token");
-    if !path
-        .try_exists()
-        .map_err(|_| "Cannot inspect MCP credential")?
-    {
-        let mut file = wispnet_registry::control::credential_temp(&path)
-            .map_err(|_| "Cannot reserve MCP credential")?;
-        file.write_all(wispnet_registry::control::token().as_bytes())
-            .and_then(|_| file.as_file().sync_all())
-            .map_err(|_| "Cannot save MCP credential")?;
-        if file.persist_noclobber(&path).is_err() && !path.exists() {
-            return Err("Cannot install MCP credential".into());
-        }
-        std::fs::File::open(state)
-            .and_then(|f| f.sync_all())
-            .map_err(|_| "Cannot sync MCP credential")?;
-    }
-    wispnet_registry::control::read_token(&path).map_err(|_| "Unsafe MCP credential".into())
-}
 
 fn tool(
     name: &str,
@@ -316,7 +294,6 @@ pub(crate) fn serve(
     client: Arc<Client>,
     mut socket: TcpStream,
     request: Request,
-    token: Arc<Zeroizing<String>>,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), ()>> + Send>> {
     Box::pin(async move {
         // Never inherit the discovery API's permissive browser CORS policy.
@@ -324,26 +301,8 @@ pub(crate) fn serve(
             return response(
                 &mut socket,
                 "403 Forbidden",
-                "MCP accepts authenticated native clients only",
+                "MCP accepts local native clients only",
                 "",
-            )
-            .await;
-        }
-        let expected = format!("Bearer {}", token.as_str());
-        // Compare every credential byte; duplicate headers fail closed.
-        let supplied = request.one("authorization").unwrap_or("").as_bytes();
-        let difference = supplied
-            .iter()
-            .zip(expected.as_bytes())
-            .fold(supplied.len() ^ expected.len(), |d, (a, b)| {
-                d | usize::from(a ^ b)
-            });
-        if difference != 0 {
-            return response(
-                &mut socket,
-                "401 Unauthorized",
-                "MCP authentication required",
-                "WWW-Authenticate: Bearer\r\n",
             )
             .await;
         }
@@ -487,20 +446,6 @@ pub(crate) fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn private_persistent_credential_rejects_unsafe_files() {
-        use std::os::unix::fs::PermissionsExt;
-        let state = tempfile::tempdir().unwrap();
-        std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        let original = credential(state.path()).unwrap();
-        assert_eq!(*original, *credential(state.path()).unwrap());
-        std::fs::set_permissions(
-            state.path().join("mcp-token"),
-            std::fs::Permissions::from_mode(0o644),
-        )
-        .unwrap();
-        assert!(credential(state.path()).is_err());
-    }
     #[test]
     fn tool_arguments_reject_unknown_fields_and_invalid_grants() {
         let list = tools(true);

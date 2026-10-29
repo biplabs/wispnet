@@ -171,29 +171,25 @@ stateless Streamable HTTP (JSON responses; no server event stream). It supports
 initialize, ping, tools/list and tools/call. GET and DELETE return 405. Send
 `Accept: application/json, text/event-stream` and `Content-Type: application/json`.
 
-Every MCP request needs `Authorization: Bearer <token>`. The token is generated
-once in private `state_dir/mcp-token` (0600) and survives restarts and port changes.
-It is separate from Wispnet host identity, pairings and service grants. Never
-publish the token, put it in a URL, or share it with websites. MCP rejects all
-browser Origin/Fetch Metadata headers, sends no CORS permission, and rejects
-missing/duplicate credentials. The discovery API retains its existing CORS policy.
+No bearer token or account sign-in is required. The listener binds only to
+`127.0.0.1`, and MCP requires the `wispnet.localhost` hostname. It rejects browser
+Origin/Fetch Metadata headers and sends no CORS permission. Existing host
+identity, pairings, service grants and owner-policy validation still apply.
+The discovery API retains its existing CORS policy.
 
 After installing the updated desktop/node and bringing local access online, add
-the following to your private Codex config (`~/.codex/config.toml`). Replace
-`/home/YOU` with your actual home directory:
+the following to your Codex config (`~/.codex/config.toml`):
 
 ```toml
 [mcp_servers.wispnet]
 url = "http://wispnet.localhost:7842/mcp"
-http_headers_helper = "python3 /home/YOU/.local/libexec/wispnet-node/mcp_headers.py"
 startup_timeout_sec = 15
 tool_timeout_sec = 35
 ```
 
-The header helper reads the private token on demand; the Codex config contains
-no token. It accepts `--config /absolute/path/host.toml` for another local node.
-Restart/reconnect the Codex MCP client after registration. Other MCP clients can
-read the same private token and send the bearer header themselves. See the
+Restart/reconnect the MCP client after registration. Older configurations using
+`mcp_headers.py` remain compatible: the helper now returns empty headers without
+reading or sending credentials. Existing `mcp-token` files are unused. See the
 [Codex MCP configuration documentation](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
 
 Tools include service discovery/link resolution, gateway settings, port changes

@@ -180,31 +180,25 @@ pub(crate) async fn start(client: Arc<Client>, port: u16) -> Result<JoinHandle<(
     let listener = TcpListener::bind(("127.0.0.1", port)).await.map_err(|_| {
         format!("Registry port {port} unavailable; choose another port in Access settings")
     })?;
-    let token = Arc::new(crate::mcp::credential(&client.state)?);
     Ok(tokio::spawn(async move {
         let slots = client.gateway.connections.clone();
         let mut tasks = tokio::task::JoinSet::new();
         loop {
             tokio::select! {
-                accepted=listener.accept()=>{let Ok((socket,_))=accepted else {break};let Ok(permit)=slots.clone().try_acquire_owned() else {continue};let c=client.clone();let token=token.clone();tasks.spawn(async move {let _permit=permit;let _=handle(c,socket,port,token).await;});},
+                accepted=listener.accept()=>{let Ok((socket,_))=accepted else {break};let Ok(permit)=slots.clone().try_acquire_owned() else {continue};let c=client.clone();tasks.spawn(async move {let _permit=permit;let _=handle(c,socket,port).await;});},
                 _=tasks.join_next(),if !tasks.is_empty()=>{}
             }
         }
     }))
 }
-async fn handle(
-    client: Arc<Client>,
-    mut socket: TcpStream,
-    port: u16,
-    token: Arc<zeroize::Zeroizing<String>>,
-) -> Result<(), ()> {
+async fn handle(client: Arc<Client>, mut socket: TcpStream, port: u16) -> Result<(), ()> {
     let mut request = match headers(&mut socket).await.and_then(|b| parse(&b)) {
         Ok(r) => r,
         Err(_) => return response(&mut socket, "400 Bad Request", "Invalid request", "").await,
     };
     if request.safe(&format!("wispnet.localhost:{port}")) {
         if request.path == "/mcp" {
-            return crate::mcp::serve(client, socket, request, token).await;
+            return crate::mcp::serve(client, socket, request).await;
         }
         request.path = match request.path.as_str() {
             "/registry" | "/registry/" | "/registry/v1/services" => "/v1/services".into(),
@@ -430,23 +424,25 @@ mod tests {
         assert!(directory.starts_with("HTTP/1.1 200"), "{directory}");
         assert!(directory.contains("gike"));
         assert!(!directory.contains("mcp-token"));
-        let token = crate::mcp::credential(state.path()).unwrap();
-        let auth = format!(
-            "Authorization: Bearer {}\r\nContent-Type: application/json\r\nAccept: application/json, text/event-stream\r\n",
-            token.as_str()
-        );
+        assert!(!state.path().join("mcp-token").exists());
+        let rpc_headers =
+            "Content-Type: application/json\r\nAccept: application/json, text/event-stream\r\n";
         let init=json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}).to_string();
-        for extra in ["".to_owned(), auth.replace(token.as_str(), "wrong")] {
+        // Previously configured clients can keep sending their unused credential.
+        for extra in [
+            rpc_headers.to_owned(),
+            format!("{rpc_headers}Authorization: Bearer legacy-unused-token\r\n"),
+        ] {
             assert!(
                 unified(port, "POST", "/mcp", &extra, &init)
                     .await
-                    .starts_with("HTTP/1.1 401")
+                    .starts_with("HTTP/1.1 200")
             );
         }
         for extra in [
-            format!("{auth}Origin: https://evil.example\r\n"),
-            format!("{auth}Origin: null\r\n"),
-            format!("{auth}Sec-Fetch-Site: cross-site\r\n"),
+            format!("{rpc_headers}Origin: https://evil.example\r\n"),
+            format!("{rpc_headers}Origin: null\r\n"),
+            format!("{rpc_headers}Sec-Fetch-Site: cross-site\r\n"),
         ] {
             assert!(
                 unified(port, "POST", "/mcp", &extra, &init)
@@ -454,29 +450,29 @@ mod tests {
                     .starts_with("HTTP/1.1 403")
             );
         }
-        let initialized = unified(port, "POST", "/mcp", &auth, &init).await;
+        let initialized = unified(port, "POST", "/mcp", rpc_headers, &init).await;
         assert!(initialized.starts_with("HTTP/1.1 200"), "{initialized}");
         assert!(initialized.contains("2025-11-25"));
-        assert!(!initialized.contains(token.as_str()));
+        assert!(!initialized.contains("legacy-unused-token"));
         assert!(
-            unified(port, "GET", "/mcp", &auth, "")
+            unified(port, "GET", "/mcp", rpc_headers, "")
                 .await
                 .starts_with("HTTP/1.1 405")
         );
         let notification =
             json!({"jsonrpc":"2.0","method":"notifications/initialized"}).to_string();
         assert!(
-            unified(port, "POST", "/mcp", &auth, &notification)
+            unified(port, "POST", "/mcp", rpc_headers, &notification)
                 .await
                 .starts_with("HTTP/1.1 202")
         );
         let list = json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}).to_string();
-        let listed = unified(port, "POST", "/mcp", &auth, &list).await;
+        let listed = unified(port, "POST", "/mcp", rpc_headers, &list).await;
         assert!(listed.contains("wispnet_settings"));
         assert!(!listed.contains("wispnet_set_service")); // No node socket in this fixture.
         let bad=json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"wispnet_set_port","arguments":{"port":80}}}).to_string();
         assert!(
-            unified(port, "POST", "/mcp", &auth, &bad)
+            unified(port, "POST", "/mcp", rpc_headers, &bad)
                 .await
                 .contains("-32602")
         );
@@ -529,13 +525,13 @@ mod tests {
         assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 2);
         let changed = unused_port();
         let change=json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"wispnet_set_port","arguments":{"port":changed}}}).to_string();
-        let acknowledgement = unified(port, "POST", "/mcp", &auth, &change).await;
+        let acknowledgement = unified(port, "POST", "/mcp", rpc_headers, &change).await;
         assert!(
             acknowledgement.starts_with("HTTP/1.1 200"),
             "{acknowledgement}"
         );
         assert!(acknowledgement.contains("\"isError\":false"));
-        assert_eq!(*token, *crate::mcp::credential(state.path()).unwrap());
+        assert!(!state.path().join("mcp-token").exists());
         let moved = client
             .command(&json!({"op":"resolve_link","link":link}))
             .await
@@ -573,7 +569,7 @@ mod tests {
             .ends_with("llama")
         );
         let stop=json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"wispnet_set_access","arguments":{"enabled":false}}}).to_string();
-        let acknowledgement = unified(changed, "POST", "/mcp", &auth, &stop).await;
+        let acknowledgement = unified(changed, "POST", "/mcp", rpc_headers, &stop).await;
         assert!(
             acknowledgement.contains("\"isError\":false"),
             "{acknowledgement}"

@@ -24,8 +24,6 @@ import termios
 import time
 import unittest
 
-from mcp_headers import headers
-
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = ROOT / "target/debug/wispnet"
 spec = importlib.util.spec_from_file_location(
@@ -179,7 +177,7 @@ class ShellSmoke(unittest.TestCase):
         operation["expected_revision"] = api.request(op="status")["host"]["revision"]
         return api.request(op="mutate", operation=operation)
 
-    def mcp(self, config, api, name, **arguments):
+    def mcp(self, api, name, **arguments):
         port = api.request(op="gateway_settings")["settings"]["registry_port"]
         connection = http.client.HTTPConnection("127.0.0.1", port, timeout=15)
         try:
@@ -188,7 +186,7 @@ class ShellSmoke(unittest.TestCase):
                 "params": {"name": name, "arguments": arguments},
             }), headers={"Host": f"wispnet.localhost:{port}",
                          "Content-Type": "application/json",
-                         "Accept": "application/json, text/event-stream", **headers(config)})
+                         "Accept": "application/json, text/event-stream"})
             response = connection.getresponse()
             self.assertEqual(response.status, 200)
             result = json.loads(response.read())
@@ -306,7 +304,7 @@ class ShellSmoke(unittest.TestCase):
         active.send("printf '%s%s\\n' WISP_ ACTIVE\r")
         active.expect("WISP_ACTIVE")
         before = target_api.request(op="status")["host"]
-        self.mcp(target, target_api, "wispnet_revoke_service_access",
+        self.mcp(target_api, "wispnet_revoke_service_access",
                  expected_revision=before["revision"], service="shell", peer=client_id)
         active.wait(1)
         self.cli(client, "shell", "--host", target_id, success=False)

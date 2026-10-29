@@ -18,8 +18,6 @@ import tempfile
 import time
 import unittest
 
-from mcp_headers import headers
-
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = ROOT / "target/debug/wispnet"
 sys.path.insert(0, str(ROOT / "apps/node/desktop"))
@@ -109,8 +107,7 @@ class MCPExecTests(unittest.TestCase):
                 "params": params or {},
             }), headers={"Host": f"wispnet.localhost:{port}",
                          "Content-Type": "application/json",
-                         "Accept": "application/json, text/event-stream",
-                         **headers(client["config"])})
+                         "Accept": "application/json, text/event-stream"})
             return connection
         except BaseException:
             connection.close()

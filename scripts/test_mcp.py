@@ -1,7 +1,6 @@
 """Exercise MCP against a real isolated node and its owner policy API."""
 import http.client
 import json
-import os
 from pathlib import Path
 import socket
 import subprocess
@@ -9,8 +8,6 @@ import sys
 import tempfile
 import time
 import unittest
-
-from mcp_headers import headers
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'apps/node/desktop'))
@@ -69,7 +66,6 @@ class MCPTests(unittest.TestCase):
                 port = unused_port()
                 api.request(op='configure_access', settings={'registry_port': port})
                 api.request(op='enable')
-                secret_headers = headers(config)
                 request_id = 0
 
                 def rpc(method, params=None):
@@ -78,7 +74,7 @@ class MCPTests(unittest.TestCase):
                     connection = http.client.HTTPConnection('127.0.0.1', port, timeout=35)
                     fields = {'Host': f'wispnet.localhost:{port}',
                               'Content-Type': 'application/json',
-                              'Accept': 'application/json, text/event-stream', **secret_headers}
+                              'Accept': 'application/json, text/event-stream'}
                     connection.request('POST', '/mcp', body=json.dumps({
                         'jsonrpc': '2.0', 'id': request_id,
                         'method': method, 'params': params or {}}), headers=fields)
@@ -184,7 +180,7 @@ class MCPTests(unittest.TestCase):
                 process.terminate()
                 process.wait(timeout=10)
 
-    def test_authenticated_owner_changes_revision_conflicts_and_listener_lifecycle(self):
+    def test_local_owner_changes_revision_conflicts_and_listener_lifecycle(self):
         with tempfile.TemporaryDirectory(prefix='wispnet-mcp-') as temporary:
             root = Path(temporary)
             config = root / 'host.toml'
@@ -203,15 +199,12 @@ class MCPTests(unittest.TestCase):
                 port = unused_port()
                 api.request(op='configure_access', settings={'registry_port': port})
                 api.request(op='enable')
-                secret_headers = headers(config)
-                original_token = (state / 'mcp-token').read_bytes()
+                self.assertFalse((state / 'mcp-token').exists())
                 request_id = 0
 
-                def request(method='POST', path='/mcp', message=None, extra=None, authenticated=True, authority=None):
+                def request(method='POST', path='/mcp', message=None, extra=None, authority=None):
                     connection = http.client.HTTPConnection('127.0.0.1', port, timeout=35)
                     fields = {'Host': authority or f'wispnet.localhost:{port}', 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream'}
-                    if authenticated:
-                        fields.update(secret_headers)
                     fields.update(extra or {})
                     connection.request(method, path, body=json.dumps(message) if message else None, headers=fields)
                     reply = connection.getresponse()
@@ -231,8 +224,11 @@ class MCPTests(unittest.TestCase):
                     return rpc('tools/call', {'name': name, 'arguments': args})
 
                 initialize = {'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-11-25', 'clientInfo': {'name': 'integration', 'version': '1'}, 'capabilities': {}}}
-                self.assertEqual(request(message=initialize, authenticated=False)[0], 401)
+                self.assertEqual(request(message=initialize)[0], 200)
+                self.assertEqual(request(message=initialize, extra={'Authorization': 'Bearer legacy-client-value'})[0], 200)
                 self.assertEqual(request(message=initialize, extra={'Origin': 'https://evil.example'})[0], 403)
+                self.assertEqual(request(message=initialize, extra={'Sec-Fetch-Site': 'cross-site'})[0], 403)
+                self.assertEqual(request(message=initialize, authority='evil.example')[0], 421)
                 self.assertEqual(request(message=initialize)[1]['result']['protocolVersion'], '2025-11-25')
                 self.assertIn('wispnet_set_service', [t['name'] for t in rpc('tools/list')['tools']])
                 before = call('wispnet_status')['structuredContent']['host']
@@ -246,10 +242,10 @@ class MCPTests(unittest.TestCase):
                 self.assertEqual(after['host'], before['host'])
                 self.assertEqual(after['clients'], before['clients'])
                 self.assertEqual(next(s['allow'] for s in after['services'] if s['id'] == 'mcp-fixture'), [])
-                self.assertEqual(request(method='GET', path='/registry', authenticated=False)[0], 200)
-                self.assertEqual(request(method='GET', path='/registry/v1/services', authenticated=False)[0], 200)
-                self.assertEqual(request(method='GET', path='/v1/services', authenticated=False, authority=f'registry.wispnet.localhost:{port}')[0], 200)
-                self.assertEqual(request(method='GET', path='/registry', authenticated=False, authority='evil.example')[0], 421)
+                self.assertEqual(request(method='GET', path='/registry')[0], 200)
+                self.assertEqual(request(method='GET', path='/registry/v1/services')[0], 200)
+                self.assertEqual(request(method='GET', path='/v1/services', authority=f'registry.wispnet.localhost:{port}')[0], 200)
+                self.assertEqual(request(method='GET', path='/registry', authority='evil.example')[0], 421)
                 self.assertFalse(call('wispnet_remove_service', expected_revision=after['revision'], id='mcp-fixture')['isError'])
                 changed = unused_port()
                 self.assertFalse(call('wispnet_set_port', port=changed)['isError'])
@@ -260,12 +256,13 @@ class MCPTests(unittest.TestCase):
                 self.assertFalse(call('wispnet_set_access', enabled=False)['isError'])
                 with self.assertRaises(OSError):
                     socket.create_connection(('127.0.0.1', port), timeout=1)
+                # An unused legacy credential must not prevent local MCP startup.
+                legacy_token = state / 'mcp-token'
+                legacy_token.write_text('unused legacy credential')
+                legacy_token.chmod(0o644)
                 api.request(op='enable')
-                self.assertEqual((state / 'mcp-token').read_bytes(), original_token)
                 self.assertEqual(call('wispnet_status')['structuredContent']['host']['host'], before['host'])
-                (state / 'mcp-token').chmod(0o644)
-                with self.assertRaises(ValueError):
-                    headers(config)
+                self.assertEqual(legacy_token.read_text(), 'unused legacy credential')
             finally:
                 process.terminate()
                 process.wait(timeout=10)
