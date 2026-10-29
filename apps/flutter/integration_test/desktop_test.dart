@@ -26,6 +26,16 @@ void main() {
         true,
         reason: 'Run with the existing node online',
       );
+      final local = (before['hosts'] as Map)[before['peer']] as Map;
+      final services = (local['catalog']['services'] as List)
+          .where((s) => s['kind'] == 'http')
+          .toList();
+      expect(
+        services,
+        isNotEmpty,
+        reason: 'A running HTTP service is required for live handoff',
+      );
+      final httpServiceId = services.first['id'] as String;
       final key = GlobalKey();
       Future<void> waitFor(Finder finder) async {
         for (var n = 0; n < 150 && finder.evaluate().isEmpty; n++) {
@@ -182,18 +192,19 @@ void main() {
         await tester.pump(const Duration(milliseconds: 500));
         await tester.tap(find.byTooltip('Close'));
         await tester.pump(const Duration(milliseconds: 500));
-        await tester.tap(
-          find
-              .descendant(
-                of: find.byKey(const ValueKey('local-sector')),
-                matching: find.byWidgetPredicate(
-                  (widget) =>
-                      widget is IconButton &&
-                      (widget.tooltip?.startsWith('Settings for ') ?? false),
-                ),
-              )
-              .first,
+        final serviceSettings = find.descendant(
+          of: find.byKey(const ValueKey('local-sector')),
+          matching: find.byWidgetPredicate(
+            (widget) =>
+                widget is IconButton &&
+                (widget.tooltip?.startsWith(
+                      'Settings for $httpServiceId on ',
+                    ) ??
+                    false),
+          ),
         );
+        await tester.ensureVisible(serviceSettings);
+        await tester.tap(serviceSettings);
         await waitFor(find.text('Remove service'));
         expect(find.text('Add a new service'), findsNothing);
         await capture('local-service-controls');
@@ -287,16 +298,14 @@ void main() {
           await tester.pump(const Duration(milliseconds: 100));
         }
         await tester.tap(find.byTooltip('Settings'));
-        await waitFor(find.widgetWithText(TextField, 'Registry port'));
+        await waitFor(find.widgetWithText(TextField, 'Wispnet port'));
         expect(find.text('Device and browser settings'), findsNothing);
         expect(find.byTooltip('Close'), findsOneWidget);
         await capture('settings');
         await tester.pump(const Duration(seconds: 1));
         expect(
           tester
-              .widget<TextField>(
-                find.widgetWithText(TextField, 'Registry port'),
-              )
+              .widget<TextField>(find.widgetWithText(TextField, 'Wispnet port'))
               .controller!
               .text,
           isNotEmpty,
@@ -309,7 +318,8 @@ void main() {
             () => Future<void>.delayed(const Duration(milliseconds: 100)),
           );
         }
-        expect(backend.launched, endsWith('/v1/services'));
+        expect(backend.launched, endsWith('/registry'));
+        expect(Uri.parse(backend.launched!).host, 'wispnet.localhost');
         await tester.runAsync(() async {
           final client = HttpClient();
           try {
@@ -373,26 +383,15 @@ void main() {
           tester.widget<OnlineButton>(find.byType(OnlineButton)).onPressed,
           isNotNull,
         );
-        final local = (before['hosts'] as Map)[before['peer']] as Map;
-        final services = (local['catalog']['services'] as List)
-            .where((s) => s['kind'] == 'http')
-            .toList();
-        expect(
-          services,
-          isNotEmpty,
-          reason: 'A running HTTP service is required for live handoff',
-        );
         tester.binding.handleAppLifecycleStateChanged(
           AppLifecycleState.resumed,
         );
-        await tester.tap(
-          find
-              .textContaining(
-                services.first['id'] as String,
-                findRichText: true,
-              )
-              .first,
+        final localService = find.descendant(
+          of: find.byKey(const ValueKey('local-sector')),
+          matching: find.text(httpServiceId),
         );
+        await tester.ensureVisible(localService);
+        await tester.tap(localService);
         for (var i = 0; i < 100 && backend.launched == null; i++) {
           await tester.pump(const Duration(milliseconds: 100));
           await tester.runAsync(
@@ -404,7 +403,11 @@ void main() {
           final client = HttpClient();
           try {
             final uri = Uri.parse(backend.launched!);
-            final request = await client.getUrl(uri.replace(host: '127.0.0.1'));
+            final request = await client.getUrl(
+              uri.host.endsWith('.localhost')
+                  ? uri.replace(host: '127.0.0.1')
+                  : uri,
+            );
             request.headers.set(HttpHeaders.hostHeader, uri.authority);
             final response = await request.close();
             expect(response.statusCode, lessThan(500));

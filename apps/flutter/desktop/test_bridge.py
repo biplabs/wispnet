@@ -325,6 +325,38 @@ class BridgeTests(unittest.TestCase):
         for url in ['https://web.localhost:18000/', 'http://web.localhost:18000/?token=x', 'http://evil.test/', 'http://web.localhost:18000/path', 'http://user@web.localhost:18000/']:
             with self.assertRaises(ValueError): module.browser_url(url)
 
+    def test_generic_browser_handoff_accepts_public_https_roots_and_existing_local_urls(self):
+        for platform, opener in [('linux', 'xdg-open'), ('darwin', '/usr/bin/open')]:
+            for url in ['https://web.wispnet.test/', 'https://web.wispnet.test:443/',
+                        'http://web.localhost:18000/', 'http://wispnet.localhost:18400/registry']:
+                with self.subTest(platform=platform, url=url), \
+                     patch.object(module.sys, 'platform', platform), \
+                     patch.object(module.subprocess, 'run') as launch:
+                    self.assertEqual(self.bridge.dispatch('launch', dict(url=url)), {})
+                    launch.assert_called_once_with([opener, url], check=True, timeout=15,
+                                                  stdout=module.subprocess.DEVNULL,
+                                                  stderr=module.subprocess.DEVNULL)
+                    self.assertNotIn('shell', launch.call_args.kwargs)
+
+    def test_generic_browser_handoff_rejects_unsafe_urls_without_launching(self):
+        invalid = [None, 123, 'http://web.wispnet.test/', 'https://user@web.wispnet.test/',
+                   'https://user:password@web.wispnet.test/', 'https://@web.wispnet.test/',
+                   'https://web.wispnet.test/?token=x', 'https://web.wispnet.test/?',
+                   'https://web.wispnet.test/#fragment', 'https://web.wispnet.test/#',
+                   'https://web.wispnet.test:8443/', 'https://web.wispnet.test:bad/',
+                   'https://web.wispnet.test:/', 'https://web.wispnet.test',
+                   'https://web.wispnet.test/path', 'https:///missing-host/',
+                   'https://[broken/', 'https://bad..wispnet.test/',
+                   'https://bad%20host.wispnet.test/', 'https://web.wispnet.test\\evil/',
+                   'https://web.wispnet.test/\n', 'https://web.wispnet.test/\t',
+                   'https://web.wispnet.test/\x7f', 'javascript:alert(1)',
+                   'http://web.localhost:18000/path', 'http://web.localhost:18000/?token=x']
+        with patch.object(module.subprocess, 'run') as launch:
+            for url in invalid:
+                with self.subTest(url=url), self.assertRaises(ValueError):
+                    self.bridge.dispatch('launch', dict(url=url))
+            launch.assert_not_called()
+
     def test_explicit_owner_revision_and_no_arbitrary_helper_commands(self):
         operation = dict(op='revoke', peer=PEER, expected_revision=4)
         self.bridge.dispatch('desktopRequest', dict(payload=dict(op='mutate', operation=operation)))

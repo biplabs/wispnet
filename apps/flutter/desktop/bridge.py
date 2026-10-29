@@ -58,6 +58,25 @@ def browser_url(url):
     return url
 
 
+def public_browser_url(url):
+    if (not isinstance(url, str) or len(url) > 2048
+        or any(ord(c) < 33 or 127 <= ord(c) <= 159 for c in url)):
+        raise ValueError('Invalid public browser handoff')
+    try:
+        parsed = urlsplit(url)
+        host, port = parsed.hostname, parsed.port
+    except ValueError:
+        raise ValueError('Invalid public browser handoff') from None
+    if (parsed.scheme != 'https' or not host or len(host) > 253
+        or not all(re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label, re.I)
+                   for label in host.split('.'))
+        or port not in (None, 443) or parsed.netloc.endswith(':')
+        or parsed.path != '/' or '?' in url or '#' in url
+        or parsed.username is not None or parsed.password is not None):
+        raise ValueError('Invalid public browser handoff')
+    return url
+
+
 def readable_device_id(value):
     if re.fullmatch(r'[a-z0-9][a-z0-9._-]{0,63}', value):
         return value
@@ -381,17 +400,17 @@ class Bridge:
                                 if p['service'] == args['service'] and p.get('enabled') is True), None)
             if not publication or not isinstance(publication.get('url'), str):
                 raise ValueError('Public URL unavailable')
-            url = publication['url']
-            parsed = urlsplit(url)
-            if (parsed.scheme != 'https' or not parsed.hostname or parsed.port not in (None, 443)
-                or parsed.path != '/' or parsed.query or parsed.fragment or parsed.username or parsed.password
-                or any(ord(c) < 33 for c in url)):
-                raise ValueError('Invalid public browser handoff')
+            url = public_browser_url(publication['url'])
             subprocess.run(['/usr/bin/open' if sys.platform == 'darwin' else 'xdg-open', url],
                            check=True, timeout=15, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return {'url': url}
         if method == 'launch':
-            url = browser_url(args['url'])
+            if not isinstance(args['url'], str):
+                raise ValueError('Invalid browser handoff')
+            try:
+                url = browser_url(args['url'])
+            except ValueError:
+                url = public_browser_url(args['url'])
             subprocess.run(['/usr/bin/open' if sys.platform == 'darwin' else 'xdg-open', url],
                            check=True, timeout=15, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return {}
