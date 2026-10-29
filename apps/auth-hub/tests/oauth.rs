@@ -229,6 +229,33 @@ impl Fixture {
         assert_eq!(response.status(), StatusCode::OK);
         value(response).await
     }
+    async fn refresh(&self, client: &str, refresh: &str) -> Response {
+        self.form(
+            "/api/auth/oauth2/token",
+            &[
+                ("grant_type", "refresh_token"),
+                ("client_id", client),
+                ("refresh_token", refresh),
+                ("resource", RESOURCE),
+            ],
+        )
+        .await
+    }
+    fn refresh_expiry(&self, refresh: &str) -> i64 {
+        self.hub
+            .db
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT expires FROM oauth_refresh_tokens WHERE token_hash=?",
+                [digest(refresh)],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+    fn restart(&mut self) {
+        self.hub = Hub::open(self.hub.config.clone()).unwrap();
+    }
     fn allowed(&self, access: &str, resource: &str) -> bool {
         let db = self.hub.db.lock().unwrap();
         let service = db::resource(&db, resource).unwrap().unwrap();
@@ -372,6 +399,326 @@ async fn opaque_oauth_flow_binds_resource_and_rotates_refresh_with_replay_revoca
             assert!(!hash.contains(access));
             assert!(!hash.contains(refresh));
         }
+    }
+}
+
+#[tokio::test]
+async fn refresh_grants_outlive_thirty_days_while_access_tokens_stay_short_lived() {
+    let f = Fixture::new();
+    let client = f.register().await;
+    let before = now();
+    let first = f.flow(&client, &f.owner).await;
+    assert_eq!(first["expires_in"], 300);
+    let access = first["access_token"].as_str().unwrap();
+    let refresh = first["refresh_token"].as_str().unwrap();
+    let access_expiry: i64 = f
+        .hub
+        .db
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT expires FROM oauth_access_tokens WHERE token_hash=?",
+            [digest(access)],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!((before + 300..=now() + 300).contains(&access_expiry));
+    assert!(f.refresh_expiry(refresh) > now() + 31 * 24 * 3600);
+    assert_eq!(f.refresh_expiry(refresh), i64::MAX);
+
+    // Access expiry must not force browser authorization while the independent
+    // offline grant is still current. No wall-clock sleeps are needed.
+    f.hub
+        .db
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE oauth_access_tokens SET expires=? WHERE token_hash=?",
+            params![now() - 1, digest(access)],
+        )
+        .unwrap();
+    assert!(!f.allowed(access, RESOURCE));
+    let rotated = f.refresh(&client, refresh).await;
+    assert_eq!(rotated.status(), StatusCode::OK);
+    let rotated = value(rotated).await;
+    assert_ne!(rotated["refresh_token"], first["refresh_token"]);
+    assert_eq!(
+        f.refresh_expiry(rotated["refresh_token"].as_str().unwrap()),
+        i64::MAX
+    );
+    assert!(f.allowed(rotated["access_token"].as_str().unwrap(), RESOURCE));
+}
+
+#[tokio::test]
+async fn legacy_live_families_upgrade_and_keep_spent_refresh_replay_evidence() {
+    let mut f = Fixture::new();
+    let client = f.register().await;
+    let first = f.flow(&client, &f.owner).await;
+    let first_refresh = first["refresh_token"].as_str().unwrap();
+    let rotated = f.refresh(&client, first_refresh).await;
+    assert_eq!(rotated.status(), StatusCode::OK);
+    let rotated = value(rotated).await;
+    let expired_ancestor = rotated["refresh_token"].as_str().unwrap();
+    let third = f.refresh(&client, expired_ancestor).await;
+    assert_eq!(third.status(), StatusCode::OK);
+    let third = value(third).await;
+    let revoked_ancestor = third["refresh_token"].as_str().unwrap();
+    let current = f.refresh(&client, revoked_ancestor).await;
+    assert_eq!(current.status(), StatusCode::OK);
+    let current = value(current).await;
+    let current_refresh = current["refresh_token"].as_str().unwrap();
+    let legacy_deadline = now() + 30 * 24 * 3600;
+    {
+        let db = f.hub.db.lock().unwrap();
+        db.execute(
+            "UPDATE oauth_refresh_tokens SET expires=?",
+            [legacy_deadline],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE oauth_refresh_tokens SET expires=? WHERE token_hash=?",
+            params![now() - 1, digest(expired_ancestor)],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE oauth_refresh_tokens SET revoked=1 WHERE token_hash=?",
+            [digest(revoked_ancestor)],
+        )
+        .unwrap();
+    }
+
+    f.restart();
+    // Inspect both the current credential and its spent ancestor. Their stored
+    // lifetime now extends beyond the old 30-day boundary, so later cleanup
+    // cannot erase the ancestor's replay evidence at that boundary.
+    assert_eq!(f.refresh_expiry(first_refresh), i64::MAX);
+    assert_eq!(f.refresh_expiry(current_refresh), i64::MAX);
+    assert!(f.refresh_expiry(first_refresh) > legacy_deadline);
+    assert!(f.refresh_expiry(expired_ancestor) < now());
+    assert_eq!(f.refresh_expiry(revoked_ancestor), legacy_deadline);
+    let used: i64 = f
+        .hub
+        .db
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT used FROM oauth_refresh_tokens WHERE token_hash=?",
+            [digest(first_refresh)],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(used, 1);
+    let current = f.refresh(&client, current_refresh).await;
+    assert_eq!(current.status(), StatusCode::OK);
+    let current = value(current).await;
+    let current_access = current["access_token"].as_str().unwrap();
+    assert_eq!(
+        f.refresh_expiry(current["refresh_token"].as_str().unwrap()),
+        i64::MAX
+    );
+    assert_eq!(f.refresh_expiry(first_refresh), i64::MAX);
+    assert!(f.allowed(current_access, RESOURCE));
+    assert_eq!(
+        f.refresh(&client, first_refresh).await.status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert!(!f.allowed(current_access, RESOURCE));
+    assert_eq!(
+        f.refresh(&client, current["refresh_token"].as_str().unwrap())
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn legacy_refresh_upgrade_never_revives_expired_revoked_or_stale_credentials() {
+    for invalidation in [
+        "expired",
+        "revoked",
+        "spent_without_successor",
+        "grant_generation",
+        "service_generation",
+        "connection_generation",
+        "unlinked_host",
+        "disabled_service",
+        "bearer_only_service",
+    ] {
+        let mut f = Fixture::new();
+        {
+            let mut db = f.hub.db.lock().unwrap();
+            let service = db::resource(&db, RESOURCE).unwrap().unwrap();
+            db::set_grant(&mut db, &service, "alice", true).unwrap();
+        }
+        let client = f.register().await;
+        let flow = f.flow(&client, &f.alice).await;
+        let refresh = flow["refresh_token"].as_str().unwrap();
+        let legacy_deadline = now() + 30 * 24 * 3600;
+        {
+            let mut db = f.hub.db.lock().unwrap();
+            db.execute(
+                "UPDATE oauth_refresh_tokens SET expires=?",
+                [legacy_deadline],
+            )
+            .unwrap();
+            match invalidation {
+                "expired" => {
+                    db.execute("UPDATE oauth_refresh_tokens SET expires=?", [now() - 1])
+                        .unwrap();
+                }
+                "revoked" => {
+                    db.execute("UPDATE oauth_refresh_tokens SET revoked=1", [])
+                        .unwrap();
+                }
+                "spent_without_successor" => {
+                    db.execute("UPDATE oauth_refresh_tokens SET used=1", [])
+                        .unwrap();
+                }
+                "grant_generation" => {
+                    let service = db::resource(&db, RESOURCE).unwrap().unwrap();
+                    db::set_grant(&mut db, &service, "alice", false).unwrap();
+                    db::set_grant(&mut db, &service, "alice", true).unwrap();
+                }
+                "service_generation" => {
+                    db.execute("UPDATE command_services SET generation=generation+1", [])
+                        .unwrap();
+                }
+                "connection_generation" => {
+                    db.execute(
+                        "UPDATE command_oauth_connections SET generation=generation+1",
+                        [],
+                    )
+                    .unwrap();
+                }
+                "unlinked_host" => db::unlink(&mut db, "host").unwrap(),
+                "disabled_service" => {
+                    db.execute("UPDATE command_services SET enabled=0", [])
+                        .unwrap();
+                }
+                "bearer_only_service" => {
+                    db.execute("UPDATE command_services SET auth_mode='bearer'", [])
+                        .unwrap();
+                }
+                _ => unreachable!(),
+            }
+        }
+        f.restart();
+        let promoted: i64 = f
+            .hub
+            .db
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM oauth_refresh_tokens WHERE token_hash=? AND expires>?",
+                params![digest(refresh), legacy_deadline],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(promoted, 0, "migration revived {invalidation}");
+        assert_eq!(
+            f.refresh(&client, refresh).await.status(),
+            StatusCode::BAD_REQUEST,
+            "refresh succeeded after {invalidation}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn legacy_live_refresh_upgrade_is_independent_of_the_cimd_metadata_cache() {
+    let mut f = Fixture::new();
+    let client = "https://client.example/metadata.json";
+    let metadata = json!({"client_id":client,"client_name":"Evicted CIMD fixture","redirect_uris":[REDIRECT],"grant_types":["authorization_code","refresh_token"],"response_types":["code"],"token_endpoint_auth_method":"none","scope":"mcp:use offline_access","application_type":"native"});
+    f.hub
+        .db
+        .lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO oauth_clients(client_id,metadata,source,expires) VALUES(?,?,'cimd',?)",
+            params![client, metadata.to_string(), now() + 300],
+        )
+        .unwrap();
+    let flow = f.flow(client, &f.owner).await;
+    let refresh = flow["refresh_token"].as_str().unwrap();
+    {
+        let db = f.hub.db.lock().unwrap();
+        db.execute(
+            "UPDATE oauth_refresh_tokens SET expires=?",
+            [now() + 30 * 24 * 3600],
+        )
+        .unwrap();
+        db.execute("DELETE FROM oauth_clients WHERE client_id=?", [client])
+            .unwrap();
+    }
+    f.restart();
+    assert_eq!(f.refresh_expiry(refresh), i64::MAX);
+}
+
+#[tokio::test]
+async fn indefinite_refresh_still_obeys_explicit_revocation_and_generation_changes() {
+    for invalidation in [
+        "oauth_revocation",
+        "grant_generation",
+        "service_generation",
+        "connection_generation",
+        "host_unlink",
+    ] {
+        let f = Fixture::new();
+        {
+            let mut db = f.hub.db.lock().unwrap();
+            let service = db::resource(&db, RESOURCE).unwrap().unwrap();
+            db::set_grant(&mut db, &service, "alice", true).unwrap();
+        }
+        let client = f.register().await;
+        let flow = f.flow(&client, &f.alice).await;
+        let rotated = f
+            .refresh(&client, flow["refresh_token"].as_str().unwrap())
+            .await;
+        assert_eq!(rotated.status(), StatusCode::OK);
+        let rotated = value(rotated).await;
+        let access = rotated["access_token"].as_str().unwrap();
+        let refresh = rotated["refresh_token"].as_str().unwrap();
+        assert_eq!(f.refresh_expiry(refresh), i64::MAX);
+        assert!(f.allowed(access, RESOURCE));
+        if invalidation == "oauth_revocation" {
+            let revoked = f
+                .form(
+                    "/api/auth/oauth2/revoke",
+                    &[("client_id", &client), ("token", refresh)],
+                )
+                .await;
+            assert_eq!(revoked.status(), StatusCode::OK);
+        } else {
+            let mut db = f.hub.db.lock().unwrap();
+            match invalidation {
+                "grant_generation" => {
+                    let service = db::resource(&db, RESOURCE).unwrap().unwrap();
+                    db::set_grant(&mut db, &service, "alice", false).unwrap();
+                    db::set_grant(&mut db, &service, "alice", true).unwrap();
+                }
+                "service_generation" => {
+                    db.execute("UPDATE command_services SET generation=generation+1", [])
+                        .unwrap();
+                }
+                "connection_generation" => {
+                    db.execute(
+                        "UPDATE command_oauth_connections SET generation=generation+1",
+                        [],
+                    )
+                    .unwrap();
+                }
+                "host_unlink" => db::unlink(&mut db, "host").unwrap(),
+                _ => unreachable!(),
+            }
+        }
+        assert!(
+            !f.allowed(access, RESOURCE),
+            "access survived {invalidation}"
+        );
+        assert_eq!(
+            f.refresh(&client, refresh).await.status(),
+            StatusCode::BAD_REQUEST,
+            "refresh survived {invalidation}"
+        );
     }
 }
 

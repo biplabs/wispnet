@@ -37,6 +37,25 @@ OAuth supports public PKCE clients and CIMD clients using RS256
 without changing the opaque access-token design. DCR registers public clients;
 the supported token endpoints require an explicit body `client_id`.
 
+Access tokens expire after five minutes. With `offline_access`, clients receive
+rotating refresh credentials and can stay connected until access is revoked;
+there is no fixed OAuth reauthorization deadline. Clients must securely save
+the replacement refresh token after each exchange. Reusing a spent token
+revokes the connection's token family. Without `offline_access`, obtaining
+another access token requires authorization again.
+
+Disconnecting or revoking the client, revoking its service grant, unlinking the
+host, replacing the service or changing its authentication mode invalidates
+the affected credentials. Regranting access does not revive old credentials.
+A client that loses its stored refresh credentials must authorize again;
+expiration of a Command Center browser session alone does not require it.
+Existing unexpired families with a live grant and an unused refresh credential
+adopt the until-revoked lifetime on upgrade. Expired, revoked and stale
+credentials remain invalid. Named bearer API keys retain their separate
+configured expiration. Spent refresh hashes are retained while their family is
+live for replay detection; allow for that storage growth in backups. Revoked
+and stale records are removed in bounded cleanup batches.
+
 The host HTTP mediator checks public authorization every two seconds, with a
 two-second check deadline, and stops active streams if authorization cannot be
 renewed. Public access fails closed during a hub outage; private device access

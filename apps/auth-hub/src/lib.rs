@@ -34,6 +34,7 @@ pub struct Hub {
     pub http: reqwest::Client,
     limits: Mutex<HashMap<String, Vec<i64>>>,
     requests: tokio::sync::Semaphore,
+    pub(crate) refresh_cleanup_after: std::sync::atomic::AtomicI64,
 }
 #[derive(Debug)]
 pub struct Error {
@@ -134,6 +135,7 @@ impl Hub {
             http,
             limits: Mutex::new(HashMap::new()),
             requests: tokio::sync::Semaphore::new(128),
+            refresh_cleanup_after: std::sync::atomic::AtomicI64::new(0),
         }))
     }
     pub fn router(self: &Arc<Self>) -> Router {

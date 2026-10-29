@@ -164,11 +164,25 @@ redirect-free fetches.
 Service owners automatically have public access. Other users register with
 GitHub and share their account ID, which the owner grants in the dashboard.
 Access requires the current grant even after token issuance. OAuth access
-tokens last five minutes; refresh tokens rotate, and refresh issuance checks
-the grant again. Token records bind durable service/grant/connection generations.
+tokens last five minutes. Clients requesting `offline_access` receive rotating
+refresh credentials whose grant lasts until revoked, with no fixed 30-day
+reauthorization deadline. Clients must securely retain each replacement refresh
+token; replaying a spent token revokes that connection's token family. Refresh
+issuance checks the current grant again. Token records bind durable
+service/grant/connection generations.
 Disconnecting a client, standard OAuth revocation, unlinking a host, revoking a
 grant, replacing a service, and changing authentication mode invalidate the
 affected credentials. Regranting does not revive old keys or refresh tokens.
+Losing the client's saved refresh credentials requires a new authorization;
+expiration of a dashboard browser session alone does not. Without
+`offline_access`, the client must authorize again after its access token expires.
+
+On upgrade, unexpired refresh families with a current live grant and an unused
+credential adopt the same until-revoked lifetime, including their unexpired
+spent credentials needed for replay detection. Expired, revoked and stale
+credentials are never revived. Spent refresh hashes remain stored for the
+lifetime of a live family; operators should account for that growth in storage
+and backups. Revoked and stale records are removed in bounded cleanup batches.
 
 The dashboard can create named bearer keys scoped to one service. Complete keys
 appear only in the creation response and are stored as hashes. Revocation

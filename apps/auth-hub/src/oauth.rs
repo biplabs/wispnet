@@ -16,15 +16,96 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     net::{IpAddr, SocketAddr},
+    sync::atomic::{AtomicI64, Ordering},
     time::Duration,
 };
 use url::Url;
 
 const AUTH: &str = "/api/auth/oauth2/";
 const ACCESS_LIFETIME: i64 = 300;
-const REFRESH_LIFETIME: i64 = 30 * 24 * 3600;
+// Only refresh records use this sentinel. Access tokens, codes, client
+// assertions, sessions and metadata caches retain their finite lifetimes.
+const REFRESH_UNTIL_REVOKED: i64 = i64::MAX;
 const MAX_REGISTERED_CLIENTS: i64 = 10_000;
 type Fields = BTreeMap<String, String>;
+
+// `r` is a refresh record. Client metadata is deliberately absent: an expired
+// CIMD cache is not a revocation of a previously approved connection.
+const LIVE_REFRESH_STATE: &str = "EXISTS(
+    SELECT 1 FROM command_oauth_connections c
+    JOIN command_services s ON s.id=r.service_id
+    JOIN command_hosts h ON h.host=s.host
+    JOIN users u ON u.id=r.user_id
+    WHERE c.id=r.connection_id AND c.user_id=r.user_id
+      AND c.service_id=r.service_id AND c.client_id=r.client_id
+      AND c.active=1 AND c.generation=r.connection_generation
+      AND s.resource=r.resource AND s.generation=r.service_generation
+      AND s.enabled=1 AND s.auth_mode!='bearer'
+      AND h.revoked=0 AND h.owner_id=s.owner_id
+      AND ((s.owner_id=r.user_id AND r.grant_generation=0) OR
+        (s.owner_id!=r.user_id AND EXISTS(
+          SELECT 1 FROM command_grants g WHERE g.service_id=r.service_id
+          AND g.user_id=r.user_id AND g.active=1 AND g.generation=r.grant_generation)))
+)";
+
+fn extend_live_refresh_families(db: &Connection, family: Option<&str>) -> Result<()> {
+    // Upgrade the entire eligible family in one statement inside the caller's
+    // transaction, including spent ancestors needed for replay detection. A
+    // used-only, expired, revoked or stale family is never made spendable again.
+    let sql = format!(
+        "UPDATE oauth_refresh_tokens AS r SET expires=?1
+        WHERE r.expires>?2 AND r.expires<?1 AND r.revoked=0
+        AND (?3 IS NULL OR r.family_id=?3) AND {LIVE_REFRESH_STATE}
+        AND EXISTS(SELECT 1 FROM oauth_refresh_tokens current
+          WHERE current.family_id=r.family_id AND current.connection_id=r.connection_id
+          AND current.connection_generation=r.connection_generation
+          AND current.user_id=r.user_id AND current.client_id=r.client_id
+          AND current.service_id=r.service_id AND current.resource=r.resource
+          AND current.service_generation=r.service_generation
+          AND current.grant_generation=r.grant_generation
+          AND current.used=0 AND current.revoked=0 AND current.expires>?2)"
+    );
+    db.execute(&sql, params![REFRESH_UNTIL_REVOKED, now(), family])?;
+    Ok(())
+}
+
+fn cleanup_refresh_rows(db: &Connection, cursor: &AtomicI64) -> Result<()> {
+    // Indefinite spent hashes stay while their connection and grant are live.
+    // Once revoked or replaced, generation checks deny the whole family even
+    // after its credential rows have been removed.
+    // The expiry index skips perpetual history. At most another 2048 records
+    // are inspected for stale authority, with a rotating per-Hub keyset cursor.
+    db.execute("DELETE FROM oauth_refresh_tokens WHERE rowid IN (SELECT rowid FROM oauth_refresh_tokens WHERE expires<=? LIMIT 2048)",[now()])?;
+    let scan_end = |after: i64| -> Result<Option<i64>> {
+        let mut statement = db.prepare(
+            "SELECT rowid FROM oauth_refresh_tokens WHERE rowid>? ORDER BY rowid LIMIT 2048",
+        )?;
+        let mut rows = statement.query([after])?;
+        let mut last = None;
+        while let Some(row) = rows.next()? {
+            last = Some(row.get::<_, i64>(0)?);
+        }
+        Ok(last)
+    };
+    let mut after = cursor.load(Ordering::Relaxed);
+    let mut last = scan_end(after)?;
+    if last.is_none() && after != 0 {
+        after = 0;
+        last = scan_end(after)?;
+    }
+    let Some(last) = last else {
+        cursor.store(0, Ordering::Relaxed);
+        return Ok(());
+    };
+    let sql = format!(
+        "DELETE FROM oauth_refresh_tokens WHERE rowid IN (
+        SELECT r.rowid FROM oauth_refresh_tokens r WHERE r.rowid>?1 AND r.rowid<=?2
+        AND (r.expires<=?3 OR r.revoked!=0 OR NOT {LIVE_REFRESH_STATE}))"
+    );
+    db.execute(&sql, params![after, last, now()])?;
+    cursor.store(last, Ordering::Relaxed);
+    Ok(())
+}
 
 pub fn initialize(db: &Connection) -> Result<()> {
     if let Err(existing) = jsonwebtoken::crypto::rust_crypto::DEFAULT_PROVIDER.install_default()
@@ -78,8 +159,12 @@ pub fn initialize(db: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS oauth_code_client ON oauth_codes(client_id);
         CREATE INDEX IF NOT EXISTS oauth_access_client ON oauth_access_tokens(client_id);
         CREATE INDEX IF NOT EXISTS oauth_refresh_client ON oauth_refresh_tokens(client_id);
+        CREATE INDEX IF NOT EXISTS oauth_refresh_family_state ON oauth_refresh_tokens(family_id,connection_id,connection_generation,used,revoked,expires);
         CREATE INDEX IF NOT EXISTS oauth_assertion_expiry ON oauth_assertions(expires);",
     )?;
+    // db::open wraps initialization in BEGIN IMMEDIATE; the single promotion
+    // statement is atomic even when initialize is exercised independently.
+    extend_live_refresh_families(db, None)?;
     Ok(())
 }
 
@@ -150,18 +235,18 @@ async fn route(hub: Shared, request: Request<Body>) -> Result<Response> {
 fn cleanup(hub: &Shared) -> Result<()> {
     if hub.throttle("oauth:cleanup", 1).is_ok() {
         let db = hub.db.lock().unwrap();
-        // Delete only bounded batches of expired rows. Used refresh credentials
-        // remain replay evidence until their original family's expiry.
+        // Delete only bounded batches of expired rows. Refresh grants have
+        // their own cleanup rule because live replay history never expires.
         for table in [
             "oauth_pending",
             "oauth_codes",
             "oauth_access_tokens",
-            "oauth_refresh_tokens",
             "oauth_assertions",
             "oauth_jwks",
         ] {
             db.execute(&format!("DELETE FROM {table} WHERE rowid IN (SELECT rowid FROM {table} WHERE expires<=? LIMIT 2048)"), [now()])?;
         }
+        cleanup_refresh_rows(&db, &hub.refresh_cleanup_after)?;
         // Bound anonymous abandoned registrations while retaining clients that
         // have a live grant or are in the middle of an authorization flow.
         db.execute("DELETE FROM oauth_clients WHERE client_id IN (
@@ -1136,7 +1221,7 @@ async fn exchange(hub: Shared, request: Request<Body>) -> Result<Response> {
                 "UPDATE oauth_codes SET consumed=1 WHERE token_hash=?",
                 [digest(code)],
             )?;
-            issue(&tx, &value, now() + REFRESH_LIFETIME)?
+            issue(&tx, &value)?
         }
         "refresh_token" => {
             if !client.grant_types.iter().any(|g| g == "refresh_token") {
@@ -1171,11 +1256,14 @@ async fn exchange(hub: Shared, request: Request<Body>) -> Result<Response> {
             if !live(&tx, &value, &service)? {
                 return Err(Error::oauth(400, "invalid_grant"));
             }
+            if value.expires != REFRESH_UNTIL_REVOKED {
+                extend_live_refresh_families(&tx, Some(&value.family))?;
+            }
             tx.execute(
                 "UPDATE oauth_refresh_tokens SET used=1 WHERE token_hash=?",
                 [digest(raw)],
             )?;
-            issue(&tx, &value, value.expires)?
+            issue(&tx, &value)?
         }
         _ => return Err(Error::oauth(400, "unsupported_grant_type")),
     };
@@ -1183,13 +1271,13 @@ async fn exchange(hub: Shared, request: Request<Body>) -> Result<Response> {
     Ok(json(response))
 }
 
-fn issue(db: &Connection, value: &Credential, refresh_expiry: i64) -> Result<Value> {
+fn issue(db: &Connection, value: &Credential) -> Result<Value> {
     let access = token("woa_");
     db.execute("INSERT INTO oauth_access_tokens(token_hash,user_id,client_id,resource,scope,expires,service_id,service_generation,grant_generation,connection_id,connection_generation,family_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",params![digest(&access),value.user,value.client,value.resource,value.scope,now()+ACCESS_LIFETIME,value.service,value.service_generation,value.grant_generation,value.connection,value.connection_generation,value.family])?;
     let mut response = json!({"access_token":access,"token_type":"Bearer","expires_in":ACCESS_LIFETIME,"scope":value.scope});
     if value.scope.split(' ').any(|s| s == "offline_access") {
         let refresh = token("wor_");
-        db.execute("INSERT INTO oauth_refresh_tokens(token_hash,user_id,client_id,resource,scope,expires,service_id,service_generation,grant_generation,connection_id,connection_generation,family_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",params![digest(&refresh),value.user,value.client,value.resource,value.scope,refresh_expiry,value.service,value.service_generation,value.grant_generation,value.connection,value.connection_generation,value.family])?;
+        db.execute("INSERT INTO oauth_refresh_tokens(token_hash,user_id,client_id,resource,scope,expires,service_id,service_generation,grant_generation,connection_id,connection_generation,family_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",params![digest(&refresh),value.user,value.client,value.resource,value.scope,REFRESH_UNTIL_REVOKED,value.service,value.service_generation,value.grant_generation,value.connection,value.connection_generation,value.family])?;
         response["refresh_token"] = json!(refresh);
     }
     Ok(response)
@@ -1391,7 +1479,7 @@ mod unit {
     }
 
     #[test]
-    fn cleanup_is_bounded_and_preserves_unexpired_refresh_replay_evidence() {
+    fn cleanup_is_bounded_and_preserves_live_indefinite_refresh_replay_evidence() {
         let state = tempfile::tempdir().unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -1410,7 +1498,15 @@ mod unit {
                 db.execute("INSERT INTO oauth_pending(id,user_id,session_hash,request,expires) VALUES(?,'user','hash','{}',?)",params![format!("expired-{i}"),now()-1]).unwrap();
             }
             db.execute("INSERT INTO oauth_pending(id,user_id,session_hash,request,expires) VALUES('valid','user','hash','{}',?)",[now()+100]).unwrap();
-            db.execute("INSERT INTO oauth_refresh_tokens(token_hash,user_id,client_id,resource,scope,expires,service_id,service_generation,grant_generation,connection_id,connection_generation,family_id,used) VALUES('replay','user','client','resource','mcp:use',?,'service',1,0,'connection',1,'family',1)",[now()+100]).unwrap();
+            db.execute("INSERT INTO users(id,github_id,name,email) VALUES('user','github','User','user@example.test')",[]).unwrap();
+            db.execute(
+                "INSERT INTO command_hosts(host,owner_id,name) VALUES('host','user','Host')",
+                [],
+            )
+            .unwrap();
+            db.execute("INSERT INTO command_services(id,host,owner_id,service,incarnation,name,resource) VALUES('service','host','user','service','incarnation','Host','resource')",[]).unwrap();
+            db.execute("INSERT INTO command_oauth_connections(id,user_id,service_id,client_id) VALUES('connection','user','service','client')",[]).unwrap();
+            db.execute("INSERT INTO oauth_refresh_tokens(token_hash,user_id,client_id,resource,scope,expires,service_id,service_generation,grant_generation,connection_id,connection_generation,family_id,used) VALUES('replay','user','client','resource','mcp:use offline_access',?,'service',1,0,'connection',1,'family',1)",[REFRESH_UNTIL_REVOKED]).unwrap();
         }
         cleanup(&hub).unwrap();
         cleanup(&hub).unwrap();
@@ -1429,6 +1525,57 @@ mod unit {
             )
             .unwrap(),
             1
+        );
+        db.execute("UPDATE command_oauth_connections SET active=0,generation=generation+1 WHERE id='connection'",[]).unwrap();
+        cleanup_refresh_rows(&db, &hub.refresh_cleanup_after).unwrap();
+        assert_eq!(
+            db.query_row(
+                "SELECT COUNT(*) FROM oauth_refresh_tokens WHERE token_hash='replay'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+        db.execute(
+            "UPDATE command_oauth_connections SET active=1 WHERE id='connection'",
+            [],
+        )
+        .unwrap();
+        db.execute("WITH RECURSIVE numbers(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM numbers WHERE x<2050)
+          INSERT INTO oauth_refresh_tokens(token_hash,user_id,client_id,resource,scope,expires,service_id,service_generation,grant_generation,connection_id,connection_generation,family_id,used)
+          SELECT 'history-'||x,'user','client','resource','mcp:use offline_access',?,'service',1,0,'connection',2,'family',1 FROM numbers",[REFRESH_UNTIL_REVOKED]).unwrap();
+        db.execute(
+            "UPDATE oauth_refresh_tokens SET revoked=1 WHERE token_hash='history-2050'",
+            [],
+        )
+        .unwrap();
+        hub.refresh_cleanup_after.store(0, Ordering::Relaxed);
+        cleanup_refresh_rows(&db, &hub.refresh_cleanup_after).unwrap();
+        assert_eq!(
+            db.query_row(
+                "SELECT COUNT(*) FROM oauth_refresh_tokens WHERE revoked=1",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1,
+            "the first bounded scan must not inspect the far tail"
+        );
+        cleanup_refresh_rows(&db, &hub.refresh_cleanup_after).unwrap();
+        assert_eq!(
+            db.query_row("SELECT COUNT(*) FROM oauth_refresh_tokens", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            2049
+        );
+        cleanup_refresh_rows(&db, &hub.refresh_cleanup_after).unwrap();
+        assert_eq!(
+            db.query_row("SELECT COUNT(*) FROM oauth_refresh_tokens", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            2049,
+            "wrapping the scan must preserve live replay history"
         );
     }
 
