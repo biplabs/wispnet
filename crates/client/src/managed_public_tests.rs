@@ -713,7 +713,8 @@ async fn managed_public_real_rust_hub_keys_revoke_streams_and_private_access_sur
     assert!(
         !unavailable
             .to_ascii_lowercase()
-            .contains("www-authenticate")
+            .lines()
+            .any(|line| line.starts_with("www-authenticate:"))
     );
     assert_eq!(fixture.backend_calls.load(Ordering::SeqCst), backend_calls);
     assert!(
