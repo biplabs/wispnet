@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 import '../backend.dart';
 import '../theme.dart';
 
-/// The optional desktop account/publishing feature has one settings entry point.
+part 'account_button.dart';
+
+/// Optional desktop account/publishing controls share one removable module.
 /// Private discovery, pairing and device grants never depend on this module.
 const commandCenterEnabled = bool.fromEnvironment(
   'WISPNET_COMMAND_CENTER',
@@ -75,6 +77,9 @@ class _CommandCenterPanelState extends State<_CommandCenterPanel> {
   bool busy = false;
   bool refreshing = false;
   Timer? timer;
+  Timer? pendingDeadline;
+  bool pendingStopped = false;
+  String? pendingProblem;
 
   bool get linked => status?['linked'] == true;
   Map<String, dynamic>? get publication =>
@@ -100,38 +105,103 @@ class _CommandCenterPanelState extends State<_CommandCenterPanel> {
   void initState() {
     super.initState();
     unawaited(refresh());
-    timer = Timer.periodic(const Duration(seconds: 3), (_) {
-      if (!busy) unawaited(refresh(poll: pending != null));
+    timer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (!busy) {
+        unawaited(refresh(poll: pending != null && !pendingStopped));
+      }
     });
   }
 
   @override
   void dispose() {
     timer?.cancel();
+    pendingDeadline?.cancel();
     super.dispose();
   }
 
   Future<Map<String, dynamic>> request(Map<String, dynamic> payload) =>
       widget.backend.invoke('desktopRequest', {'payload': payload});
 
+  Future<Map<String, dynamic>> readStatus() async {
+    final next = await request({'op': 'command_center_status'});
+    if (next['enabled'] != true || next['linked'] is! bool) {
+      throw const FormatException('Public account controls are unavailable.');
+    }
+    return next;
+  }
+
+  bool samePending(Map<String, dynamic>? first, Map<String, dynamic>? second) =>
+      first != null &&
+      second != null &&
+      first['user_code'] is String &&
+      first['verification_url'] is String &&
+      first['user_code'] == second['user_code'] &&
+      first['verification_url'] == second['verification_url'];
+
+  void startPending(Map<String, dynamic> next) {
+    pending = next;
+    pendingStopped = false;
+    pendingProblem = null;
+    pendingDeadline?.cancel();
+    pendingDeadline = Timer(const Duration(minutes: 10), () {
+      if (!mounted || linked) return;
+      setState(() {
+        pendingStopped = true;
+        pendingProblem =
+            'Sign-in timed out. Start a new GitHub sign-in to continue.';
+        error = pendingProblem;
+      });
+    });
+  }
+
   Future<void> refresh({bool poll = false}) async {
     if (refreshing) return;
     refreshing = true;
     try {
-      if (poll) await request({'op': 'command_center_poll'});
-      final next = await request({'op': 'command_center_status'});
+      var next = await readStatus();
+      String? pollFailure;
+      if (poll && !pendingStopped && next['linked'] != true) {
+        final current = (next['pending'] as Map?)?.cast<String, dynamic>();
+        if (samePending(pending, current)) {
+          try {
+            await request({
+              'op': 'command_center_poll',
+              'expected_user_code': pending!['user_code'],
+              'expected_verification_url': pending!['verification_url'],
+            });
+          } catch (_) {
+            pollFailure = 'Could not check browser approval. Retry or start a new GitHub sign-in.';
+          }
+          // Another desktop or CLI poll may already have consumed the result.
+          next = await readStatus();
+        }
+      }
       if (mounted) {
         setState(() {
           status = next;
-          pending = (next['pending'] as Map?)?.cast<String, dynamic>();
-          error = null;
+          final current = (next['pending'] as Map?)?.cast<String, dynamic>();
+          if (next['linked'] == true) {
+            pendingDeadline?.cancel();
+            pending = null;
+            pendingStopped = false;
+            pendingProblem = null;
+            error = null;
+          } else {
+            if (pending == null && current != null) {
+              startPending(current);
+            } else if (pending != null && !samePending(pending, current)) {
+              pendingDeadline?.cancel();
+              pendingStopped = true;
+              pendingProblem = 'Another sign-in was started on this computer. Start a new GitHub sign-in here to continue.';
+            }
+            error = pendingProblem ?? pollFailure;
+          }
         });
       }
     } catch (_) {
       if (mounted) {
         setState(
-          () => error =
-              'Command Center is unavailable. Private access still works.',
+          () => error = 'Public account controls are unavailable. Start or update Wispnet on this computer, then retry. Private access does not require sign-in.',
         );
       }
     } finally {
@@ -147,6 +217,7 @@ class _CommandCenterPanelState extends State<_CommandCenterPanel> {
     });
     try {
       await action();
+      if (!mounted) return;
       widget.onChanged();
       await refresh();
     } catch (e) {
@@ -164,9 +235,39 @@ class _CommandCenterPanelState extends State<_CommandCenterPanel> {
 
   Future<void> connect() async {
     final result = await request({'op': 'command_center_link'});
-    if (mounted) setState(() => pending = result);
+    if (!mounted) return;
+    if (result['user_code'] is! String ||
+        result['verification_url'] is! String) {
+      throw const FormatException(
+        'Could not start GitHub sign-in. Update Wispnet and retry.',
+      );
+    }
+    if (mounted) setState(() => startPending(result));
+    await launchLink();
+  }
+
+  Future<void> launchLink() async {
+    final next = await readStatus();
+    if (!mounted) return;
+    if (next['linked'] == true) {
+      await refresh();
+      return;
+    }
+    if (!samePending(
+      pending,
+      (next['pending'] as Map?)?.cast<String, dynamic>(),
+    )) {
+      await refresh();
+      throw const FormatException(
+        'Another sign-in was started on this computer. Start a new GitHub sign-in here to continue.',
+      );
+    }
     // The adapter resolves this URL from owner-local state, never UI input.
-    await widget.backend.invoke('launchCommandCenter', {'purpose': 'link'});
+    await widget.backend.invoke('launchCommandCenter', {
+      'purpose': 'link',
+      'expected_user_code': pending!['user_code'],
+      'expected_verification_url': pending!['verification_url'],
+    });
   }
 
   Future<void> confirm(
@@ -272,6 +373,7 @@ class _CommandCenterPanelState extends State<_CommandCenterPanel> {
             if (error != null) ...[
               const SizedBox(height: 8),
               Text(error!, style: const TextStyle(color: WispColors.error)),
+              action('Retry account status', () => refresh()),
             ],
             if (warning != null) ...[
               const SizedBox(height: 8),
@@ -296,19 +398,18 @@ class _CommandCenterPanelState extends State<_CommandCenterPanel> {
             if (!linked && status != null) ...[
               const SizedBox(height: 8),
               const Text('Connect your GitHub account to publish public URLs.'),
-              action('Connect GitHub account', connect),
+              action(
+                pending == null ? 'Sign in with GitHub' : 'Start again',
+                connect,
+              ),
             ],
-            if (pending != null && !linked) ...[
+            if (pending != null && !linked && !pendingStopped) ...[
               const Text('Approve this computer in your browser.'),
               if (pending!['user_code'] is String)
                 SelectableText(pending!['user_code'] as String),
               if (pending!['verification_url'] is String)
                 SelectableText(pending!['verification_url'] as String),
-              action('Open sign-in page', () async {
-                await widget.backend.invoke('launchCommandCenter', {
-                  'purpose': 'link',
-                });
-              }),
+              action('Open sign-in page', launchLink),
               action('Check connection', () => refresh(poll: true)),
             ],
             if (linked) ...[
@@ -320,10 +421,10 @@ class _CommandCenterPanelState extends State<_CommandCenterPanel> {
                 });
               }),
               action(
-                'Disconnect account',
+                'Sign out',
                 () => confirm(
-                  'Disconnect account',
-                  'Stop this computer’s public publications and disconnect its account. Private pairing and device grants stay in place.',
+                  'Sign out',
+                  'Sign out of this computer and stop public publishing linked to this account. Private pairing and device grants stay in place.',
                   {'op': 'command_center_unlink'},
                 ),
               ),

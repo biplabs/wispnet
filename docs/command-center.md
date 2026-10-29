@@ -88,6 +88,40 @@ Stop public publications before removing the server or integration. Private host
 keys and grants do not need migration. The backend credential mediator can remain
 useful independently or be reset explicitly to pass-through service by service.
 
+## CLI login
+
+The desktop app's account controls and the CLI use the same local node account
+link. Private pairing, Shell and private service commands remain available
+without signing in.
+
+```sh
+wispnet login
+wispnet account
+wispnet account status --json
+wispnet logout
+```
+
+`login` prints a verification URL and code, opens the system browser, and waits
+for GitHub sign-in and approval of this computer. Use `--no-browser` over SSH or
+when opening the URL on another device. The default wait is ten minutes;
+`--timeout SECONDS` accepts 1 through 600. Ctrl+C stops waiting without unlinking
+an account or changing private access. Retry with `wispnet login` to resume a
+pending request; use `wispnet login --restart` if that request expired.
+
+All three commands accept `--config PATH` for a custom host configuration and
+`--json` for machine-readable output. During JSON login, the verification URL
+and progress go to stderr and stdout contains only the final JSON result.
+`login --url https://cmd.example.com` selects another self-hosted Command Center
+while unlinked. Sign out before switching an existing link to another server.
+Use `wispnet login --help` for the account command options.
+
+`account` describes the locally stored link; it does not verify a live browser
+session or contact the hub. `logout` stops this computer's managed public
+publications and clears its local account link. If the hub cannot confirm remote
+revocation, it prints a warning with instructions to check Command Center.
+Launching `wispnet` without a subcommand also offers **Settings → Account** for
+status, browser sign-in and confirmed sign-out.
+
 ## Run and deploy
 
 Create a GitHub OAuth app with homepage `https://cmd.wispnet.app` and callback

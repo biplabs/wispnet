@@ -24,7 +24,7 @@ def _base_origin(value):
     return parsed
 
 
-def browser_target(status, purpose):
+def browser_target(status, purpose, expectations=None):
     base = _base_origin(status.get('base_url'))
     if purpose == 'dashboard':
         return base.geturl().rstrip('/') + '/'
@@ -34,6 +34,12 @@ def browser_target(status, purpose):
     url = pending.get('verification_url') if isinstance(pending, dict) else None
     if not isinstance(url, str) or len(url) > 4096 or any(ord(c) < 33 for c in url):
         raise ValueError('Command Center sign-in link unavailable')
+    if expectations is not None:
+        for field, actual in [('expected_user_code', pending.get('user_code')),
+                              ('expected_verification_url', url)]:
+            if field in expectations and (not isinstance(expectations[field], str)
+                                          or expectations[field] != actual):
+                raise ValueError('Account sign-in request changed; restart sign-in')
     target = urlsplit(url)
     query = parse_qs(target.query, strict_parsing=True)
     if (target.scheme != base.scheme or target.netloc != base.netloc
@@ -51,7 +57,7 @@ def dispatch(method, args, api):
             return api.request(**payload)
     if method == 'launchCommandCenter':
         status = api.request(op='command_center_status')
-        url = browser_target(status, args.get('purpose'))
+        url = browser_target(status, args.get('purpose'), args)
         subprocess.run(['/usr/bin/open' if sys.platform == 'darwin' else 'xdg-open', url],
                        check=True, timeout=15, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return {}

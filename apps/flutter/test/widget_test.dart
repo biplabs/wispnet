@@ -13,6 +13,7 @@ import 'package:wispnet/src/cards.dart';
 import 'package:wispnet/src/header.dart';
 import 'package:wispnet/src/space.dart';
 import 'package:wispnet/src/desktop_settings.dart';
+import 'package:wispnet/src/command_center/command_center.dart';
 import 'package:wispnet/src/terminal_sheet.dart';
 import 'package:wispnet/src/theme.dart';
 
@@ -363,6 +364,30 @@ class DesktopFake extends FakeBackend {
   }
 }
 
+class AccountDesktopFake extends DesktopFake {
+  bool accountLinked = false;
+  final accountReads = <Map<String, dynamic>>[];
+
+  @override
+  Future<Map<String, dynamic>> invoke(
+    String method, [
+    Map<String, dynamic> arguments = const {},
+  ]) async {
+    if (method == 'desktopRequest' &&
+        arguments['payload']?['op'] == 'command_center_status') {
+      accountReads.add(arguments);
+      return {
+        'enabled': true,
+        'base_url': 'https://cmd.wispnet.app',
+        'linked': accountLinked,
+        if (accountLinked) 'account': {'id': 'alice-id', 'name': 'Alice'},
+        'credentials': <Map<String, dynamic>>[],
+      };
+    }
+    return super.invoke(method, arguments);
+  }
+}
+
 Future<void> mount(
   WidgetTester tester,
   FakeBackend backend, {
@@ -418,6 +443,64 @@ Future<void> screenshot(WidgetTester tester, String name) async {
 }
 
 void main() {
+  testWidgets(
+    'desktop home exposes public sign-in online and offline without gating private use',
+    (tester) async {
+      for (final enabled in [true, false]) {
+        final backend = AccountDesktopFake()..enabled = enabled;
+        await mount(tester, backend, size: const Size(1000, 850));
+        final entry = find.byKey(const ValueKey('public-account'));
+        if (!commandCenterEnabled) {
+          expect(entry, findsNothing);
+          expect(backend.accountReads, isEmpty);
+          await close(tester);
+          continue;
+        }
+        expect(entry, findsOneWidget);
+        expect(
+          find.widgetWithText(TextButton, 'Sign in with GitHub'),
+          findsOneWidget,
+        );
+        expect(
+          find.byTooltip(enabled ? 'Online' : 'Enter wisp space'),
+          findsOneWidget,
+        );
+        await tester.tap(entry);
+        await tester.pumpAndSettle();
+        expect(find.text('Public account'), findsOneWidget);
+        expect(
+          find.widgetWithText(OutlinedButton, 'Sign in with GitHub'),
+          findsOneWidget,
+        );
+        expect(find.text('Backend authentication'), findsNothing);
+        expect(find.text('Enable public access'), findsNothing);
+        backend.accountLinked = true;
+        await tester.tap(find.byTooltip('Close'));
+        await tester.pumpAndSettle();
+        expect(find.widgetWithText(TextButton, 'Alice'), findsOneWidget);
+        expect(backend.enabled, enabled);
+        expect(backend.ownerCalls, isEmpty);
+        expect(tester.takeException(), isNull);
+        await close(tester);
+      }
+    },
+  );
+
+  testWidgets(
+    'Android private directory never loads desktop public-account controls',
+    (tester) async {
+      final backend = FakeBackend();
+      await mount(tester, backend);
+      expect(find.byKey(const ValueKey('public-account')), findsNothing);
+      expect(
+        backend.calls.where((call) => call.$1 == 'desktopRequest'),
+        isEmpty,
+      );
+      expect(find.byTooltip('Online'), findsOneWidget);
+      await close(tester);
+    },
+  );
+
   testWidgets(
     'service links enable access and launch the resolved HTTP URL once',
     (tester) async {
@@ -1876,6 +1959,13 @@ void main() {
     await mount(tester, backend, size: const Size(1000, 850));
     await tester.tap(find.byTooltip('Settings for web on hibreak'));
     await tester.pumpAndSettle();
+    if (!commandCenterEnabled) {
+      expect(find.text('Enable public access'), findsNothing);
+      expect(find.text('Command Center'), findsNothing);
+      expect(backend.ownerCalls, isEmpty);
+      await close(tester);
+      return;
+    }
     await tester.ensureVisible(find.text('Enable public access'));
     await tester.tap(find.text('Enable public access'));
     await tester.pumpAndSettle();
@@ -1919,11 +2009,15 @@ void main() {
         tester.getRect(remove).top - tester.getRect(edit).bottom,
         greaterThanOrEqualTo(8),
       );
-      expect(
-        tester.getRect(publish).top - tester.getRect(remove).bottom,
-        greaterThanOrEqualTo(8),
-      );
-      for (final button in [remove, publish]) {
+      if (commandCenterEnabled) {
+        expect(
+          tester.getRect(publish).top - tester.getRect(remove).bottom,
+          greaterThanOrEqualTo(8),
+        );
+      } else {
+        expect(publish, findsNothing);
+      }
+      for (final button in [remove, if (commandCenterEnabled) publish]) {
         expect(
           tester
               .widget<OutlinedButton>(button)

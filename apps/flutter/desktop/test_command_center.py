@@ -8,7 +8,8 @@ class CommandCenterTests(unittest.TestCase):
     def setUp(self):
         self.status = {
             'base_url': 'https://cmd.wispnet.app',
-            'pending': {'verification_url': 'https://cmd.wispnet.app/connect?code=ABCD-EFGH'},
+            'pending': {'verification_url': 'https://cmd.wispnet.app/connect?code=ABCD-EFGH',
+                        'user_code': 'ABCD-EFGH'},
         }
         self.api = Mock()
         self.api.request.return_value = self.status
@@ -33,6 +34,36 @@ class CommandCenterTests(unittest.TestCase):
                 self.status['pending']['verification_url'] = url
                 with self.assertRaises(ValueError):
                     command_center.browser_target(self.status, 'link')
+
+    def test_browser_handoff_rejects_replaced_or_malformed_pending_expectations(self):
+        for field, expected in [
+            ('expected_user_code', 'OLD-CODE'),
+            ('expected_user_code', None),
+            ('expected_user_code', 1234),
+            ('expected_verification_url', 'https://cmd.wispnet.app/connect?code=OLD'),
+            ('expected_verification_url', None),
+            ('expected_verification_url', ['https://cmd.wispnet.app/connect?code=ABCD-EFGH']),
+        ]:
+            with self.subTest(field=field, expected=expected):
+                with patch.object(command_center.subprocess, 'run') as opened:
+                    with self.assertRaisesRegex(ValueError, 'sign-in request changed'):
+                        command_center.dispatch('launchCommandCenter', {
+                            'purpose': 'link', field: expected}, self.api)
+                    opened.assert_not_called()
+
+    def test_matching_pending_expectations_launch_node_url_and_dashboard_ignores_them(self):
+        expectations = {
+            'expected_user_code': self.status['pending']['user_code'],
+            'expected_verification_url': self.status['pending']['verification_url'],
+        }
+        with patch.object(command_center.subprocess, 'run') as opened:
+            command_center.dispatch('launchCommandCenter', {
+                'purpose': 'link', 'url': 'https://attacker.example/', **expectations}, self.api)
+            self.assertEqual(opened.call_args.args[0][-1], expectations['expected_verification_url'])
+            command_center.dispatch('launchCommandCenter', {
+                'purpose': 'dashboard', 'expected_user_code': None,
+                'expected_verification_url': 'https://attacker.example/'}, self.api)
+            self.assertEqual(opened.call_args.args[0][-1], 'https://cmd.wispnet.app/')
 
     def test_module_only_forwards_its_explicit_owner_operations(self):
         payload = {'op': 'configure_backend_auth', 'service': 'gike', 'mode': 'bearer', 'token': 'fixture'}

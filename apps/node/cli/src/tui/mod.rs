@@ -112,6 +112,7 @@ enum Kind {
     Owners,
     OwnerSaved,
     Settings,
+    Account,
     Links,
 }
 #[derive(Clone)]
@@ -257,6 +258,7 @@ enum Action {
     Service(Value),
     Remote(String, Value),
     Shell(String, Value),
+    AccountLogin(bool),
     PairInput,
     Form(Form),
     Confirm {
@@ -370,6 +372,7 @@ struct CatalogReply {
     result: Result<Value, String>,
 }
 struct App {
+    account_login: Option<bool>,
     shell: Option<Value>,
     api: Api,
     page: Page,
@@ -438,6 +441,7 @@ impl App {
         let (tx, rx) = worker(api.clone());
         let (catalog_tx, catalog_rx) = mpsc::channel();
         Self {
+            account_login: None,
             shell: None,
             api,
             page: Page::Machines,
@@ -563,6 +567,14 @@ impl App {
     fn entries(&self) -> Vec<Entry> {
         match self.page {
             Page::Home => vec![
+                entry(
+                    "account",
+                    "Account / public publishing sign-in",
+                    Action::Run(Work {
+                        kind: Kind::Account,
+                        task: Task::Request(json!({"op":"command_center_status"})),
+                    }),
+                ),
                 entry(
                     "settings",
                     "Device ID and shared HTTP port",
@@ -1099,6 +1111,10 @@ impl App {
     }
     fn action(&mut self, action: Action) {
         match action {
+            Action::AccountLogin(restart) => {
+                self.modal = None;
+                self.account_login = Some(restart);
+            }
             Action::Shell(host, service) => {
                 self.modal = None;
                 self.shell = Some(
@@ -1727,6 +1743,37 @@ impl App {
                         self.message = "Browser route ready".into();
                         self.last_poll = Instant::now() - Duration::from_secs(5);
                     }
+                    Kind::Account => match crate::account::lines(&value) {
+                        Ok(lines) => {
+                            let entries = if value["linked"] == true {
+                                vec![entry("logout", "Sign out and stop managed public publications", Action::Confirm {
+                                        title: "Sign out of Wispnet".into(),
+                                        detail: vec!["Stops managed public publications on this computer and removes its account link. Private device access remains available.".into()],
+                                        work: Work { kind: Kind::Account, task: Task::Request(json!({"op":"command_center_unlink"})) },
+                                    })]
+                            } else {
+                                let mut entries = vec![entry(
+                                    "login",
+                                    if value["pending"].is_null() {
+                                        "Sign in with GitHub"
+                                    } else {
+                                        "Continue GitHub sign-in"
+                                    },
+                                    Action::AccountLogin(false),
+                                )];
+                                if !value["pending"].is_null() {
+                                    entries.push(entry(
+                                        "restart",
+                                        "Start a new sign-in request",
+                                        Action::AccountLogin(true),
+                                    ));
+                                }
+                                entries
+                            };
+                            self.choice("Wispnet account", lines, entries);
+                        }
+                        Err(error) => self.message = error,
+                    },
                     Kind::Settings => {
                         self.modal = Some(Modal::Form(Form {
                             title: "Device settings".into(),
@@ -2655,12 +2702,31 @@ pub fn run(config: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let api = Api::new(config)?;
     let mut app = App::new(api);
     let stop = Arc::new(AtomicBool::new(false));
+    let interrupt = Arc::new(AtomicBool::new(false));
     let sigterm = signal_hook::flag::register(signal_hook::consts::SIGTERM, stop.clone())?;
-    let sigint = signal_hook::flag::register(signal_hook::consts::SIGINT, stop.clone())?;
+    let sigint = signal_hook::flag::register(signal_hook::consts::SIGINT, interrupt.clone())?;
     let mut terminal = ratatui::init();
     let _restore = Restore;
     execute!(io::stdout(), EnableMouseCapture, EnableBracketedPaste)?;
-    while !stop.load(Ordering::Relaxed) {
+    while !stop.load(Ordering::Relaxed) && !interrupt.load(Ordering::Relaxed) {
+        if let Some(restart) = app.account_login.take() {
+            execute!(io::stdout(), DisableMouseCapture, DisableBracketedPaste)?;
+            ratatui::restore();
+            let result = crate::account::terminal_login(&app.api, restart);
+            // Ctrl+C belongs to the temporarily foreground login command.
+            // Preserve SIGTERM's separate stop flag so shutdown still works.
+            interrupt.store(false, Ordering::Relaxed);
+            terminal = ratatui::init();
+            execute!(io::stdout(), EnableMouseCapture, EnableBracketedPaste)?;
+            app.message = match result {
+                Ok(()) => "Account sign-in completed".into(),
+                Err(error) => error,
+            };
+            app.send(Work {
+                kind: Kind::Account,
+                task: Task::Request(json!({"op":"command_center_status"})),
+            });
+        }
         if let Some(request) = app.shell.take() {
             execute!(io::stdout(), DisableMouseCapture, DisableBracketedPaste)?;
             ratatui::restore();

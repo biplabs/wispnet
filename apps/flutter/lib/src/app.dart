@@ -10,6 +10,7 @@ import 'sheets.dart';
 import 'cards.dart';
 import 'header.dart';
 import 'desktop_settings.dart';
+import 'command_center/command_center.dart';
 import 'terminal_sheet.dart';
 
 class WispnetApp extends StatelessWidget {
@@ -1003,6 +1004,17 @@ class _WispHomeState extends State<WispHome>
                     padding: const EdgeInsets.symmetric(horizontal: 20),
                     child: Column(
                       children: [
+                        if (snapshot['desktop'] == true && commandCenterEnabled)
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: Padding(
+                              padding: const EdgeInsets.only(top: 8, bottom: 2),
+                              child: CommandCenterAccountButton(
+                                backend: backend,
+                                onChanged: () => unawaited(poll()),
+                              ),
+                            ),
+                          ),
                         if (online)
                           WispHeader(
                             label:

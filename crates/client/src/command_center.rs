@@ -266,6 +266,9 @@ pub(crate) async fn command(client: Arc<Client>, value: &Value) -> Result<Value,
         .local_authority
         .as_ref()
         .ok_or("Command center administration requires local ownership")?;
+    // Account commands read, await the hub, then replace the same settings file.
+    // Keep the whole operation ordered across desktop and CLI callers.
+    let _account = client.command_center_lock.lock().await;
     let host = client.endpoint.id();
     match crate::argument(value, "op")? {
         "command_center_status" => status(&client).await,
@@ -323,6 +326,20 @@ pub(crate) async fn command(client: Arc<Client>, value: &Value) -> Result<Value,
         "command_center_poll" => {
             let mut s = settings(&client.state, host)?;
             let pending = s.pending.as_ref().ok_or("Start account linking first")?;
+            for (field, actual) in [
+                ("expected_user_code", pending.user_code.as_str()),
+                (
+                    "expected_verification_url",
+                    pending.verification_url.as_str(),
+                ),
+            ] {
+                if value
+                    .get(field)
+                    .is_some_and(|expected| expected.as_str() != Some(actual))
+                {
+                    return Err("Account sign-in request changed; restart sign-in".into());
+                }
+            }
             let response = post(
                 &s.base_url,
                 "/api/command/links/poll",
@@ -420,6 +437,185 @@ impl wispnet_agent::http_backend::RequestAuthorization for PublicAuthorization {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::{TcpListener, TcpStream},
+        sync::oneshot,
+    };
+
+    async fn account_client(base_url: &str) -> (tempfile::TempDir, Arc<Client>) {
+        let state = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let key = wispnet_core::identity::SecretKey::generate();
+        let owner = key.public();
+        wispnet_registry::host::initialize(state.path(), owner).unwrap();
+        let config = serde_json::from_value(json!({"bind_addr":"127.0.0.1:0"})).unwrap();
+        let endpoint = wispnet_agent::tunnel::bind_configured_client(&key, Some(&config))
+            .await
+            .unwrap();
+        let client = Client::from_endpoint(
+            endpoint,
+            key,
+            state.path().into(),
+            config,
+            wispnet_registry::host::Authority::open(state.path(), owner).unwrap(),
+        );
+        let mut s = settings(state.path(), owner).unwrap();
+        s.base_url = base_url.into();
+        s.pending = Some(Pending {
+            device_code: "device-fixture-0123456789abcdefghijk".into(),
+            user_code: "ABCD-1234-5678".into(),
+            verification_url: format!("{base_url}/connect?code=ABCD-1234-5678"),
+        });
+        save(state.path(), &s).unwrap();
+        (state, client)
+    }
+
+    async fn hub_request(listener: &TcpListener) -> (TcpStream, String, Value) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut headers = Vec::new();
+            while !headers.ends_with(b"\r\n\r\n") {
+                assert!(headers.len() < 16384);
+                headers.push(stream.read_u8().await.unwrap());
+            }
+            let headers = String::from_utf8(headers).unwrap();
+            let length: usize = headers
+                .lines()
+                .filter_map(|line| line.split_once(':'))
+                .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                .unwrap()
+                .1
+                .trim()
+                .parse()
+                .unwrap();
+            assert!(length <= 16384);
+            let mut body = vec![0; length];
+            stream.read_exact(&mut body).await.unwrap();
+            (stream, headers, serde_json::from_slice(&body).unwrap())
+        })
+        .await
+        .unwrap()
+    }
+
+    async fn hub_reply(mut stream: TcpStream, response: Value) {
+        let body = serde_json::to_vec(&response).unwrap();
+        stream
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        stream.write_all(&body).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn poll_rejects_replaced_or_malformed_expectations_before_contacting_hub() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let (_state, client) = account_client(&base).await;
+        for (field, expected) in [
+            ("expected_user_code", json!("OLD-CODE")),
+            ("expected_user_code", Value::Null),
+            ("expected_user_code", json!(true)),
+            ("expected_verification_url", json!("https://other.example/")),
+            ("expected_verification_url", Value::Null),
+            ("expected_verification_url", json!({"url":"changed"})),
+        ] {
+            let mut request = json!({"op":"command_center_poll"});
+            request[field] = expected;
+            let error = client.command(&request).await.unwrap_err();
+            assert!(error.contains("sign-in request changed"));
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), listener.accept())
+                .await
+                .is_err()
+        );
+        let hub = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (stream, headers, body) = hub_request(&listener).await;
+                assert!(headers.starts_with("POST /api/command/links/poll "));
+                assert_eq!(body["device_code"], "device-fixture-0123456789abcdefghijk");
+                hub_reply(stream, json!({"state":"pending"})).await;
+            }
+        });
+        // Matching expectations and older callers without them both still work.
+        for request in [
+            json!({"op":"command_center_poll","expected_user_code":"ABCD-1234-5678",
+                "expected_verification_url":format!("{base}/connect?code=ABCD-1234-5678")}),
+            json!({"op":"command_center_poll"}),
+        ] {
+            assert_eq!(client.command(&request).await.unwrap()["state"], "pending");
+        }
+        hub.await.unwrap();
+        client.endpoint.close().await;
+    }
+
+    #[tokio::test]
+    async fn unlink_waits_for_inflight_poll_and_cannot_be_overwritten_by_its_response() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let (state, client) = account_client(&base).await;
+        let (started, received) = oneshot::channel();
+        let (release, waiting) = oneshot::channel();
+        let hub = tokio::spawn(async move {
+            let (stream, headers, _) = hub_request(&listener).await;
+            assert!(headers.starts_with("POST /api/command/links/poll "));
+            started.send(()).unwrap();
+            waiting.await.unwrap();
+            hub_reply(
+                stream,
+                json!({"state":"linked",
+                "publisher_token":"wph_fixture_0123456789abcdefghijklmnopqrstuvwxyz",
+                "account":{"id":"usr_fixture","name":"Fixture"}}),
+            )
+            .await;
+            let (stream, headers, _) = hub_request(&listener).await;
+            assert!(headers.starts_with("POST /api/command/host/unlink "));
+            assert!(headers.contains("Bearer wph_fixture_0123456789abcdefghijklmnopqrstuvwxyz"));
+            hub_reply(stream, json!({"ok":true})).await;
+        });
+        let polling = client.clone();
+        let poll =
+            tokio::spawn(
+                async move { polling.command(&json!({"op":"command_center_poll"})).await },
+            );
+        received.await.unwrap();
+        let unlinking = client.clone();
+        let mut unlink = tokio::spawn(async move {
+            unlinking
+                .command(&json!({"op":"command_center_unlink"}))
+                .await
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut unlink)
+                .await
+                .is_err()
+        );
+        assert!(
+            settings(state.path(), client.endpoint.id())
+                .unwrap()
+                .pending
+                .is_some()
+        );
+        release.send(()).unwrap();
+        assert_eq!(poll.await.unwrap().unwrap()["state"], "linked");
+        let result = unlink.await.unwrap().unwrap();
+        assert_eq!(result["linked"], false);
+        assert_eq!(result["remote_revocation"], "confirmed");
+        let final_settings = settings(state.path(), client.endpoint.id()).unwrap();
+        assert!(final_settings.publisher_token.is_none());
+        assert!(final_settings.account.is_none());
+        assert!(final_settings.pending.is_none());
+        hub.await.unwrap();
+        client.endpoint.close().await;
+    }
+
     #[test]
     fn protected_identity_bound_settings_and_redacted_origin() {
         let temp = tempfile::tempdir().unwrap();
