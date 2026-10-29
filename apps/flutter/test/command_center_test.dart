@@ -173,10 +173,7 @@ void main() {
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pumpAndSettle();
-      expect(
-        find.widgetWithText(TextButton, 'Logged in as Alice'),
-        findsOneWidget,
-      );
+      expect(find.text('Logged in as Alice'), findsOneWidget);
       expect(backend.requests, hasLength(2));
       await tester.pumpWidget(const SizedBox.shrink());
     },
@@ -187,6 +184,15 @@ void main() {
     (tester) async {
       final backend = CommandBackend()..linked = true;
       await mountAccount(tester, backend);
+      final accountLabel = find.text('Logged in as Alice');
+      expect(
+        find.ancestor(of: accountLabel, matching: find.byType(TextButton)),
+        findsNothing,
+      );
+      await tester.tap(accountLabel);
+      await tester.pumpAndSettle();
+      expect(find.text('Public account'), findsNothing);
+      expect(find.widgetWithText(TextButton, 'Manage'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('public-account')));
       await tester.pumpAndSettle();
       expect(find.text('Connected as Alice'), findsOneWidget);

@@ -514,9 +514,10 @@ void main() {
       backend.accountLinked = true;
       await tester.tap(find.byTooltip('Close').last);
       await tester.pumpAndSettle();
+      expect(find.text('Logged in as Alice'), findsOneWidget);
       expect(
-        find.widgetWithText(TextButton, 'Logged in as Alice'),
-        findsOneWidget,
+        tester.getRect(entry).left,
+        greaterThan(tester.getRect(find.text('Logged in as Alice')).right),
       );
       await tester.ensureVisible(accountNote);
       await tester.pumpAndSettle();
@@ -1371,6 +1372,21 @@ void main() {
         greaterThan(tester.getRect(find.text(url)).bottom),
       );
     }
+    final divider = find.byKey(const ValueKey('settings-registry-mcp-divider'));
+    expect(
+      tester.getRect(divider).top,
+      greaterThan(
+        tester.getRect(find.textContaining('Lists the services')).bottom,
+      ),
+    );
+    expect(
+      tester.getRect(divider).bottom,
+      lessThan(tester.getRect(find.text('MCP (Model Context Protocol)')).top),
+    );
+    expect(
+      find.textContaining('No account sign-in is needed.'),
+      findsOneWidget,
+    );
     await tester.tap(find.byKey(const ValueKey('settings-address')));
     await tester.pumpAndSettle();
     expect(

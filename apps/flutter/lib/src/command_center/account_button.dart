@@ -125,6 +125,27 @@ class _CommandCenterAccountButtonState
         : status == null
         ? 'Public account'
         : 'Sign in with GitHub';
+    if (linked && !unavailable) {
+      return Row(
+        children: [
+          const Icon(
+            Icons.account_circle_outlined,
+            size: 18,
+            color: WispColors.muted,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+          ),
+          const SizedBox(width: 8),
+          TextButton(
+            key: const ValueKey('public-account'),
+            onPressed: open ? null : showAccount,
+            child: const Text('Manage'),
+          ),
+        ],
+      );
+    }
     return Tooltip(
       message: unavailable
           ? 'Public account unavailable. Open to retry.'

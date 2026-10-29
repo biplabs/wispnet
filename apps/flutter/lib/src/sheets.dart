@@ -1001,7 +1001,9 @@ class _SettingsFormState extends State<SettingsForm> {
           'Lists the services this device can access and their local URLs. Apps can use it to find and connect to services.',
           style: TextStyle(color: WispColors.muted),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 8),
+        const Divider(key: ValueKey('settings-registry-mcp-divider')),
+        const SizedBox(height: 8),
         const Text('MCP (Model Context Protocol)'),
         const SizedBox(height: 4),
         Row(
@@ -1018,7 +1020,7 @@ class _SettingsFormState extends State<SettingsForm> {
         ),
         const SizedBox(height: 8),
         const Text(
-          'Connect AI assistants to Wispnet to discover services and manage access. Add this URL to your MCP client with your private bearer token. Both URLs work only on this device while local access is online.',
+          'Connect AI assistants to Wispnet to discover services and manage access. Use this device’s MCP bearer token to connect. No account sign-in is needed. Both URLs work only on this device while local access is online.',
           style: TextStyle(color: WispColors.muted),
         ),
       ],
