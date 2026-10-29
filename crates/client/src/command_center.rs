@@ -453,7 +453,8 @@ impl wispnet_agent::http_backend::RequestAuthorization for PublicAuthorization {
             // credentials. Publisher/configuration failures and outages cannot
             // be repaired by making the visitor reconnect their OAuth account.
             if status == reqwest::StatusCode::FORBIDDEN
-                && result["error"] == "Service access denied"
+                && (result["error"] == "Service access denied"
+                    || result["allowed"].as_bool() == Some(false))
             {
                 return Err(AuthorizationError::Denied);
             }
@@ -593,11 +594,17 @@ mod tests {
                 Err(AuthorizationError::Unavailable),
             ),
             (
+                403,
+                r#"{"allowed":"false"}"#,
+                Err(AuthorizationError::Unavailable),
+            ),
+            (
                 200,
                 r#"{"allowed":false}"#,
                 Err(AuthorizationError::Unavailable),
             ),
             (200, "invalid json", Err(AuthorizationError::Unavailable)),
+            (403, r#"{"allowed":false}"#, Err(AuthorizationError::Denied)),
             (
                 403,
                 r#"{"error":"Service access denied"}"#,

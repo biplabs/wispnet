@@ -702,15 +702,20 @@ async fn managed_public_real_rust_hub_keys_revoke_streams_and_private_access_sur
     while !fixture.hub.is_finished() {
         tokio::task::yield_now().await;
     }
+    let backend_calls = fixture.backend_calls.load(Ordering::SeqCst);
+    let unavailable = fixture
+        .public(&format!(
+            "Authorization: Bearer {}\r\n",
+            fresh["key"].as_str().unwrap()
+        ))
+        .await;
+    assert!(unavailable.starts_with("HTTP/1.1 503"), "{unavailable}");
     assert!(
-        fixture
-            .public(&format!(
-                "Authorization: Bearer {}\r\n",
-                fresh["key"].as_str().unwrap()
-            ))
-            .await
-            .starts_with("HTTP/1.1 401")
+        !unavailable
+            .to_ascii_lowercase()
+            .contains("www-authenticate")
     );
+    assert_eq!(fixture.backend_calls.load(Ordering::SeqCst), backend_calls);
     assert!(
         fixture
             .private(&fixture.peer)
