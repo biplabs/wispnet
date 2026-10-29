@@ -1,6 +1,6 @@
 part of 'command_center.dart';
 
-/// A desktop home entry point. The status read is local and requires no account.
+/// A secondary desktop settings entry. Status reads require no account.
 class CommandCenterAccountButton extends StatelessWidget {
   const CommandCenterAccountButton({
     super.key,

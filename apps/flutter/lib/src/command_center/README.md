@@ -4,12 +4,12 @@
 host-local backend authentication editor. Private pairing, device grants,
 discovery and service opening do not import or call this module.
 
-`CommandCenterAccountButton` is the desktop home entry point, available both
-online and offline. It shows **Sign in with GitHub** or the linked account name,
+`CommandCenterAccountButton` is a secondary entry inside the desktop gear
+settings. It shows **Sign in with GitHub** or the linked account name,
 and opens an account-only sheet with sign-in, public-access management and sign
 out. Signing out confirms that account-linked public publishing will stop.
-The home control reads owner-local status on creation, app resume and account
-changes. It does not poll the hub or read account status on every frame. The
+The control reads owner-local status only while settings are open and on account
+changes. The home screen does not load account status. The
 existing linking sheet polls only while open to complete browser approval.
 
 The default command center is supplied by the node's local

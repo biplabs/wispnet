@@ -443,48 +443,83 @@ Future<void> screenshot(WidgetTester tester, String name) async {
 }
 
 void main() {
-  testWidgets(
-    'desktop home exposes public sign-in online and offline without gating private use',
-    (tester) async {
-      for (final enabled in [true, false]) {
-        final backend = AccountDesktopFake()..enabled = enabled;
-        await mount(tester, backend, size: const Size(1000, 850));
-        final entry = find.byKey(const ValueKey('public-account'));
-        if (!commandCenterEnabled) {
-          expect(entry, findsNothing);
-          expect(backend.accountReads, isEmpty);
-          await close(tester);
-          continue;
-        }
-        expect(entry, findsOneWidget);
-        expect(
-          find.widgetWithText(TextButton, 'Sign in with GitHub'),
-          findsOneWidget,
-        );
-        expect(
-          find.byTooltip(enabled ? 'Online' : 'Enter wisp space'),
-          findsOneWidget,
-        );
-        await tester.tap(entry);
-        await tester.pumpAndSettle();
-        expect(find.text('Public account'), findsOneWidget);
-        expect(
-          find.widgetWithText(OutlinedButton, 'Sign in with GitHub'),
-          findsOneWidget,
-        );
-        expect(find.text('Backend authentication'), findsNothing);
-        expect(find.text('Enable public access'), findsNothing);
-        backend.accountLinked = true;
-        await tester.tap(find.byTooltip('Close'));
-        await tester.pumpAndSettle();
-        expect(find.widgetWithText(TextButton, 'Alice'), findsOneWidget);
-        expect(backend.enabled, enabled);
-        expect(backend.ownerCalls, isEmpty);
-        expect(tester.takeException(), isNull);
+  testWidgets('desktop public sign-in stays optional inside gear settings', (
+    tester,
+  ) async {
+    for (final enabled in [true, false]) {
+      final backend = AccountDesktopFake()..enabled = enabled;
+      await mount(tester, backend, size: const Size(1000, 850));
+      final entry = find.byKey(const ValueKey('public-account'));
+      expect(entry, findsNothing);
+      expect(find.text('Sign in with GitHub'), findsNothing);
+      expect(backend.accountReads, isEmpty);
+      expect(
+        find.byTooltip(enabled ? 'Online' : 'Enter wisp space'),
+        findsOneWidget,
+      );
+      await tester.pump(const Duration(seconds: 8));
+      expect(backend.accountReads, isEmpty);
+      await screenshot(
+        tester,
+        'desktop-home-${enabled ? 'online' : 'offline'}-account-hidden',
+      );
+      if (!enabled) {
+        expect(find.byTooltip('Settings'), findsNothing);
         await close(tester);
+        continue;
       }
-    },
-  );
+      await tester.tap(find.byTooltip('Settings'));
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(TextField, 'Device ID'), findsOneWidget);
+      expect(find.widgetWithText(TextField, 'Wispnet port'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Save'), findsOneWidget);
+      if (!commandCenterEnabled) {
+        expect(entry, findsNothing);
+        expect(backend.accountReads, isEmpty);
+        await close(tester);
+        continue;
+      }
+      expect(entry, findsOneWidget);
+      expect(
+        find.widgetWithText(TextButton, 'Sign in with GitHub'),
+        findsOneWidget,
+      );
+      expect(
+        tester.getRect(entry).top,
+        greaterThan(tester.getRect(find.text('Save')).bottom),
+      );
+      await tester.ensureVisible(entry);
+      await tester.pumpAndSettle();
+      await screenshot(
+        tester,
+        'desktop-settings-${enabled ? 'online' : 'offline'}-secondary-account',
+      );
+      await tester.tap(entry);
+      await tester.pumpAndSettle();
+      expect(find.text('Public account'), findsOneWidget);
+      expect(
+        find.widgetWithText(OutlinedButton, 'Sign in with GitHub'),
+        findsOneWidget,
+      );
+      expect(find.text('Backend authentication'), findsNothing);
+      expect(find.text('Enable public access'), findsNothing);
+      backend.accountLinked = true;
+      await tester.tap(find.byTooltip('Close').last);
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(TextButton, 'Alice'), findsOneWidget);
+      expect(find.widgetWithText(TextField, 'Device ID'), findsOneWidget);
+      expect(backend.enabled, enabled);
+      expect(backend.ownerCalls, isEmpty);
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      expect(entry, findsNothing);
+      final reads = backend.accountReads.length;
+      await tester.pump(const Duration(seconds: 8));
+      expect(backend.accountReads, hasLength(reads));
+      expect(tester.takeException(), isNull);
+      await close(tester);
+    }
+  });
 
   testWidgets(
     'Android private directory never loads desktop public-account controls',
@@ -492,11 +527,15 @@ void main() {
       final backend = FakeBackend();
       await mount(tester, backend);
       expect(find.byKey(const ValueKey('public-account')), findsNothing);
+      await tester.tap(find.byTooltip('Settings'));
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(TextField, 'Device ID'), findsOneWidget);
+      expect(find.byKey(const ValueKey('public-account')), findsNothing);
+      expect(find.text('Sign in with GitHub'), findsNothing);
       expect(
         backend.calls.where((call) => call.$1 == 'desktopRequest'),
         isEmpty,
       );
-      expect(find.byTooltip('Online'), findsOneWidget);
       await close(tester);
     },
   );
