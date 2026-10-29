@@ -173,7 +173,10 @@ void main() {
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pumpAndSettle();
-      expect(find.widgetWithText(TextButton, 'Alice'), findsOneWidget);
+      expect(
+        find.widgetWithText(TextButton, 'Logged in as Alice'),
+        findsOneWidget,
+      );
       expect(backend.requests, hasLength(2));
       await tester.pumpWidget(const SizedBox.shrink());
     },

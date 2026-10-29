@@ -121,31 +121,28 @@ class _CommandCenterAccountButtonState
     final label = unavailable
         ? 'Public account'
         : linked
-        ? (name?.trim().isNotEmpty == true ? name! : 'GitHub account')
+        ? 'Logged in as ${name?.trim().isNotEmpty == true ? name! : 'GitHub user'}'
         : status == null
         ? 'Public account'
         : 'Sign in with GitHub';
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 280),
-      child: Tooltip(
-        message: unavailable
-            ? 'Public account unavailable. Open to retry.'
-            : linked
-            ? 'Public account · $label'
-            : 'Sign in with GitHub for public publishing',
-        child: TextButton.icon(
-          key: const ValueKey('public-account'),
-          onPressed: open ? null : showAccount,
-          icon: Icon(
-            unavailable
-                ? Icons.warning_amber_rounded
-                : linked
-                ? Icons.account_circle_outlined
-                : Icons.login,
-            size: 18,
-          ),
-          label: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+    return Tooltip(
+      message: unavailable
+          ? 'Public account unavailable. Open to retry.'
+          : linked
+          ? 'Public account · $label'
+          : 'Sign in with GitHub for public publishing',
+      child: TextButton.icon(
+        key: const ValueKey('public-account'),
+        onPressed: open ? null : showAccount,
+        icon: Icon(
+          unavailable
+              ? Icons.warning_amber_rounded
+              : linked
+              ? Icons.account_circle_outlined
+              : Icons.login,
+          size: 18,
         ),
+        label: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
       ),
     );
   }

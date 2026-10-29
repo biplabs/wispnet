@@ -450,7 +450,9 @@ void main() {
       final backend = AccountDesktopFake()..enabled = enabled;
       await mount(tester, backend, size: const Size(1000, 850));
       final entry = find.byKey(const ValueKey('public-account'));
+      final accountNote = find.textContaining('An account is only needed');
       expect(entry, findsNothing);
+      expect(accountNote, findsNothing);
       expect(find.text('Sign in with GitHub'), findsNothing);
       expect(backend.accountReads, isEmpty);
       expect(
@@ -475,11 +477,13 @@ void main() {
       expect(find.widgetWithText(FilledButton, 'Save'), findsOneWidget);
       if (!commandCenterEnabled) {
         expect(entry, findsNothing);
+        expect(accountNote, findsNothing);
         expect(backend.accountReads, isEmpty);
         await close(tester);
         continue;
       }
       expect(entry, findsOneWidget);
+      expect(accountNote, findsOneWidget);
       expect(
         find.widgetWithText(TextButton, 'Sign in with GitHub'),
         findsOneWidget,
@@ -488,7 +492,11 @@ void main() {
         tester.getRect(entry).top,
         greaterThan(tester.getRect(find.text('Save')).bottom),
       );
-      await tester.ensureVisible(entry);
+      expect(
+        tester.getRect(accountNote).top,
+        greaterThan(tester.getRect(entry).bottom),
+      );
+      await tester.ensureVisible(accountNote);
       await tester.pumpAndSettle();
       await screenshot(
         tester,
@@ -506,10 +514,18 @@ void main() {
       backend.accountLinked = true;
       await tester.tap(find.byTooltip('Close').last);
       await tester.pumpAndSettle();
-      expect(find.widgetWithText(TextButton, 'Alice'), findsOneWidget);
+      expect(
+        find.widgetWithText(TextButton, 'Logged in as Alice'),
+        findsOneWidget,
+      );
+      await tester.ensureVisible(accountNote);
+      await tester.pumpAndSettle();
+      await screenshot(tester, 'desktop-settings-online-linked-account');
       expect(find.widgetWithText(TextField, 'Device ID'), findsOneWidget);
       expect(backend.enabled, enabled);
       expect(backend.ownerCalls, isEmpty);
+      await tester.ensureVisible(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       expect(entry, findsNothing);
@@ -532,6 +548,7 @@ void main() {
       expect(find.widgetWithText(TextField, 'Device ID'), findsOneWidget);
       expect(find.byKey(const ValueKey('public-account')), findsNothing);
       expect(find.text('Sign in with GitHub'), findsNothing);
+      expect(find.textContaining('An account is only needed'), findsNothing);
       expect(
         backend.calls.where((call) => call.$1 == 'desktopRequest'),
         isEmpty,
@@ -1333,6 +1350,27 @@ void main() {
       find.text('http://wispnet.localhost:18400/registry'),
       findsOneWidget,
     );
+    for (final (heading, url, description) in [
+      (
+        'Service registry',
+        'http://wispnet.localhost:18400/registry',
+        'Lists the services this device can access',
+      ),
+      (
+        'MCP (Model Context Protocol)',
+        'http://wispnet.localhost:18400/mcp',
+        'Connect AI assistants to Wispnet',
+      ),
+    ]) {
+      expect(
+        tester.getRect(find.text(url)).top,
+        greaterThan(tester.getRect(find.text(heading)).bottom),
+      );
+      expect(
+        tester.getRect(find.textContaining(description)).top,
+        greaterThan(tester.getRect(find.text(url)).bottom),
+      );
+    }
     await tester.tap(find.byKey(const ValueKey('settings-address')));
     await tester.pumpAndSettle();
     expect(

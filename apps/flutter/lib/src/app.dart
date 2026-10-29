@@ -698,6 +698,11 @@ class _WispHomeState extends State<WispHome>
                 onChanged: () => unawaited(poll()),
               ),
             ),
+            const SizedBox(height: 4),
+            const Text(
+              'An account is only needed to expose services to the public internet through the Wispnet gateway.',
+              style: TextStyle(color: WispColors.muted),
+            ),
           ],
         ],
       ),
