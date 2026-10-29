@@ -3,18 +3,24 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#edf2e5">
-    <meta name="description" content="Keep the services on your own computers within reach. Connect your devices privately, or publish selected services with access you control.">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#070b14">
+    <meta name="description" content="Keep the services on your own computers within reach. Connect your devices privately in Wisp Space, or publish selected services with access you control.">
     <title>Wispnet — Your services. Anywhere.</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="icon" href="/logo.png" type="image/png" sizes="256x256">
+    <link rel="apple-touch-icon" href="/logo.png">
     <link rel="stylesheet" href="/style.css">
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
+
+    <div class="space-backdrop" aria-hidden="true"></div>
+
     <header class="site-header wrap">
       <a class="wordmark" href="/" aria-label="Wispnet home">
-        <svg viewBox="0 0 36 36" fill="none" aria-hidden="true"><path d="M5 13c6-9 12 9 18 0s10 0 8 4M5 21c6-9 12 9 18 0s10 0 8 4" stroke="currentColor" stroke-width="3.4" stroke-linecap="round"/></svg>
-        Wispnet
+        <img class="brand-mark" src="/logo.png" width="38" height="38" alt="">
+        <span class="wordmark-text">Wispnet</span>
       </a>
       <nav aria-label="Main navigation">
         <a class="nav-detail" href="#connections">How it works</a>
@@ -25,83 +31,175 @@
     <main id="main">
       <section class="hero wrap" aria-labelledby="hero-title">
         <div class="hero-copy">
-          <p class="eyebrow"><span class="little-wisp" aria-hidden="true"></span>A little closer, wherever you are</p>
+          <p class="eyebrow">
+            <span class="status-dot status-dot-cyan" aria-hidden="true"></span>
+            A little closer, wherever you are
+          </p>
           <h1 id="hero-title">Your services.<br><span>Anywhere.</span></h1>
-          <p class="hero-description">The apps, APIs, and MCP servers on your own computers, all within reach. Connect your devices privately, or share selected services at a public HTTPS address.</p>
+          <p class="hero-description">The apps, APIs, and MCP servers on your own computers, all within reach. Pair your devices privately in Wisp Space, or share selected services at a public HTTPS address.</p>
           <div class="hero-actions">
 
-            <a class="text-link" href="#connections">How it works <span aria-hidden="true">↓</span></a>
+            <a class="button button-outlined" href="#connections">
+              How it works <span aria-hidden="true">↓</span>
+            </a>
           </div>
-          <p class="hero-note">Private device connections need no Wispnet account.</p>
+          <p class="hero-note">
+            <span class="note-shield" aria-hidden="true">✓</span>
+            Private device connections need no Wispnet account.
+          </p>
         </div>
 
         <figure class="connection-figure">
-          <svg class="connection-art" viewBox="0 0 610 460" role="img" aria-labelledby="art-title art-description">
+          <svg class="connection-art" viewBox="0 0 620 470" role="img" aria-labelledby="art-title art-description">
             <title id="art-title">Your services connect to the devices you choose</title>
-            <desc id="art-description">A hosting computer connects privately to a laptop and an Android phone. A separate optional path represents a public link to a selected service.</desc>
+            <desc id="art-description">A hosting computer running Wispnet connects privately to a laptop and an Android phone across Wisp Space, while a separate optional path represents a public link to a selected service.</desc>
             <defs>
-              <radialGradient id="field"><stop stop-color="#d9e8c3" stop-opacity=".85"/><stop offset="1" stop-color="#edf2e5" stop-opacity="0"/></radialGradient>
-              <linearGradient id="screen" x2="0" y2="1"><stop stop-color="#fff"/><stop offset="1" stop-color="#f4f8ee"/></linearGradient>
-              <filter id="soft-shadow" x="-40%" y="-40%" width="180%" height="190%"><feDropShadow dx="0" dy="9" stdDeviation="12" flood-color="#1e422b" flood-opacity=".07"/></filter>
+              <radialGradient id="space-glow" cx="50%" cy="46%" r="54%">
+                <stop offset="0%" stop-color="#22569e" stop-opacity=".42"/>
+                <stop offset="52%" stop-color="#14284c" stop-opacity=".22"/>
+                <stop offset="100%" stop-color="#070b14" stop-opacity="0"/>
+              </radialGradient>
+              <linearGradient id="panel-grad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#111d36"/>
+                <stop offset="100%" stop-color="#0b1324"/>
+              </linearGradient>
+              <linearGradient id="tile-grad" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stop-color="#132240"/>
+                <stop offset="100%" stop-color="#0f1b33"/>
+              </linearGradient>
+              <linearGradient id="cyan-line" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0%" stop-color="#528ef2"/>
+                <stop offset="50%" stop-color="#65ceff"/>
+                <stop offset="100%" stop-color="#528ef2"/>
+              </linearGradient>
+              <filter id="panel-shadow" x="-25%" y="-25%" width="150%" height="160%">
+                <feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#02050b" flood-opacity=".65"/>
+              </filter>
+              <filter id="cyan-glow" x="-40%" y="-40%" width="180%" height="180%">
+                <feDropShadow dx="0" dy="0" stdDeviation="5" flood-color="#65ceff" flood-opacity=".45"/>
+              </filter>
             </defs>
-            <ellipse cx="314" cy="228" rx="286" ry="218" fill="url(#field)"/>
-            <circle cx="316" cy="225" r="179" fill="none" stroke="#d7e2cb" stroke-dasharray="3 9"/>
-            <circle cx="316" cy="225" r="118" fill="none" stroke="#dee7d5"/>
 
-            <path d="M205 212C139 212 114 233 107 289" fill="none" stroke="#f8faf5" stroke-width="10"/>
-            <path d="M205 212C139 212 114 233 107 289" fill="none" stroke="#4c8061" stroke-width="2.5"/>
-            <path d="M409 187C455 187 456 158 490 158" fill="none" stroke="#f8faf5" stroke-width="10"/>
-            <path d="M409 187C455 187 456 158 490 158" fill="none" stroke="#4c8061" stroke-width="2.5"/>
-            <path d="M316 276C316 328 367 339 422 347" fill="none" stroke="#80987b" stroke-width="2" stroke-dasharray="5 7"/>
-            <circle cx="155" cy="231" r="5" fill="#4c8061" stroke="#edf2e5" stroke-width="3"/>
-            <circle cx="451" cy="172" r="5" fill="#4c8061" stroke="#edf2e5" stroke-width="3"/>
-            <text x="73" y="243" class="art-small" transform="rotate(-12 73 243)">Private connections</text>
-            <text x="348" y="320" class="art-small">Optional</text>
+            <!-- Wisp Space radial nebula & orbital rings -->
+            <ellipse cx="312" cy="228" rx="292" ry="222" fill="url(#space-glow)"/>
+            <circle cx="312" cy="224" r="196" fill="none" stroke="#1e325c" stroke-width="1.2" stroke-dasharray="3 9"/>
+            <circle cx="312" cy="224" r="136" fill="none" stroke="#243c6e" stroke-width="1.2"/>
+            <path d="M 192 94 A 176 176 0 0 1 432 94" fill="none" stroke="#65ceff" stroke-opacity=".28" stroke-width="1.5" stroke-linecap="round"/>
+            <path d="M 442 346 A 176 176 0 0 1 182 346" fill="none" stroke="#528ef2" stroke-opacity=".25" stroke-width="1.5" stroke-linecap="round"/>
 
-            <g filter="url(#soft-shadow)">
-              <rect x="198" y="115" width="216" height="161" rx="17" fill="#fcfdf9" stroke="#55735c" stroke-width="2"/>
-              <rect x="207" y="125" width="198" height="127" rx="9" fill="url(#screen)" stroke="#e3eadb"/>
-              <path d="M293 276v19m26-19v19m-42 0h58" fill="none" stroke="#55735c" stroke-width="3" stroke-linecap="round"/>
-              <circle cx="306" cy="264" r="3" fill="#a4b697"/>
-            </g>
-            <text x="306" y="91" text-anchor="middle" class="art-label">Your computer</text>
-            <g class="art-service">
-              <rect x="226" y="143" width="159" height="25" rx="6" fill="#e6efdc"/>
-              <path d="m236 151 4 4-4 4m10 0h5" stroke="#4b7250" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-              <text x="260" y="160">MCP tools</text>
-              <rect x="226" y="177" width="159" height="25" rx="6" fill="#edf1e6"/>
-              <rect x="236" y="184" width="13" height="11" rx="2" fill="none" stroke="#4b7250" stroke-width="1.4"/>
-              <path d="M236 187h13" stroke="#4b7250" stroke-width="1.4"/>
-              <text x="260" y="194">Local apps</text>
-              <rect x="226" y="211" width="159" height="25" rx="6" fill="#f0f2e9"/>
-              <path d="m240 217-4 6 4 6m6-12 4 6-4 6" stroke="#4b7250" stroke-width="1.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-              <text x="260" y="228">Your API</text>
+            <!-- Starfield streaks & beacons -->
+            <g stroke-linecap="round">
+              <line x1="78" y1="74" x2="62" y2="62" stroke="#65ceff" stroke-opacity=".65" stroke-width="1.8"/>
+              <line x1="234" y1="42" x2="228" y2="25" stroke="#f0f8ff" stroke-opacity=".55" stroke-width="1.5"/>
+              <line x1="448" y1="48" x2="462" y2="34" stroke="#7da2ff" stroke-opacity=".65" stroke-width="1.8"/>
+              <line x1="576" y1="264" x2="594" y2="270" stroke="#65ceff" stroke-opacity=".55" stroke-width="1.6"/>
+              <line x1="46" y1="224" x2="28" y2="222" stroke="#f0f8ff" stroke-opacity=".45" stroke-width="1.5"/>
+              <circle cx="144" cy="112" r="2" fill="#ffdfa8" fill-opacity=".85"/>
+              <circle cx="468" cy="288" r="2.2" fill="#65ceff" fill-opacity=".8"/>
+              <circle cx="242" cy="368" r="1.8" fill="#7da2ff" fill-opacity=".75"/>
+              <circle cx="96" cy="176" r="1.6" fill="#f0f8ff" fill-opacity=".7"/>
+              <circle cx="584" cy="122" r="1.8" fill="#ffdfa8" fill-opacity=".75"/>
             </g>
 
-            <g filter="url(#soft-shadow)">
-              <rect x="29" y="290" width="155" height="99" rx="9" fill="#fcfdf9" stroke="#698069" stroke-width="2"/>
-              <rect x="37" y="298" width="139" height="82" rx="4" fill="#e5edda"/>
-              <path d="M17 389h179l-9 10H27z" fill="#f9fbf4" stroke="#698069" stroke-width="2" stroke-linejoin="round"/>
-              <path d="M91 389h31" stroke="#698069" stroke-width="2"/>
-              <path d="M96 326c9-13 17 13 26 0m-26 13c9-13 17 13 26 0" fill="none" stroke="#6e9471" stroke-width="3" stroke-linecap="round"/>
-            </g>
-            <text x="106" y="426" text-anchor="middle" class="art-label">Your laptop</text>
+            <!-- Connection paths -->
+            <path d="M188 214C132 214 108 238 102 288" fill="none" stroke="#0b1528" stroke-width="9"/>
+            <path d="M188 214C132 214 108 238 102 288" fill="none" stroke="url(#cyan-line)" stroke-width="2.6" filter="url(#cyan-glow)"/>
 
-            <g filter="url(#soft-shadow)">
-              <rect x="490" y="79" width="90" height="170" rx="18" fill="#fcfdf9" stroke="#698069" stroke-width="2"/>
-              <rect x="497" y="87" width="76" height="154" rx="12" fill="#e5edda"/>
-              <rect x="521" y="91" width="28" height="5" rx="2.5" fill="#a9bb9c"/>
-              <path d="M520 154c9-13 17 13 26 0m-26 13c9-13 17 13 26 0" fill="none" stroke="#6e9471" stroke-width="3" stroke-linecap="round"/>
-              <path d="M525 230h20" stroke="#a9bb9c" stroke-width="3" stroke-linecap="round"/>
-            </g>
-            <text x="535" y="58" text-anchor="middle" class="art-label">Your Android</text>
+            <path d="M436 184C472 184 474 156 500 156" fill="none" stroke="#0b1528" stroke-width="9"/>
+            <path d="M436 184C472 184 474 156 500 156" fill="none" stroke="url(#cyan-line)" stroke-width="2.6" filter="url(#cyan-glow)"/>
 
-            <g filter="url(#soft-shadow)">
-              <rect x="359" y="348" width="227" height="72" rx="15" fill="#fcfdf9" stroke="#d4deca"/>
-              <circle cx="388" cy="384" r="15" fill="#edf2e5"/>
-              <path d="m385 381 3-3a4 4 0 0 1 6 6l-3 3m-6 3-3 3a4 4 0 0 1-6-6l3-3m4 3 6-6" transform="translate(3 -4)" fill="none" stroke="#5b7e58" stroke-width="1.8" stroke-linecap="round"/>
-              <text x="413" y="379" class="art-label">A public link</text>
-              <text x="413" y="398" class="art-small">Access you control</text>
+            <path d="M312 292C312 340 356 358 392 368" fill="none" stroke="#7be0b8" stroke-opacity=".7" stroke-width="2.2" stroke-dasharray="5 7"/>
+
+            <!-- Three-layer WispStatusDots on connection paths -->
+            <g>
+              <circle cx="140" cy="233" r="8" fill="#65ceff" fill-opacity=".26"/>
+              <circle cx="140" cy="233" r="4.5" fill="#65ceff"/>
+              <circle cx="140" cy="233" r="2" fill="#f4fcff"/>
+
+              <circle cx="468" cy="170" r="8" fill="#65ceff" fill-opacity=".26"/>
+              <circle cx="468" cy="170" r="4.5" fill="#65ceff"/>
+              <circle cx="468" cy="170" r="2" fill="#f4fcff"/>
+
+              <circle cx="342" cy="348" r="7.5" fill="#7be0b8" fill-opacity=".24"/>
+              <circle cx="342" cy="348" r="4.2" fill="#7be0b8"/>
+              <circle cx="342" cy="348" r="1.8" fill="#f4fcff"/>
+            </g>
+
+            <text x="64" y="242" class="art-small" transform="rotate(-14 64 242)">Private Wisp Space</text>
+            <text x="348" y="330" class="art-small art-small-green">Optional public HTTPS</text>
+
+            <!-- Central Host Computer (Desktop App Window) -->
+            <text x="312" y="76" text-anchor="middle" class="art-label">Your computer · Host</text>
+            <g filter="url(#panel-shadow)">
+              <rect x="188" y="92" width="248" height="196" rx="20" fill="url(#panel-grad)" stroke="#294270" stroke-width="1.8"/>
+              <!-- Window header bar -->
+              <text x="206" y="119" class="art-window-title">workstation · 96586a11</text>
+              <!-- Online pill matching WispHeader -->
+              <rect x="358" y="104" width="62" height="22" rx="11" fill="#12254a" stroke="#5b9cf7" stroke-width="1.2"/>
+              <circle cx="370" cy="115" r="5" fill="#65ceff" fill-opacity=".28"/>
+              <circle cx="370" cy="115" r="2.8" fill="#65ceff"/>
+              <circle cx="370" cy="115" r="1.2" fill="#f4fcff"/>
+              <text x="378" y="119" class="art-pill-text">Online</text>
+
+              <!-- Service Tile 1: MCP tools -->
+              <rect x="204" y="136" width="216" height="42" rx="12" fill="url(#tile-grad)" stroke="#32518a" stroke-width="1.3"/>
+              <path d="m218 153 4 4-4 4m8 0h6" stroke="#65ceff" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+              <text x="238" y="156" class="art-service-title">gike-mcp</text>
+              <text x="238" y="170" class="art-service-kind">HTTP · MCP</text>
+              <rect x="340" y="148" width="68" height="18" rx="6" fill="#7be0b8" fill-opacity=".14"/>
+              <text x="374" y="160" text-anchor="middle" class="art-badge-green">Public · Online</text>
+
+              <!-- Service Tile 2: Local web app -->
+              <rect x="204" y="186" width="216" height="42" rx="12" fill="url(#tile-grad)" stroke="#32518a" stroke-width="1.3"/>
+              <path d="M218 211l8-8m0 0h-6m6 0v6" stroke="#65ceff" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+              <text x="238" y="206" class="art-service-title">studio-web</text>
+              <text x="238" y="220" class="art-service-kind">HTTP · PRIVATE</text>
+              <circle cx="402" cy="207" r="3.5" fill="#65ceff"/>
+
+              <!-- Service Tile 3: Native Shell -->
+              <rect x="204" y="236" width="216" height="38" rx="12" fill="url(#tile-grad)" stroke="#32518a" stroke-width="1.3"/>
+              <path d="m218 251 4 4-4 4m8 0h6" stroke="#65ceff" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+              <text x="238" y="259" class="art-service-title">terminal</text>
+              <text x="374" y="259" class="art-service-kind">SHELL</text>
+            </g>
+
+            <!-- Paired Laptop -->
+            <g filter="url(#panel-shadow)">
+              <rect x="26" y="290" width="156" height="100" rx="12" fill="#0b1324" stroke="#294270" stroke-width="1.8"/>
+              <rect x="35" y="299" width="138" height="80" rx="7" fill="#101a30" stroke="#1d2842"/>
+              <path d="M14 390h180l-9 10H23z" fill="#101a30" stroke="#294270" stroke-width="1.6" stroke-linejoin="round"/>
+              <path d="M88 390h32" stroke="#4b73c2" stroke-width="2"/>
+              <!-- Wisp Core on laptop screen -->
+              <circle cx="104" cy="339" r="22" fill="#0f1c36" stroke="#528ef2" stroke-width="1.4"/>
+              <circle cx="104" cy="339" r="13" fill="#65ceff" fill-opacity=".18" stroke="#65ceff" stroke-opacity=".45"/>
+              <circle cx="104" cy="339" r="4.5" fill="#65ceff"/>
+              <circle cx="104" cy="339" r="2" fill="#ffffff"/>
+            </g>
+            <text x="104" y="424" text-anchor="middle" class="art-label">Your laptop</text>
+
+            <!-- Paired Android Phone -->
+            <text x="542" y="56" text-anchor="middle" class="art-label">Your Android</text>
+            <g filter="url(#panel-shadow)">
+              <rect x="496" y="72" width="92" height="172" rx="20" fill="#0b1324" stroke="#294270" stroke-width="1.8"/>
+              <rect x="504" y="81" width="76" height="154" rx="14" fill="#101a30" stroke="#1d2842"/>
+              <rect x="528" y="87" width="28" height="4" rx="2" fill="#294270"/>
+              <!-- Wisp Core on phone screen -->
+              <circle cx="542" cy="154" r="24" fill="#0f1c36" stroke="#528ef2" stroke-width="1.4"/>
+              <circle cx="542" cy="154" r="14" fill="#65ceff" fill-opacity=".18" stroke="#65ceff" stroke-opacity=".45"/>
+              <circle cx="542" cy="154" r="4.5" fill="#65ceff"/>
+              <circle cx="542" cy="154" r="2" fill="#ffffff"/>
+              <rect x="516" y="194" width="52" height="16" rx="8" fill="#12254a" stroke="#5b9cf7" stroke-width="1"/>
+              <text x="542" y="205" text-anchor="middle" class="art-pill-text">Online</text>
+              <path d="M531 226h22" stroke="#4b73c2" stroke-width="2.5" stroke-linecap="round"/>
+            </g>
+
+            <!-- Public Link Card -->
+            <g filter="url(#panel-shadow)">
+              <rect x="366" y="344" width="234" height="78" rx="18" fill="url(#panel-grad)" stroke="#294270" stroke-width="1.6"/>
+              <circle cx="400" cy="383" r="18" fill="#11223d" stroke="#32518a" stroke-width="1.2"/>
+              <path d="m394 383 3-3a4 4 0 0 1 6 6l-3 3m-6 3-3 3a4 4 0 0 1-6-6l3-3m4 3 6-6" transform="translate(3 -3)" fill="none" stroke="#7be0b8" stroke-width="1.9" stroke-linecap="round"/>
+              <text x="428" y="377" class="art-label">A public HTTPS link</text>
+              <text x="428" y="397" class="art-small">Your service controls access</text>
             </g>
           </svg>
           <figcaption>Your services stay on the computer that runs them.</figcaption>
@@ -109,63 +207,104 @@
       </section>
 
       <section class="principles wrap" aria-label="Wispnet principles">
-        <p><span aria-hidden="true">↗</span> Connect from home or away</p>
-        <p><span aria-hidden="true">⌁</span> Encrypted device connections</p>
-        <p><span aria-hidden="true">◎</span> Your host sets the permissions</p>
+        <div class="principle-item">
+          <span class="principle-icon" aria-hidden="true">↗</span>
+          <p>Connect from home or away</p>
+        </div>
+        <div class="principle-item">
+          <span class="principle-icon" aria-hidden="true">⌁</span>
+          <p>Encrypted peer-to-peer &amp; relay tunnels</p>
+        </div>
+        <div class="principle-item">
+          <span class="principle-icon" aria-hidden="true">◎</span>
+          <p>Your host sets the permissions</p>
+        </div>
       </section>
 
       <section class="connections wrap" id="connections" aria-labelledby="connections-title">
         <div class="section-heading">
-          <p class="eyebrow">Two ways to bring a service closer</p>
+          <p class="eyebrow">
+            <span class="status-dot status-dot-cyan" aria-hidden="true"></span>
+            Two ways to bring a service closer
+          </p>
           <h2 id="connections-title">Your circle. Or a wider one.</h2>
-          <p>Keep a service between your own devices, or choose to give it a public address. You decide what’s available and who gets in.</p>
+          <p>Keep a service strictly between your own paired devices, or choose to give it a public HTTPS address. You decide what is available and who gets in.</p>
         </div>
+
         <div class="access-modes">
           <article class="access-mode private-mode">
-            <div class="mode-top"><span class="mode-number">01</span><span class="mode-kind">PRIVATE DEVICE ACCESS</span></div>
+            <div class="mode-top">
+              <span class="mode-number">01</span>
+              <span class="mode-kind">PRIVATE DEVICE ACCESS</span>
+            </div>
             <h3>Pair your devices.<br>Keep it personal.</h3>
-            <p>Reach the services on your computers from another computer or your Android phone. Pair devices you trust, then choose which services each can open.</p>
+            <p>Reach the services on your computers from another computer or your Android phone. Pair devices you trust via QR or invitation code, then choose which services each device can open.</p>
             <ul>
-              <li>Encrypted connections between your devices</li>
-              <li>Permissions stay with the hosting computer</li>
-              <li>Open web services in your normal browser</li>
+              <li>End-to-end encrypted connections between your devices</li>
+              <li>Service permissions stay on the hosting computer</li>
+              <li>Open web apps and native shells directly from Wisp Space</li>
             </ul>
-            <p class="mode-note"><span aria-hidden="true">✓</span> No Wispnet account required</p>
+            <p class="mode-note">
+              <span class="status-dot status-dot-cyan" aria-hidden="true"></span>
+              No Wispnet account required
+            </p>
           </article>
+
           <article class="access-mode public-mode">
-            <div class="mode-top"><span class="mode-number">02</span><span class="mode-kind">PUBLIC SERVICE ACCESS</span></div>
+            <div class="mode-top">
+              <span class="mode-number mode-number-green">02</span>
+              <span class="mode-kind mode-kind-green">PUBLIC SERVICE ACCESS</span>
+            </div>
             <h3>Share a link.<br>Your service sets access.</h3>
             <p>Publish an HTTPS URL for a service you select. The service decides whether to require a login, API key, or no authentication.</p>
             <ul>
-              <li>Publish selected services explicitly</li>
+              <li>Publish selected HTTP and MCP services explicitly</li>
               <li>Keep authentication and user permissions in the service</li>
               <li>Stop publishing from the hosting computer</li>
             </ul>
-            <p class="mode-note"><span aria-hidden="true">↗</span> Authentication belongs to each service</p>
+            <p class="mode-note mode-note-green">
+              <span class="status-dot status-dot-green" aria-hidden="true"></span>
+              Authentication belongs to each service
+            </p>
           </article>
         </div>
       </section>
 
       <section class="start wrap" aria-labelledby="start-title">
-        <div>
-          <p class="eyebrow">Connect your own devices</p>
-          <h2 id="start-title">Your next connection<br>starts here.</h2>
-          <p>Pair your devices in the desktop or Android app, then choose which services to share.</p>
+        <div class="start-panel">
+          <div class="start-copy">
+            <p class="eyebrow">
+              <span class="status-dot status-dot-green" aria-hidden="true"></span>
+              Connect your own devices
+            </p>
+            <h2 id="start-title">Your next connection<br>starts here.</h2>
+            <p>Pair your devices in the desktop or Android app, then choose which services to share.</p>
 
+          </div>
+
+          <aside class="preview-note" aria-label="Client availability">
+            <div class="core-badge" aria-hidden="true">
+              <img class="brand-mark brand-mark-large" src="/logo.png" width="48" height="48" alt="">
+            </div>
+            <div>
+              <h3>A little early. Already connected.</h3>
+              <p>Wispnet’s desktop and Android clients are currently in private preview.</p>
+              <p class="preview-small">Built around your computers, your services, and your control.</p>
+            </div>
+          </aside>
         </div>
-        <aside class="preview-note" aria-label="Client availability">
-          <svg viewBox="0 0 40 40" fill="none" aria-hidden="true"><path d="M7 14c7-10 13 10 20 0s10 0 8 5M7 23c7-10 13 10 20 0s10 0 8 5" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
-          <h3>A little early. Already connected.</h3>
-          <p>Wispnet’s desktop and Android clients are currently in private preview.</p>
-          <p class="preview-small">Built around your computers, your services, and your control.</p>
-        </aside>
       </section>
     </main>
 
     <footer class="site-footer wrap">
-      <a class="wordmark footer-brand" href="/">Wispnet</a>
+      <a class="wordmark footer-brand" href="/">
+        <img class="brand-mark brand-mark-small" src="/logo.png" width="28" height="28" alt="">
+        Wispnet
+      </a>
       <p>Your services. Any device. Wherever you are.</p>
-      <a href="https://github.com/biplabs/wispnet" aria-label="GitHub private repository; access required" title="Private GitHub repository; access required">GitHub <span class="repository-note">(access required)</span> <span aria-hidden="true">↗</span></a>
+      <a class="footer-link" href="https://github.com/biplabs/wispnet" aria-label="GitHub private repository; access required" title="Private GitHub repository; access required">
+        GitHub <span class="repository-note">(access required)</span> <span aria-hidden="true">↗</span>
+      </a>
     </footer>
   </body>
 </html>

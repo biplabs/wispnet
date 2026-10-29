@@ -10,7 +10,7 @@ Preview from the repository root:
 python3 -m http.server 18400 --bind 127.0.0.1 --directory apps/website
 ```
 
-Deploy `index.html`, `style.css`, and `favicon.svg` together to a versioned folder
+Deploy `index.html`, `style.css`, `favicon.svg`, and `logo.png` together to a versioned folder
 on the existing HTTPS gateway, with
 `~/.local/share/wispnet-website/current` pointing to that folder. Merge the exact
 apex-host block from `deploy/website/Caddyfile.fragment` into the existing Caddy
