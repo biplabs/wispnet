@@ -1,10 +1,5 @@
 # Browser gateway security and compatibility (#10)
 
-Optional [host credential mediation](command-center.md) runs after local owner or
-device authorization. Managed routes use the registered loopback backend Host
-and an owner-configured credential; pass-through retains application headers.
-The public account extension is separate from this private gateway boundary.
-
 ## v1 decision
 
 The shared Rust Android/desktop gateway serves **HTTP only on IPv4 loopback**.

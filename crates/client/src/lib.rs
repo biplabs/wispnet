@@ -1,6 +1,5 @@
 //! Shared peer browser client. One identity/endpoint shared by pairing, catalogs and gateway.
 pub mod access_settings;
-mod command_center;
 pub mod gateway;
 mod mcp;
 pub mod public_access;
@@ -38,7 +37,6 @@ pub struct Client {
     state: PathBuf,
     pub gateway: gateway::Gateways,
     pub publications: public_access::Publications,
-    command_center_lock: tokio::sync::Mutex<()>,
     pub(crate) local_authority: Option<wispnet_registry::host::Authority>,
     telemetry: Mutex<wispnet_agent::tunnel::PeerTelemetry>,
     _host: Option<wispnet_agent::tunnel::TunnelHost>,
@@ -144,7 +142,6 @@ impl Client {
             config,
             gateway: gateway::Gateways::default(),
             publications: public_access::Publications::new(),
-            command_center_lock: tokio::sync::Mutex::new(()),
             local_authority: Some(authority),
             telemetry: Mutex::new(std::collections::BTreeMap::new()),
             _host: None,
@@ -171,7 +168,6 @@ impl Client {
             state,
             gateway: gateway::Gateways::default(),
             publications: public_access::Publications::new(),
-            command_center_lock: tokio::sync::Mutex::new(()),
             local_authority: None,
             telemetry: Mutex::new(std::collections::BTreeMap::new()),
             _host: None,
@@ -228,7 +224,6 @@ impl Client {
             state,
             gateway: gateway::Gateways::default(),
             publications: public_access::Publications::new(),
-            command_center_lock: tokio::sync::Mutex::new(()),
             local_authority: Some(authority),
             telemetry: Mutex::new(std::collections::BTreeMap::new()),
             _host: Some(host),
@@ -615,13 +610,6 @@ impl Client {
                     .map(|(k, (path, rtt_ms))| (k, json!({"path": path, "rtt_ms": rtt_ms})))
                     .collect();
                 Ok(json!({"peers": peers}))
-            }
-            "command_center_status"
-            | "command_center_link"
-            | "command_center_poll"
-            | "command_center_unlink" => command_center::command(self.clone(), value).await,
-            "configure_backend_auth" => {
-                command_center::configure_backend(self.clone(), value).await
             }
             "public_status" => self.publications.status(self).await,
             "configure_public" | "configure_public_gateway" => {

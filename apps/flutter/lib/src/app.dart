@@ -10,7 +10,6 @@ import 'sheets.dart';
 import 'cards.dart';
 import 'header.dart';
 import 'desktop_settings.dart';
-import 'command_center/command_center.dart';
 import 'terminal_sheet.dart';
 
 class WispnetApp extends StatelessWidget {
@@ -676,35 +675,14 @@ class _WispHomeState extends State<WispHome>
     await showWispSheet<void>(
       context,
       title: 'Settings',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          SettingsForm(
-            backend: backend,
-            deviceName: snapshot['name'] as String? ?? '',
-            onSaved: () {
-              Navigator.pop(context);
-              notice('Settings saved');
-              unawaited(poll());
-            },
-          ),
-          if (snapshot['desktop'] == true && commandCenterEnabled) ...[
-            const SizedBox(height: 16),
-            const Divider(),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: CommandCenterAccountButton(
-                backend: backend,
-                onChanged: () => unawaited(poll()),
-              ),
-            ),
-            const SizedBox(height: 4),
-            const Text(
-              'An account is only needed to expose services to the public internet through the Wispnet gateway.',
-              style: TextStyle(color: WispColors.muted),
-            ),
-          ],
-        ],
+      child: SettingsForm(
+        backend: backend,
+        deviceName: snapshot['name'] as String? ?? '',
+        onSaved: () {
+          Navigator.pop(context);
+          notice('Settings saved');
+          unawaited(poll());
+        },
       ),
     );
   }

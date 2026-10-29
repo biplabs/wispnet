@@ -1,8 +1,8 @@
 # Wispnet homepage
 
-Buildless public homepage for `https://wispnet.app`. The account and public-access
-dashboard is a separate service at `https://cmd.wispnet.app`. This page has no
-account state, scripts, analytics, or external asset dependencies.
+Buildless public homepage for `https://wispnet.app`. Published services choose
+their own authentication. This page has no account state, scripts, analytics,
+or external asset dependencies.
 
 Preview from the repository root:
 
@@ -14,7 +14,7 @@ Deploy `index.html`, `style.css`, and `favicon.svg` together to a versioned fold
 on the existing HTTPS gateway, with
 `~/.local/share/wispnet-website/current` pointing to that folder. Merge the exact
 apex-host block from `deploy/website/Caddyfile.fragment` into the existing Caddy
-configuration, preserving relay, wildcard publications, and Command Center.
+configuration, preserving the relay and wildcard publications.
 Validate Caddy before applying the configuration. The current gateway disables
 its admin API, so applying it requires a service restart.
 

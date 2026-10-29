@@ -1,6 +1,5 @@
 //! Persistent single-owner registry with an authenticated loopback API.
 pub mod api;
-pub mod backend_credentials;
 pub mod client;
 pub mod combined;
 pub mod control;

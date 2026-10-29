@@ -1,5 +1,0 @@
-# Add this explicit host to the existing HTTPS front end. Preserve the existing
-# relay, certificate admission, public gateway and global port configuration.
-cmd.wispnet.app {
-    reverse_proxy 127.0.0.1:8325
-}

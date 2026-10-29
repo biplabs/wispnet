@@ -1,5 +1,5 @@
 # Merge this exact apex host into the existing HTTPS configuration.
-# Preserve relay, wildcard service routes, and the Command Center host.
+# Preserve the relay and wildcard service routes.
 wispnet.app {
     root * /home/johnny/.local/share/wispnet-website/current
     encode zstd gzip

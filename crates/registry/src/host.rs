@@ -682,7 +682,6 @@ pub(crate) fn apply_mutation(
 pub struct Authority {
     pub(crate) host: EndpointId,
     pub(crate) store: Arc<Mutex<Store>>,
-    directory: Arc<std::path::PathBuf>,
     device_id: Arc<std::sync::RwLock<String>>,
     public_links: Arc<std::sync::RwLock<Vec<wispnet_core::host::PublicLink>>>,
 }
@@ -702,7 +701,6 @@ impl Authority {
         Ok(Self {
             host,
             store: Arc::new(Mutex::new(store)),
-            directory: Arc::new(directory.to_path_buf()),
             device_id: Arc::new(std::sync::RwLock::new(format!(
                 "device-{}",
                 &host.to_string()[..8]
@@ -730,10 +728,6 @@ impl Authority {
     }
     pub fn host(&self) -> EndpointId {
         self.host
-    }
-    /// Internal host-local storage location; never part of peer catalogs.
-    pub fn state_directory(&self) -> &Path {
-        &self.directory
     }
     /// Runtime advertisements contain no backend addresses or gateway credentials.
     pub fn set_public_links(

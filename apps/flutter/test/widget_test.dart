@@ -13,7 +13,6 @@ import 'package:wispnet/src/cards.dart';
 import 'package:wispnet/src/header.dart';
 import 'package:wispnet/src/space.dart';
 import 'package:wispnet/src/desktop_settings.dart';
-import 'package:wispnet/src/command_center/command_center.dart';
 import 'package:wispnet/src/terminal_sheet.dart';
 import 'package:wispnet/src/theme.dart';
 
@@ -289,15 +288,6 @@ class DesktopFake extends FakeBackend {
       };
     }
     if (method == 'desktopRequest') {
-      if (arguments['payload']['op'] == 'command_center_status') {
-        return {
-          'enabled': true,
-          'base_url': 'https://cmd.wispnet.app',
-          'linked': true,
-          'account': {'id': 'fixture-user', 'name': 'Fixture user'},
-          'credentials': <Map<String, dynamic>>[],
-        };
-      }
       ownerCalls.add(arguments['payload'] as Map<String, dynamic>);
       final operation = arguments['payload']['operation'];
       if (operation?['op'] == 'shell') {
@@ -364,30 +354,6 @@ class DesktopFake extends FakeBackend {
   }
 }
 
-class AccountDesktopFake extends DesktopFake {
-  bool accountLinked = false;
-  final accountReads = <Map<String, dynamic>>[];
-
-  @override
-  Future<Map<String, dynamic>> invoke(
-    String method, [
-    Map<String, dynamic> arguments = const {},
-  ]) async {
-    if (method == 'desktopRequest' &&
-        arguments['payload']?['op'] == 'command_center_status') {
-      accountReads.add(arguments);
-      return {
-        'enabled': true,
-        'base_url': 'https://cmd.wispnet.app',
-        'linked': accountLinked,
-        if (accountLinked) 'account': {'id': 'alice-id', 'name': 'Alice'},
-        'credentials': <Map<String, dynamic>>[],
-      };
-    }
-    return super.invoke(method, arguments);
-  }
-}
-
 Future<void> mount(
   WidgetTester tester,
   FakeBackend backend, {
@@ -443,121 +409,6 @@ Future<void> screenshot(WidgetTester tester, String name) async {
 }
 
 void main() {
-  testWidgets('desktop public sign-in stays optional inside gear settings', (
-    tester,
-  ) async {
-    for (final enabled in [true, false]) {
-      final backend = AccountDesktopFake()..enabled = enabled;
-      await mount(tester, backend, size: const Size(1000, 850));
-      final entry = find.byKey(const ValueKey('public-account'));
-      final accountNote = find.textContaining('An account is only needed');
-      expect(entry, findsNothing);
-      expect(accountNote, findsNothing);
-      expect(find.text('Sign in with GitHub'), findsNothing);
-      expect(backend.accountReads, isEmpty);
-      expect(
-        find.byTooltip(enabled ? 'Online' : 'Enter wisp space'),
-        findsOneWidget,
-      );
-      await tester.pump(const Duration(seconds: 8));
-      expect(backend.accountReads, isEmpty);
-      await screenshot(
-        tester,
-        'desktop-home-${enabled ? 'online' : 'offline'}-account-hidden',
-      );
-      if (!enabled) {
-        expect(find.byTooltip('Settings'), findsNothing);
-        await close(tester);
-        continue;
-      }
-      await tester.tap(find.byTooltip('Settings'));
-      await tester.pumpAndSettle();
-      expect(find.widgetWithText(TextField, 'Device ID'), findsOneWidget);
-      expect(find.widgetWithText(TextField, 'Wispnet port'), findsOneWidget);
-      expect(find.widgetWithText(FilledButton, 'Save'), findsOneWidget);
-      if (!commandCenterEnabled) {
-        expect(entry, findsNothing);
-        expect(accountNote, findsNothing);
-        expect(backend.accountReads, isEmpty);
-        await close(tester);
-        continue;
-      }
-      expect(entry, findsOneWidget);
-      expect(accountNote, findsOneWidget);
-      expect(
-        find.widgetWithText(TextButton, 'Sign in with GitHub'),
-        findsOneWidget,
-      );
-      expect(
-        tester.getRect(entry).top,
-        greaterThan(tester.getRect(find.text('Save')).bottom),
-      );
-      expect(
-        tester.getRect(accountNote).top,
-        greaterThan(tester.getRect(entry).bottom),
-      );
-      await tester.ensureVisible(accountNote);
-      await tester.pumpAndSettle();
-      await screenshot(
-        tester,
-        'desktop-settings-${enabled ? 'online' : 'offline'}-secondary-account',
-      );
-      await tester.tap(entry);
-      await tester.pumpAndSettle();
-      expect(find.text('Public account'), findsOneWidget);
-      expect(
-        find.widgetWithText(OutlinedButton, 'Sign in with GitHub'),
-        findsOneWidget,
-      );
-      expect(find.text('Backend authentication'), findsNothing);
-      expect(find.text('Enable public access'), findsNothing);
-      backend.accountLinked = true;
-      await tester.tap(find.byTooltip('Close').last);
-      await tester.pumpAndSettle();
-      expect(find.text('Logged in as Alice'), findsOneWidget);
-      expect(
-        tester.getRect(entry).left,
-        greaterThan(tester.getRect(find.text('Logged in as Alice')).right),
-      );
-      await tester.ensureVisible(accountNote);
-      await tester.pumpAndSettle();
-      await screenshot(tester, 'desktop-settings-online-linked-account');
-      expect(find.widgetWithText(TextField, 'Device ID'), findsOneWidget);
-      expect(backend.enabled, enabled);
-      expect(backend.ownerCalls, isEmpty);
-      await tester.ensureVisible(find.byTooltip('Close'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('Close'));
-      await tester.pumpAndSettle();
-      expect(entry, findsNothing);
-      final reads = backend.accountReads.length;
-      await tester.pump(const Duration(seconds: 8));
-      expect(backend.accountReads, hasLength(reads));
-      expect(tester.takeException(), isNull);
-      await close(tester);
-    }
-  });
-
-  testWidgets(
-    'Android private directory never loads desktop public-account controls',
-    (tester) async {
-      final backend = FakeBackend();
-      await mount(tester, backend);
-      expect(find.byKey(const ValueKey('public-account')), findsNothing);
-      await tester.tap(find.byTooltip('Settings'));
-      await tester.pumpAndSettle();
-      expect(find.widgetWithText(TextField, 'Device ID'), findsOneWidget);
-      expect(find.byKey(const ValueKey('public-account')), findsNothing);
-      expect(find.text('Sign in with GitHub'), findsNothing);
-      expect(find.textContaining('An account is only needed'), findsNothing);
-      expect(
-        backend.calls.where((call) => call.$1 == 'desktopRequest'),
-        isEmpty,
-      );
-      await close(tester);
-    },
-  );
-
   testWidgets(
     'service links enable access and launch the resolved HTTP URL once',
     (tester) async {
@@ -1351,42 +1202,6 @@ void main() {
       find.text('http://wispnet.localhost:18400/registry'),
       findsOneWidget,
     );
-    for (final (heading, url, description) in [
-      (
-        'Service registry',
-        'http://wispnet.localhost:18400/registry',
-        'Lists the services this device can access',
-      ),
-      (
-        'MCP (Model Context Protocol)',
-        'http://wispnet.localhost:18400/mcp',
-        'Connect AI assistants to Wispnet',
-      ),
-    ]) {
-      expect(
-        tester.getRect(find.text(url)).top,
-        greaterThan(tester.getRect(find.text(heading)).bottom),
-      );
-      expect(
-        tester.getRect(find.textContaining(description)).top,
-        greaterThan(tester.getRect(find.text(url)).bottom),
-      );
-    }
-    final divider = find.byKey(const ValueKey('settings-registry-mcp-divider'));
-    expect(
-      tester.getRect(divider).top,
-      greaterThan(
-        tester.getRect(find.textContaining('Lists the services')).bottom,
-      ),
-    );
-    expect(
-      tester.getRect(divider).bottom,
-      lessThan(tester.getRect(find.text('MCP (Model Context Protocol)')).top),
-    );
-    expect(
-      find.textContaining('No token or account sign-in is needed.'),
-      findsOneWidget,
-    );
     await tester.tap(find.byKey(const ValueKey('settings-address')));
     await tester.pumpAndSettle();
     expect(
@@ -2052,23 +1867,18 @@ void main() {
     await mount(tester, backend, size: const Size(1000, 850));
     await tester.tap(find.byTooltip('Settings for web on hibreak'));
     await tester.pumpAndSettle();
-    if (!commandCenterEnabled) {
-      expect(find.text('Enable public access'), findsNothing);
-      expect(find.text('Command Center'), findsNothing);
-      expect(backend.ownerCalls, isEmpty);
-      await close(tester);
-      return;
-    }
     await tester.ensureVisible(find.text('Enable public access'));
     await tester.tap(find.text('Enable public access'));
     await tester.pumpAndSettle();
     expect(backend.ownerCalls, isEmpty);
     expect(
-      find.textContaining('Public callers must be authorized'),
+      find.textContaining('unprotected to the public internet'),
       findsOneWidget,
     );
     expect(
-      find.textContaining('OAuth or a service bearer key'),
+      find.textContaining(
+        'without pairing, device approval, or Wispnet authentication',
+      ),
       findsOneWidget,
     );
     await tester.tap(find.text('Cancel'));
@@ -2081,8 +1891,6 @@ void main() {
     expect(backend.ownerCalls.single['op'], 'configure_public');
     expect(backend.ownerCalls.single['incarnation'], incarnation);
     expect(backend.ownerCalls.single['enabled'], true);
-    expect(backend.ownerCalls.single['managed'], true);
-    expect(backend.ownerCalls.single['mcp_path'], '/mcp');
     await close(tester);
   });
   testWidgets(
@@ -2102,15 +1910,11 @@ void main() {
         tester.getRect(remove).top - tester.getRect(edit).bottom,
         greaterThanOrEqualTo(8),
       );
-      if (commandCenterEnabled) {
-        expect(
-          tester.getRect(publish).top - tester.getRect(remove).bottom,
-          greaterThanOrEqualTo(8),
-        );
-      } else {
-        expect(publish, findsNothing);
-      }
-      for (final button in [remove, if (commandCenterEnabled) publish]) {
+      expect(
+        tester.getRect(publish).top - tester.getRect(remove).bottom,
+        greaterThanOrEqualTo(8),
+      );
+      for (final button in [remove, publish]) {
         expect(
           tester
               .widget<OutlinedButton>(button)

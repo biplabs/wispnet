@@ -37,69 +37,6 @@ fn remote_shell_hands_the_terminal_to_the_shell_client() {
     assert_eq!(app.shell,json!({"host":"b".repeat(64),"service":"shell","incarnation":service["incarnation"],"session":"main"}).into());
     assert!(rx.try_recv().is_err());
 }
-#[test]
-fn settings_account_entry_and_login_restore_path_do_not_mutate_private_access() {
-    let (mut app, rx, _root) = fixture();
-    app.page = Page::Home;
-    let account = app
-        .entries()
-        .into_iter()
-        .find(|entry| entry.id == "account")
-        .unwrap();
-    app.action(account.action);
-    let Work {
-        kind: Kind::Account,
-        task: Task::Request(request),
-    } = rx.try_recv().unwrap()
-    else {
-        panic!("Expected an account status read")
-    };
-    assert_eq!(request, json!({"op":"command_center_status"}));
-    app.busy = false;
-    app.action(Action::AccountLogin(false));
-    assert_eq!(app.account_login, Some(false));
-    assert!(app.shell.is_none());
-    assert!(rx.try_recv().is_err());
-}
-
-#[test]
-fn account_modal_shows_safe_status_and_confirms_sign_out_before_unlink() {
-    let (mut app, rx, _root) = fixture();
-    let (done, replies) = mpsc::channel();
-    app.rx = replies;
-    done.send(Reply {
-        kind: Kind::Account,
-        result: Ok(json!({"base_url":"https://cmd.wispnet.test","linked":true,"account":{"id":"fixture-id","name":"Fixture\u{1b}\u{202e} user","token":"SECRET"},"pending":null,"publisher_token":"SECRET"})),
-    }).unwrap();
-    app.receive();
-    let Some(Modal::Choice {
-        entries,
-        detail: lines,
-        ..
-    }) = &app.modal
-    else {
-        panic!("Expected account actions")
-    };
-    assert!(lines.iter().any(|line| line.contains("Fixture user")));
-    assert!(!lines.join("\n").contains("SECRET"));
-    let logout = entries
-        .iter()
-        .find(|entry| entry.id == "logout")
-        .unwrap()
-        .action
-        .clone();
-    app.action(logout);
-    assert!(rx.try_recv().is_err());
-    app.key(KeyCode::Enter.into());
-    let Work {
-        kind: Kind::Account,
-        task: Task::Request(request),
-    } = rx.try_recv().unwrap()
-    else {
-        panic!("Expected an explicitly confirmed unlink")
-    };
-    assert_eq!(request, json!({"op":"command_center_unlink"}));
-}
 fn fixture() -> (App, mpsc::Receiver<Work>, tempfile::TempDir) {
     let root = tempfile::tempdir().unwrap();
     let api = Api {

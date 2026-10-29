@@ -1,5 +1,4 @@
 use std::{env, path::PathBuf, process::ExitCode};
-mod account;
 mod manage;
 mod retry;
 mod shell;
@@ -90,20 +89,8 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         ]);
     }
     if args.len() == 1 && (args[0] == "--help" || args[0] == "-h") {
-        println!(
-            "{USAGE}\n\n{}\n\n{}\n\n{}",
-            account::HELP,
-            manage::HELP,
-            shell::HELP
-        );
+        println!("{USAGE}\n\n{}\n\n{}", manage::HELP, shell::HELP);
         return Ok(());
-    }
-    if args
-        .first()
-        .and_then(|a| a.to_str())
-        .is_some_and(account::handles)
-    {
-        return account::run(&args).await.map_err(Into::into);
     }
     if args
         .first()

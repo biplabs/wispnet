@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'backend.dart';
-import 'command_center/command_center.dart';
 import 'sheets.dart';
 import 'theme.dart';
 
@@ -695,19 +694,11 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                       danger: true,
                     ),
                   ],
+                  if (s['kind'] == 'http') ..._public(s),
                 ],
               ),
             ),
           ),
-        CommandCenterModule(
-          backend: widget.backend,
-          hostStatus: status!,
-          serviceId: widget.serviceId,
-          onChanged: () {
-            widget.onChanged();
-            unawaited(load());
-          },
-        ),
       ] else if (section == 'Devices') ...[
         Text(
           '${clients.length} approved devices · Active means connected or seen within the last 60 seconds.',
@@ -801,6 +792,36 @@ class _DesktopSettingsState extends State<DesktopSettings> {
       if (!widget.servicesOnly) action('Refresh', () => run(load)),
     ],
   );
+  List<Widget> _public(Map<String, dynamic> service) {
+    final enabled = publication(service)?['enabled'] == true;
+    return [
+      action(
+        enabled ? 'Disable public access' : 'Enable public access',
+        () => run(
+          () => confirm(
+            enabled
+                ? 'Disable public access?'
+                : 'Expose service to the internet?',
+            enabled
+                ? 'Stop public internet access to “${service['id']}”? Its public URL will stop working. Approved paired devices will keep their Wispnet access.'
+                : 'This exposes “${service['id']}” unprotected to the public internet. Anyone with the public URL can connect without pairing, device approval, or Wispnet authentication. Wispnet adds no password or access protection; any login must be provided by the service itself.',
+            () => request({
+              'op': 'configure_public',
+              'service': service['id'],
+              'incarnation': service['incarnation'],
+              'enabled': !enabled,
+              'name': status!['host_name'],
+            }),
+            danger: true,
+            confirmLabel: enabled
+                ? 'Disable public access'
+                : 'Enable public access',
+          ),
+        ),
+        danger: true,
+      ),
+    ];
+  }
 }
 
 typedef _FormBuilder = Widget Function(

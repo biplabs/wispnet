@@ -8,7 +8,7 @@ case "$(uname -s)" in
  *) echo 'Build on Linux or macOS; Windows node integration is not implemented.' >&2; exit 1 ;;
 esac
 (cd apps/flutter; ../../scripts/flutter.sh build "$platform" --release --dart-define="WISPNET_BUILD_ID=$version")
-cp apps/flutter/desktop/bridge.py apps/flutter/desktop/desktop_data.py apps/flutter/desktop/command_center.py "$bundle/"
+cp apps/flutter/desktop/bridge.py apps/flutter/desktop/desktop_data.py "$bundle/"
 cp apps/node/desktop/icon.png "$bundle/"
 mkdir -p "$bundle/wispnet_desktop"
 for name in __init__.py api.py combined.py catalog_cache.py; do

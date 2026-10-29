@@ -192,17 +192,6 @@ class DistributionTests(unittest.TestCase):
         )
         self.assertFalse((destination / ".venv").exists())
         self.assertFalse((destination / "wispnet_desktop/app.py").exists())
-        self.assertEqual(
-            (destination / "command_center.py").read_bytes(),
-            (ROOT / "apps/flutter/desktop/command_center.py").read_bytes(),
-        )
-        command_adapter = self.run_command(
-            sys.executable, "-I", "-c",
-            'import sys; sys.path.insert(0, sys.argv[1]); import command_center; '
-            'print(command_center.browser_target({"base_url":"https://cmd.wispnet.app"},"dashboard"))',
-            str(destination),
-        )
-        self.assertEqual(command_adapter.stdout.strip(), "https://cmd.wispnet.app/")
         self.assertEqual(self.status(), before)
         result = subprocess.run(
             [sys.executable, str(destination / "desktop_data.py")],
@@ -252,7 +241,6 @@ class DistributionTests(unittest.TestCase):
         manifest = json.loads((self.bundle / "manifest.json").read_text())
         self.assertEqual(manifest["platform"], "linux-x86_64")
         self.assertIn("bin/wispnet", manifest["sha256"])
-        self.assertIn("apps/flutter/desktop/command_center.py", manifest["sha256"])
         self.assertNotIn("apps/node/desktop/wispnet_desktop/app.py", manifest["sha256"])
         self.assertNotIn("apps/node/desktop/uv.lock", manifest["sha256"])
         for name, digest in manifest["sha256"].items():
