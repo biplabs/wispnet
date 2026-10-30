@@ -26,6 +26,12 @@ Wispnet brings your self-hosted services into one directory and makes them acces
 
 [Linux desktop/tray setup](docs/linux-desktop.md) · [macOS app](docs/macos-desktop.md). Installed service names, state paths and Android package ID stay unchanged by the source reorganization.
 
+Download the [development release](https://github.com/biplabs/wispnet/releases/tag/development)
+for Linux x86_64 or macOS (Apple Silicon and Intel), including the node/CLI,
+Flutter desktop and installer. GitHub Actions refreshes this prerelease after
+successful builds of `main`; see the [Linux bundle guide](docs/linux-distribution.md)
+or [macOS guide](docs/macos-desktop.md) for requirements and installation.
+
 ## Why Wispnet?
 
 You run a website on one computer and a `llama.cpp` server on another. Both should appear in one place and work from either computer or your phone, whether you are at home, at a coffee shop, or using cellular data.

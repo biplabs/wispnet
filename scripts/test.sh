@@ -23,6 +23,7 @@ cargo build -p wispnet-cli --example relay_fixture --locked
 python3 -m unittest discover -s scripts -p test_firewall_helper.py
 python3 -m unittest discover -s scripts -p test_uninstall.py
 python3 -m unittest discover -s scripts -p test_arch_package.py
+python3 -m unittest discover -s scripts -p test_macos_distribution.py
 python3 -m unittest discover -s scripts -p test_relay_network_audit.py
 python3 -m unittest discover -s scripts -p test_relay_discovery.py
 python3 scripts/standalone_relay_smoke.py

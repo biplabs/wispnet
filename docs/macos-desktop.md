@@ -6,7 +6,38 @@ The private Python bridge and persistence helpers live in `apps/flutter/desktop`
 the shared node API, catalog cache and owner-operation journals remain in
 `apps/node/desktop/wispnet_desktop`.
 
-## Build and install
+## Install a release bundle
+
+Download the macOS archive and its `.sha256` sidecar from the GitHub Release.
+Use `wispnet-macos-aarch64.tar.gz` for Apple Silicon or
+`wispnet-macos-x86_64.tar.gz` for Intel. The installed app requires macOS 13+
+and Python 3.11 or newer. Rust, Flutter and a source checkout are unnecessary
+when installing a release bundle.
+
+For Apple Silicon, verify and extract into a new directory:
+
+```sh
+shasum -a 256 --check wispnet-macos-aarch64.tar.gz.sha256
+tar -xzf wispnet-macos-aarch64.tar.gz
+cd wispnet-macos-aarch64
+python3 scripts/install_macos.py --init
+```
+
+Substitute `x86_64` for an Intel Mac. Use `--init` only when creating a new
+independent host. For an upgrade, quit any manually opened Wispnet app and run
+the new bundle's installer without `--init`. The installer verifies every
+payload checksum and framework symlink before changing installed files or
+initializing state. `manifest.json` records the source commit, build identity,
+architecture, minimum macOS version and payload hashes. Obtain the archive and
+checksum from a trusted release source; the checksum does not authenticate its
+publisher.
+
+The app is signed ad hoc. Developer ID signing, notarization and App Store
+distribution are not implemented; macOS may require approval to open downloaded
+software. The installer updates the app's private Python path to the interpreter
+used on your Mac.
+
+## Build and install from source
 
 Build on a Mac with Xcode and its command-line tools, Flutter 3.47.7, the pinned
 Rust toolchain, and Python 3.11 or newer. The installed app requires macOS 13+.
@@ -22,7 +53,7 @@ in an existing installation is an error. `--no-start` installs without restartin
 jobs; `--skip-build` uses existing build products. Quit a manually opened app
 before upgrading.
 
-The installer builds the Flutter release bundle and installs
+The source installer builds the Flutter release bundle. Both installation paths install
 `~/Applications/Wispnet.app`, the node under `~/.local/libexec/wispnet-node/`,
 and the terminal command `~/.local/bin/wispnet`. It also installs the private
 `wispnet-node` owner command for explicitly configured SSH owner operations.
@@ -55,8 +86,20 @@ when replacing an existing installation, keeping backups out of Applications.
 Extra launches reveal the existing desktop instead of starting a second copy.
 On macOS, left-clicking the menu-bar item opens its menu; right-click has no
 action. Choose **Open Wispnet** from the menu to show the desktop window.
-Signing is local and ad hoc; notarization and App Store distribution are not
-implemented.
+
+To build the same checkout-independent release archive on a Mac:
+
+```sh
+python3 scripts/package_macos.py
+```
+
+The native architecture determines the output name under `target/dist/`.
+The archive contains the release Rust node, complete Flutter app, installer,
+helpers, documentation, license notices and a provenance manifest. Framework
+symlinks are preserved. An explicitly prebuilt node/app can be supplied with
+`--binary` and `--app`; their architecture, build identity and app signature
+must match this checkout. A local dirty checkout is recorded in the manifest;
+GitHub release builds require clean source provenance.
 
 The local test suite covers shared Rust protocols, node API integration,
 Flutter widgets, desktop adapters, cache validation and owner operations.

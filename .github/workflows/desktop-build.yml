@@ -1,0 +1,174 @@
+name: Desktop builds
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    name: Build ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux-x86_64
+            flutter_platform: linux
+          - runner: macos-15
+            platform: macos-aarch64
+            flutter_platform: macos
+          - runner: macos-15-intel
+            platform: macos-x86_64
+            flutter_platform: macos
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install Linux desktop build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            binutils clang cmake ninja-build pkg-config \
+            libgtk-3-dev libayatana-appindicator3-dev
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: stable
+          flutter-version: '3.47.7'
+          cache: true
+      - name: Prepare Flutter desktop build
+        env:
+          FLUTTER_PLATFORM: ${{ matrix.flutter_platform }}
+        run: |
+          scripts/flutter.sh --version
+          scripts/flutter.sh config "--enable-$FLUTTER_PLATFORM-desktop"
+          scripts/flutter.sh precache "--$FLUTTER_PLATFORM"
+          cd apps/flutter
+          ../../scripts/flutter.sh pub get --enforce-lockfile
+      - name: Build Linux desktop distribution
+        if: runner.os == 'Linux'
+        run: python3 scripts/package_linux.py
+      - name: Build macOS desktop distribution
+        if: runner.os == 'macOS'
+        run: python3 scripts/package_macos.py
+      - name: Verify distribution provenance, checksum and native binary
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+          EXPECTED_PLATFORM: ${{ matrix.platform }}
+        run: |
+          target/release/wispnet --help > /dev/null
+          test "$(target/release/wispnet --version)" = "wispnet $(python3 scripts/build_identity.py)"
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, tarfile
+          platform = os.environ['EXPECTED_PLATFORM']
+          name = f'wispnet-{platform}'
+          archive = pathlib.Path('target/dist') / f'{name}.tar.gz'
+          checksum = archive.with_name(archive.name + '.sha256').read_text().split()
+          assert checksum == [hashlib.sha256(archive.read_bytes()).hexdigest(), archive.name]
+          with tarfile.open(archive) as bundle:
+              manifest = json.load(bundle.extractfile(f'{name}/manifest.json'))
+          assert manifest['source_commit'] == os.environ['EXPECTED_COMMIT'], 'Wrong source revision'
+          assert manifest['source_dirty'] is False, 'Build modified tracked sources'
+          assert manifest['platform'] == platform
+          assert manifest['desktop'] == 'flutter'
+          assert manifest['license'] == 'Apache-2.0'
+          PY
+      - name: Upload desktop build artifact
+        id: artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wispnet-${{ matrix.platform }}-${{ github.sha }}
+          path: |
+            target/dist/wispnet-${{ matrix.platform }}.tar.gz
+            target/dist/wispnet-${{ matrix.platform }}.tar.gz.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Summarize build
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+          PLATFORM: ${{ matrix.platform }}
+          ARTIFACT_URL: ${{ steps.artifact.outputs.artifact-url }}
+        run: |
+          {
+            echo "### $PLATFORM desktop build"
+            echo "Source commit: \`$SOURCE_COMMIT\`"
+            echo "[Download bundle and SHA-256 checksum]($ARTIFACT_URL)"
+            echo 'Contains the Rust node, Flutter desktop, installer, license and notices.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    name: Publish development prerelease
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: desktop-development-release
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SOURCE_COMMIT: ${{ github.sha }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: wispnet-*-${{ github.sha }}
+          merge-multiple: true
+          path: dist
+      - name: Verify complete release assets
+        working-directory: dist
+        run: |
+          for platform in linux-x86_64 macos-aarch64 macos-x86_64; do
+            sha256sum --check "wispnet-$platform.tar.gz.sha256"
+          done
+      - name: Publish rolling development release
+        run: |
+          # An older build must not replace a newer main build's release.
+          if [ "$(gh api "repos/$GH_REPO/git/ref/heads/main" --jq .object.sha)" != "$SOURCE_COMMIT" ]; then
+            echo 'A newer main commit exists; retaining artifacts without updating the release.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          cat > "$RUNNER_TEMP/release-notes.md" <<EOF
+          Automated development build from [$SOURCE_COMMIT](https://github.com/$GH_REPO/commit/$SOURCE_COMMIT).
+
+          Download the archive for your system and its SHA-256 sidecar. Each archive includes the native Wispnet node/CLI, Flutter desktop, installer and guides.
+
+          | System | Archive |
+          | --- | --- |
+          | Linux x86_64 (glibc, systemd) | wispnet-linux-x86_64.tar.gz |
+          | macOS 13+ Apple Silicon | wispnet-macos-aarch64.tar.gz |
+          | macOS 13+ Intel | wispnet-macos-x86_64.tar.gz |
+
+          Python 3.11+ is required for installation and desktop helpers. The macOS app is ad hoc signed and is not notarized.
+
+          This rolling prerelease is replaced after successful builds of main. It is a development snapshot, not a stable v1 release. Project tests run locally before pushing.
+          EOF
+          if gh release view development > /dev/null 2>&1; then
+            gh release upload development dist/*.tar.gz dist/*.sha256 --clobber
+            gh api --method PATCH "repos/$GH_REPO/git/refs/tags/development" \
+              -f "sha=$SOURCE_COMMIT" -F force=true > /dev/null
+            gh release edit development --title 'Development build' --prerelease --latest=false \
+              --notes-file "$RUNNER_TEMP/release-notes.md"
+          else
+            gh release create development dist/*.tar.gz dist/*.sha256 --target "$SOURCE_COMMIT" \
+              --title 'Development build' --prerelease --latest=false \
+              --notes-file "$RUNNER_TEMP/release-notes.md"
+          fi
+          echo "[Download Linux and macOS development builds](https://github.com/$GH_REPO/releases/tag/development)" >> "$GITHUB_STEP_SUMMARY"

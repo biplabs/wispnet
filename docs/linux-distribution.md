@@ -36,20 +36,28 @@ Build hosts need Flutter 3.47.7, Clang, CMake, Ninja, the corresponding developm
 before changing installed files. `--desktop-binary /absolute/Wispnet` packages an
 explicit prebuilt Flutter executable together with its sibling `lib`/`data` and helper files. Its provenance must be established separately.
 
-## GitHub Actions build artifact
+## GitHub Actions and development releases
 
-Every push to `main` automatically runs **Actions → Linux build**. You can also
-use **Run workflow** on `main` to rebuild manually. The workflow builds the Rust node and Flutter Linux x86_64 desktop on Ubuntu 24.04 using the
-existing packaging scripts, with Rust 1.95.0 and Flutter 3.47.7. It checks the
-archive checksum, clean source provenance, platform, desktop and license metadata.
+Every push to `main` automatically runs **Actions → Desktop builds**. You can also
+use **Run workflow** on `main` to rebuild manually. The workflow builds the Rust
+node and Flutter desktop for Linux x86_64 on Ubuntu 24.04, plus native macOS
+Apple Silicon and Intel bundles, with Rust 1.95.0 and Flutter 3.47.7. It checks
+archive checksums, clean source provenance, platform, desktop and license metadata.
 Project tests remain local through the required pre-push hook.
 
-After the run succeeds, download the `wispnet-linux-x86_64-COMMIT` artifact from
-its summary or Artifacts section. It contains `wispnet-linux-x86_64.tar.gz` and
-its `.sha256` sidecar; extract the artifact ZIP, then follow the verification and
-installation steps above. Artifacts are retained for 14 days. Access follows the
-repository's GitHub permissions, so private-repository builds require access.
-This workflow does not create GitHub Releases or publish/update an AUR package.
+After all three builds succeed, the workflow updates the rolling
+[Development build prerelease](https://github.com/biplabs/wispnet/releases/tag/development)
+with the archives and their `.sha256` sidecars. Download
+`wispnet-linux-x86_64.tar.gz` and its checksum directly from that release, then
+follow the verification and installation steps above. The release notes identify
+the source commit. This is a development snapshot, not a stable v1 release.
+Failed builds leave the previous release in place. A build superseded by a newer
+`main` commit retains its Actions artifacts without replacing the release.
+
+Each run also retains a `wispnet-linux-x86_64-COMMIT` Actions artifact for 14 days.
+It contains the same archive and checksum inside an artifact ZIP. Access follows
+the repository's GitHub permissions, so private-repository downloads require
+access. The workflow does not publish or update an AUR package.
 
 ## Fresh host: initialize explicitly
 

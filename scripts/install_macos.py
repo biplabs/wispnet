@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Build/install the Flutter macOS app and user launch agents from this checkout."""
+"""Install the Flutter macOS app and user launch agents from a checkout or bundle."""
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
+import platform
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -15,6 +18,49 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[1]
 LABEL = "app.wispnet.node"
 DESKTOP_LABEL = "app.wispnet.desktop"
+
+
+def distribution():
+    """Verify every packaged payload before touching configuration or installed files."""
+    if not (ROOT / "manifest.json").exists():
+        if (ROOT / "bin/wispnet").exists():
+            raise ValueError("Distribution manifest is missing")
+        return None
+    manifest = json.loads((ROOT / "manifest.json").read_text())
+    arch = {"arm64": "aarch64", "aarch64": "aarch64", "x86_64": "x86_64"}.get(platform.machine())
+    if (manifest.get("format") != 1 or manifest.get("platform") != f"macos-{arch}"
+        or manifest.get("desktop") != "flutter" or manifest.get("license") != "Apache-2.0"):
+        raise ValueError("Unsupported distribution platform or format")
+    if (not re.fullmatch(r"[0-9]+", str(manifest.get("source_count", "")))
+        or not re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,3}", manifest.get("version", ""))
+        or not isinstance(manifest.get("build_identity"), str)):
+        raise ValueError("Invalid distribution build metadata")
+    hashes = manifest["sha256"]
+    symlinks = manifest["symlinks"]
+    required = {"bin/wispnet", "Wispnet.app/Contents/MacOS/Wispnet", "scripts/install_macos.py"}
+    if not required.issubset(hashes) or set(hashes) & set(symlinks):
+        raise ValueError("Distribution is missing required payloads")
+    actual = set()
+    for path in ROOT.rglob("*"):
+        if path.is_symlink() or path.is_file():
+            actual.add(str(path.relative_to(ROOT)))
+        elif not path.is_dir():
+            raise ValueError(f"Unsupported distribution payload: {path.name}")
+    if actual != set(hashes) | set(symlinks) | {"manifest.json"}:
+        raise ValueError("Distribution payload does not match its manifest")
+    for name, expected in {**hashes, **symlinks}.items():
+        relative = Path(name)
+        path = ROOT / relative
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValueError(f"Invalid distribution path: {name}")
+        if name in symlinks:
+            if (not path.is_symlink() or os.readlink(path) != expected
+                or Path(expected).is_absolute() or not path.exists()
+                or not path.resolve().is_relative_to(ROOT.resolve())):
+                raise ValueError(f"Bundle checksum mismatch: {name}")
+        elif path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+            raise ValueError(f"Bundle checksum mismatch: {name}")
+    return manifest
 
 
 def run(*args, **kwargs):
@@ -51,16 +97,32 @@ def main():
     args = parser.parse_args()
     if sys.platform != "darwin":
         parser.error("This installer requires macOS")
+    if sys.version_info < (3, 11):
+        parser.error("Python 3.11 or newer is required")
+    try:
+        manifest = distribution()
+    except (ValueError, KeyError, OSError) as error:
+        parser.error(str(error))
     home = Path.home()
     config = home / ".config/wispnet-node/host.toml"
     state = home / ".local/state/wispnet-node"
     if not config.exists() and not args.init:
         parser.error("No existing host configuration. Use --init to explicitly create this Mac’s independent identity.")
-    if not args.skip_build:
+    if manifest is None and not args.skip_build:
         run("cargo", "build", "--workspace", "--locked", cwd=ROOT)
         run(ROOT / "scripts/build_flutter_desktop.sh")
-    node_source = ROOT / "target/debug/wispnet"
-    app_source = ROOT / "apps/flutter/build/macos/Build/Products/Release/Wispnet.app"
+    node_source = ROOT / ("bin/wispnet" if manifest else "target/debug/wispnet")
+    app_source = ROOT / ("Wispnet.app" if manifest else "apps/flutter/build/macos/Build/Products/Release/Wispnet.app")
+    run(node_source, "--help", stdout=subprocess.DEVNULL)
+    run("codesign", "--verify", "--deep", "--strict", app_source)
+    if manifest:
+        version = manifest["build_identity"]
+        build_number = manifest["source_count"]
+        app_version = manifest["version"]
+    else:
+        version = subprocess.check_output([sys.executable, str(ROOT / "scripts/build_identity.py")], text=True).strip()
+        build_number = subprocess.check_output(["git", "rev-list", "--count", "HEAD"], cwd=ROOT, text=True).strip()
+        app_version = "0.1.0"
     if not config.exists():
         # Never recover missing authority by silently creating a new identity.
         if state.exists():
@@ -145,15 +207,13 @@ def main():
                 run("sips", "-z", size * scale, size * scale, ROOT / "apps/node/desktop/icon.png", "--out",
                     iconset / f"icon_{size}x{size}{suffix}.png", stdout=subprocess.DEVNULL)
         run("iconutil", "-c", "icns", iconset, "-o", resources / "Wispnet.icns")
-    version = subprocess.check_output([sys.executable, str(ROOT / "scripts/build_identity.py")], text=True).strip()
-    build_number = subprocess.check_output(["git", "rev-list", "--count", "HEAD"], cwd=ROOT, text=True).strip()
     with (contents / "Info.plist").open("rb") as source:
         app_info = plistlib.load(source)
     write_plist(contents / "Info.plist", {
         **app_info,
         "CFBundleIdentifier": "app.wispnet.desktop", "CFBundleName": "Wispnet",
         "CFBundleDisplayName": "Wispnet", "CFBundleExecutable": "Wispnet",
-        "CFBundlePackageType": "APPL", "CFBundleShortVersionString": "0.1.0",
+        "CFBundlePackageType": "APPL", "CFBundleShortVersionString": app_version,
         "CFBundleVersion": build_number, "WispnetBuildIdentity": version, "CFBundleIconFile": "Wispnet.icns",
         "LSMinimumSystemVersion": "13.0", "NSHighResolutionCapable": True,
         "WispnetStateDirectory": str(state),
