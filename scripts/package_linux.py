@@ -51,6 +51,8 @@ def package(binary, output, desktop_binary=None):
             "LICENSE",
             "NOTICE",
             "vendor/iroh/LICENSE-BSD3",
+            "crates/shell/LICENSE",
+            "crates/shell/NOTICE.md",
             "apps/flutter/assets/fonts/Roboto_LICENSE.txt",
             "scripts/install_node_desktop.py",
             "scripts/node_request.py",
