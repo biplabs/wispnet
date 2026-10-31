@@ -207,6 +207,60 @@ class FakeBackend implements WispnetBackend {
   }
 }
 
+class UploadDockFake extends FakeBackend {
+  UploadDockFake()
+    : super(
+        shellService: true,
+        minimizedShell: {
+          'host': peer,
+          'host_name': 'j-strix',
+          'service': 'shell',
+          'incarnation': incarnation,
+          'session': 'main',
+          'title': 'j-strix · fish',
+          'state': 'attached',
+          'minimized': true,
+        },
+      );
+  final uploads = <String, Map<String, dynamic>>{};
+
+  void addUpload(
+    String id,
+    String host,
+    String name, {
+    String state = 'running',
+  }) {
+    uploads[id] = {
+      'transfer': id,
+      'host': host,
+      'host_name': host == peer ? 'j-strix' : 'j-desktop',
+      'incarnation': incarnation,
+      'workspace': '',
+      'local_path': 'content://documents/$id',
+      'name': name,
+      'state': state,
+      'phase': 'transferring',
+      'verified_bytes': 512 * 1024,
+      'size_bytes': 1024 * 1024,
+    };
+  }
+
+  @override
+  Future<Map<String, dynamic>> invoke(
+    String method, [
+    Map<String, dynamic> arguments = const {},
+  ]) async {
+    if (method == 'fileList') return {'transfers': uploads.values.toList()};
+    if (method == 'fileStatus' || method == 'fileCancel') {
+      calls.add((method, Map.of(arguments)));
+      final upload = uploads[arguments['transfer']]!;
+      if (method == 'fileCancel') upload['state'] = 'cancelled';
+      return Map.of(upload);
+    }
+    return super.invoke(method, arguments);
+  }
+}
+
 class LinkFake extends FakeBackend {
   LinkFake(this.link) : super(enabled: false);
   String? link;
@@ -2068,6 +2122,99 @@ void main() {
       await close(tester);
     },
   );
+  testWidgets(
+    'upload docks match shells and show only active receiving hosts',
+    (tester) async {
+      final secondHost = 'e' * 64;
+      final backend = UploadDockFake()
+        ..addUpload('first', peer, 'weights.bin')
+        ..addUpload('second', secondHost, 'config.json')
+        ..addUpload('old', peer, 'old.bin', state: 'complete');
+      await mount(tester, backend);
+      await tester.pump();
+      final shell = find.byKey(const ValueKey('shell-dock'));
+      final upload = find.byKey(const ValueKey('file-transfers-dock'));
+      expect(tester.getSize(upload), tester.getSize(shell));
+      expect(find.text('j-strix · Uploading file'), findsOneWidget);
+      expect(find.text('j-desktop · Uploading file'), findsOneWidget);
+      expect(find.text('Relay: connected'), findsNothing);
+      expect(find.text('v0.1.0'), findsNothing);
+      expect(find.textContaining('0 active'), findsNothing);
+      await screenshot(tester, 'android-upload-shell-docks');
+
+      await tester.tap(find.byKey(ValueKey('file-dock-expand-$peer')));
+      await tester.pumpAndSettle();
+      expect(find.text('Uploads to j-strix'), findsOneWidget);
+      expect(find.text('weights.bin'), findsOneWidget);
+      expect(find.text('config.json'), findsNothing);
+    await screenshot(tester, 'android-upload-progress');
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+
+      backend.uploads['first']!['state'] = 'complete';
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      expect(find.text('j-strix · Uploading file'), findsNothing);
+      expect(find.text('j-desktop · Uploading file'), findsOneWidget);
+      backend.uploads['second']!['state'] = 'failed';
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      expect(find.byKey(const ValueKey('file-transfers-dock')), findsNothing);
+      expect(find.byType(WispDockBar), findsOneWidget);
+      expect(shell, findsOneWidget);
+      await close(tester);
+    },
+  );
+
+  testWidgets(
+    'closing an upload dock confirms cancellation for only its host',
+    (tester) async {
+      final secondHost = 'e' * 64;
+      final backend = UploadDockFake()
+        ..addUpload('first', peer, 'weights.bin')
+        ..addUpload('second', peer, 'model.bin')
+        ..addUpload('other', secondHost, 'config.json');
+      await mount(tester, backend);
+      await tester.pump();
+      expect(find.text('j-strix · Uploading 2 files'), findsOneWidget);
+      await tester.tap(find.byKey(ValueKey('file-dock-close-$peer')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Keep uploading'));
+      await tester.pumpAndSettle();
+      expect(backend.calls.where((call) => call.$1 == 'fileCancel'), isEmpty);
+      await tester.tap(find.byKey(ValueKey('file-dock-close-$peer')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('confirm-cancel-uploads')));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      expect(
+        backend.calls
+            .where((call) => call.$1 == 'fileCancel')
+            .map((call) => call.$2['transfer']),
+        unorderedEquals(['first', 'second']),
+      );
+      expect(backend.uploads['other']!['state'], 'running');
+      expect(find.text('j-strix · Uploading 2 files'), findsNothing);
+      expect(find.text('j-desktop · Uploading file'), findsOneWidget);
+      await close(tester);
+    },
+  );
+
+  testWidgets('finished upload history never creates an empty dock', (
+    tester,
+  ) async {
+    final backend = UploadDockFake()
+      ..addUpload('complete', peer, 'sent.bin', state: 'complete')
+      ..addUpload('failed', peer, 'failed.bin', state: 'failed')
+      ..addUpload('cancelled', peer, 'cancelled.bin', state: 'cancelled');
+    await mount(tester, backend);
+    await tester.pump();
+    expect(find.byKey(const ValueKey('file-transfers-dock')), findsNothing);
+    expect(find.textContaining('File transfers'), findsNothing);
+    expect(find.byKey(const ValueKey('shell-dock')), findsOneWidget);
+    await close(tester);
+  });
   testWidgets(
     'multiple minimized host shells each render their own dock pill',
     (tester) async {

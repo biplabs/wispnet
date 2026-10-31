@@ -898,11 +898,99 @@ class _WispHomeState extends State<WispHome>
     await showFiles(receiver, service, paths: paths);
   }
 
-  Future<void> showTransfers() => showWispSheet<void>(
-    context,
-    title: 'File transfers',
-    child: FileTransferList(transfers: fileTransfers),
-  );
+  Future<void> showTransfers({String? host, String? hostName}) =>
+      showWispSheet<void>(
+        context,
+        title: hostName == null ? 'File transfers' : 'Uploads to $hostName',
+        child: FileTransferList(transfers: fileTransfers, host: host),
+      );
+
+  Future<void> confirmCancelUploads(String host, String hostName) async {
+    final active = fileTransfers.jobs.where(
+      (job) => job.machine.id == host && !job.finished,
+    );
+    if (active.isEmpty) return;
+    final confirmed = await showWispSheet<bool>(
+      context,
+      title: 'Cancel uploads to $hostName?',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Files already sent are kept. Cancelled uploads can be resumed from Files.',
+          ),
+          const SizedBox(height: 16),
+          FilledButton(
+            key: const ValueKey('confirm-cancel-uploads'),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Cancel uploads'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Keep uploading'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true) return;
+    for (final job in active.toList()) {
+      fileTransfers.cancel(job);
+    }
+  }
+
+  Widget uploadDocks() {
+    final groups = <String, List<DesktopFileTransfer>>{};
+    if (online) {
+      for (final job in fileTransfers.jobs.where((job) => !job.finished)) {
+        groups.putIfAbsent(job.machine.id, () => []).add(job);
+      }
+    }
+    if (groups.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 4, bottom: 8),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final entry in groups.entries.indexed) ...[
+            if (entry.$1 > 0) const SizedBox(height: 6),
+            _buildUploadDock(
+              entry.$2.key,
+              entry.$2.value,
+              primary: entry.$1 == 0,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildUploadDock(
+    String host,
+    List<DesktopFileTransfer> jobs, {
+    required bool primary,
+  }) {
+    final hostName = jobs.first.hostName;
+    final label = jobs.length == 1
+        ? 'Uploading file'
+        : 'Uploading ${jobs.length} files';
+    return WispDockBar(
+      key: ValueKey(
+        primary ? 'file-transfers-dock' : 'file-transfers-dock-$host',
+      ),
+      title: '$hostName · $label',
+      statusColor: jobs.any((job) => job.uploading)
+          ? WispColors.green
+          : WispColors.amber,
+      expandKey: ValueKey('file-dock-expand-$host'),
+      closeKey: ValueKey('file-dock-close-$host'),
+      expandLabel: 'Expand uploads to $hostName',
+      closeLabel: 'Cancel uploads to $hostName',
+      onExpand: busy
+          ? null
+          : () => showTransfers(host: host, hostName: hostName),
+      onClose: busy ? null : () => confirmCancelUploads(host, hostName),
+    );
+  }
 
   Widget directory() {
     final local = machines.where((m) => m.data['local'] == true).toList();
@@ -1041,75 +1129,27 @@ class _WispHomeState extends State<WispHome>
 
   Widget _buildDockBar(Map<String, dynamic> shell, {required bool primary}) {
     final host = shell['host'] as String? ?? '';
-    return WispPanel(
+    final title = (shell['title'] as String?)?.isNotEmpty == true
+        ? shell['title'] as String
+        : '${shell['host_name'] ?? 'Shell'} · ${shell['session'] ?? 'main'}';
+    return WispDockBar(
       key: ValueKey(primary ? 'shell-dock' : 'shell-dock-$host'),
-      color: WispColors.sheet,
-      radius: 16,
-      padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
-      child: Row(
-        children: [
-          Expanded(
-            child: Semantics(
-              button: true,
-              label:
-                  'Expand shell ${shell['title'] ?? shell['host_name'] ?? 'Shell'}',
-              child: WispInkWell(
-                key: ValueKey(
-                  primary ? 'shell-dock-expand' : 'shell-dock-expand-$host',
-                ),
-                onTap: busy ? null : () => expandShell(shell),
-                borderRadius: BorderRadius.circular(12),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 8,
-                  ),
-                  child: Row(
-                    children: [
-                      WispStatusDot(
-                        color: shell['state'] == 'attached'
-                            ? WispColors.green
-                            : shell['state'] == 'connecting'
-                            ? WispColors.amber
-                            : WispColors.error,
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          (shell['title'] as String?)?.isNotEmpty == true
-                              ? shell['title'] as String
-                              : '${shell['host_name'] ?? 'Shell'} · ${shell['session'] ?? 'main'}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      const Icon(
-                        Icons.keyboard_arrow_up,
-                        size: 20,
-                        color: WispColors.cyan,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 4),
-          IconButton(
-            key: ValueKey(
-              primary ? 'shell-dock-close' : 'shell-dock-close-$host',
-            ),
-            tooltip: 'Close shell',
-            onPressed: busy ? null : () => confirmCloseShell(shell),
-            icon: const Icon(Icons.close, size: 18, color: WispColors.muted),
-          ),
-        ],
+      title: title,
+      statusColor: shell['state'] == 'attached'
+          ? WispColors.green
+          : shell['state'] == 'connecting'
+          ? WispColors.amber
+          : WispColors.error,
+      expandKey: ValueKey(
+        primary ? 'shell-dock-expand' : 'shell-dock-expand-$host',
       ),
+      closeKey: ValueKey(
+        primary ? 'shell-dock-close' : 'shell-dock-close-$host',
+      ),
+      expandLabel: 'Expand shell $title',
+      closeLabel: 'Close shell',
+      onExpand: busy ? null : () => expandShell(shell),
+      onClose: busy ? null : () => confirmCloseShell(shell),
     );
   }
 
@@ -1214,47 +1254,8 @@ class _WispHomeState extends State<WispHome>
                                         ),
                                 ),
                         ),
-                        if (online)
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: Padding(
-                              padding: const EdgeInsets.only(top: 6, bottom: 2),
-                              child: Text(
-                                'Relay: ${snapshot['relay'] ?? 'connecting…'}',
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  color: WispColors.muted,
-                                ),
-                              ),
-                            ),
-                          ),
-                        if (online)
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: Padding(
-                              padding: const EdgeInsets.only(bottom: 6),
-                              child: Text(
-                                'v${snapshot['version'] ?? ''}',
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  color: WispColors.muted,
-                                ),
-                              ),
-                            ),
-                          ),
                         shellDock(),
-                        if (fileTransfers.jobs.isNotEmpty)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 8),
-                            child: OutlinedButton.icon(
-                              key: const ValueKey('file-transfers-dock'),
-                              onPressed: showTransfers,
-                              icon: const Icon(Icons.file_upload_outlined),
-                              label: Text(
-                                '${fileTransfers.jobs.where((job) => !job.finished).length} active · File transfers',
-                              ),
-                            ),
-                          ),
+                        uploadDocks(),
                       ],
                     ),
                   ),

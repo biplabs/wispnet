@@ -26,6 +26,7 @@ class _FilesBackend implements WispnetBackend {
   final calls = <(String, Map<String, dynamic>)>[];
   final states = <String, Map<String, dynamic>>{};
   Object? sendError;
+  Completer<Map<String, dynamic>>? statusWait;
   int nextId = 0;
 
   List<Map<String, dynamic>> get sends => calls
@@ -93,6 +94,7 @@ class _FilesBackend implements WispnetBackend {
         };
         return Map.of(states[id]!);
       case 'fileStatus':
+        if (statusWait != null) return statusWait!.future;
         return Map.of(states[arguments['transfer']]!);
       case 'fileCancel':
         final id = arguments['transfer'] as String;
@@ -154,6 +156,186 @@ void main() {
       'MaterialIcons',
     )..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'))).load();
   });
+
+  test(
+    'upload speed measures new bytes and expires on a stalled native reply',
+    () {
+      var elapsed = const Duration(days: 1);
+      final job = DesktopFileTransfer(
+        machine: _machine,
+        incarnation: _incarnation,
+        workspace: '',
+        path: '/source/model.bin',
+        elapsed: () => elapsed,
+      );
+      void report(int bytes) => job.update({
+        'state': 'running',
+        'phase': 'transferring',
+        'verified_bytes': bytes,
+        'size_bytes': 1024 * 1024,
+      });
+      report(512 * 1024);
+      expect(
+        job.bytesPerSecond,
+        isNull,
+        reason: 'A resumed prefix is only a baseline.',
+      );
+      elapsed += const Duration(seconds: 3);
+      expect(
+        job.bytesPerSecond,
+        0,
+        reason: 'A stalled first reply must not measure forever.',
+      );
+      report(512 * 1024);
+      elapsed += const Duration(seconds: 2);
+      report(514 * 1024);
+      expect(job.bytesPerSecond, 1024);
+      report(514 * 1024);
+      expect(
+        job.bytesPerSecond,
+        1024,
+        reason: 'Same-time samples cannot divide by zero.',
+      );
+      elapsed += const Duration(seconds: 1);
+      report(514 * 1024);
+      expect(
+        job.bytesPerSecond,
+        0,
+        reason: 'A real stall must not retain a moving rate.',
+      );
+      elapsed += const Duration(seconds: 1);
+      report(516 * 1024);
+      expect(job.bytesPerSecond, 2048);
+      elapsed += const Duration(seconds: 3);
+      expect(
+        job.bytesPerSecond,
+        0,
+        reason: 'A delayed native reply expires the previous rate.',
+      );
+      job.error = 'Waiting for the local device';
+      expect(job.bytesPerSecond, isNull);
+      job.error = null;
+      job.cancelling = true;
+      expect(job.bytesPerSecond, isNull);
+    },
+  );
+
+  test(
+    'upload speed resets through preparation, reconnects and terminal states',
+    () {
+      var elapsed = Duration.zero;
+      final job = DesktopFileTransfer(
+        machine: _machine,
+        incarnation: _incarnation,
+        workspace: '',
+        path: '/source/model.bin',
+        elapsed: () => elapsed,
+      );
+      var bytes = 0;
+      void report(String phase, {String state = 'running'}) {
+        elapsed += const Duration(seconds: 1);
+        job.update({
+          'state': state,
+          'phase': phase,
+          'verified_bytes': bytes,
+          'copied_bytes': 1024 * 1024,
+          'size_bytes': 1024 * 1024,
+        });
+      }
+
+      for (final phase in [
+        'preparing',
+        'hashing',
+        'copying',
+        'queued',
+        'reconnecting',
+        'verifying',
+      ]) {
+        report('transferring');
+        bytes += 256;
+        report('transferring');
+        expect(job.bytesPerSecond, 256);
+        report(phase);
+        expect(job.bytesPerSecond, isNull, reason: phase);
+        bytes += 4096;
+        report('transferring');
+        expect(
+          job.bytesPerSecond,
+          isNull,
+          reason: 'A new active phase needs a fresh baseline.',
+        );
+      }
+      for (final state in ['complete', 'failed', 'cancelled']) {
+        bytes += 256;
+        report('transferring');
+        expect(job.bytesPerSecond, 256);
+        report('transferring', state: state);
+        expect(job.bytesPerSecond, isNull, reason: state);
+        report('transferring');
+        expect(job.bytesPerSecond, isNull);
+      }
+      bytes = 0;
+      report('transferring');
+      expect(
+        job.bytesPerSecond,
+        isNull,
+        reason: 'Counter resets must not produce negative rates.',
+      );
+      bytes = 128;
+      report('transferring');
+      expect(job.bytesPerSecond, 128);
+    },
+  );
+
+  testWidgets(
+    'upload progress shows percentage, bytes and a current expiring speed',
+    (tester) async {
+      var elapsed = Duration.zero;
+      final backend = _FilesBackend();
+      final transfers = DesktopFileTransfers(backend, elapsed: () => elapsed);
+      addTearDown(transfers.dispose);
+      final job = transfers
+          .enqueue(
+            machine: _machine,
+            incarnation: _incarnation,
+            paths: ['/source/model.bin'],
+          )
+          .single;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: FileTransferList(transfers: transfers)),
+        ),
+      );
+      await tester.pump();
+      expect(find.text('Measuring upload speed…'), findsOneWidget);
+      elapsed += const Duration(seconds: 1);
+      backend.states[job.transfer!]!['verified_bytes'] = 640;
+      await _pumpStatus(tester);
+      expect(find.text('62% · 640 B / 1.0 KB'), findsOneWidget);
+      expect(find.text('512 B/s'), findsOneWidget);
+      final bar = tester.widget<LinearProgressIndicator>(
+        find.byType(LinearProgressIndicator),
+      );
+      expect(bar.value, .625);
+      expect(bar.minHeight, 10);
+      expect(bar.semanticsValue, '62%');
+      backend.statusWait = Completer<Map<String, dynamic>>();
+      elapsed += const Duration(seconds: 1);
+      await _pumpStatus(tester);
+      elapsed += const Duration(seconds: 2);
+      await tester.pump(const Duration(seconds: 2));
+      expect(find.text('0 B/s'), findsOneWidget);
+      expect(find.text('512 B/s'), findsNothing);
+      transfers.cancel(job);
+      await tester.pump();
+      expect(find.text('0 B/s'), findsNothing);
+      expect(job.bytesPerSecond, isNull);
+      backend.statusWait!.complete(Map.of(backend.states[job.transfer!]!));
+      backend.statusWait = null;
+      await tester.pump();
+      await _pumpStatus(tester);
+    },
+  );
 
   testWidgets('native jobs run sequentially and preserve the selected target', (
     tester,
@@ -588,6 +770,7 @@ void main() {
       );
       expect(accepted, isTrue);
       expect(released, isTrue);
+      expect(find.byKey(const ValueKey('file-transfers-dock')), findsNothing);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       await tester.pump();

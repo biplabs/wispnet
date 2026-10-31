@@ -250,7 +250,13 @@ void main() {
     );
     await tester.pump();
     original.dispose();
-    final restored = DesktopFileTransfers(backend)..nativeQueue = true;
+    for (final state in backend.states.values) {
+      state['verified_bytes'] = 1024 * 1024;
+      state['size_bytes'] = 2 * 1024 * 1024;
+    }
+    var elapsed = const Duration(days: 1);
+    final restored = DesktopFileTransfers(backend, elapsed: () => elapsed)
+      ..nativeQueue = true;
     addTearDown(restored.dispose);
     await restored.restore({_host: _machine});
     await tester.pumpWidget(
@@ -260,6 +266,21 @@ void main() {
     );
     await tester.pump();
     expect(restored.jobs, hasLength(3));
+    expect(restored.jobs.every((job) => job.bytesPerSecond == null), isTrue);
+    expect(find.text('Measuring upload speed…'), findsNWidgets(2));
+    elapsed += const Duration(seconds: 1);
+    backend.states[restored.jobs.first.transfer!]!['verified_bytes'] =
+        1024 * 1024 + 1024;
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(restored.jobs.first.bytesPerSecond, 1024);
+    expect(restored.jobs[1].bytesPerSecond, 0);
+    expect(
+      restored.jobs.last.bytesPerSecond,
+      isNull,
+      reason: 'Native queued jobs have no upload rate.',
+    );
+    expect(find.text('1.0 KB/s'), findsOneWidget);
     expect(restored.jobs.map((job) => job.name), [
       'model weights.bin',
       '配置.json',

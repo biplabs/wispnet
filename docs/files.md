@@ -81,6 +81,14 @@ pop-up or closing the panel keeps submitted transfers running. Files are queued
 one at a time and retain their original names; folders must first be archived.
 The recipient must already have granted Files access.
 
+Active uploads appear in a dock for each receiving computer, using the same
+controls as the shell dock. Expand a dock to view that computer's transfers;
+closing it asks before cancelling its uploads. The dock disappears when none
+of that computer's uploads remain active. Transfer progress shows a percentage,
+sent/total bytes, and current upload speed; preparation and verification have
+their own status. Speed is measured from newly acknowledged bytes and falls to
+zero when progress stalls.
+
 On Android, tap a device's **Files** service and use **Choose files** to select
 one or more documents in Android's system picker.
 Select **Send files** to queue the batch. Two files can run concurrently; each

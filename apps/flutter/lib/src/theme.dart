@@ -127,6 +127,79 @@ class WispPanel extends StatelessWidget {
   );
 }
 
+class WispDockBar extends StatelessWidget {
+  const WispDockBar({
+    super.key,
+    required this.title,
+    required this.statusColor,
+    required this.onExpand,
+    required this.onClose,
+    required this.expandLabel,
+    required this.closeLabel,
+    this.expandKey,
+    this.closeKey,
+  });
+  final String title, expandLabel, closeLabel;
+  final Color statusColor;
+  final VoidCallback? onExpand, onClose;
+  final Key? expandKey, closeKey;
+
+  @override
+  Widget build(BuildContext context) => WispPanel(
+    color: WispColors.sheet,
+    radius: 16,
+    padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
+    child: Row(
+      children: [
+        Expanded(
+          child: Semantics(
+            button: true,
+            label: expandLabel,
+            child: WispInkWell(
+              key: expandKey,
+              onTap: onExpand,
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                child: Row(
+                  children: [
+                    WispStatusDot(color: statusColor),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    const Icon(
+                      Icons.keyboard_arrow_up,
+                      size: 20,
+                      color: WispColors.cyan,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 4),
+        IconButton(
+          key: closeKey,
+          tooltip: closeLabel,
+          onPressed: onClose,
+          icon: const Icon(Icons.close, size: 18, color: WispColors.muted),
+        ),
+      ],
+    ),
+  );
+}
+
 class _WispBottomSheetRoute<T> extends ModalBottomSheetRoute<T> {
   _WispBottomSheetRoute({
     required super.builder,

@@ -28,6 +28,7 @@ class DesktopFileTransfer {
     this.displayName,
     this.sourceSizeBytes = 0,
     this.resume = true,
+    this.elapsed,
   }) {
     sizeBytes = sourceSizeBytes;
   }
@@ -44,10 +45,62 @@ class DesktopFileTransfer {
   int verifiedBytes = 0, sizeBytes = 0, copiedBytes = 0;
   bool cancelling = false;
   bool _cancelSent = false;
+  final _clock = Stopwatch()..start();
+  final Duration Function()? elapsed;
+  Duration? _sampleAt;
+  int? _sampleBytes;
+  double? _bytesPerSecond;
   final _completion = Completer<void>();
   Future<void> get done => _completion.future;
   bool get finished =>
       const ['complete', 'failed', 'cancelled'].contains(state);
+  bool get uploading =>
+      state == 'running' &&
+      const ['sending', 'transferring', 'uploading'].contains(phase) &&
+      !cancelling &&
+      error == null;
+  Duration get _now => elapsed?.call() ?? _clock.elapsed;
+  double? get bytesPerSecond {
+    if (!uploading) return null;
+    // A delayed native reply must not keep advertising an old moving rate.
+    if (_sampleAt != null && _now - _sampleAt! >= const Duration(seconds: 3)) {
+      return 0;
+    }
+    return _bytesPerSecond;
+  }
+
+  void _resetSpeed() {
+    _sampleAt = null;
+    _sampleBytes = null;
+    _bytesPerSecond = null;
+  }
+
+  void _measureSpeed() {
+    if (!uploading) {
+      _resetSpeed();
+      return;
+    }
+    final now = _now;
+    final previousAt = _sampleAt;
+    final previousBytes = _sampleBytes;
+    if (previousAt == null ||
+        previousBytes == null ||
+        now < previousAt ||
+        verifiedBytes < previousBytes) {
+      // The first observation may include a restored/resumed prefix. It is a
+      // baseline, never bytes uploaded during this process's sampling window.
+      _bytesPerSecond = null;
+    } else if (now == previousAt) {
+      return;
+    } else {
+      _bytesPerSecond =
+          (verifiedBytes - previousBytes) *
+          Duration.microsecondsPerSecond /
+          (now - previousAt).inMicroseconds;
+    }
+    _sampleAt = now;
+    _sampleBytes = verifiedBytes;
+  }
 
   void update(Map<String, dynamic> status) {
     transfer = status['transfer'] as String? ?? transfer;
@@ -63,10 +116,12 @@ class DesktopFileTransfer {
         ? failure['message'] as String? ?? 'File transfer failed.'
         : null;
     if (finished) cancelling = false;
+    _measureSpeed();
     finish();
   }
 
   void finish() {
+    if (finished) _resetSpeed();
     if (finished && !_completion.isCompleted) _completion.complete();
   }
 }
@@ -74,8 +129,9 @@ class DesktopFileTransfer {
 /// Native jobs keep running when a sheet or the tray window is hidden. Only
 /// paths and progress cross this adapter; the daemon streams the file bytes.
 class DesktopFileTransfers extends ChangeNotifier {
-  DesktopFileTransfers(this.backend);
+  DesktopFileTransfers(this.backend, {this.elapsed});
   final WispnetBackend backend;
+  final Duration Function()? elapsed;
   final List<DesktopFileTransfer> jobs = [];
   // Android owns a bounded native queue in its foreground service. Submit all
   // selected jobs there so closing/recreating the Activity does not lose them.
@@ -83,7 +139,26 @@ class DesktopFileTransfers extends ChangeNotifier {
   bool _working = false, _disposed = false;
   bool _restored = false, _restoring = false;
   Timer? _timer;
+  Timer? _speedTimer;
   Completer<void>? _wake;
+
+  void _trackSpeed() {
+    if (_disposed || !jobs.any((job) => !job.finished)) {
+      _speedTimer?.cancel();
+      _speedTimer = null;
+      return;
+    }
+    if (_speedTimer != null) return;
+    _speedTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_disposed || !jobs.any((job) => !job.finished)) {
+        _speedTimer?.cancel();
+        _speedTimer = null;
+        return;
+      }
+      // Rebuild rates when samples expire, even while a native call is waiting.
+      notifyListeners();
+    });
+  }
 
   Future<void> _pause() {
     final wake = Completer<void>();
@@ -119,10 +194,12 @@ class DesktopFileTransfers extends ChangeNotifier {
             displayName: names[path],
             sourceSizeBytes: sizes[path] ?? 0,
             resume: resume,
+            elapsed: elapsed,
           ),
         )
         .toList();
     jobs.addAll(added);
+    _trackSpeed();
     notifyListeners();
     _wakeUp();
     unawaited(_run());
@@ -163,10 +240,12 @@ class DesktopFileTransfers extends ChangeNotifier {
           path: path,
           displayName: name,
           sourceSizeBytes: (status['size_bytes'] as num?)?.toInt() ?? 0,
+          elapsed: elapsed,
         )..update(status);
         jobs.add(job);
       }
       _restored = true;
+      _trackSpeed();
       notifyListeners();
       unawaited(_run());
     } catch (_) {
@@ -251,7 +330,10 @@ class DesktopFileTransfers extends ChangeNotifier {
             }
           }
         }
-        if (!_disposed) notifyListeners();
+        if (!_disposed) {
+          _trackSpeed();
+          notifyListeners();
+        }
         if (_disposed) break;
         final pending = jobs.any(
           (job) => job.state == 'queued' && job.transfer == null,
@@ -270,6 +352,7 @@ class DesktopFileTransfers extends ChangeNotifier {
 
   void cancel(DesktopFileTransfer job) {
     if (job.finished || job.cancelling) return;
+    job._resetSpeed();
     if (job.state == 'queued' && job.transfer == null) {
       job.state = 'cancelled';
       job.finish();
@@ -277,6 +360,7 @@ class DesktopFileTransfers extends ChangeNotifier {
       job.cancelling = true;
       _wakeUp();
     }
+    _trackSpeed();
     notifyListeners();
   }
 
@@ -305,6 +389,7 @@ class DesktopFileTransfers extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _speedTimer?.cancel();
     _wakeUp();
     super.dispose();
   }
@@ -622,6 +707,23 @@ class FileTransferList extends StatelessWidget {
   final DesktopFileTransfers transfers;
   final String? host;
 
+  double? progress(DesktopFileTransfer job) {
+    if (job.sizeBytes <= 0 ||
+        const ['preparing', 'hashing', 'queued'].contains(job.phase) ||
+        const ['queued', 'starting'].contains(job.state)) {
+      return null;
+    }
+    final bytes = job.phase == 'copying' ? job.copiedBytes : job.verifiedBytes;
+    return (bytes / job.sizeBytes).clamp(0, 1);
+  }
+
+  String amount(DesktopFileTransfer job) {
+    final value = progress(job);
+    final bytes = job.phase == 'copying' ? job.copiedBytes : job.verifiedBytes;
+    if (value == null) return '${fileSize(bytes)} sent';
+    return '${(value * 100).floor()}% · ${fileSize(bytes)} / ${fileSize(job.sizeBytes)}';
+  }
+
   String status(DesktopFileTransfer job) {
     if (job.cancelling) return 'Cancelling…';
     if (job.state == 'complete') return 'Sent · ${fileSize(job.sizeBytes)}';
@@ -631,7 +733,7 @@ class FileTransferList extends StatelessWidget {
     if (job.error != null) return job.error!;
     if (job.phase == 'copying') {
       return job.sizeBytes > 0
-          ? 'Preparing file · ${fileSize(job.copiedBytes)} / ${fileSize(job.sizeBytes)}'
+          ? 'Preparing file · ${amount(job)}'
           : 'Preparing file · ${fileSize(job.copiedBytes)}';
     }
     if (job.phase == 'hashing' || job.phase == 'preparing') {
@@ -639,7 +741,7 @@ class FileTransferList extends StatelessWidget {
     }
     if (job.phase == 'verifying') return 'Verifying file…';
     if (job.phase == 'reconnecting') return 'Reconnecting…';
-    return '${fileSize(job.verifiedBytes)} / ${fileSize(job.sizeBytes)}';
+    return amount(job);
   }
 
   @override
@@ -683,6 +785,16 @@ class FileTransferList extends StatelessWidget {
                                   : WispColors.muted,
                             ),
                           ),
+                          if (job.uploading)
+                            Text(
+                              job.bytesPerSecond == null
+                                  ? 'Measuring upload speed…'
+                                  : '${fileSize(job.bytesPerSecond!.round())}/s',
+                              style: const TextStyle(
+                                color: WispColors.cyan,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
                         ],
                       ),
                     ),
@@ -712,16 +824,15 @@ class FileTransferList extends StatelessWidget {
                 if (!job.finished) ...[
                   const SizedBox(height: 8),
                   LinearProgressIndicator(
-                    value:
-                        job.sizeBytes > 0 &&
-                            job.phase != 'preparing' &&
-                            job.phase != 'hashing'
-                        ? ((job.phase == 'copying'
-                                      ? job.copiedBytes
-                                      : job.verifiedBytes) /
-                                  job.sizeBytes)
-                              .clamp(0, 1)
-                        : null,
+                    value: progress(job),
+                    minHeight: 10,
+                    borderRadius: BorderRadius.circular(6),
+                    color: WispColors.cyan,
+                    backgroundColor: const Color(0xff263a59),
+                    semanticsLabel: 'Upload progress for ${job.name}',
+                    semanticsValue: progress(job) == null
+                        ? status(job)
+                        : '${(progress(job)! * 100).floor()}%',
                   ),
                 ],
               ],
