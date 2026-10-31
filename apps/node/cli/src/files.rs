@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-pub const HELP: &str = "Files: wispnet files <put|get> DEVICE WORKSPACE LOCAL_PATH REMOTE_PATH [--config PATH] [--no-resume]\n       wispnet files status TRANSFER [--config PATH]\n       wispnet files cancel TRANSFER [--config PATH]\nTransfers resume by default. Ctrl+C pauses the transfer and retains resumable data.\nProgress is JSON on stderr; completion or a typed transfer error is JSON on stdout.";
+pub const HELP: &str = "Files: wispnet files put DEVICE WORKSPACE LOCAL_PATH REMOTE_PATH [--config PATH] [--no-resume]\n       wispnet files status TRANSFER [--config PATH]\n       wispnet files cancel TRANSFER [--config PATH]\nTransfers resume by default. Ctrl+C pauses the transfer and retains resumable data.\nProgress is JSON on stderr; completion or a typed transfer error is JSON on stdout.";
 
 pub fn error_result(error: &str) -> Value {
     let (code, message) = error
@@ -48,8 +48,11 @@ fn options(args: &[OsString]) -> Result<Option<Options>, String> {
     }
     let action = positional.first().cloned().ok_or(HELP)?;
     positional.remove(0);
+    if action == "get" {
+        return Err("Files is one way: use put to send a file to a device that has granted you Files access".into());
+    }
     if !match action.as_str() {
-        "put" | "get" => positional.len() == 4,
+        "put" => positional.len() == 4,
         "status" | "cancel" => positional.len() == 1,
         _ => false,
     } {
@@ -236,7 +239,7 @@ mod tests {
         assert_eq!(result.positional[2], "dataset.npz");
         assert_eq!(result.positional[3], "jobs/1/data");
         let result = options(&args(&[
-            "get",
+            "put",
             "device",
             "training",
             "output",
@@ -250,7 +253,7 @@ mod tests {
         assert!(!result.resume);
         assert!(
             options(&args(&[
-                "get",
+                "put",
                 "device",
                 "training",
                 "output",
@@ -259,5 +262,16 @@ mod tests {
             ]))
             .is_err()
         );
+        let rejected = options(&args(&[
+            "get",
+            "device",
+            "training",
+            "output",
+            "remote",
+            "--config",
+            "/tmp/config",
+        ]));
+        assert!(matches!(rejected, Err(error) if error.contains("Files is one way")));
+        assert!(!HELP.contains("get"));
     }
 }

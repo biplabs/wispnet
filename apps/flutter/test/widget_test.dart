@@ -2330,42 +2330,41 @@ void main() {
       await close(tester);
     },
   );
-  testWidgets(
-    'files card shows native transfer commands without launching a browser',
-    (tester) async {
-      final backend = DesktopFake();
-      (backend.status['host']['services'] as List).add({
-        'id': 'files',
-        'display_name': 'Files',
-        'kind': 'files',
-        'backend': '127.0.0.1:0',
-        'incarnation': incarnation,
-        'allow': <String>[],
-      });
-      await mount(tester, backend, size: const Size(1000, 1000));
-      expect(find.byIcon(Icons.folder_outlined), findsOneWidget);
-      await tester.tap(find.text('files'));
-      await tester.pumpAndSettle();
-      expect(find.text('Files on hibreak'), findsOneWidget);
-      expect(
-        find.text(
-          'wispnet files put ${'d' * 64} WORKSPACE /local/file relative/path',
-        ),
-        findsOneWidget,
-      );
-      expect(
-        find.text(
-          'wispnet files get ${'d' * 64} WORKSPACE /local/file relative/path',
-        ),
-        findsOneWidget,
-      );
-      expect(
-        backend.calls.where((call) => call.$1 == 'open' || call.$1 == 'launch'),
-        isEmpty,
-      );
-      await close(tester);
-    },
-  );
+  testWidgets('files card shows a send command without launching a browser', (
+    tester,
+  ) async {
+    final backend = DesktopFake();
+    (backend.status['host']['services'] as List).add({
+      'id': 'files',
+      'display_name': 'Files',
+      'kind': 'files',
+      'backend': '127.0.0.1:0',
+      'incarnation': incarnation,
+      'allow': <String>[],
+    });
+    await mount(tester, backend, size: const Size(1000, 1000));
+    expect(find.byIcon(Icons.folder_outlined), findsOneWidget);
+    await tester.tap(find.text('files'));
+    await tester.pumpAndSettle();
+    expect(find.text('Send files to hibreak'), findsOneWidget);
+    expect(
+      find.text(
+        'wispnet files put ${'d' * 64} WORKSPACE /local/file relative/path',
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.text(
+        'wispnet files get ${'d' * 64} WORKSPACE /local/file relative/path',
+      ),
+      findsNothing,
+    );
+    expect(
+      backend.calls.where((call) => call.$1 == 'open' || call.$1 == 'launch'),
+      isEmpty,
+    );
+    await close(tester);
+  });
   testWidgets(
     'files sharing requires a folder before device grants can be selected',
     (tester) async {

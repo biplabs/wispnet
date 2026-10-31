@@ -1257,9 +1257,9 @@ impl App {
             Action::Service(service) => {
                 if service["kind"] == "files" {
                     self.choice("Built-in Files", vec![
-                        "Transfer files with wispnet files put|get DEVICE WORKSPACE LOCAL REMOTE.".into(),
+                        "Send files with wispnet files put DEVICE WORKSPACE LOCAL REMOTE.".into(),
                         "Configure exported directories with wispnet files-access --export NAME=/absolute/path.".into(),
-                        "Permitted devices can upload and download without confirming each transfer.".into(),
+                        "Permitted devices can send files into your configured folders without confirming each transfer.".into(),
                         "Choose a shared folder before granting Files access.".into(),
                     ], if self.files_configured() {
                         vec![entry("grants", "Edit permitted devices", Action::Form(self.files_form(&service)))]
@@ -1333,8 +1333,7 @@ impl App {
                         "Files access",
                         vec![
                             format!("Host: {host}"),
-                            format!("Upload: wispnet files put {host} WORKSPACE LOCAL REMOTE"),
-                            format!("Download: wispnet files get {host} WORKSPACE LOCAL REMOTE"),
+                            format!("Send: wispnet files put {host} WORKSPACE LOCAL REMOTE"),
                             "Transfers resume automatically after interruption.".into(),
                         ],
                         vec![],
@@ -1541,7 +1540,7 @@ impl App {
                 }
                 let mut detail = vec![format!("Device: {name}"), format!("Full client ID: {peer}"), "Pairing and the selected grants will be saved together. Existing grants are preserved.".into()];
                 if services.iter().any(|s| s == "files") {
-                    detail.push("Files permission allows uploads and downloads without confirming each transfer.".into());
+                    detail.push("Files permission lets this device send files into your configured folders without confirming each transfer.".into());
                 }
                 if chosen.is_empty() {
                     detail.push("No services selected: pair without new service access.".into());
@@ -1564,7 +1563,7 @@ impl App {
                     return Err("Set a shared folder before granting Files access".into());
                 }
                 self.confirmation("Save Files access".into(),
-                    vec![format!("{} permitted devices", allow.len()), "These devices may upload and download inside the shared folders without confirming each transfer.".into()],
+                    vec![format!("{} permitted devices", allow.len()), "These devices may send files into your configured folders without confirming each transfer.".into()],
                     self.mutate(json!({"op":"files","allow":allow,"exports":exports,"expected_revision":revision})));
             }
             FormKind::Shell { revision } => {

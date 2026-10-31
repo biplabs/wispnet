@@ -352,10 +352,7 @@ impl FileService {
     ) -> Response {
         let permit = if matches!(
             request,
-            Request::UploadWrite { .. }
-                | Request::UploadCommit { .. }
-                | Request::FileStat { .. }
-                | Request::FileReadRange { .. }
+            Request::UploadWrite { .. } | Request::UploadCommit { .. }
         ) {
             match self.0.bulk.clone().acquire_owned().await {
                 Ok(p) => Some(p),
@@ -1137,64 +1134,10 @@ impl FileService {
                 self.save(&manifest)?;
                 Ok(Response::Aborted)
             }
-            Request::FileStat { workspace, path } => {
-                let root = self.export(exports, &workspace)?;
-                let (directory, name) = parent(root, &path, false)?;
-                let mut file = open_file_at(&directory, &name, libc::O_RDONLY, 0)?;
-                let before = fingerprint(&file.metadata()?);
-                let hash = hash_cancel(&mut file, cancel, &AtomicBool::new(false))?;
-                let metadata = file.metadata()?;
-                if fingerprint(&metadata) != before {
-                    return Err(fail(ErrorCode::StaleVersion));
-                }
-                Ok(Response::File {
-                    file: info(&path, hash, &metadata),
-                })
-            }
-            Request::FileReadRange {
-                workspace,
-                path,
-                expected_version,
-                offset: position,
-                max_bytes,
-            } => {
-                if max_bytes == 0 {
-                    return Err(fail(ErrorCode::InvalidArgument));
-                }
-                let Some((hash, expected_fingerprint)) = expected_version.split_once(':') else {
-                    return Err(fail(ErrorCode::StaleVersion));
-                };
-                if !valid_hash(hash) || !valid_hash(expected_fingerprint) {
-                    return Err(fail(ErrorCode::StaleVersion));
-                }
-                let root = self.export(exports, &workspace)?;
-                let (directory, name) = parent(root, &path, false)?;
-                let mut file = open_file_at(&directory, &name, libc::O_RDONLY, 0)?;
-                let metadata = file.metadata()?;
-                if fingerprint(&metadata) != expected_fingerprint {
-                    return Err(fail(ErrorCode::StaleVersion));
-                }
-                if position > metadata.len() {
-                    return Err(offset(metadata.len()));
-                }
-                let count = max_bytes
-                    .min(MAX_CHUNK as u64)
-                    .min(metadata.len() - position) as usize;
-                let mut data = vec![0; count];
-                file.seek(SeekFrom::Start(position))?;
-                file.read_exact(&mut data)?;
-                if fingerprint(&file.metadata()?) != expected_fingerprint {
-                    return Err(fail(ErrorCode::StaleVersion));
-                }
-                canceled(cancel)?;
-                Ok(Response::Range {
-                    file_version: expected_version,
-                    offset: position,
-                    next_offset: position + count as u64,
-                    eof: position + count as u64 == metadata.len(),
-                    chunk_sha256: sha256(&data),
-                    data,
-                })
+            // Every Files caller, including legacy clients, has an incoming-only
+            // grant. Reject reads before touching any export or revealing metadata.
+            Request::FileStat { .. } | Request::FileReadRange { .. } => {
+                Err(fail(ErrorCode::PermissionDenied))
             }
         }
     }
@@ -1521,18 +1464,6 @@ mod tests {
             })
             .await
         }
-        async fn stat(&self, path: &str) -> FileInfo {
-            match self
-                .call(Request::FileStat {
-                    workspace: "training.v1".into(),
-                    path: path.into(),
-                })
-                .await
-            {
-                Response::File { file } => file,
-                response => panic!("unexpected stat: {response:?}"),
-            }
-        }
     }
     fn error(response: Response, expected: ErrorCode) {
         match response {
@@ -1585,7 +1516,7 @@ mod tests {
                 transfer_id: id.clone(),
             })
             .await;
-        let Response::File { file } = committed.clone() else {
+        let Response::File { .. } = committed.clone() else {
             panic!("{committed:?}");
         };
         assert_eq!(fs::read(f.root.join("jobs/a/train.bin")).unwrap(), bytes);
@@ -1611,21 +1542,6 @@ mod tests {
             f.call(Request::UploadAbort { transfer_id: id }).await,
             ErrorCode::AlreadyCommitted,
         );
-        // Commit returns a usable version even after removing its partial link.
-        assert!(matches!(
-            f.call(Request::FileReadRange {
-                workspace: "training.v1".into(),
-                path: file.path,
-                expected_version: file.file_version,
-                offset: 0,
-                max_bytes: 1024
-            })
-            .await,
-            Response::Range {
-                next_offset: 1024,
-                ..
-            }
-        ));
         let id = f.begin("empty", &[], "empty").await;
         assert!(matches!(
             f.call(Request::UploadCommit { transfer_id: id }).await,
@@ -1705,33 +1621,39 @@ mod tests {
         fs::write(outside.join("secret"), b"secret").unwrap();
         symlink(&outside, f.root.join("escape")).unwrap();
         symlink(outside.join("secret"), f.root.join("linked-file")).unwrap();
-        for path in [
-            "/absolute",
-            "../outside/secret",
-            "escape/secret",
-            "linked-file",
-            ".wispnet-upload-private",
-            "a//b",
-            "./secret",
+        for (path, expected) in [
+            ("/absolute", ErrorCode::PathDenied),
+            ("../outside/secret", ErrorCode::PathDenied),
+            ("escape/secret", ErrorCode::PathDenied),
+            ("linked-file", ErrorCode::Conflict),
+            (".wispnet-upload-private", ErrorCode::PathDenied),
+            ("a//b", ErrorCode::PathDenied),
+            ("./secret", ErrorCode::PathDenied),
         ] {
             error(
-                f.call(Request::FileStat {
+                f.call(Request::UploadBegin {
                     workspace: "training.v1".into(),
                     path: path.into(),
+                    size_bytes: 0,
+                    sha256: sha256(b""),
+                    idempotency_key: path.into(),
                 })
                 .await,
-                ErrorCode::PathDenied,
+                expected,
             );
         }
         let fifo = CString::new(f.root.join("fifo").to_str().unwrap()).unwrap();
         assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
         error(
-            f.call(Request::FileStat {
+            f.call(Request::UploadBegin {
                 workspace: "training.v1".into(),
                 path: "fifo".into(),
+                size_bytes: 0,
+                sha256: sha256(b""),
+                idempotency_key: "fifo".into(),
             })
             .await,
-            ErrorCode::PathDenied,
+            ErrorCode::Conflict,
         );
         symlink(&f.root, outside.join("alias")).unwrap();
         let exports = BTreeMap::from([("alias".into(), outside.join("alias"))]);
@@ -1741,9 +1663,12 @@ mod tests {
                     "peer-a",
                     "inc-a",
                     &exports,
-                    Request::FileStat {
+                    Request::UploadBegin {
                         workspace: "alias".into(),
                         path: "linked-file".into(),
+                        size_bytes: 0,
+                        sha256: sha256(b""),
+                        idempotency_key: "alias".into(),
                     },
                 )
                 .await,
@@ -1809,29 +1734,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn downloads_are_bounded_versioned_and_eof_checked() {
+    async fn incoming_grants_never_read_existing_or_own_uploaded_files() {
         let f = Fixture::new();
-        fs::write(f.root.join("source"), b"0123456789").unwrap();
-        let file = f.stat("source").await;
-        let request = |position, max_bytes| Request::FileReadRange {
-            workspace: "training.v1".into(),
-            path: "source".into(),
-            expected_version: file.file_version.clone(),
-            offset: position,
-            max_bytes,
+        fs::write(f.root.join("private"), b"receiver's private bytes").unwrap();
+        let id = f
+            .begin("uploaded", b"sender's bytes", "incoming-only")
+            .await;
+        f.write(&id, 0, b"sender's bytes").await;
+        let Response::File { file } = f.call(Request::UploadCommit { transfer_id: id }).await
+        else {
+            panic!("upload commit failed");
         };
-        let response = f.call(request(3, 4)).await;
-        assert!(
-            matches!(response, Response::Range { offset: 3, next_offset: 7, eof: false, ref data, ref chunk_sha256, .. } if data == b"3456" && *chunk_sha256 == sha256(data))
+        for path in ["private", "uploaded", "missing", "../outside/secret"] {
+            error(
+                f.call(Request::FileStat {
+                    workspace: "training.v1".into(),
+                    path: path.into(),
+                })
+                .await,
+                ErrorCode::PermissionDenied,
+            );
+            // Even a known version from the sender's own commit is no read grant.
+            error(
+                f.call(Request::FileReadRange {
+                    workspace: "training.v1".into(),
+                    path: path.into(),
+                    expected_version: file.file_version.clone(),
+                    offset: 0,
+                    max_bytes: MAX_CHUNK as u64,
+                })
+                .await,
+                ErrorCode::PermissionDenied,
+            );
+        }
+        assert_eq!(
+            fs::read(f.root.join("private")).unwrap(),
+            b"receiver's private bytes"
         );
-        assert!(
-            matches!(f.call(request(10, 4)).await, Response::Range { offset: 10, next_offset: 10, eof: true, ref data, .. } if data.is_empty())
+        assert_eq!(
+            fs::read(f.root.join("uploaded")).unwrap(),
+            b"sender's bytes"
         );
-        error(f.call(request(11, 4)).await, ErrorCode::InvalidOffset);
-        error(f.call(request(0, 0)).await, ErrorCode::InvalidArgument);
-        fs::write(f.root.join("source"), b"changed!!!").unwrap();
-        error(f.call(request(0, 4)).await, ErrorCode::StaleVersion);
-        assert_ne!(f.stat("source").await.file_version, file.file_version);
     }
 
     #[tokio::test]
@@ -1936,7 +1879,9 @@ mod tests {
                 panic!("{response:?}");
             };
             assert!(!f.root.join(partial).exists());
-            assert_eq!(f.stat(key).await, file);
+            assert_eq!(file.path, key);
+            assert_eq!(file.sha256, sha256(b"checkpoint"));
+            assert_eq!(fs::read(f.root.join(key)).unwrap(), b"checkpoint");
             error(
                 f.call(Request::UploadAbort { transfer_id: id }).await,
                 ErrorCode::AlreadyCommitted,

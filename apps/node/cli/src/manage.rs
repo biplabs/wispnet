@@ -16,8 +16,8 @@ All management commands return JSON. node-request accepts the same owner-local
 operations as the desktop: catalogs, pairing, revision-checked service/grant
 mutations, access settings and public access. Request files must be owner-only.
 Service links grant no permissions; pair and obtain access first.
-Files requires a shared folder before grants; permitted devices can upload and
-download without confirming each transfer. Clearing all exports revokes access.";
+Files requires a receiving folder before grants; permitted devices can send files
+into it without confirming each transfer. Clearing all exports revokes access.";
 
 pub fn handles(mode: &str) -> bool {
     matches!(

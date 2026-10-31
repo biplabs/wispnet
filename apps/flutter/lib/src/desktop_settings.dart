@@ -262,7 +262,7 @@ class _DesktopSettingsState extends State<DesktopSettings> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 const Text(
-                  'Choose a folder before sharing Files. Selected devices can upload and download files in the shared folders without confirming each transfer. Transfers can resume after disconnects.',
+                  'Choose a folder to receive files. Selected devices can send files into these folders without confirming each transfer. Transfers can resume after disconnects.',
                 ),
                 const SizedBox(height: 12),
                 TextField(
@@ -281,7 +281,7 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                 const SizedBox(height: 12),
                 Text(
                   hasFolders
-                      ? 'Select paired devices allowed to use these folders. Leave all unchecked for local access only.'
+                      ? 'Select paired devices allowed to send files into these folders. Leave all unchecked to disable incoming transfers.'
                       : 'Set a shared folder before granting Files access.',
                 ),
                 for (final c in devices)
@@ -502,7 +502,7 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                   subtitle: s['kind'] == 'files'
                       ? Text(
                           hasFileFolders
-                              ? 'Upload and download without confirming each transfer.'
+                              ? 'Send files into your configured folders without confirming each transfer.'
                               : 'Set a shared folder before granting Files access.',
                         )
                       : null,

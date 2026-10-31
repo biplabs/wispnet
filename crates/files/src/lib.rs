@@ -1,4 +1,6 @@
-//! Binary, resumable file transfers. Peer authentication, grants and active
+//! Binary, resumable incoming file transfers. A grant permits sending files to
+//! the host's configured folders, never reading files from them.
+//! Peer authentication, grants and active
 //! revocation are enforced by Wispnet before and during `FileService::serve`.
 mod protocol;
 mod server;

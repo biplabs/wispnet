@@ -155,7 +155,7 @@ fn pause_after(bytes: u64) -> TransferOptions {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn sdk_upload_and_download_resume_across_client_restart_without_restarting_prefix() {
+async fn sdk_upload_resumes_across_client_restart_without_restarting_prefix() {
     tokio::time::timeout(Duration::from_secs(60), async {
         let state = tempfile::tempdir().unwrap();
         let export = tempfile::tempdir().unwrap();
@@ -200,60 +200,27 @@ async fn sdk_upload_and_download_resume_across_client_restart_without_restarting
             .unwrap();
         assert!(resumed_upload.lock().unwrap()[0] > 0);
         assert_eq!(wispnet_files::hash_file(&source).unwrap(), uploaded.sha256);
-        let destination = local.path().join("download.bin");
-        let error = client
-            .get_file(
-                target.clone(),
-                "training",
-                "job/input.bin",
-                &destination,
-                pause_after(32 * 1024 * 1024),
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(error.code, "CANCELLED");
-        assert!(!destination.exists());
+        assert_eq!(
+            wispnet_files::hash_file(&export.path().join("job/input.bin")).unwrap(),
+            uploaded.sha256
+        );
         client.endpoint.close().await;
         drop(client);
         let (client, target) = create(state.path(), export.path(), key).await;
-        let resumed_download = Arc::new(Mutex::new(Vec::new()));
-        let observed = resumed_download.clone();
-        let downloaded = client
-            .get_file(
-                target.clone(),
-                "training",
-                "job/input.bin",
-                &destination,
-                TransferOptions {
-                    progress: Some(Arc::new(move |p| {
-                        if p.phase == "transferring" {
-                            observed.lock().unwrap().push(p.verified_bytes);
-                        }
-                    })),
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap();
-        assert_eq!(resumed_download.lock().unwrap()[0], 32 * 1024 * 1024);
-        assert_eq!(uploaded, downloaded);
-        assert_eq!(
-            wispnet_files::hash_file(&destination).unwrap(),
-            uploaded.sha256
-        );
-        // Idempotent helper retry recognizes an already published destination.
+        // A completed upload retains its peer-bound idempotency key and can be
+        // retried after restart without remote stat or read access.
         assert_eq!(
             client
-                .get_file(
+                .put_file(
                     target,
                     "training",
+                    &source,
                     "job/input.bin",
-                    &destination,
                     TransferOptions::default()
                 )
                 .await
                 .unwrap(),
-            downloaded
+            uploaded
         );
         client.endpoint.close().await;
     })
@@ -262,69 +229,85 @@ async fn sdk_upload_and_download_resume_across_client_restart_without_restarting
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn download_rejects_changed_version_and_supports_explicit_restart() {
+async fn uploads_never_replace_existing_destinations_or_claim_other_uploads() {
     tokio::time::timeout(Duration::from_secs(60), async {
         let state = tempfile::tempdir().unwrap();
         let export = tempfile::tempdir().unwrap();
         let local = tempfile::tempdir().unwrap();
-        let source = export.path().join("output.bin");
-        write_source(&source, 9);
+        let source = local.path().join("source.bin");
+        std::fs::write(&source, b"original").unwrap();
+        std::fs::write(export.path().join("existing.bin"), b"original").unwrap();
         let (client, target) = create(state.path(), export.path(), SecretKey::generate()).await;
-        let destination = local.path().join("download.bin");
+        // Even identical pre-existing files cannot be probed or claimed by a new upload.
         assert_eq!(
             client
-                .get_file(
+                .put_file(
                     target.clone(),
                     "training",
-                    "output.bin",
-                    &destination,
-                    pause_after(32 * 1024 * 1024)
-                )
-                .await
-                .unwrap_err()
-                .code,
-            "CANCELLED"
-        );
-        // External writers do not get silently merged into the saved immutable version.
-        let mut source_file = std::fs::OpenOptions::new()
-            .write(true)
-            .open(&source)
-            .unwrap();
-        source_file.write_all(b"changed").unwrap();
-        source_file.sync_all().unwrap();
-        assert_eq!(
-            client
-                .get_file(
-                    target.clone(),
-                    "training",
-                    "output.bin",
-                    &destination,
+                    &source,
+                    "existing.bin",
                     TransferOptions::default()
                 )
                 .await
                 .unwrap_err()
                 .code,
-            "STALE_VERSION"
+            "CONFLICT"
         );
-        assert!(!destination.exists());
-        let file = client
-            .get_file(
-                target,
+        client
+            .put_file(
+                target.clone(),
                 "training",
-                "output.bin",
-                &destination,
-                TransferOptions {
-                    resume: false,
-                    ..Default::default()
-                },
+                &source,
+                "created.bin",
+                TransferOptions::default(),
             )
             .await
             .unwrap();
-        assert_eq!(wispnet_files::hash_file(&destination).unwrap(), file.sha256);
+        // Discarding the caller's upload identity does not confer access to the existing artifact.
+        assert_eq!(
+            client
+                .put_file(
+                    target.clone(),
+                    "training",
+                    &source,
+                    "created.bin",
+                    TransferOptions {
+                        resume: false,
+                        ..Default::default()
+                    }
+                )
+                .await
+                .unwrap_err()
+                .code,
+            "CONFLICT"
+        );
+        std::fs::write(&source, b"changed").unwrap();
+        assert_eq!(
+            client
+                .put_file(
+                    target,
+                    "training",
+                    &source,
+                    "created.bin",
+                    TransferOptions::default()
+                )
+                .await
+                .unwrap_err()
+                .code,
+            "CONFLICT"
+        );
+        assert_eq!(
+            std::fs::read(export.path().join("existing.bin")).unwrap(),
+            b"original"
+        );
+        assert_eq!(
+            std::fs::read(export.path().join("created.bin")).unwrap(),
+            b"original"
+        );
         client.endpoint.close().await;
     })
     .await
-    .expect("SDK transfer test timed out");
+    .expect("SDK upload conflict test timed out");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -336,6 +319,13 @@ async fn owner_jobs_report_only_metadata_and_transfer_binary_without_shell_outpu
     let source = local.path().join("source.bin");
     std::fs::write(&source, [0, 255, 1, 128]).unwrap();
     let (client, target) = create(state.path(), export.path(), SecretKey::generate()).await;
+    let destination = local.path().join("must-not-download.bin");
+    assert_eq!(
+        client.command(&json!({"op":"file_get","host":target.host,"incarnation":target.incarnation,"workspace":"training","remote_path":"private.bin","local_path":destination}))
+            .await.unwrap_err(),
+        "Unknown app operation"
+    );
+    assert!(!destination.exists());
     let job = client.command(&json!({"op":"file_put","host":target.host,"incarnation":target.incarnation,"workspace":"training","local_path":source,"remote_path":"binary"})).await.unwrap();
     let id = job["transfer"].as_str().unwrap();
     let complete = tokio::time::timeout(Duration::from_secs(15), async {
@@ -365,57 +355,48 @@ async fn owner_jobs_report_only_metadata_and_transfer_binary_without_shell_outpu
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn cancellation_before_publication_never_exposes_an_incomplete_destination() {
+async fn cancelled_upload_never_exposes_an_incomplete_destination() {
     tokio::time::timeout(Duration::from_secs(60), async {
         let state = tempfile::tempdir().unwrap();
         let export = tempfile::tempdir().unwrap();
         let local = tempfile::tempdir().unwrap();
-        let source = export.path().join("output.bin");
+        let source = local.path().join("source.bin");
         write_source(&source, 2);
         let (client, target) = create(state.path(), export.path(), SecretKey::generate()).await;
-        let destination = local.path().join("download.bin");
-        let cancellation = FileCancellation::default();
-        let cancel = cancellation.clone();
         let error = client
-            .get_file(
+            .put_file(
                 target.clone(),
                 "training",
+                &source,
                 "output.bin",
-                &destination,
-                TransferOptions {
-                    cancellation,
-                    progress: Some(Arc::new(move |progress| {
-                        if progress.phase == "verifying" {
-                            cancel.cancel();
-                        }
-                    })),
-                    ..Default::default()
-                },
+                pause_after(wispnet_files::MAX_CHUNK as u64),
             )
             .await
             .unwrap_err();
         assert_eq!(error.code, "CANCELLED");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        assert!(!destination.exists());
+        assert!(!export.path().join("output.bin").exists());
         let file = client
-            .get_file(
+            .put_file(
                 target,
                 "training",
+                &source,
                 "output.bin",
-                &destination,
                 TransferOptions::default(),
             )
             .await
             .unwrap();
-        assert_eq!(wispnet_files::hash_file(&destination).unwrap(), file.sha256);
+        assert_eq!(
+            wispnet_files::hash_file(&export.path().join("output.bin")).unwrap(),
+            file.sha256
+        );
         client.endpoint.close().await;
     })
     .await
-    .expect("SDK transfer test timed out");
+    .expect("SDK cancelled upload test timed out");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn sdk_uses_authenticated_remote_quic_for_binary_roundtrip() {
+async fn sdk_uses_authenticated_remote_quic_for_binary_upload() {
     tokio::time::timeout(Duration::from_secs(60), async {
         let host_state = tempfile::tempdir().unwrap();
         let client_state = tempfile::tempdir().unwrap();
@@ -441,21 +422,10 @@ async fn sdk_uses_authenticated_remote_quic_for_binary_roundtrip() {
             )
             .await
             .unwrap();
-        let destination = local.path().join("download.bin");
-        let downloaded = client
-            .get_file(
-                target.clone(),
-                "training",
-                "job/native.bin",
-                &destination,
-                TransferOptions::default(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(uploaded, downloaded);
+        assert_eq!(uploaded.sha256, wispnet_files::hash_file(&source).unwrap());
         assert_eq!(
             wispnet_files::hash_file(&source).unwrap(),
-            wispnet_files::hash_file(&destination).unwrap()
+            wispnet_files::hash_file(&export.path().join("job/native.bin")).unwrap()
         );
         let authority = Authority::open(host_state.path(), target.host).unwrap();
         let snapshot = authority.snapshot().await.unwrap();
@@ -493,7 +463,7 @@ async fn sdk_uses_authenticated_remote_quic_for_binary_roundtrip() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "1 GiB SDK helper acceptance including disk hashes and resumed download"]
+#[ignore = "1 GiB SDK helper acceptance including disk hashes and resumed upload"]
 async fn sdk_large_file() {
     let state = tempfile::tempdir().unwrap();
     let client_state = tempfile::tempdir().unwrap();
@@ -511,30 +481,13 @@ async fn sdk_large_file() {
         client_key.clone(),
     )
     .await;
-    let started = std::time::Instant::now();
-    let uploaded = client
-        .put_file(
-            target.clone(),
-            "training",
-            &source,
-            "artifact.bin",
-            TransferOptions::default(),
-        )
-        .await
-        .unwrap();
-    eprintln!(
-        "SDK 1 GiB upload total {:?}, {:.3} Gbps",
-        started.elapsed(),
-        uploaded.size_bytes as f64 * 8.0 / started.elapsed().as_secs_f64() / 1e9
-    );
-    let destination = local.path().join("download.bin");
     assert_eq!(
         client
-            .get_file(
-                target.clone(),
+            .put_file(
+                target,
                 "training",
+                &source,
                 "artifact.bin",
-                &destination,
                 pause_after(32 * 1024 * 1024)
             )
             .await
@@ -542,6 +495,7 @@ async fn sdk_large_file() {
             .code,
         "CANCELLED"
     );
+    assert!(!export.path().join("artifact.bin").exists());
     client.endpoint.close().await;
     drop(client);
     host.shutdown().await;
@@ -553,27 +507,38 @@ async fn sdk_large_file() {
         client_key,
     )
     .await;
+    let resumed_offset = Arc::new(Mutex::new(None));
+    let observed_offset = resumed_offset.clone();
     let started = std::time::Instant::now();
-    let downloaded = client
-        .get_file(
+    let uploaded = client
+        .put_file(
             target,
             "training",
+            &source,
             "artifact.bin",
-            &destination,
-            TransferOptions::default(),
+            TransferOptions {
+                progress: Some(Arc::new(move |progress| {
+                    if progress.phase == "transferring" {
+                        observed_offset
+                            .lock()
+                            .unwrap()
+                            .get_or_insert(progress.verified_bytes);
+                    }
+                })),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
+    let resumed_offset = resumed_offset.lock().unwrap().unwrap();
+    assert!(resumed_offset > 0);
     eprintln!(
-        "SDK 1 GiB resumed download total {:?}, {:.3} Gbps",
+        "SDK 1 GiB resumed upload total {:?}, {:.3} Gbps",
         started.elapsed(),
-        (downloaded.size_bytes - 32 * 1024 * 1024) as f64 * 8.0
-            / started.elapsed().as_secs_f64()
-            / 1e9
+        (uploaded.size_bytes - resumed_offset) as f64 * 8.0 / started.elapsed().as_secs_f64() / 1e9
     );
-    assert_eq!(downloaded, uploaded);
     assert_eq!(
-        wispnet_files::hash_file(&destination).unwrap(),
+        wispnet_files::hash_file(&export.path().join("artifact.bin")).unwrap(),
         uploaded.sha256
     );
     client.endpoint.close().await;

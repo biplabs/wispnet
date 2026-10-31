@@ -101,17 +101,30 @@ class FilesSmoke(unittest.TestCase):
         self.assertEqual(hashlib.sha256((export / "jobs/a/input.bin").read_bytes()).hexdigest(), expected_hash)
         self.assertEqual(uploaded["file"]["path"], "jobs/a/input.bin")
 
-        # A grant is ongoing: retries and downloads need no new confirmation.
+        # A grant is ongoing: retries and further sends need no new confirmation.
         # Repeating a completed helper call recognizes the same destination.
         retry = self.cli(client, "files", "put", target_id, "training.v1",
                          str(source), "jobs/a/input.bin")
         self.completed(retry, expected_hash, len(content))
+        additional = self.cli(client, "files", "put", target_id, "training.v1",
+                              str(source), "jobs/b/input.bin")
+        self.completed(additional, expected_hash, len(content))
+        self.assertEqual((export / "jobs/b/input.bin").read_bytes(), content)
+
+        # Receiving permission never lets the sender retrieve the host's files.
         downloaded = self.root / "downloaded.bin"
         get = self.cli(client, "files", "get", target_id, "training.v1",
-                       str(downloaded), "jobs/a/input.bin")
-        self.completed(get, expected_hash, len(content))
-        self.assertEqual(hashlib.sha256(downloaded.read_bytes()).hexdigest(), expected_hash)
-        self.assertEqual(downloaded.read_bytes(), content)
+                       str(downloaded), "jobs/a/input.bin", success=False)
+        self.assertFalse(downloaded.exists())
+        self.assertIn("send", get.stderr.lower())
+
+        # Identical existing content is not this sender's completed transfer.
+        existing = export / "existing.bin"
+        existing.write_bytes(content)
+        conflict = self.cli(client, "files", "put", target_id, "training.v1",
+                            str(source), "existing.bin", success=False)
+        self.assertEqual(json.loads(conflict.stdout)["error"]["code"], "CONFLICT")
+        self.assertEqual(existing.read_bytes(), content)
 
         outside = self.root / "outside.bin"
         escaped = self.cli(client, "files", "put", target_id, "training.v1",
@@ -125,12 +138,11 @@ class FilesSmoke(unittest.TestCase):
         self.cli(target, "files-access", "--allow", "none")
         catalog = api.request(op="catalog", host=target_id)
         self.assertEqual([service["id"] for service in catalog["services"]], ["shell"])
-        revoked_destination = self.root / "revoked.bin"
-        revoked = self.cli(client, "files", "get", target_id, "training.v1",
-                           str(revoked_destination), "jobs/a/input.bin", success=False)
+        revoked = self.cli(client, "files", "put", target_id, "training.v1",
+                           str(source), "jobs/revoked.bin", success=False)
         self.assertIn("not granted", revoked.stderr)
         self.assertEqual(json.loads(revoked.stdout)["error"]["code"], "PERMISSION_DENIED")
-        self.assertFalse(revoked_destination.exists())
+        self.assertFalse((export / "jobs/revoked.bin").exists())
         self.assertEqual(hashlib.sha256((export / "jobs/a/input.bin").read_bytes()).hexdigest(), expected_hash)
 
         # Removing the last folder revokes standing access without deleting data.

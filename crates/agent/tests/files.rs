@@ -11,7 +11,7 @@ use wispnet_core::{
     identity::{EndpointId, Identity},
     protocol::Status,
 };
-use wispnet_files::{Request, Response, TransferState, read_response, write_request};
+use wispnet_files::{ErrorCode, Request, Response, TransferState, read_response, write_request};
 use wispnet_registry::host::{self, Authority, Mutation};
 
 fn config() -> TransportConfig {
@@ -171,7 +171,7 @@ async fn native_files_grants_restart_lost_ack_commit_and_revocation() {
     let Response::File { file: ref info } = committed else {
         panic!("commit did not return file info")
     };
-    let downloaded = rpc(
+    let denied_read = rpc(
         &mut stream,
         Request::FileReadRange {
             workspace: "jobs".into(),
@@ -182,7 +182,39 @@ async fn native_files_grants_restart_lost_ack_commit_and_revocation() {
         },
     )
     .await;
-    assert!(matches!(downloaded, Response::Range { data, eof: true, .. } if data == bytes));
+    assert!(matches!(
+        denied_read,
+        Response::Error {
+            code: ErrorCode::PermissionDenied,
+            ..
+        }
+    ));
+    // A standing incoming grant cannot inspect files already in the receiving
+    // folder, even when the sender knows the path and a real content version.
+    std::fs::write(export.path().join("receiver-private.bin"), b"private").unwrap();
+    for path in ["run/input.bin", "receiver-private.bin", "missing.bin"] {
+        for request in [
+            Request::FileStat {
+                workspace: "jobs".into(),
+                path: path.into(),
+            },
+            Request::FileReadRange {
+                workspace: "jobs".into(),
+                path: path.into(),
+                expected_version: info.file_version.clone(),
+                offset: 0,
+                max_bytes: 1,
+            },
+        ] {
+            assert!(matches!(
+                rpc(&mut stream, request).await,
+                Response::Error {
+                    code: ErrorCode::PermissionDenied,
+                    ..
+                }
+            ));
+        }
+    }
     assert_eq!(
         rpc(
             &mut stream,

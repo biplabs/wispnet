@@ -320,48 +320,33 @@ class _WispHomeState extends State<WispHome>
   }
 
   Future<void> showFiles(Machine machine) async {
-    final upload =
+    final send =
         'wispnet files put ${machine.id} WORKSPACE /local/file relative/path';
-    final download =
-        'wispnet files get ${machine.id} WORKSPACE /local/file relative/path';
     await showWispSheet<void>(
       context,
-      title: 'Files on ${machine.name}',
+      title: 'Send files to ${machine.name}',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const Text(
-            'Transfer files using the Wispnet command line on a paired computer. Uploads and downloads resume after disconnects.',
+            'Send files using the Wispnet command line on a paired computer. The receiving device must grant you Files access. Transfers resume after disconnects.',
           ),
           const SizedBox(height: 12),
           const Text(
             'Replace WORKSPACE with an exported folder name, /local/file with your local file path, and relative/path with the path inside the exported folder.',
           ),
           const SizedBox(height: 16),
-          const Text('Upload'),
+          const Text('Send a file'),
           const SizedBox(height: 8),
-          SelectableText(upload),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: () async {
-              await Clipboard.setData(ClipboardData(text: upload));
-              notice('Upload command copied');
-            },
-            icon: const Icon(Icons.copy),
-            label: const Text('Copy upload command'),
-          ),
-          const SizedBox(height: 16),
-          const Text('Download'),
-          const SizedBox(height: 8),
-          SelectableText(download),
+          SelectableText(send),
           const SizedBox(height: 8),
           OutlinedButton.icon(
             onPressed: () async {
-              await Clipboard.setData(ClipboardData(text: download));
-              notice('Download command copied');
+              await Clipboard.setData(ClipboardData(text: send));
+              notice('Send command copied');
             },
             icon: const Icon(Icons.copy),
-            label: const Text('Copy download command'),
+            label: const Text('Copy send command'),
           ),
         ],
       ),

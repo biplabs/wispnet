@@ -4,16 +4,16 @@ Every Wispnet host includes the permanent `files` service alongside `shell`.
 Files uses binary frames on the authenticated native Iroh/QUIC service tunnel;
 file bytes never pass through MCP JSON, Shell output, or the HTTP gateway.
 
-The host owner chooses exported directories and the complete list of paired
-clients that may read and write them. Pairing and Shell grants confer no Files
+The host owner chooses receiving folders and the complete list of paired
+clients that may send files into them. Pairing and Shell grants confer no Files
 access. Exports begin empty, and remote access begins disabled.
 
 Choose at least one folder before granting Files access. A grant is ongoing
-permission: that device can upload and download within every configured folder
-without asking you to confirm each transfer. The current grant combines reading
-and writing; it is not an upload-only permission. Transfers cannot overwrite
-existing files or escape the shared folders. Revoke the device's Files grant to
-stop its active access and prevent new transfers.
+permission: that device can send files into every configured folder without
+asking you to confirm each transfer. This is a one-way receiving service: the
+grant does not let the sender read or download files from your computer.
+Transfers cannot overwrite existing files or escape the receiving folders.
+Revoke the device's Files grant to stop active access and prevent new transfers.
 
 ## Configure a host
 
@@ -45,28 +45,34 @@ available `files-legacy` identifier with its existing grants preserved.
 ## Transfer a file
 
 The node must be running. Device names must resolve unambiguously; a full public
-host ID always works. Both directions take LOCAL_PATH before REMOTE_PATH:
+host ID always works. The sender chooses a local file and its destination path
+inside one of the receiving host's configured folders:
 
 ```sh
 wispnet files put GPU_HOST training ./dataset.npz jobs/run-1/dataset.npz
-wispnet files get GPU_HOST training ./checkpoint.bin jobs/run-1/checkpoint.bin
 ```
 
 Transfers resume by default. Repeat the same command after a disconnect, client
 restart, or node restart. Ctrl+C pauses a transfer and retains its resumable
 bytes. `--no-resume` starts with fresh client resume state. Existing destinations
-are never overwritten; identical complete content can be recognized by checksum.
+are never overwritten, including files with identical content. Retrying your own
+completed transfer can recover its receipt while its client journal and the
+receiving host's retained transfer state remain available (24 hours by default).
 
 Progress is JSON on stderr, and completion or a typed transfer error is JSON on
 stdout. The owner-local API starts bounded background jobs with paths and target
-metadata only (`file_put`, `file_get`), then exposes `file_status` and
+metadata only (`file_put`), then exposes `file_status` and
 `file_cancel`. The CLI also supports `files status TRANSFER` and
-`files cancel TRANSFER`. Background job handles are ephemeral; repeat put/get to
+`files cancel TRANSFER`. Background job handles are ephemeral; repeat put to
 recover durable resume state after a node restart.
 
-The Rust SDK exposes `Client::put_file` and `Client::get_file`, `FileTarget`,
+The Rust SDK exposes `Client::put_file`, `FileTarget`,
 `TransferOptions`, progress callbacks, and `FileCancellation` in
 `wispnet_client::files`.
+
+There is no `files get` command or `file_get` API. To send files in the other
+direction, the other computer's owner must configure a receiving folder and
+grant the first computer permission to send there.
 
 ## Reliability and limits
 
@@ -80,13 +86,6 @@ Retries recover lost acknowledgements and commit responses.
 Pipelined upload chunks can share a durable flush in groups of up to eight.
 Each chunk still receives a response; its acknowledged offset may include later
 chunks in the same group. Single-request callers remain supported.
-
-Downloads pin a content version, verify range hashes and the complete SHA-256,
-and write a private partial beside the local destination. Local publication is
-atomic and refuses replacement. Saved offsets refer to verified, durable local
-bytes. A changed source version fails with `STALE_VERSION` rather than mixing
-versions. Version checks include inode, size, and nanosecond modification/change
-timestamps; final SHA-256 remains authoritative.
 
 Only regular files are supported. Absolute remote paths, traversal, symlinks,
 and reserved partial-file names are rejected. Disk/hash work runs outside the
@@ -124,8 +123,8 @@ This transfers real binary payload over authenticated Iroh/QUIC, checks a durabl
 offset after restarting the host, and verifies the final SHA-256. Loopback results
 demonstrate local implementation capacity, not a guaranteed Internet rate.
 
-The SDK benchmark uses two native peers, includes source checksumming and upload
-commit, then interrupts a download and resumes it after restarting both nodes.
+The SDK benchmark uses two native peers, pauses an upload, restarts both nodes,
+and resumes the upload through verification and commit.
 Set `TMPDIR` to a directory on the desired filesystem to include that storage
 device in the measurement; `/tmp` may be backed by memory.
 
@@ -136,5 +135,4 @@ transfer. These are local loopback measurements; Internet and relay paths still
 need separate validation.
 
 The full SDK run on that filesystem measured 3.27 Gbit/s for upload including
-source hashing and commit, and 2.62 Gbit/s for resumed download including prefix
-verification, final hashing, and publication.
+source hashing and commit.

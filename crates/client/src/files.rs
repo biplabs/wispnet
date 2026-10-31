@@ -8,8 +8,8 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     fs::{File, OpenOptions},
-    io::{self, Read, Seek, SeekFrom, Write},
-    os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt, PermissionsExt},
+    io::{self, Read, SeekFrom, Write},
+    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
     time::{Duration, Instant},
@@ -203,20 +203,17 @@ struct Binding {
     direction: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+// Older upload journals include unused download fields; accept those when resuming.
 struct Journal {
     binding: Binding,
     size_bytes: u64,
     sha256: String,
     idempotency_key: String,
     transfer_id: Option<String>,
-    file_version: Option<String>,
     committed_offset: u64,
-    prefix_sha256: String,
 }
 struct ResumeFiles {
     journal: PathBuf,
-    partial: PathBuf,
     _lock: Arc<File>,
 }
 
@@ -262,26 +259,6 @@ impl Client {
         drop_guard.armed = false;
         result
     }
-    pub async fn get_file(
-        self: &Arc<Self>,
-        target: FileTarget,
-        workspace: &str,
-        remote_path: &str,
-        local_path: &Path,
-        options: TransferOptions,
-    ) -> Result<FileInfo> {
-        let mut drop_guard = CancelOnDrop {
-            cancellation: options.cancellation.clone(),
-            armed: true,
-        };
-        let result = tokio::select! {
-            biased;
-            _ = options.cancellation.cancelled() => Err(TransferError::new("CANCELLED", "Transfer cancelled; resumable data retained")),
-            result = self.get_file_inner(target, workspace, remote_path, local_path, &options) => result,
-        };
-        drop_guard.armed = false;
-        result
-    }
     pub(crate) async fn files_command(
         self: &Arc<Self>,
         value: &Value,
@@ -296,14 +273,14 @@ impl Client {
                     .unwrap_or_else(|e| e.into_inner())
                     .get(id)
                     .cloned()
-                    .ok_or("File transfer handle unavailable; repeat put/get to resume")?;
+                    .ok_or("File transfer handle unavailable; repeat put to resume")?;
                 if value["op"] == "file_cancel" {
                     job.cancellation.cancel();
                 }
                 let status = job.status.lock().unwrap_or_else(|e| e.into_inner()).clone();
                 Ok(status)
             }
-            "file_put" | "file_get" => {
+            "file_put" => {
                 let target = FileTarget {
                     host: crate::peer(value)?,
                     service: value["service"].as_str().unwrap_or("files").into(),
@@ -379,20 +356,13 @@ impl Client {
                     })),
                 };
                 let client = self.clone();
-                let upload = value["op"] == "file_put";
                 let started = Instant::now();
                 let operation_job = job.clone();
                 tokio::spawn(async move {
                     let _permit = permit;
-                    let result = if upload {
-                        client
-                            .put_file(target, &workspace, &local_path, &remote_path, options)
-                            .await
-                    } else {
-                        client
-                            .get_file(target, &workspace, &remote_path, &local_path, options)
-                            .await
-                    };
+                    let result = client
+                        .put_file(target, &workspace, &local_path, &remote_path, options)
+                        .await;
                     let mut status = operation_job
                         .status
                         .lock()
@@ -615,7 +585,7 @@ impl Client {
             }
             Ok((
                 metadata.len(),
-                hash_reader_cancelled(&mut file, None, Some(&cancellation))?.0,
+                hash_reader_cancelled(&mut file, Some(&cancellation))?,
             ))
         })
         .await?;
@@ -632,9 +602,7 @@ impl Client {
             sha256: sha256.clone(),
             idempotency_key: crate::token(),
             transfer_id: None,
-            file_version: None,
             committed_offset: 0,
-            prefix_sha256: String::new(),
         });
         persist(&resume.journal, &journal, &resume._lock).await?;
         for attempt in 0..MAX_RETRIES {
@@ -669,33 +637,9 @@ impl Client {
         options: &TransferOptions,
     ) -> Result<FileInfo> {
         let (mut stream, _resources) = self.file_stream(target).await?;
-        // A previous commit response may have been lost, including after server
-        // transfer metadata expiry. Content identity makes this check safe.
-        write_request(
-            &mut stream,
-            &Request::FileStat {
-                workspace: journal.binding.workspace.clone(),
-                path: journal.binding.remote_path.clone(),
-            },
-        )
-        .await
-        .map_err(TransferError::io)?;
-        match response(&mut stream).await {
-            Ok(Response::File { file })
-                if file.sha256 == journal.sha256 && file.size_bytes == journal.size_bytes =>
-            {
-                return Ok(file);
-            }
-            Ok(Response::File { .. }) => {
-                return Err(TransferError::new(
-                    "CONFLICT",
-                    "Remote destination already contains different content",
-                ));
-            }
-            Err(error) if error.code == "NOT_FOUND" => {}
-            Err(error) => return Err(error),
-            _ => return Err(protocol_error()),
-        }
+        // UploadBegin recovers the peer-bound manifest, including a committed
+        // transfer whose response was lost. The receive-only grant cannot stat
+        // arbitrary destination files.
         write_request(
             &mut stream,
             &Request::UploadBegin {
@@ -831,285 +775,6 @@ impl Client {
         options.report("complete", size, size);
         Ok(file)
     }
-    async fn get_file_inner(
-        self: &Arc<Self>,
-        target: FileTarget,
-        workspace: &str,
-        remote_path: &str,
-        local_path: &Path,
-        options: &TransferOptions,
-    ) -> Result<FileInfo> {
-        validate_target(&target)?;
-        let local_path = absolute_file_path(local_path)?;
-        let binding = Binding {
-            version: 1,
-            own: self.endpoint.id().to_string(),
-            target: target.clone(),
-            workspace: workspace.into(),
-            remote_path: remote_path.into(),
-            local_path: local_path.clone(),
-            direction: "get".into(),
-        };
-        let resume = self.prepare_resume(binding.clone()).await?;
-        let journal_path = resume.journal.clone();
-        let old = if options.resume {
-            blocking(move || load_journal(&journal_path)).await?
-        } else {
-            None
-        };
-        let mut journal = old.filter(|j| j.binding == binding);
-        for attempt in 0..MAX_RETRIES {
-            let result = self
-                .download_attempt(&target, &resume, &binding, &mut journal, options)
-                .await;
-            match result {
-                Ok(file) => return Ok(file),
-                Err(error) if retryable(&error) && attempt + 1 < MAX_RETRIES => {
-                    options.report(
-                        "reconnecting",
-                        journal.as_ref().map_or(0, |j| j.committed_offset),
-                        journal.as_ref().map_or(0, |j| j.size_bytes),
-                    );
-                    tokio::time::sleep(Duration::from_millis(250 * (1 << attempt))).await;
-                }
-                Err(error) => return Err(error),
-            }
-        }
-        unreachable!()
-    }
-    async fn download_attempt(
-        self: &Arc<Self>,
-        target: &FileTarget,
-        resume: &ResumeFiles,
-        binding: &Binding,
-        saved: &mut Option<Journal>,
-        options: &TransferOptions,
-    ) -> Result<FileInfo> {
-        let (mut stream, _resources) = self.file_stream(target).await?;
-        write_request(
-            &mut stream,
-            &Request::FileStat {
-                workspace: binding.workspace.clone(),
-                path: binding.remote_path.clone(),
-            },
-        )
-        .await
-        .map_err(TransferError::io)?;
-        let info = match response(&mut stream).await? {
-            Response::File { file } => file,
-            _ => return Err(protocol_error()),
-        };
-        if let Some(journal) = saved.as_ref()
-            && (journal.file_version.as_deref() != Some(info.file_version.as_str())
-                || journal.sha256 != info.sha256
-                || journal.size_bytes != info.size_bytes)
-        {
-            return Err(TransferError::new(
-                "STALE_VERSION",
-                "Remote file changed; repeat with resume disabled",
-            ));
-        }
-        let destination = binding.local_path.clone();
-        let expected_info = info.clone();
-        let cancellation = options.cancellation.clone();
-        if blocking(move || {
-            existing_matches_cancelled(&destination, &expected_info, Some(&cancellation))
-        })
-        .await?
-        {
-            return Ok(info);
-        }
-        let journal = saved.get_or_insert_with(|| Journal {
-            binding: binding.clone(),
-            size_bytes: info.size_bytes,
-            sha256: info.sha256.clone(),
-            idempotency_key: String::new(),
-            transfer_id: None,
-            file_version: Some(info.file_version.clone()),
-            committed_offset: 0,
-            prefix_sha256: wispnet_files::sha256(&[]),
-        });
-        if journal.committed_offset > info.size_bytes {
-            return Err(protocol_error());
-        }
-        let partial_path = resume.partial.clone();
-        let offset = journal.committed_offset;
-        let prefix = journal.prefix_sha256.clone();
-        let resume_lock = resume._lock.clone();
-        let cancellation = options.cancellation.clone();
-        let (partial, hasher) = blocking(move || {
-            let _resume_lock = resume_lock;
-            let file = safe_open(&partial_path, true, true)?;
-            let metadata = file.metadata().map_err(TransferError::io)?;
-            if !metadata.is_file()
-                || metadata.uid() != unsafe { libc::geteuid() }
-                || metadata.permissions().mode() & 0o077 != 0
-            {
-                return Err(TransferError::new(
-                    "PATH_DENIED",
-                    "Download partial must be a private regular file",
-                ));
-            }
-            if file.metadata().map_err(TransferError::io)?.len() < offset {
-                return Err(TransferError::new(
-                    "HASH_MISMATCH",
-                    "Saved download prefix is incomplete",
-                ));
-            }
-            let mut reader = file.try_clone().map_err(TransferError::io)?;
-            let (digest, hasher) =
-                hash_reader_cancelled(&mut reader, Some(offset), Some(&cancellation))?;
-            if digest != prefix {
-                return Err(TransferError::new(
-                    "HASH_MISMATCH",
-                    "Saved download prefix failed verification",
-                ));
-            }
-            file.set_len(offset).map_err(TransferError::io)?;
-            // The initial journal must never outlive the partial's directory
-            // entry, including when this is an empty download or a restart.
-            file.sync_all().map_err(TransferError::io)?;
-            sync_parent(&partial_path)?;
-            Ok((Arc::new(file), hasher))
-        })
-        .await?;
-        persist(&resume.journal, journal, &resume._lock).await?;
-        options.report("transferring", offset, info.size_bytes);
-        let (mut reader, mut writer) = tokio::io::split(stream);
-        let slots = Arc::new(Semaphore::new(PIPELINE));
-        let (queued, mut expected) = mpsc::channel(PIPELINE);
-        let send = async {
-            let mut at = offset;
-            while at < info.size_bytes {
-                let permit = slots
-                    .clone()
-                    .acquire_owned()
-                    .await
-                    .map_err(|_| protocol_error())?;
-                let length = (info.size_bytes - at).min(MAX_CHUNK as u64);
-                write_request(
-                    &mut writer,
-                    &Request::FileReadRange {
-                        workspace: binding.workspace.clone(),
-                        path: binding.remote_path.clone(),
-                        expected_version: info.file_version.clone(),
-                        offset: at,
-                        max_bytes: length,
-                    },
-                )
-                .await
-                .map_err(TransferError::io)?;
-                queued
-                    .send((at, length, permit))
-                    .await
-                    .map_err(|_| protocol_error())?;
-                at += length;
-            }
-            drop(queued);
-            Ok::<_, TransferError>(())
-        };
-        let mut hasher = hasher;
-        let receive = async {
-            let mut since_sync = 0;
-            while let Some((at, length, permit)) = expected.recv().await {
-                let data = match response(&mut reader).await? {
-                    Response::Range {
-                        file_version,
-                        offset,
-                        next_offset,
-                        eof,
-                        chunk_sha256,
-                        data,
-                    } if file_version == info.file_version
-                        && offset == at
-                        && next_offset == at + data.len() as u64
-                        && data.len() as u64 == length
-                        && eof == (next_offset == info.size_bytes) =>
-                    {
-                        let (data, valid) = blocking(move || {
-                            let valid = wispnet_files::sha256(&data) == chunk_sha256;
-                            Ok((data, valid))
-                        })
-                        .await?;
-                        if !valid {
-                            return Err(TransferError::new(
-                                "HASH_MISMATCH",
-                                "Download chunk checksum failed",
-                            ));
-                        }
-                        data
-                    }
-                    _ => return Err(protocol_error()),
-                };
-                let file = partial.clone();
-                let mut next_hasher = hasher.clone();
-                let resume_lock = resume._lock.clone();
-                hasher = blocking(move || {
-                    let _resume_lock = resume_lock;
-                    file.write_all_at(&data, at).map_err(TransferError::io)?;
-                    next_hasher.update(&data);
-                    Ok(next_hasher)
-                })
-                .await?;
-                since_sync += 1;
-                let end = at + length;
-                if since_sync == PIPELINE || end == info.size_bytes {
-                    let file = partial.clone();
-                    let resume_lock = resume._lock.clone();
-                    blocking(move || {
-                        let _resume_lock = resume_lock;
-                        file.sync_all().map_err(TransferError::io)
-                    })
-                    .await?;
-                    journal.committed_offset = end;
-                    journal.prefix_sha256 = hex_digest(&hasher.clone().finalize());
-                    persist(&resume.journal, journal, &resume._lock).await?;
-                    since_sync = 0;
-                    options.report("transferring", end, info.size_bytes);
-                }
-                drop(permit);
-            }
-            Ok::<_, TransferError>(())
-        };
-        tokio::try_join!(send, receive)?;
-        options.report("verifying", info.size_bytes, info.size_bytes);
-        let partial_path = resume.partial.clone();
-        let destination = binding.local_path.clone();
-        let expected_hash = info.sha256.clone();
-        let expected_size = info.size_bytes;
-        // Re-read the stored bytes, then publish with a no-replace operation.
-        // The blocking closure owns the descriptor through cancellation.
-        let resume_lock = resume._lock.clone();
-        let cancellation = options.cancellation.clone();
-        blocking(move || {
-            let _resume_lock = resume_lock;
-            partial.sync_all().map_err(TransferError::io)?;
-            let mut file = partial.try_clone().map_err(TransferError::io)?;
-            file.seek(SeekFrom::Start(0)).map_err(TransferError::io)?;
-            let actual = hash_reader_cancelled(&mut file, None, Some(&cancellation))?.0;
-            if partial.metadata().map_err(TransferError::io)?.len() != expected_size
-                || actual != expected_hash
-            {
-                return Err(TransferError::new(
-                    "HASH_MISMATCH",
-                    "Completed download failed checksum verification",
-                ));
-            }
-            if cancellation.is_cancelled() {
-                return Err(TransferError::new(
-                    "CANCELLED",
-                    "Transfer cancelled; resumable data retained",
-                ));
-            }
-            std::fs::hard_link(&partial_path, &destination).map_err(TransferError::io)?;
-            sync_parent(&destination)?;
-            std::fs::remove_file(&partial_path).map_err(TransferError::io)?;
-            sync_parent(&partial_path)
-        })
-        .await?;
-        options.report("complete", info.size_bytes, info.size_bytes);
-        Ok(info)
-    }
 }
 
 fn validate_target(target: &FileTarget) -> Result<()> {
@@ -1208,9 +873,6 @@ fn resume_files(directory: &Path, binding: &Binding) -> Result<ResumeFiles> {
     }
     Ok(ResumeFiles {
         journal: directory.join(format!("{key}.json")),
-        partial: binding
-            .local_path
-            .with_file_name(format!(".wispnet-{key}.partial")),
         _lock: Arc::new(lock),
     })
 }
@@ -1255,73 +917,26 @@ fn sync_parent(path: &Path) -> Result<()> {
 fn hex_digest(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
-#[cfg(test)]
-fn hash_reader(reader: &mut impl Read, limit: Option<u64>) -> Result<(String, Sha256)> {
-    hash_reader_cancelled(reader, limit, None)
-}
 fn hash_reader_cancelled(
     reader: &mut impl Read,
-    limit: Option<u64>,
     cancellation: Option<&FileCancellation>,
-) -> Result<(String, Sha256)> {
+) -> Result<String> {
     let mut hasher = Sha256::new();
-    let mut remaining = limit.unwrap_or(u64::MAX);
     let mut buffer = vec![0; 1024 * 1024];
-    while remaining > 0 {
+    loop {
         if cancellation.is_some_and(FileCancellation::is_cancelled) {
             return Err(TransferError::new(
                 "CANCELLED",
                 "Transfer cancelled; resumable data retained",
             ));
         }
-        let amount = remaining.min(buffer.len() as u64) as usize;
-        let n = reader
-            .read(&mut buffer[..amount])
-            .map_err(TransferError::io)?;
+        let n = reader.read(&mut buffer).map_err(TransferError::io)?;
         if n == 0 {
-            if limit.is_some() {
-                return Err(TransferError::new(
-                    "HASH_MISMATCH",
-                    "Stored prefix is incomplete",
-                ));
-            }
             break;
         }
         hasher.update(&buffer[..n]);
-        remaining -= n as u64;
     }
-    Ok((hex_digest(&hasher.clone().finalize()), hasher))
-}
-#[cfg(test)]
-fn existing_matches(path: &Path, info: &FileInfo) -> Result<bool> {
-    existing_matches_cancelled(path, info, None)
-}
-fn existing_matches_cancelled(
-    path: &Path,
-    info: &FileInfo,
-    cancellation: Option<&FileCancellation>,
-) -> Result<bool> {
-    let metadata = match std::fs::symlink_metadata(path) {
-        Ok(meta) => meta,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => return Err(TransferError::io(error)),
-    };
-    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() != info.size_bytes
-    {
-        return Err(TransferError::new(
-            "CONFLICT",
-            "Local destination already exists",
-        ));
-    }
-    let actual = hash_reader_cancelled(&mut safe_open(path, false, false)?, None, cancellation)?.0;
-    if actual == info.sha256 {
-        Ok(true)
-    } else {
-        Err(TransferError::new(
-            "CONFLICT",
-            "Local destination contains different content",
-        ))
-    }
+    Ok(hex_digest(&hasher.finalize()))
 }
 
 #[cfg(test)]
@@ -1342,7 +957,7 @@ mod tests {
             workspace: "training".into(),
             remote_path: "input.bin".into(),
             local_path: path,
-            direction: "get".into(),
+            direction: "put".into(),
         }
     }
     #[tokio::test]
@@ -1359,7 +974,7 @@ mod tests {
         assert!(resume_files(&directory.path().join("state"), &b).is_ok());
     }
     #[tokio::test]
-    async fn private_journal_round_trips_and_prefix_corruption_is_detectable() {
+    async fn private_journal_round_trips_and_preserves_upload_identity() {
         let directory = tempfile::tempdir().unwrap();
         let b = binding(directory.path().join("output"));
         let resume = resume_files(&directory.path().join("state"), &b).unwrap();
@@ -1369,9 +984,7 @@ mod tests {
             sha256: wispnet_files::sha256(b"hello"),
             idempotency_key: "key".into(),
             transfer_id: Some("id".into()),
-            file_version: Some("version".into()),
             committed_offset: 3,
-            prefix_sha256: wispnet_files::sha256(b"hel"),
         };
         persist(&resume.journal, &journal, &resume._lock)
             .await
@@ -1387,30 +1000,36 @@ mod tests {
                 & 0o077,
             0
         );
-        assert_ne!(
-            hash_reader(&mut b"hex".as_slice(), Some(3)).unwrap().0,
-            loaded.prefix_sha256
-        );
-        assert!(hash_reader(&mut b"he".as_slice(), Some(3)).is_err());
+        assert_eq!(loaded.idempotency_key, "key");
+        assert_eq!(loaded.transfer_id.as_deref(), Some("id"));
+        // Preserve resume support for journals written before the service
+        // became receive-only, without retaining download state in new journals.
+        let mut legacy = serde_json::to_value(&journal).unwrap();
+        legacy["file_version"] = json!(null);
+        legacy["prefix_sha256"] = json!("");
+        let restored: Journal = serde_json::from_value(legacy).unwrap();
+        assert_eq!(restored.idempotency_key, journal.idempotency_key);
     }
     #[test]
-    fn destination_is_reused_only_when_content_matches_and_symlinks_are_rejected() {
+    fn source_hashing_rejects_symlinks_and_observes_cancellation() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("file");
         std::fs::write(&path, b"hello").unwrap();
-        let info = FileInfo {
-            path: "remote".into(),
-            size_bytes: 5,
-            sha256: wispnet_files::sha256(b"hello"),
-            file_version: "v".into(),
-        };
-        assert!(existing_matches(&path, &info).unwrap());
+        assert_eq!(
+            hash_reader_cancelled(&mut safe_open(&path, false, false).unwrap(), None).unwrap(),
+            wispnet_files::sha256(b"hello")
+        );
         let link = directory.path().join("link");
         std::os::unix::fs::symlink(&path, &link).unwrap();
-        assert!(existing_matches(&link, &info).is_err());
-        assert!(safe_open(&link, true, false).is_err());
-        std::fs::write(&path, b"world").unwrap();
-        assert_eq!(existing_matches(&path, &info).unwrap_err().code, "CONFLICT");
+        assert!(safe_open(&link, false, false).is_err());
+        let cancellation = FileCancellation::default();
+        cancellation.cancel();
+        assert_eq!(
+            hash_reader_cancelled(&mut b"hello".as_slice(), Some(&cancellation))
+                .unwrap_err()
+                .code,
+            "CANCELLED"
+        );
     }
     #[tokio::test]
     async fn cancellation_is_observed_even_before_waiting() {

@@ -68,6 +68,8 @@ pub enum Request {
     UploadAbort {
         transfer_id: String,
     },
+    // Recognize legacy read requests only to reject them with PermissionDenied.
+    // A Files grant permits sending to this host, never reading from it.
     FileStat {
         workspace: String,
         path: String,
@@ -101,15 +103,6 @@ pub enum Response {
         file: FileInfo,
     },
     Aborted,
-    Range {
-        file_version: String,
-        offset: u64,
-        next_offset: u64,
-        eof: bool,
-        chunk_sha256: String,
-        #[serde(skip)]
-        data: Vec<u8>,
-    },
     Error {
         code: ErrorCode,
         message: String,
@@ -190,10 +183,8 @@ pub async fn read_response(reader: &mut (impl AsyncRead + Unpin)) -> io::Result<
     let Some((metadata, data)) = read_frame(reader).await? else {
         return Ok(None);
     };
-    let mut response = serde_json::from_slice(&metadata).map_err(|_| invalid())?;
-    if let Response::Range { data: target, .. } = &mut response {
-        *target = data;
-    } else if !data.is_empty() {
+    let response = serde_json::from_slice(&metadata).map_err(|_| invalid())?;
+    if !data.is_empty() {
         return Err(invalid());
     }
     Ok(Some(response))
@@ -203,14 +194,10 @@ pub async fn write_response(
     writer: &mut (impl AsyncWrite + Unpin),
     response: &Response,
 ) -> io::Result<()> {
-    let data = match response {
-        Response::Range { data, .. } => data.as_slice(),
-        _ => &[],
-    };
     write_frame(
         writer,
         serde_json::to_vec(response).map_err(|_| invalid())?,
-        data,
+        &[],
     )
     .await
 }
