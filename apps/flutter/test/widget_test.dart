@@ -354,6 +354,23 @@ class DesktopFake extends FakeBackend {
   }
 }
 
+DesktopFake filesBackend({
+  Map<String, String> exports = const {},
+  List<String> allow = const [],
+}) {
+  final backend = DesktopFake();
+  (backend.status['host']['services'] as List).add({
+    'id': 'files',
+    'display_name': 'Files',
+    'kind': 'files',
+    'backend': '127.0.0.1:0',
+    'incarnation': incarnation,
+    'allow': allow,
+  });
+  backend.status['host']['file_exports'] = exports;
+  return backend;
+}
+
 Future<void> mount(
   WidgetTester tester,
   FakeBackend backend, {
@@ -2349,6 +2366,126 @@ void main() {
       await close(tester);
     },
   );
+  testWidgets(
+    'files sharing requires a folder before device grants can be selected',
+    (tester) async {
+      final backend = filesBackend();
+      await mount(tester, backend, size: const Size(1000, 1000));
+      await tester.tap(find.byTooltip('Settings for files on hibreak'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Manage folders and access'));
+      await tester.pumpAndSettle();
+      final field = find.widgetWithText(TextField, 'Exported folders');
+      final checkbox = find.byType(CheckboxListTile);
+      expect(tester.widget<CheckboxListTile>(checkbox).onChanged, isNull);
+      expect(
+        find.text('Set a shared folder before granting Files access.'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('without confirming each transfer'),
+        findsOneWidget,
+      );
+      await tester.enterText(field, 'training=relative');
+      await tester.pump();
+      expect(tester.widget<CheckboxListTile>(checkbox).onChanged, isNull);
+      await tester.enterText(field, 'training=/srv/training');
+      await tester.pump();
+      expect(tester.widget<CheckboxListTile>(checkbox).onChanged, isNotNull);
+      await tester.tap(checkbox);
+      await tester.ensureVisible(find.text('Save folders and access'));
+      await tester.tap(find.text('Save folders and access'));
+      await tester.pumpAndSettle();
+      expect(backend.ownerCalls.single['operation'], {
+        'op': 'files',
+        'allow': [peer],
+        'exports': {'training': '/srv/training'},
+        'expected_revision': 7,
+      });
+      await close(tester);
+    },
+  );
+  testWidgets(
+    'clearing the last shared folder disables devices and revokes Files grants',
+    (tester) async {
+      final backend = filesBackend(
+        exports: {'training': '/srv/training'},
+        allow: [peer],
+      );
+      await mount(tester, backend, size: const Size(1000, 1000));
+      await tester.tap(find.byTooltip('Settings for files on hibreak'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Manage folders and access'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<CheckboxListTile>(find.byType(CheckboxListTile)).value,
+        true,
+      );
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Exported folders'),
+        '',
+      );
+      await tester.pump();
+      final checkbox = tester.widget<CheckboxListTile>(
+        find.byType(CheckboxListTile),
+      );
+      expect(checkbox.value, false);
+      expect(checkbox.onChanged, isNull);
+      await tester.ensureVisible(find.text('Save folders and access'));
+      await tester.tap(find.text('Save folders and access'));
+      await tester.pumpAndSettle();
+      expect(backend.ownerCalls.single['operation'], {
+        'op': 'files',
+        'allow': [],
+        'exports': {},
+        'expected_revision': 7,
+      });
+      await close(tester);
+    },
+  );
+  for (final configured in [false, true]) {
+    testWidgets(
+      'pairing ${configured ? 'permits' : 'disables'} Files grants ${configured ? 'with' : 'without'} a shared folder',
+      (tester) async {
+        final backend = filesBackend(
+          exports: configured ? {'training': '/srv/training'} : {},
+        );
+        await mount(tester, backend, size: const Size(1000, 1000));
+        await tester.tap(
+          find
+              .descendant(
+                of: find.byKey(const ValueKey('remote-sector')),
+                matching: find.byType(OutlinedButton),
+              )
+              .first,
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Review 1 pairing requests'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Approve device'));
+        await tester.pumpAndSettle();
+        final grant = find.widgetWithText(CheckboxListTile, 'files');
+        expect(tester.widget<CheckboxListTile>(grant).value, false);
+        if (configured) {
+          expect(tester.widget<CheckboxListTile>(grant).onChanged, isNotNull);
+          await tester.tap(grant);
+        } else {
+          expect(tester.widget<CheckboxListTile>(grant).onChanged, isNull);
+          expect(
+            find.text('Set a shared folder before granting Files access.'),
+            findsOneWidget,
+          );
+        }
+        await tester.tap(find.text('Approve device').last);
+        await tester.pumpAndSettle();
+        expect(
+          (backend.ownerCalls.single['operation'] as Map)['services'],
+          configured ? ['web', 'files'] : ['web'],
+        );
+        await close(tester);
+      },
+    );
+  }
   testWidgets('built-in files manages exported folders and explicit grants', (
     tester,
   ) async {

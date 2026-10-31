@@ -542,6 +542,7 @@ pub(crate) fn apply_mutation(
                 {
                     return Err(ControlError::Invalid);
                 }
+                require_file_export_for_grant(tx, service)?;
             }
             let peer = crate::pairing::approve(tx, &invitation, crate::enrollment::now())?;
             // Preserve other clients' grants and any access this peer already has.
@@ -661,6 +662,7 @@ pub(crate) fn apply_mutation(
             {
                 return Err(ControlError::Invalid);
             }
+            require_file_export_for_grant(tx, &service)?;
             let peer = peer.to_string();
             if !tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM host_clients WHERE id=?1)",
@@ -736,7 +738,8 @@ pub(crate) fn apply_mutation(
         }
         Mutation::Files { allow, exports, .. } => {
             validate_file_exports(tx, &exports)?;
-            if allow.len() > 128
+            if (exports.is_empty() && !allow.is_empty())
+                || allow.len() > 128
                 || allow.iter().collect::<std::collections::HashSet<_>>().len() != allow.len()
             {
                 return Err(ControlError::Invalid);
@@ -854,6 +857,17 @@ pub(crate) fn apply_mutation(
                 return Err(ControlError::Invalid);
             }
         }
+    }
+    Ok(())
+}
+/// Files grants are standing access to configured folders. They cannot be
+/// assigned before the owner has chosen at least one folder to share.
+fn require_file_export_for_grant(
+    tx: &rusqlite::Transaction<'_>,
+    service: &str,
+) -> Result<(), ControlError> {
+    if service == "files" && file_exports(tx)?.is_empty() {
+        return Err(ControlError::Invalid);
     }
     Ok(())
 }

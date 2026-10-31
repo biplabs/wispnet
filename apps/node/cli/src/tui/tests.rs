@@ -1,6 +1,34 @@
 use super::*;
 use ratatui::{Terminal, backend::TestBackend};
 #[test]
+fn files_requires_a_folder_in_settings_and_pairing_selection() {
+    let (mut app, rx, _root) = fixture();
+    let service = json!({"id":"files","kind":"files","incarnation":"d".repeat(64),"allow":[]});
+    let mut form = app.files_form(&service);
+    assert!(matches!(form.fields[0].kind, FieldKind::ReadOnly));
+    form.fields[0].kind = FieldKind::Check(true);
+    form.fields[0].value = json!("b".repeat(64)).to_string();
+    assert!(app.save_form(form).unwrap_err().contains("shared folder"));
+    app.action(Action::Service(service.clone()));
+    let Some(Modal::Choice { entries, .. }) = &app.modal else {
+        panic!("Expected Files setup")
+    };
+    assert!(entries.is_empty());
+    assert!(rx.try_recv().is_err());
+    app.snapshot.as_mut().unwrap()["host"]["services"] = json!([service]);
+    app.action(Action::Pending(app.pending()[0].clone()));
+    app.key(KeyCode::Enter.into());
+    let Some(Modal::Form(form)) = &app.modal else {
+        panic!("Expected approval form")
+    };
+    assert!(matches!(form.fields[2].kind, FieldKind::ReadOnly));
+    let mut form = form.clone();
+    form.fields[2].value = json!("files").to_string();
+    form.fields[2].kind = FieldKind::Check(true);
+    assert!(app.save_form(form).unwrap_err().contains("shared folder"));
+    assert!(rx.try_recv().is_err());
+}
+#[test]
 fn built_in_files_grants_preserve_exports_and_never_offer_http_actions() {
     let (mut app, rx, _root) = fixture();
     app.snapshot.as_mut().unwrap()["host"]["file_exports"] = json!({"jobs":"/srv/jobs"});

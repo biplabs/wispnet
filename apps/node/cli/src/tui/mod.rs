@@ -1078,9 +1078,20 @@ impl App {
             selected: 0,
         }
     }
+    fn files_configured(&self) -> bool {
+        self.host()["file_exports"]
+            .as_object()
+            .is_some_and(|roots| !roots.is_empty())
+    }
     fn files_form(&self, service: &Value) -> Form {
         let mut form = self.shell_form(service);
         form.title = "Files · permitted devices".into();
+        if !self.files_configured() {
+            for field in &mut form.fields {
+                field.kind = FieldKind::ReadOnly;
+                field.value = "Set a shared folder before granting Files access".into();
+            }
+        }
         form.kind = FormKind::Files {
             revision: self.revision(),
             exports: self.host()["file_exports"]
@@ -1197,7 +1208,10 @@ impl App {
                         service["id"].clone(),
                         false,
                     );
-                    if array(&service["allow"]).contains(&json!(peer)) {
+                    if service["kind"] == "files" && !self.files_configured() {
+                        field.kind = FieldKind::ReadOnly;
+                        field.value = "Set a shared folder before granting Files access".into();
+                    } else if array(&service["allow"]).contains(&json!(peer)) {
                         field.kind = FieldKind::Granted;
                     }
                     fields.push(field);
@@ -1245,7 +1259,11 @@ impl App {
                     self.choice("Built-in Files", vec![
                         "Transfer files with wispnet files put|get DEVICE WORKSPACE LOCAL REMOTE.".into(),
                         "Configure exported directories with wispnet files-access --export NAME=/absolute/path.".into(),
-                    ], vec![entry("grants", "Edit permitted devices", Action::Form(self.files_form(&service)))]);
+                        "Permitted devices can upload and download without confirming each transfer.".into(),
+                        "Choose a shared folder before granting Files access.".into(),
+                    ], if self.files_configured() {
+                        vec![entry("grants", "Edit permitted devices", Action::Form(self.files_form(&service)))]
+                    } else { vec![] });
                     return;
                 }
                 if service["kind"] == "shell" {
@@ -1518,7 +1536,13 @@ impl App {
                             .map_err(|_| "Invalid selected service".to_string())
                     })
                     .collect::<Result<_, _>>()?;
+                if services.iter().any(|s| s == "files") && !self.files_configured() {
+                    return Err("Set a shared folder before granting Files access".into());
+                }
                 let mut detail = vec![format!("Device: {name}"), format!("Full client ID: {peer}"), "Pairing and the selected grants will be saved together. Existing grants are preserved.".into()];
+                if services.iter().any(|s| s == "files") {
+                    detail.push("Files permission allows uploads and downloads without confirming each transfer.".into());
+                }
                 if chosen.is_empty() {
                     detail.push("No services selected: pair without new service access.".into());
                 } else {
@@ -1536,8 +1560,11 @@ impl App {
                             .map_err(|_| "Invalid selected device")
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                if !allow.is_empty() && exports.as_object().is_none_or(|roots| roots.is_empty()) {
+                    return Err("Set a shared folder before granting Files access".into());
+                }
                 self.confirmation("Save Files access".into(),
-                    vec![format!("{} permitted devices", allow.len()), "These devices may read and write files inside the configured exports.".into()],
+                    vec![format!("{} permitted devices", allow.len()), "These devices may upload and download inside the shared folders without confirming each transfer.".into()],
                     self.mutate(json!({"op":"files","allow":allow,"exports":exports,"expected_revision":revision})));
             }
             FormKind::Shell { revision } => {

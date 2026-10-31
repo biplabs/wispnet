@@ -83,7 +83,7 @@ impl Store {
                 CREATE TABLE services (id TEXT PRIMARY KEY, host TEXT NOT NULL REFERENCES devices(id));
                 CREATE TABLE grants (service TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE, device TEXT NOT NULL REFERENCES devices(id), PRIMARY KEY(service,device));
                 PRAGMA user_version=1;")?,
-            1..=13 => {},
+            1..=14 => {},
             _ => return Err(Error::UnsupportedSchema),
         }
         if version < 2 {
@@ -182,6 +182,19 @@ impl Store {
                 tx.execute("UPDATE revision SET value=value+1 WHERE id=1", [])?;
             }
             tx.pragma_update(None, "user_version", 13)?;
+        }
+        if version < 14 {
+            // Older nodes could record Files grants before any folder was
+            // configured. Revoke these ineffective grants so choosing a folder
+            // later cannot silently activate access that predates that choice.
+            let removed = tx.execute(
+                "DELETE FROM host_grants WHERE service='files' AND NOT EXISTS(SELECT 1 FROM host_file_exports)",
+                [],
+            )?;
+            if removed > 0 {
+                tx.execute("UPDATE revision SET value=value+1 WHERE id=1", [])?;
+            }
+            tx.pragma_update(None, "user_version", 14)?;
         }
         tx.commit()?;
         Ok(Self(db))

@@ -171,6 +171,7 @@ fn files_name_and_exports_fail_closed_without_mutating_authority() {
 #[test]
 fn schema_thirteen_preserves_legacy_files_service_and_grants_once() {
     let state = directory();
+    let workspace = directory();
     let host = Identity::generate().endpoint_id();
     let peer = Identity::generate().endpoint_id();
     host::initialize(state.path(), host).unwrap();
@@ -190,10 +191,13 @@ fn schema_thirteen_preserves_legacy_files_service_and_grants_once() {
         .host_mutate(
             host,
             &owner,
-            Mutation::GrantService {
+            Mutation::Files {
                 expected_revision: 1,
-                service: "files".into(),
-                peer,
+                allow: vec![peer],
+                exports: BTreeMap::from([(
+                    "training".into(),
+                    workspace.path().canonicalize().unwrap(),
+                )]),
             },
         )
         .unwrap();
@@ -240,4 +244,228 @@ fn schema_thirteen_preserves_legacy_files_service_and_grants_once() {
             .incarnation,
         incarnation
     );
+}
+
+#[test]
+fn folder_is_required_for_every_grant_path_and_clearing_it_revokes_access() {
+    use wispnet_core::pairing::{Claim, Proof};
+    let state = directory();
+    let workspace = directory();
+    let host_key = Identity::generate();
+    let host = host_key.endpoint_id();
+    let peer = Identity::generate().endpoint_id();
+    let incoming = Identity::generate();
+    host::initialize(state.path(), host).unwrap();
+    let (mut store, owner) = host::owner_store(state.path(), host).unwrap();
+    store
+        .host_mutate(
+            host,
+            &owner,
+            Mutation::Approve {
+                expected_revision: 0,
+                peer,
+                name: "paired".into(),
+            },
+        )
+        .unwrap();
+    let now = wispnet_registry::enrollment::now();
+    let invitation = store
+        .pairing_invite(host, &owner, "https://relay.example", now, 300)
+        .unwrap();
+    let claim = Claim {
+        invitation: invitation.invitation.clone(),
+        code: invitation.code.clone(),
+        name: "incoming".into(),
+    };
+    let challenge = store
+        .pairing_challenge(host, incoming.endpoint_id(), &claim, now)
+        .unwrap();
+    let proof = Proof {
+        signature: incoming.secret_key().sign(&challenge.signing_bytes()),
+        challenge,
+    };
+    store
+        .pairing_prove(host, incoming.endpoint_id(), &proof, now)
+        .unwrap();
+    for operation in [
+        Mutation::Files {
+            expected_revision: 1,
+            allow: vec![peer],
+            exports: BTreeMap::new(),
+        },
+        Mutation::GrantService {
+            expected_revision: 1,
+            service: "files".into(),
+            peer,
+        },
+        Mutation::ApproveInvitation {
+            expected_revision: 1,
+            invitation: invitation.invitation.clone(),
+            services: vec!["files".into()],
+        },
+    ] {
+        assert!(matches!(
+            store.host_mutate(host, &owner, operation),
+            Err(ControlError::Invalid)
+        ));
+        let snapshot = store.host_snapshot(host).unwrap();
+        assert_eq!(snapshot.revision, 1);
+        assert_eq!(snapshot.clients.len(), 1);
+        assert!(snapshot.file_exports.is_empty());
+        assert!(
+            snapshot
+                .services
+                .iter()
+                .find(|s| s.id == "files")
+                .unwrap()
+                .allow
+                .is_empty()
+        );
+        assert_eq!(
+            store.pairing_list(host, &owner, now).unwrap()[0].state,
+            "pending"
+        );
+    }
+    let exports = BTreeMap::from([("shared".into(), workspace.path().canonicalize().unwrap())]);
+    store
+        .host_mutate(
+            host,
+            &owner,
+            Mutation::Files {
+                expected_revision: 1,
+                allow: vec![],
+                exports: exports.clone(),
+            },
+        )
+        .unwrap();
+    store
+        .host_mutate(
+            host,
+            &owner,
+            Mutation::GrantService {
+                expected_revision: 2,
+                service: "files".into(),
+                peer,
+            },
+        )
+        .unwrap();
+    store
+        .host_mutate(
+            host,
+            &owner,
+            Mutation::ApproveInvitation {
+                expected_revision: 3,
+                invitation: invitation.invitation.clone(),
+                services: vec!["files".into()],
+            },
+        )
+        .unwrap();
+    let configured = store.host_snapshot(host).unwrap();
+    let configured_files = configured
+        .services
+        .iter()
+        .find(|s| s.id == "files")
+        .unwrap();
+    assert_eq!(configured_files.allow.len(), 2);
+    let incarnation = configured_files.incarnation.clone();
+    assert!(matches!(
+        store.host_mutate(
+            host,
+            &owner,
+            Mutation::Files {
+                expected_revision: 4,
+                allow: vec![peer],
+                exports: BTreeMap::new()
+            }
+        ),
+        Err(ControlError::Invalid)
+    ));
+    assert_eq!(store.host_snapshot(host).unwrap().revision, 4);
+    store
+        .host_mutate(
+            host,
+            &owner,
+            Mutation::Files {
+                expected_revision: 4,
+                allow: vec![],
+                exports: BTreeMap::new(),
+            },
+        )
+        .unwrap();
+    let cleared = store.host_snapshot(host).unwrap();
+    assert!(cleared.file_exports.is_empty());
+    let cleared_files = cleared.services.iter().find(|s| s.id == "files").unwrap();
+    assert!(cleared_files.allow.is_empty());
+    assert_ne!(cleared_files.incarnation, incarnation);
+    assert_eq!(cleared.clients.len(), 2);
+}
+
+#[test]
+fn upgrade_revokes_only_legacy_files_grants_without_a_folder() {
+    for configured in [false, true] {
+        let state = directory();
+        let workspace = directory();
+        let host = Identity::generate().endpoint_id();
+        let peer = Identity::generate().endpoint_id();
+        host::initialize(state.path(), host).unwrap();
+        let (mut store, owner) = host::owner_store(state.path(), host).unwrap();
+        store
+            .host_mutate(
+                host,
+                &owner,
+                Mutation::Approve {
+                    expected_revision: 0,
+                    peer,
+                    name: "paired".into(),
+                },
+            )
+            .unwrap();
+        if configured {
+            store
+                .host_mutate(
+                    host,
+                    &owner,
+                    Mutation::Files {
+                        expected_revision: 1,
+                        allow: vec![peer],
+                        exports: BTreeMap::from([(
+                            "shared".into(),
+                            workspace.path().canonicalize().unwrap(),
+                        )]),
+                    },
+                )
+                .unwrap();
+        }
+        let before = store.host_snapshot(host).unwrap();
+        drop(store);
+        let db = rusqlite::Connection::open(state.path().join("host.sqlite3")).unwrap();
+        if !configured {
+            db.execute(
+                "INSERT INTO host_grants VALUES('files',?1)",
+                [peer.to_string()],
+            )
+            .unwrap();
+        }
+        db.pragma_update(None, "user_version", 13).unwrap();
+        drop(db);
+        let (mut store, _) = host::owner_store(state.path(), host).unwrap();
+        let after = store.host_snapshot(host).unwrap();
+        assert_eq!(after.revision, before.revision + u64::from(!configured));
+        let files = after.services.iter().find(|s| s.id == "files").unwrap();
+        assert_eq!(files.allow, if configured { vec![peer] } else { vec![] });
+        assert_eq!(after.file_exports, before.file_exports);
+        assert_eq!(
+            files.incarnation,
+            before
+                .services
+                .iter()
+                .find(|s| s.id == "files")
+                .unwrap()
+                .incarnation
+        );
+        let revision = after.revision;
+        drop(store);
+        let (mut store, _) = host::owner_store(state.path(), host).unwrap();
+        assert_eq!(store.host_snapshot(host).unwrap().revision, revision);
+    }
 }

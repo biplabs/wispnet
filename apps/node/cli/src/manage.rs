@@ -15,7 +15,9 @@ pub const HELP: &str = "Management (uses the running node; --config is optional)
 All management commands return JSON. node-request accepts the same owner-local
 operations as the desktop: catalogs, pairing, revision-checked service/grant
 mutations, access settings and public access. Request files must be owner-only.
-Service links grant no permissions; pair and obtain access first.";
+Service links grant no permissions; pair and obtain access first.
+Files requires a shared folder before grants; permitted devices can upload and
+download without confirming each transfer. Clearing all exports revokes access.";
 
 pub fn handles(mode: &str) -> bool {
     matches!(
@@ -100,22 +102,17 @@ pub fn run(args: &[OsString]) -> Result<Value, String> {
             if !options.contains_key("--allow") && exports.is_empty() && !clear_exports {
                 return Ok(json!({"service":service,"exports":current_exports}));
             }
-            let allow = match options.get("--allow") {
-                None => service["allow"].clone(),
-                Some(&"none") => json!([]),
-                Some(ids) => json!(
-                    ids.split(',')
-                        .map(|id| id
-                            .parse::<wispnet_core::identity::EndpointId>()
-                            .map_err(|_| "Invalid allowed device ID"))
-                        .collect::<Result<Vec<_>, _>>()?
-                ),
-            };
             let exports = if clear_exports || !exports.is_empty() {
                 json!(exports)
             } else {
                 current_exports
             };
+            let allow = files_grants(
+                options.get("--allow").copied(),
+                &service["allow"],
+                &exports,
+                clear_exports,
+            )?;
             let result = api.request(json!({"op":"mutate","operation":{"op":"files","allow":allow,"exports":exports,"expected_revision":status["host"]["revision"]}}))?;
             Ok(
                 json!({"service":"files","revision":result["revision"],"allow":allow,"exports":exports}),
@@ -222,5 +219,65 @@ pub fn run(args: &[OsString]) -> Result<Value, String> {
             service_links(&api, host, selected)
         }
         _ => Err(HELP.into()),
+    }
+}
+
+/// A folder removal revokes its grants; an explicit grant always requires roots.
+fn files_grants(
+    requested: Option<&str>,
+    current: &Value,
+    exports: &Value,
+    clear_exports: bool,
+) -> Result<Value, String> {
+    let allow = match requested {
+        None if clear_exports => json!([]),
+        None => current.clone(),
+        Some("none") => json!([]),
+        Some(ids) => json!(
+            ids.split(',')
+                .map(|id| id
+                    .parse::<wispnet_core::identity::EndpointId>()
+                    .map_err(|_| "Invalid allowed device ID"))
+                .collect::<Result<Vec<_>, _>>()?
+        ),
+    };
+    if !allow.as_array().is_some_and(|peers| peers.is_empty())
+        && exports.as_object().is_none_or(|roots| roots.is_empty())
+    {
+        return Err(
+            "Set a shared folder with --export NAME=/absolute/path before granting Files access"
+                .into(),
+        );
+    }
+    Ok(allow)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn files_grants_require_folders_and_clearing_folders_revokes_access() {
+        let peer = wispnet_core::identity::Identity::generate()
+            .endpoint_id()
+            .to_string();
+        let current = json!([peer]);
+        assert!(
+            files_grants(Some(&peer), &json!([]), &json!({}), false)
+                .unwrap_err()
+                .contains("shared folder")
+        );
+        assert_eq!(
+            files_grants(None, &current, &json!({}), true).unwrap(),
+            json!([])
+        );
+        assert!(files_grants(Some(&peer), &current, &json!({}), true).is_err());
+        assert_eq!(
+            files_grants(None, &current, &json!({"jobs":"/srv/jobs"}), false).unwrap(),
+            current
+        );
+        assert_eq!(
+            files_grants(Some("none"), &current, &json!({}), false).unwrap(),
+            json!([])
+        );
     }
 }

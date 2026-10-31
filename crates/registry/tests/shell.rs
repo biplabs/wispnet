@@ -191,6 +191,7 @@ fn schema_twelve_preserves_legacy_shell_service_and_adds_builtin_once() {
 #[tokio::test]
 async fn builtins_reserve_their_own_slots_beside_128_custom_services() {
     let dir = directory();
+    let workspace = directory();
     let own = Identity::generate().endpoint_id();
     let peer = Identity::generate().endpoint_id();
     host::initialize(dir.path(), own).unwrap();
@@ -239,7 +240,10 @@ async fn builtins_reserve_their_own_slots_beside_128_custom_services() {
             Mutation::Files {
                 expected_revision: 130,
                 allow: vec![peer],
-                exports: std::collections::BTreeMap::new(),
+                exports: std::collections::BTreeMap::from([(
+                    "shared".into(),
+                    workspace.path().canonicalize().unwrap(),
+                )]),
             },
         )
         .unwrap();

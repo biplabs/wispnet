@@ -219,6 +219,24 @@ class _DesktopSettingsState extends State<DesktopSettings> {
     );
   }
 
+  Map<String, String> parseFileExports(String text) {
+    final roots = <String, String>{};
+    for (final raw in text.split('\n')) {
+      final line = raw.trim();
+      if (line.isEmpty) continue;
+      final split = line.indexOf('=');
+      final name = split < 0 ? '' : line.substring(0, split);
+      final root = split < 0 ? '' : line.substring(split + 1);
+      if (!RegExp(r'^[a-z0-9][a-z0-9._-]{0,63}$').hasMatch(name) ||
+          !root.startsWith('/') ||
+          roots.containsKey(name)) {
+        throw Exception('Use a unique name=/absolute/folder on each line.');
+      }
+      roots[name] = root;
+    }
+    return roots;
+  }
+
   Future<void> editFiles(Map<String, dynamic> service) async {
     final revision = status!['host']['revision'] as int;
     final allowed = (service['allow'] as List? ?? []).cast<String>().toSet();
@@ -233,76 +251,78 @@ class _DesktopSettingsState extends State<DesktopSettings> {
       child: _ActionForm(
         controllers: [exports],
         builder: (context, submit, working, failure) => StatefulBuilder(
-          builder: (context, update) => Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Text(
-                'Files is built into Wispnet. Selected devices may upload and download files in the exported folders. Transfers can resume after disconnects.',
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: exports,
-                enabled: !working,
-                minLines: 2,
-                maxLines: 6,
-                decoration: const InputDecoration(
-                  labelText: 'Exported folders',
-                  hintText: 'training=/absolute/path/to/training',
-                  helperText: 'One name=/absolute/folder per line. Folders must already exist.',
+          builder: (context, update) {
+            var hasFolders = false;
+            try {
+              hasFolders = parseFileExports(exports.text).isNotEmpty;
+            } catch (_) {
+              // The form reports invalid folder entries when saved.
+            }
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  'Choose a folder before sharing Files. Selected devices can upload and download files in the shared folders without confirming each transfer. Transfers can resume after disconnects.',
                 ),
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                'Select paired devices allowed to use these folders. Leave all unchecked for local access only.',
-              ),
-              for (final c in devices)
-                CheckboxListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(c['name'] as String),
-                  subtitle: Text(c['peer'] as String),
-                  value: allowed.contains(c['peer']),
-                  onChanged: working
+                const SizedBox(height: 12),
+                TextField(
+                  controller: exports,
+                  enabled: !working,
+                  onChanged: (_) => update(() {}),
+                  minLines: 2,
+                  maxLines: 6,
+                  decoration: const InputDecoration(
+                    labelText: 'Exported folders',
+                    hintText: 'training=/absolute/path/to/training',
+                    helperText: 'One name=/absolute/folder per line. Folders must already exist. Removing every folder revokes Files access.',
+                    helperMaxLines: 3,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  hasFolders
+                      ? 'Select paired devices allowed to use these folders. Leave all unchecked for local access only.'
+                      : 'Set a shared folder before granting Files access.',
+                ),
+                for (final c in devices)
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(c['name'] as String),
+                    subtitle: Text(c['peer'] as String),
+                    value: hasFolders && allowed.contains(c['peer']),
+                    onChanged: working || !hasFolders
+                        ? null
+                        : (value) => update(() {
+                            if (value!) {
+                              allowed.add(c['peer'] as String);
+                            } else {
+                              allowed.remove(c['peer']);
+                            }
+                          }),
+                  ),
+                if (failure != null)
+                  Text(
+                    failure,
+                    style: const TextStyle(color: WispColors.error),
+                  ),
+                FilledButton(
+                  onPressed: working
                       ? null
-                      : (value) => update(() {
-                          if (value!) {
-                            allowed.add(c['peer'] as String);
-                          } else {
-                            allowed.remove(c['peer']);
-                          }
+                      : () => submit(() async {
+                          final roots = parseFileExports(exports.text);
+                          await mutate({
+                            'op': 'files',
+                            'allow': roots.isEmpty
+                                ? <String>[]
+                                : allowed.toList(),
+                            'exports': roots,
+                          }, revision);
                         }),
+                  child: const Text('Save folders and access'),
                 ),
-              if (failure != null)
-                Text(failure, style: const TextStyle(color: WispColors.error)),
-              FilledButton(
-                onPressed: working
-                    ? null
-                    : () => submit(() async {
-                        final roots = <String, String>{};
-                        for (final raw in exports.text.split('\n')) {
-                          final line = raw.trim();
-                          if (line.isEmpty) continue;
-                          final split = line.indexOf('=');
-                          if (split < 1 ||
-                              split == line.length - 1 ||
-                              roots.containsKey(line.substring(0, split))) {
-                            throw Exception(
-                              'Use a unique name=/absolute/folder on each line.',
-                            );
-                          }
-                          roots[line.substring(0, split)] = line.substring(
-                            split + 1,
-                          );
-                        }
-                        await mutate({
-                          'op': 'files',
-                          'allow': allowed.toList(),
-                          'exports': roots,
-                        }, revision);
-                      }),
-                child: const Text('Save folders and access'),
-              ),
-            ],
-          ),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -451,8 +471,14 @@ class _DesktopSettingsState extends State<DesktopSettings> {
 
   Future<void> approve(Map<String, dynamic> invitation) async {
     final revision = status!['host']['revision'] as int;
+    final hasFileFolders =
+        (status!['host']['file_exports'] as Map? ?? {}).isNotEmpty;
     final existing = services
-        .where((s) => (s['allow'] as List).contains(invitation['peer']))
+        .where(
+          (s) =>
+              (s['allow'] as List).contains(invitation['peer']) &&
+              (s['kind'] != 'files' || hasFileFolders),
+        )
         .map((s) => s['id'] as String)
         .toSet();
     final allowed = {...existing};
@@ -473,8 +499,20 @@ class _DesktopSettingsState extends State<DesktopSettings> {
               for (final s in available)
                 CheckboxListTile(
                   title: Text(s['id'] as String),
-                  value: allowed.contains(s['id']),
-                  onChanged: working || existing.contains(s['id'])
+                  subtitle: s['kind'] == 'files'
+                      ? Text(
+                          hasFileFolders
+                              ? 'Upload and download without confirming each transfer.'
+                              : 'Set a shared folder before granting Files access.',
+                        )
+                      : null,
+                  value:
+                      (s['kind'] != 'files' || hasFileFolders) &&
+                      allowed.contains(s['id']),
+                  onChanged:
+                      working ||
+                          existing.contains(s['id']) ||
+                          (s['kind'] == 'files' && !hasFileFolders)
                       ? null
                       : (v) => update(() {
                           if (v!) {

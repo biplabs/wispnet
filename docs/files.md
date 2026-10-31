@@ -8,6 +8,13 @@ The host owner chooses exported directories and the complete list of paired
 clients that may read and write them. Pairing and Shell grants confer no Files
 access. Exports begin empty, and remote access begins disabled.
 
+Choose at least one folder before granting Files access. A grant is ongoing
+permission: that device can upload and download within every configured folder
+without asking you to confirm each transfer. The current grant combines reading
+and writing; it is not an upload-only permission. Transfers cannot overwrite
+existing files or escape the shared folders. Revoke the device's Files grant to
+stop its active access and prevent new transfers.
+
 ## Configure a host
 
 Create a directory for the files, then configure it on the host:
@@ -25,8 +32,9 @@ configured exports. Remote paths are relative to the selected export.
 
 Repeated `--export` options replace the entire export map. Omitting exports
 preserves the map; omitting `--allow` preserves the grants. To revoke all remote
-Files access, run `wispnet files-access --allow none`. To remove all exports,
-use `wispnet files-access --clear-exports`.
+Files access, run `wispnet files-access --allow none`. To remove all exports and
+revoke their grants, use `wispnet files-access --clear-exports`. Sharing is
+disabled until a folder is configured and devices are granted access again.
 
 Export changes rotate the service incarnation and invalidate previous resume
 bindings. Grant revocation closes active remote streams through the same

@@ -52,12 +52,6 @@ class FilesSmoke(unittest.TestCase):
         self.assertEqual(initial["service"]["kind"], "files")
         self.assertEqual(initial["service"]["allow"], [])
         self.assertEqual(initial["exports"], {})
-        configured = json.loads(self.cli(
-            target, "files-access", "--export", f"training.v1={export}",
-            "--allow", "none",
-        ).stdout)
-        self.assertEqual(configured["exports"], {"training.v1": str(export)})
-
         invitation_path = self.root / "invitation.json"
         subprocess.run(
             [shell_smoke.BINARY, "host-invite", "--config", target,
@@ -74,12 +68,30 @@ class FilesSmoke(unittest.TestCase):
         self.cli(target, "shell-access", "--allow", client_id)
         catalog = api.request(op="catalog", host=target_id)
         self.assertEqual([service["id"] for service in catalog["services"]], ["shell"])
+        # A folder must be configured before any UI/CLI/API can grant Files.
+        before_folder = target_api.request(op="status")["host"]
+        no_folder = self.cli(target, "files-access", "--allow", client_id,
+                             success=False)
+        self.assertIn("folder", no_folder.stderr.lower())
+        self.assertEqual(target_api.request(op="status")["host"], before_folder)
+        with self.assertRaises(ValueError):
+            self.mutate(target_api, op="grant_service", service="files",
+                        peer=client_id)
+        self.assertEqual(target_api.request(op="status")["host"], before_folder)
+        self.assertEqual(api.request(op="catalog", host=target_id)["services"],
+                         catalog["services"])
+
         denied = self.cli(client, "files", "put", target_id, "training.v1",
                           str(source), "jobs/a/input.bin", success=False)
         self.assertIn("not granted", denied.stderr)
         self.assertEqual(json.loads(denied.stdout)["error"]["code"], "PERMISSION_DENIED")
         self.assertFalse((export / "jobs/a/input.bin").exists())
 
+        configured = json.loads(self.cli(
+            target, "files-access", "--export", f"training.v1={export}",
+            "--allow", "none",
+        ).stdout)
+        self.assertEqual(configured["exports"], {"training.v1": str(export)})
         granted = json.loads(self.cli(target, "files-access", "--allow", client_id).stdout)
         self.assertEqual(granted["allow"], [client_id])
         self.assertEqual(granted["exports"], configured["exports"])
@@ -89,6 +101,7 @@ class FilesSmoke(unittest.TestCase):
         self.assertEqual(hashlib.sha256((export / "jobs/a/input.bin").read_bytes()).hexdigest(), expected_hash)
         self.assertEqual(uploaded["file"]["path"], "jobs/a/input.bin")
 
+        # A grant is ongoing: retries and downloads need no new confirmation.
         # Repeating a completed helper call recognizes the same destination.
         retry = self.cli(client, "files", "put", target_id, "training.v1",
                          str(source), "jobs/a/input.bin")
@@ -118,6 +131,25 @@ class FilesSmoke(unittest.TestCase):
         self.assertIn("not granted", revoked.stderr)
         self.assertEqual(json.loads(revoked.stdout)["error"]["code"], "PERMISSION_DENIED")
         self.assertFalse(revoked_destination.exists())
+        self.assertEqual(hashlib.sha256((export / "jobs/a/input.bin").read_bytes()).hexdigest(), expected_hash)
+
+        # Removing the last folder revokes standing access without deleting data.
+        self.cli(target, "files-access", "--allow", client_id)
+        before_clear = target_api.request(op="status")["host"]
+        conflicting_clear = self.cli(target, "files-access", "--clear-exports",
+                                     "--allow", client_id, success=False)
+        self.assertIn("folder", conflicting_clear.stderr.lower())
+        self.assertEqual(target_api.request(op="status")["host"], before_clear)
+        cleared = json.loads(self.cli(target, "files-access", "--clear-exports").stdout)
+        self.assertEqual(cleared["allow"], [])
+        self.assertEqual(cleared["exports"], {})
+        snapshot = target_api.request(op="status")["host"]
+        self.assertEqual(snapshot["file_exports"], {})
+        files = next(service for service in snapshot["services"]
+                     if service["id"] == "files")
+        self.assertEqual(files["allow"], [])
+        catalog = api.request(op="catalog", host=target_id)
+        self.assertEqual([service["id"] for service in catalog["services"]], ["shell"])
         self.assertEqual(hashlib.sha256((export / "jobs/a/input.bin").read_bytes()).hexdigest(), expected_hash)
 
 
