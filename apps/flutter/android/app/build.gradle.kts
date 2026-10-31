@@ -34,7 +34,7 @@ android {
     sourceSets.getByName("main") {
         jniLibs.setSrcDirs(listOf(layout.buildDirectory.dir("wispnet-jni").get().asFile))
     }
-    defaultConfig { applicationId = "app.wispnet.android"; minSdk = 34; targetSdk = 36; versionCode = flutter.versionCode; versionName = flutter.versionName; ndk { abiFilters.clear(); abiFilters += nativeAbis } }
+    defaultConfig { applicationId = "app.wispnet.android"; minSdk = 34; targetSdk = 36; versionCode = flutter.versionCode; versionName = flutter.versionName; testInstrumentationRunner = "com.biplabs.wispnet.FilesTransferInstrumentation"; ndk { abiFilters.clear(); abiFilters += nativeAbis } }
     val uploadEnvironment = listOf("WISPNET_UPLOAD_KEYSTORE", "WISPNET_UPLOAD_STORE_PASSWORD", "WISPNET_UPLOAD_KEY_ALIAS", "WISPNET_UPLOAD_KEY_PASSWORD")
     val supplied = uploadEnvironment.map { providers.environmentVariable(it).orNull }
     require(supplied.all { it == null } || supplied.all { !it.isNullOrBlank() }) { "Supply all upload signing environment variables, or none for an unsigned build" }

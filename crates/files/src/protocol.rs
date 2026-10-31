@@ -45,6 +45,8 @@ pub enum ErrorCode {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
+    /// Names of configured receiving folders; never a directory listing.
+    Workspaces,
     UploadBegin {
         workspace: String,
         path: String,
@@ -86,6 +88,9 @@ pub enum Request {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Response {
+    Workspaces {
+        workspaces: Vec<String>,
+    },
     Upload {
         transfer_id: String,
         state: TransferState,

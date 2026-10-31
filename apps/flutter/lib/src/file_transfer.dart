@@ -1,0 +1,799 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:desktop_drop/desktop_drop.dart';
+import 'package:flutter/material.dart';
+
+import 'backend.dart';
+import 'sheets.dart';
+import 'theme.dart';
+
+String _fileName(String path) => path.split(Platform.pathSeparator).last;
+
+String fileSize(num bytes) {
+  if (bytes < 1024) return '$bytes B';
+  if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+  if (bytes < 1024 * 1024 * 1024) {
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+  return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+}
+
+class DesktopFileTransfer {
+  DesktopFileTransfer({
+    required this.machine,
+    required this.incarnation,
+    required this.workspace,
+    required this.path,
+    this.displayName,
+    this.sourceSizeBytes = 0,
+    this.resume = true,
+  }) {
+    sizeBytes = sourceSizeBytes;
+  }
+  final Machine machine;
+  final String incarnation, workspace, path;
+  final bool resume;
+  final String? displayName;
+  final int sourceSizeBytes;
+  String get name => displayName ?? _fileName(path);
+  String get hostName => machine.name;
+  String get remotePath => name;
+  String state = 'queued', phase = 'preparing';
+  String? transfer, error, errorCode;
+  int verifiedBytes = 0, sizeBytes = 0, copiedBytes = 0;
+  bool cancelling = false;
+  bool _cancelSent = false;
+  final _completion = Completer<void>();
+  Future<void> get done => _completion.future;
+  bool get finished =>
+      const ['complete', 'failed', 'cancelled'].contains(state);
+
+  void update(Map<String, dynamic> status) {
+    transfer = status['transfer'] as String? ?? transfer;
+    state = status['state'] as String? ?? state;
+    phase = status['phase'] as String? ?? phase;
+    verifiedBytes =
+        (status['verified_bytes'] as num?)?.toInt() ?? verifiedBytes;
+    sizeBytes = (status['size_bytes'] as num?)?.toInt() ?? sizeBytes;
+    copiedBytes = (status['copied_bytes'] as num?)?.toInt() ?? copiedBytes;
+    final failure = status['error'];
+    errorCode = failure is Map ? failure['code'] as String? : null;
+    error = failure is Map
+        ? failure['message'] as String? ?? 'File transfer failed.'
+        : null;
+    if (finished) cancelling = false;
+    finish();
+  }
+
+  void finish() {
+    if (finished && !_completion.isCompleted) _completion.complete();
+  }
+}
+
+/// Native jobs keep running when a sheet or the tray window is hidden. Only
+/// paths and progress cross this adapter; the daemon streams the file bytes.
+class DesktopFileTransfers extends ChangeNotifier {
+  DesktopFileTransfers(this.backend);
+  final WispnetBackend backend;
+  final List<DesktopFileTransfer> jobs = [];
+  // Android owns a bounded native queue in its foreground service. Submit all
+  // selected jobs there so closing/recreating the Activity does not lose them.
+  bool nativeQueue = false;
+  bool _working = false, _disposed = false;
+  bool _restored = false, _restoring = false;
+  Timer? _timer;
+  Completer<void>? _wake;
+
+  Future<void> _pause() {
+    final wake = Completer<void>();
+    _wake = wake;
+    _timer = Timer(const Duration(seconds: 1), () {
+      if (!wake.isCompleted) wake.complete();
+    });
+    return wake.future;
+  }
+
+  void _wakeUp() {
+    _timer?.cancel();
+    final wake = _wake;
+    if (wake != null && !wake.isCompleted) wake.complete();
+  }
+
+  List<DesktopFileTransfer> enqueue({
+    required Machine machine,
+    required String incarnation,
+    required String workspace,
+    required List<String> paths,
+    Map<String, String> names = const {},
+    Map<String, int> sizes = const {},
+    bool resume = true,
+  }) {
+    final added = paths
+        .map(
+          (path) => DesktopFileTransfer(
+            machine: machine,
+            incarnation: incarnation,
+            workspace: workspace,
+            path: path,
+            displayName: names[path],
+            sourceSizeBytes: sizes[path] ?? 0,
+            resume: resume,
+          ),
+        )
+        .toList();
+    jobs.addAll(added);
+    notifyListeners();
+    _wakeUp();
+    unawaited(_run());
+    return added;
+  }
+
+  Future<void> restore(Map<String, Machine> machines) async {
+    if (_disposed || _restored || _restoring) return;
+    _restoring = true;
+    try {
+      final response = await backend.invoke('fileList');
+      if (_disposed) return;
+      for (final entry in response['transfers'] as List? ?? const []) {
+        if (entry is! Map) continue;
+        final status = entry.cast<String, dynamic>();
+        final id = status['transfer'] as String?;
+        final host = status['host'] as String?;
+        final incarnation = status['incarnation'] as String?;
+        final workspace = status['workspace'] as String?;
+        final path = status['local_path'] as String?;
+        final name =
+            status['name'] as String? ?? status['remote_path'] as String?;
+        if (id == null ||
+            host == null ||
+            incarnation == null ||
+            workspace == null ||
+            path == null ||
+            name == null ||
+            jobs.any((job) => job.transfer == id)) {
+          continue;
+        }
+        final job = DesktopFileTransfer(
+          machine:
+              machines[host] ??
+              Machine(host, {'name': status['host_name'] ?? 'Device'}),
+          incarnation: incarnation,
+          workspace: workspace,
+          path: path,
+          displayName: name,
+          sourceSizeBytes: (status['size_bytes'] as num?)?.toInt() ?? 0,
+        )..update(status);
+        jobs.add(job);
+      }
+      _restored = true;
+      notifyListeners();
+      unawaited(_run());
+    } catch (_) {
+      // Networking may still be starting. The next online snapshot retries.
+    } finally {
+      _restoring = false;
+    }
+  }
+
+  Future<void> _run() async {
+    if (_working || _disposed) return;
+    _working = true;
+    try {
+      while (!_disposed) {
+        var active = jobs
+            .where((job) => !job.finished && job.transfer != null)
+            .toList();
+        while (!_disposed && (nativeQueue || active.isEmpty)) {
+          final job = jobs
+              .where((job) => job.state == 'queued' && job.transfer == null)
+              .firstOrNull;
+          if (job == null) break;
+          job.state = 'starting';
+          notifyListeners();
+          try {
+            job.update(
+              await backend.invoke('fileSend', {
+                'host': job.machine.id,
+                'incarnation': job.incarnation,
+                'workspace': job.workspace,
+                'local_path': job.path,
+                'remote_path': job.remotePath,
+                'resume': job.resume,
+              }),
+            );
+            if (job.transfer == null && !job.finished) {
+              throw const FormatException(
+                'The file transfer could not be started.',
+              );
+            }
+          } catch (error) {
+            job.state = 'failed';
+            job.error = failureMessage(error);
+            job.finish();
+          }
+          active = jobs
+              .where((job) => !job.finished && job.transfer != null)
+              .toList();
+        }
+        for (final job in active) {
+          if (_disposed) break;
+          try {
+            if (job.cancelling && !job._cancelSent) {
+              try {
+                job.update(
+                  await backend.invoke('fileCancel', {
+                    'transfer': job.transfer,
+                  }),
+                );
+                job._cancelSent = true;
+              } catch (error) {
+                final message = failureMessage(error);
+                if (message.contains('handle unavailable')) rethrow;
+                job.error = 'Waiting to cancel: $message';
+              }
+            }
+            if (!job.finished) {
+              job.update(
+                await backend.invoke('fileStatus', {'transfer': job.transfer}),
+              );
+            }
+          } catch (error) {
+            final message = failureMessage(error);
+            if (message.contains('handle unavailable')) {
+              job.state = 'failed';
+              job.error = message;
+              job.finish();
+            } else {
+              // A temporary owner-socket failure must not start another job
+              // while this native transfer may still be running.
+              job.error = 'Waiting for the local device: $message';
+            }
+          }
+        }
+        if (!_disposed) notifyListeners();
+        if (_disposed) break;
+        final pending = jobs.any(
+          (job) => job.state == 'queued' && job.transfer == null,
+        );
+        final running = jobs.any(
+          (job) => !job.finished && job.transfer != null,
+        );
+        if (pending && (nativeQueue || !running)) continue;
+        if (!running) break;
+        await _pause();
+      }
+    } finally {
+      _working = false;
+    }
+  }
+
+  void cancel(DesktopFileTransfer job) {
+    if (job.finished || job.cancelling) return;
+    if (job.state == 'queued' && job.transfer == null) {
+      job.state = 'cancelled';
+      job.finish();
+    } else {
+      job.cancelling = true;
+      _wakeUp();
+    }
+    notifyListeners();
+  }
+
+  void retry(DesktopFileTransfer job) {
+    if (!job.finished || job.state == 'complete') return;
+    if (jobs.any(
+      (other) =>
+          !other.finished &&
+          other.machine.id == job.machine.id &&
+          other.workspace == job.workspace &&
+          other.path == job.path,
+    )) {
+      return;
+    }
+    enqueue(
+      machine: job.machine,
+      incarnation: job.incarnation,
+      workspace: job.workspace,
+      paths: [job.path],
+      names: {job.path: job.name},
+      sizes: {job.path: job.sourceSizeBytes},
+      resume: job.errorCode != 'TRANSFER_EXPIRED',
+    );
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _wakeUp();
+    super.dispose();
+  }
+}
+
+class FileDropArea extends StatefulWidget {
+  const FileDropArea({
+    super.key,
+    required this.onFiles,
+    required this.child,
+    this.enabled = true,
+  });
+  final Future<void> Function(List<String>) onFiles;
+  final Widget child;
+  final bool enabled;
+  @override
+  State<FileDropArea> createState() => _FileDropAreaState();
+}
+
+class _FileDropAreaState extends State<FileDropArea> {
+  bool hovering = false;
+
+  Future<void> dropped(DropDetails details) async {
+    try {
+      final files = details.items.whereType<DropFileItem>().toList();
+      if (files.isEmpty ||
+          details.items.any((item) => item is DropDirectoryItem)) {
+        throw const FormatException(
+          'Drop files here. To send a folder, create an archive first.',
+        );
+      }
+      final paths = <String>{};
+      for (final file in files) {
+        final path = file.localPath;
+        if (path == null || file.isPromised) {
+          throw const FormatException(
+            'Save these files to your computer before sending them.',
+          );
+        }
+        if (await FileSystemEntity.type(path, followLinks: false) !=
+            FileSystemEntityType.file) {
+          throw const FormatException(
+            'Choose regular files. Folders and shortcuts cannot be sent.',
+          );
+        }
+        paths.add(path);
+      }
+      if (!mounted || !widget.enabled) return;
+      // Keep the native drop's provider access alive until the selection is
+      // dismissed or its submitted transfers finish, including while hidden.
+      await widget.onFiles(paths.toList());
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(failureMessage(error))));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => DropTarget(
+    enabled: widget.enabled && (ModalRoute.of(context)?.isCurrent ?? true),
+    acceptedKinds: const {DropItemKind.file},
+    onDrop: dropped,
+    onEnter: (_) => setState(() => hovering = true),
+    onLeave: () => setState(() => hovering = false),
+    child: Stack(
+      children: [
+        widget.child,
+        if (hovering && widget.enabled)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xe60b1528),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: WispColors.cyan, width: 2),
+                ),
+                alignment: Alignment.center,
+                child: const Padding(
+                  padding: EdgeInsets.all(8),
+                  child: Text(
+                    'Drop files to send',
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
+}
+
+class _SelectedFile {
+  _SelectedFile(this.path, {String? name, this.sizeBytes = 0})
+    : name = name ?? _fileName(path);
+  final String path;
+  final String name;
+  final int sizeBytes;
+  final completion = Completer<void>();
+  void release() {
+    if (!completion.isCompleted) completion.complete();
+  }
+}
+
+class FileSendSheet extends StatefulWidget {
+  const FileSendSheet({
+    super.key,
+    required this.backend,
+    required this.machine,
+    required this.incarnation,
+    required this.transfers,
+    this.initialPaths = const [],
+    this.onQueued,
+    this.desktop = true,
+  });
+  final WispnetBackend backend;
+  final Machine machine;
+  final String incarnation;
+  final DesktopFileTransfers transfers;
+  final List<String> initialPaths;
+  final ValueChanged<List<DesktopFileTransfer>>? onQueued;
+  final bool desktop;
+  @override
+  State<FileSendSheet> createState() => _FileSendSheetState();
+}
+
+class _FileSendSheetState extends State<FileSendSheet> {
+  final folder = TextEditingController();
+  final List<_SelectedFile> selected = [];
+  List<String> workspaces = [];
+  bool loading = true, manual = false, picking = false;
+  String? feedback;
+
+  @override
+  void initState() {
+    super.initState();
+    selected.addAll(widget.initialPaths.map(_SelectedFile.new));
+    unawaited(loadFolders());
+  }
+
+  Future<void> loadFolders() async {
+    try {
+      final response = await widget.backend.invoke('fileWorkspaces', {
+        'host': widget.machine.id,
+        'incarnation': widget.incarnation,
+      });
+      if (!mounted) return;
+      workspaces = (response['workspaces'] as List).cast<String>();
+      if (workspaces.isEmpty) {
+        feedback = 'This device has no receiving folders. Ask its owner to set one in Files access.';
+      } else {
+        folder.text = workspaces.first;
+      }
+    } catch (error) {
+      if (!mounted) return;
+      manual = true;
+      feedback =
+          'Could not load receiving folders. Enter the shared folder name supplied by the recipient. ${failureMessage(error)}';
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
+  }
+
+  Future<void> addFiles(List<String> paths) async {
+    final existing = selected.map((file) => file.path).toSet();
+    final added = paths.where(existing.add).map(_SelectedFile.new).toList();
+    setState(() {
+      selected.addAll(added);
+      feedback = null;
+    });
+    await Future.wait(added.map((file) => file.completion.future));
+  }
+
+  Future<void> pickFiles() async {
+    if (picking) return;
+    setState(() => picking = true);
+    try {
+      final response = await widget.backend.invoke('pickFiles');
+      if (!mounted) return;
+      final existing = selected.map((file) => file.path).toSet();
+      final added = <_SelectedFile>[];
+      for (final entry in response['files'] as List? ?? const []) {
+        if (entry is! Map) {
+          throw const FormatException('Could not read the selected files.');
+        }
+        final path = entry['path'] as String?;
+        final name = entry['name'] as String?;
+        if (path == null ||
+            Uri.tryParse(path)?.scheme != 'content' ||
+            name == null ||
+            name.isEmpty ||
+            name == '.' ||
+            name == '..' ||
+            name.contains('/') ||
+            name.contains('\\') ||
+            name.contains('\u0000')) {
+          throw const FormatException(
+            'Could not read a selected file name. Choose another file.',
+          );
+        }
+        if (existing.add(path)) {
+          added.add(
+            _SelectedFile(
+              path,
+              name: name,
+              sizeBytes: (entry['size_bytes'] as num?)?.toInt() ?? 0,
+            ),
+          );
+        }
+      }
+      setState(() {
+        selected.addAll(added);
+        if (added.isNotEmpty) feedback = null;
+      });
+    } catch (error) {
+      if (mounted) setState(() => feedback = failureMessage(error));
+    } finally {
+      if (mounted) setState(() => picking = false);
+    }
+  }
+
+  void send() {
+    final workspace = folder.text.trim();
+    if (selected.isEmpty || loading || picking) return;
+    if (!RegExp(r'^[a-z0-9][a-z0-9._-]{0,63}$').hasMatch(workspace)) {
+      setState(
+        () => feedback = 'Choose a receiving folder or enter its shared name.',
+      );
+      return;
+    }
+    final names = selected.map((file) => file.name).toList();
+    if (names.toSet().length != names.length) {
+      setState(
+        () => feedback = 'Two files have the same name. Send them separately or rename one first.',
+      );
+      return;
+    }
+    final pending = selected.toList();
+    final jobs = widget.transfers.enqueue(
+      machine: widget.machine,
+      incarnation: widget.incarnation,
+      workspace: workspace,
+      paths: pending.map((file) => file.path).toList(),
+      names: {for (final file in pending) file.path: file.name},
+      sizes: {for (final file in pending) file.path: file.sizeBytes},
+    );
+    for (var i = 0; i < jobs.length; i++) {
+      unawaited(jobs[i].done.then((_) => pending[i].release()));
+    }
+    widget.onQueued?.call(jobs);
+    setState(() {
+      selected.clear();
+      feedback = null;
+    });
+  }
+
+  @override
+  void dispose() {
+    for (final file in selected) {
+      file.release();
+    }
+    folder.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Text(
+        '${widget.desktop ? 'Drop' : 'Choose'} files to send them into a folder shared by this device. Existing files are kept; interrupted transfers can resume.',
+      ),
+      const SizedBox(height: 16),
+      if (loading)
+        const LinearProgressIndicator()
+      else if (manual)
+        TextField(
+          key: const ValueKey('file-workspace'),
+          controller: folder,
+          decoration: const InputDecoration(
+            labelText: 'Shared receiving folder',
+          ),
+        )
+      else if (workspaces.isNotEmpty)
+        DropdownButtonFormField<String>(
+          key: const ValueKey('file-workspace'),
+          initialValue: folder.text,
+          isExpanded: true,
+          decoration: const InputDecoration(labelText: 'Receiving folder'),
+          items: workspaces
+              .map((name) => DropdownMenuItem(value: name, child: Text(name)))
+              .toList(),
+          onChanged: (name) => folder.text = name ?? '',
+        ),
+      const SizedBox(height: 16),
+      if (widget.desktop)
+        FileDropArea(
+          key: const ValueKey('file-drop-zone'),
+          enabled: !loading && (manual || workspaces.isNotEmpty),
+          onFiles: addFiles,
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 96),
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              color: WispColors.tile,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: const Color(0xff32518a)),
+            ),
+            child: const Column(
+              children: [
+                Icon(Icons.upload_file, color: WispColors.cyan),
+                SizedBox(height: 8),
+                Text('Drop files here'),
+              ],
+            ),
+          ),
+        )
+      else
+        OutlinedButton.icon(
+          key: const ValueKey('file-pick'),
+          onPressed: loading || picking || (!manual && workspaces.isEmpty)
+              ? null
+              : pickFiles,
+          icon: picking
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.add_to_photos_outlined),
+          label: Text(
+            picking
+                ? 'Choosing files…'
+                : selected.isEmpty
+                ? 'Choose files'
+                : 'Add files',
+          ),
+        ),
+      for (final file in selected)
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.insert_drive_file_outlined),
+          title: Text(file.name, maxLines: 2, overflow: TextOverflow.ellipsis),
+          trailing: IconButton(
+            tooltip: 'Remove ${file.name}',
+            onPressed: () => setState(() {
+              selected.remove(file);
+              file.release();
+            }),
+            icon: const Icon(Icons.close),
+          ),
+        ),
+      if (feedback != null) ...[
+        const SizedBox(height: 12),
+        Text(feedback!, style: const TextStyle(color: WispColors.amber)),
+      ],
+      const SizedBox(height: 12),
+      FilledButton.icon(
+        key: const ValueKey('file-send'),
+        onPressed:
+            selected.isEmpty ||
+                loading ||
+                picking ||
+                (!manual && workspaces.isEmpty)
+            ? null
+            : send,
+        icon: const Icon(Icons.send),
+        label: Text(
+          selected.length > 1 ? 'Send ${selected.length} files' : 'Send files',
+        ),
+      ),
+      const SizedBox(height: 16),
+      FileTransferList(transfers: widget.transfers, host: widget.machine.id),
+    ],
+  );
+}
+
+class FileTransferList extends StatelessWidget {
+  const FileTransferList({super.key, required this.transfers, this.host});
+  final DesktopFileTransfers transfers;
+  final String? host;
+
+  String status(DesktopFileTransfer job) {
+    if (job.cancelling) return 'Cancelling…';
+    if (job.state == 'complete') return 'Sent · ${fileSize(job.sizeBytes)}';
+    if (job.state == 'cancelled') return 'Cancelled · you can resume this file';
+    if (job.state == 'failed') return job.error ?? 'Transfer failed';
+    if (job.state == 'queued' || job.phase == 'queued') return 'Queued';
+    if (job.error != null) return job.error!;
+    if (job.phase == 'copying') {
+      return job.sizeBytes > 0
+          ? 'Preparing file · ${fileSize(job.copiedBytes)} / ${fileSize(job.sizeBytes)}'
+          : 'Preparing file · ${fileSize(job.copiedBytes)}';
+    }
+    if (job.phase == 'hashing' || job.phase == 'preparing') {
+      return 'Preparing file…';
+    }
+    if (job.phase == 'verifying') return 'Verifying file…';
+    if (job.phase == 'reconnecting') return 'Reconnecting…';
+    return '${fileSize(job.verifiedBytes)} / ${fileSize(job.sizeBytes)}';
+  }
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: transfers,
+    builder: (context, _) => Column(
+      key: const ValueKey('file-transfer-list'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final job in transfers.jobs.where(
+          (job) => host == null || job.machine.id == host,
+        ))
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            job.name,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          Text(
+                            '${job.hostName} / ${job.workspace}',
+                            style: const TextStyle(
+                              color: WispColors.muted,
+                              fontSize: 12,
+                            ),
+                          ),
+                          Text(
+                            status(job),
+                            style: TextStyle(
+                              color: job.state == 'failed'
+                                  ? WispColors.error
+                                  : WispColors.muted,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (!job.finished)
+                      IconButton(
+                        tooltip: 'Cancel ${job.name}',
+                        onPressed: job.cancelling
+                            ? null
+                            : () => transfers.cancel(job),
+                        icon: const Icon(Icons.close),
+                      )
+                    else if (job.state != 'complete')
+                      IconButton(
+                        tooltip: job.errorCode == 'TRANSFER_EXPIRED'
+                            ? 'Send again ${job.name}'
+                            : 'Resume ${job.name}',
+                        onPressed: () => transfers.retry(job),
+                        icon: const Icon(Icons.refresh),
+                      )
+                    else
+                      const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: Icon(Icons.check, color: WispColors.green),
+                      ),
+                  ],
+                ),
+                if (!job.finished) ...[
+                  const SizedBox(height: 8),
+                  LinearProgressIndicator(
+                    value:
+                        job.sizeBytes > 0 &&
+                            job.phase != 'preparing' &&
+                            job.phase != 'hashing'
+                        ? ((job.phase == 'copying'
+                                      ? job.copiedBytes
+                                      : job.verifiedBytes) /
+                                  job.sizeBytes)
+                              .clamp(0, 1)
+                        : null,
+                  ),
+                ],
+              ],
+            ),
+          ),
+      ],
+    ),
+  );
+}

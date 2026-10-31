@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import 'backend.dart';
 import 'theme.dart';
+import 'file_transfer.dart';
 
 class MachineCard extends StatelessWidget {
   const MachineCard({
@@ -18,9 +19,12 @@ class MachineCard extends StatelessWidget {
     this.onSettings,
     required this.onReorder,
     this.showHeader = true,
+    this.onFilesDropped,
   });
   final Machine machine;
   final bool showHeader;
+  final Future<void> Function(Map<String, dynamic>, List<String>)?
+  onFilesDropped;
   final Map<String, dynamic> order;
   final String telemetry;
   final Color stateColor;
@@ -149,7 +153,23 @@ class MachineCard extends StatelessWidget {
                       id: id,
                       onDrop: (moved) =>
                           onReorder('services/${machine.id}', ids, moved, id),
-                      child: serviceCard(context, machine, services[id]!),
+                      child:
+                          services[id]!['kind'] == 'files' &&
+                              onFilesDropped != null
+                          ? FileDropArea(
+                              enabled:
+                                  !busy &&
+                                  machine.online &&
+                                  machine.canOpen(services[id]!),
+                              onFiles: (paths) =>
+                                  onFilesDropped!(services[id]!, paths),
+                              child: serviceCard(
+                                context,
+                                machine,
+                                services[id]!,
+                              ),
+                            )
+                          : serviceCard(context, machine, services[id]!),
                     ),
                   ),
               ],

@@ -799,6 +799,9 @@ impl FileService {
     ) -> Result<Response> {
         canceled(cancel)?;
         match request {
+            Request::Workspaces => Ok(Response::Workspaces {
+                workspaces: exports.keys().cloned().collect(),
+            }),
             Request::UploadBegin {
                 workspace,
                 path,
@@ -1237,11 +1240,28 @@ fn open_directory(path: &Path) -> io::Result<File> {
             "absolute directory required",
         ));
     }
+    let components: Vec<_> = path.components().collect();
+    // Android permits searching an app's /data ancestors, not listing them.
+    // O_PATH retains a no-follow directory capability without requiring read
+    // access. The final directory remains readable for fsync and enumeration.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let ancestor_mode = libc::O_PATH;
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let ancestor_mode = libc::O_RDONLY;
     let mut directory = fs::OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .custom_flags(
+            libc::O_DIRECTORY
+                | libc::O_NOFOLLOW
+                | libc::O_CLOEXEC
+                | if components.len() > 1 {
+                    ancestor_mode
+                } else {
+                    libc::O_RDONLY
+                },
+        )
         .open("/")?;
-    for component in path.components() {
+    for (index, component) in components.iter().enumerate() {
         match component {
             Component::RootDir => continue,
             Component::Normal(name) => {
@@ -1253,7 +1273,14 @@ fn open_directory(path: &Path) -> io::Result<File> {
                     libc::openat(
                         directory.as_raw_fd(),
                         name.as_ptr(),
-                        libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                        libc::O_DIRECTORY
+                            | libc::O_NOFOLLOW
+                            | libc::O_CLOEXEC
+                            | if index + 1 == components.len() {
+                                libc::O_RDONLY
+                            } else {
+                                ancestor_mode
+                            },
                     )
                 };
                 if fd < 0 {
@@ -1407,6 +1434,29 @@ fn link_at(directory: &File, old: &str, new: &str) -> Result<()> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn state_can_be_opened_through_search_only_ancestors_without_following_symlinks() {
+        let temporary = tempfile::tempdir().unwrap();
+        let ancestor = temporary.path().join("search-only");
+        let parent = ancestor.join("app-private");
+        let state = parent.join("files");
+        fs::create_dir_all(&state).unwrap();
+        struct Restore(PathBuf);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o700));
+            }
+        }
+        let _restore = Restore(ancestor.clone());
+        fs::set_permissions(&ancestor, fs::Permissions::from_mode(0o111)).unwrap();
+        let service = FileService::new(state).unwrap();
+        service.0.directory.sync_all().unwrap();
+        let alias = temporary.path().join("alias");
+        std::os::unix::fs::symlink(&ancestor, &alias).unwrap();
+        assert!(open_directory(&alias.join("app-private/files")).is_err());
+    }
 
     struct Fixture {
         _temp: TempDir,

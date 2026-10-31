@@ -11,6 +11,7 @@ import 'cards.dart';
 import 'header.dart';
 import 'desktop_settings.dart';
 import 'terminal_sheet.dart';
+import 'file_transfer.dart';
 
 class WispnetApp extends StatelessWidget {
   const WispnetApp({super.key, required this.backend});
@@ -86,6 +87,10 @@ class _WispHomeState extends State<WispHome>
           )
           .toList();
   WispnetBackend get backend => widget.backend;
+  late final fileTransfers = DesktopFileTransfers(backend)
+    ..addListener(() {
+      if (mounted) setState(() {});
+    });
 
   @override
   void initState() {
@@ -129,6 +134,7 @@ class _WispHomeState extends State<WispHome>
     timer?.cancel();
     desktopShells.closeAll(terminate: false, notify: false);
     desktopShells.dispose();
+    fileTransfers.dispose();
     WidgetsBinding.instance.removeObserver(this);
     warp.dispose();
     super.dispose();
@@ -178,6 +184,14 @@ class _WispHomeState extends State<WispHome>
         }
         initializationError = null;
       });
+      fileTransfers.nativeQueue = next['desktop'] != true;
+      if (next['desktop'] != true && next['enabled'] == true) {
+        unawaited(
+          fileTransfers.restore({
+            for (final machine in machines) machine.id: machine,
+          }),
+        );
+      }
       if (pairingSheet) return;
       final link = (await backend.invoke('takeLink'))['link'] as String?;
       if (link != null) {
@@ -319,7 +333,31 @@ class _WispHomeState extends State<WispHome>
     if (mounted) setState(() {});
   }
 
-  Future<void> showFiles(Machine machine) async {
+  Future<void> showFiles(
+    Machine machine,
+    Map<String, dynamic> service, {
+    List<String> paths = const [],
+  }) async {
+    if (machine.data['local'] != true) {
+      final submitted = <DesktopFileTransfer>[];
+      await showWispSheet<void>(
+        context,
+        title: 'Send files to ${machine.name}',
+        child: FileSendSheet(
+          backend: backend,
+          machine: machine,
+          incarnation: service['incarnation'] as String,
+          transfers: fileTransfers,
+          initialPaths: paths,
+          onQueued: submitted.addAll,
+          desktop: snapshot['desktop'] == true,
+        ),
+      );
+      // Native drop providers must remain alive if the user hides the sheet
+      // while the daemon is still reading the dropped files.
+      await Future.wait(submitted.map((job) => job.done));
+      return;
+    }
     final send =
         'wispnet files put ${machine.id} WORKSPACE /local/file relative/path';
     await showWispSheet<void>(
@@ -356,7 +394,7 @@ class _WispHomeState extends State<WispHome>
   Future<void> open(Machine machine, Map<String, dynamic> service) async {
     if (busy || !online) return;
     if (service['kind'] == 'files') {
-      await showFiles(machine);
+      await showFiles(machine, service);
       return;
     }
     if (service['kind'] == 'shell' && snapshot['desktop'] == true) {
@@ -814,6 +852,57 @@ class _WispHomeState extends State<WispHome>
         ? localServiceSettings
         : null,
     onReorder: reorder,
+    onFilesDropped: snapshot['desktop'] == true && !local && online
+        ? (service, paths) => showFiles(machine, service, paths: paths)
+        : null,
+  );
+
+  Future<void> dropFiles(List<String> paths) async {
+    final receivers = machines
+        .where(
+          (machine) =>
+              machine.data['local'] != true &&
+              machine.online &&
+              machine.services.any(
+                (service) =>
+                    service['kind'] == 'files' && machine.canOpen(service),
+              ),
+        )
+        .toList();
+    if (receivers.isEmpty) {
+      notice(
+        'No devices are ready to receive files. Ask a paired device to grant Files access.',
+      );
+      return;
+    }
+    final receiver = receivers.length == 1
+        ? receivers.single
+        : await showWispSheet<Machine>(
+            context,
+            title: 'Send files to…',
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final machine in receivers)
+                  ListTile(
+                    leading: const Icon(Icons.computer, color: WispColors.cyan),
+                    title: Text(machine.name),
+                    onTap: () => Navigator.pop(context, machine),
+                  ),
+              ],
+            ),
+          );
+    if (receiver == null || !mounted) return;
+    final service = receiver.services.firstWhere(
+      (service) => service['kind'] == 'files',
+    );
+    await showFiles(receiver, service, paths: paths);
+  }
+
+  Future<void> showTransfers() => showWispSheet<void>(
+    context,
+    title: 'File transfers',
+    child: FileTransferList(transfers: fileTransfers),
   );
 
   Widget directory() {
@@ -883,6 +972,14 @@ class _WispHomeState extends State<WispHome>
                 ),
               ),
               const SizedBox(height: 12),
+              if (snapshot['desktop'] == true)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 12),
+                  child: Text(
+                    'Drop files here or onto a Files service to send.',
+                    style: TextStyle(color: WispColors.muted, fontSize: 12),
+                  ),
+                ),
               if (remote.isEmpty) const Text('Pair a machine to get started'),
               for (final machine in remote)
                 Padding(
@@ -1020,7 +1117,7 @@ class _WispHomeState extends State<WispHome>
   @override
   Widget build(BuildContext context) {
     final list = machines;
-    return Scaffold(
+    final scaffold = Scaffold(
       body: WispSpace(
         online: online,
         warp: warp,
@@ -1147,6 +1244,18 @@ class _WispHomeState extends State<WispHome>
                             ),
                           ),
                         shellDock(),
+                        if (fileTransfers.jobs.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: OutlinedButton.icon(
+                              key: const ValueKey('file-transfers-dock'),
+                              onPressed: showTransfers,
+                              icon: const Icon(Icons.file_upload_outlined),
+                              label: Text(
+                                '${fileTransfers.jobs.where((job) => !job.finished).length} active · File transfers',
+                              ),
+                            ),
+                          ),
                       ],
                     ),
                   ),
@@ -1157,5 +1266,12 @@ class _WispHomeState extends State<WispHome>
         ),
       ),
     );
+    return snapshot['desktop'] == true
+        ? FileDropArea(
+            enabled: online && !busy && !pairingSheet,
+            onFiles: dropFiles,
+            child: scaffold,
+          )
+        : scaffold;
   }
 }

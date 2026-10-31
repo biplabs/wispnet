@@ -111,7 +111,7 @@ public final class AccessService extends Service {
      synchronized(networkLock){
       if(destroyed||!requestedOnline)return;
       Native.command("network");
-      Native.command("enable");enabled=true;
+      Native.command("enable");enabled=true;controller.filesOnline();
       networkStatus=current==null?"No network. Waiting for a connection…":"Network available";
       online.complete(null);
       getSystemService(NotificationManager.class).notify(1,notification("Wispnet online"));
@@ -123,7 +123,7 @@ public final class AccessService extends Service {
   }
  }
  void stopAccess(){
-  synchronized(networkLock){ requestedOnline=false;online.completeExceptionally(new IllegalStateException("Wispnet is offline"));enabled=false; try{if(Native.ready)Native.command("stop");}catch(Exception ignored){} }
+  synchronized(networkLock){ requestedOnline=false;online.completeExceptionally(new IllegalStateException("Wispnet is offline"));enabled=false;controller.cancelFiles();try{if(Native.ready)Native.command("stop");}catch(Exception ignored){} }
   stopForeground(STOP_FOREGROUND_REMOVE);stopSelf();
  }
  public void onDestroy(){

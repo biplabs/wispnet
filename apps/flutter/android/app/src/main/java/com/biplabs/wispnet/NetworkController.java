@@ -9,13 +9,24 @@ import org.json.*;
 /** Owns native state and persistent UI records exclusively in the network process. */
 final class NetworkController extends ContextWrapper {
  private final AccessService service;
+ private final AndroidFiles files;
  final ExecutorService work = Executors.newFixedThreadPool(4);
  private static final AtomicBoolean pairing = new AtomicBoolean();
- NetworkController(AccessService service) { super(service); this.service = service; }
- void close() { work.shutdown(); }
+ NetworkController(AccessService service) { super(service); this.service = service; this.files = new AndroidFiles(service); }
+ void close() { files.close(); work.shutdown(); }
+ void cancelFiles() { files.stop(); }
+ void filesOnline() { files.online(); }
  JSONObject dispatch(String method, JSONObject args) throws Exception {
   HostStore store = new HostStore(this);
   switch (method) {
+   case "fileWorkspaces":
+   case "fileSend": {
+    if (!service.enabled) throw new Exception("Go online before sending files");
+    return "fileSend".equals(method) ? files.send(args) : files.workspaces(args);
+   }
+   case "fileStatus": return files.status(args.getString("transfer"));
+   case "fileCancel": return files.cancel(args.getString("transfer"));
+   case "fileList": return files.list();
    case "shell_open":
    case "shell_input":
    case "shell_resize":
@@ -59,6 +70,7 @@ final class NetworkController extends ContextWrapper {
     } finally { pairing.set(false); }
    }
    case "removeHost": {
+    files.cancelHost(args.getString("host"));
     store.remove(args.getString("host"));
     if (store.all().length() == 0) service.stopAccess();
     return new JSONObject();

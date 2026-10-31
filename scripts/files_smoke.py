@@ -95,6 +95,13 @@ class FilesSmoke(unittest.TestCase):
         granted = json.loads(self.cli(target, "files-access", "--allow", client_id).stdout)
         self.assertEqual(granted["allow"], [client_id])
         self.assertEqual(granted["exports"], configured["exports"])
+        catalog = api.request(op="catalog", host=target_id)
+        files_service = next(service for service in catalog["services"]
+                             if service["id"] == "files")
+        workspaces = api.request(op="file_workspaces", host=target_id,
+                                 incarnation=files_service["incarnation"])
+        self.assertEqual(workspaces, {"workspaces": ["training.v1"]})
+        self.assertNotIn(str(export), json.dumps(workspaces))
         put = self.cli(client, "files", "put", target_id, "training.v1",
                        str(source), "jobs/a/input.bin")
         uploaded = self.completed(put, expected_hash, len(content))
@@ -138,6 +145,9 @@ class FilesSmoke(unittest.TestCase):
         self.cli(target, "files-access", "--allow", "none")
         catalog = api.request(op="catalog", host=target_id)
         self.assertEqual([service["id"] for service in catalog["services"]], ["shell"])
+        with self.assertRaisesRegex(ValueError, "PERMISSION_DENIED"):
+            api.request(op="file_workspaces", host=target_id,
+                        incarnation=files_service["incarnation"])
         revoked = self.cli(client, "files", "put", target_id, "training.v1",
                            str(source), "jobs/revoked.bin", success=False)
         self.assertIn("not granted", revoked.stderr)

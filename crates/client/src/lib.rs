@@ -383,7 +383,9 @@ impl Client {
     }
     pub async fn command(self: &Arc<Self>, value: &Value) -> Result<Value, String> {
         match argument(value, "op")? {
-            "file_put" | "file_status" | "file_cancel" => self.files_command(value).await,
+            "file_workspaces" | "file_put" | "file_status" | "file_cancel" => {
+                self.files_command(value).await
+            }
             "shell_open" => self.shell_open(value).await,
             "shell_input" | "shell_resize" | "shell_poll" | "shell_close" => {
                 self.shells.command(value).await
@@ -691,6 +693,27 @@ fn app_transport_config(value: &Value) -> Result<TransportConfig, String> {
     .map_err(|_| "Invalid relay")?;
     config.validate().map_err(|_| "Invalid relay")?;
     Ok(config)
+}
+
+/// Platform capability entry point. Unlike `call`, this consumes an already
+/// authorized file object and never resolves a numeric descriptor from JSON.
+pub fn put_file_descriptor(text: &str, file: std::fs::File) -> String {
+    let outcome = (|| -> Result<Value, String> {
+        if text.len() > 16384 {
+            return Err("App request too large".into());
+        }
+        let value: Value = serde_json::from_str(text).map_err(|_| "Invalid app request")?;
+        let client = CLIENT
+            .lock()
+            .map_err(|_| "Native state unavailable")?
+            .clone()
+            .ok_or("Client not initialized")?;
+        runtime().block_on(client.start_file_descriptor_job(&value, file))
+    })();
+    match outcome {
+        Ok(value) => json!({"ok":true,"result":value}).to_string(),
+        Err(error) => json!({"ok":false,"error":error,"code":"operation_failed"}).to_string(),
+    }
 }
 
 pub fn call(text: &str) -> String {

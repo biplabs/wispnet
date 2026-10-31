@@ -1,0 +1,11 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+ <permission android:name="app.wispnet.android.test.READ_FIXTURE"
+     android:protectionLevel="signature"/>
+ <application>
+  <!-- This provider exists only in the test APK and serves generated fixtures. -->
+  <provider android:name="com.biplabs.wispnet.FilesTestProvider"
+      android:authorities="app.wispnet.android.test.files"
+      android:readPermission="app.wispnet.android.test.READ_FIXTURE"
+      android:exported="true" android:grantUriPermissions="true"/>
+ </application>
+</manifest>

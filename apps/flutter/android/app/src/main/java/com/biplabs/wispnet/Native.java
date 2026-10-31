@@ -15,10 +15,22 @@ import org.json.JSONObject;
 public final class Native {
  static { System.loadLibrary("wispnet_android"); }
  public static native String call(String request);
+ public static native String putFileDescriptor(String request, int detachedFd);
  static final class Failure extends Exception {final String code;Failure(String message,String value){super(message);code=value;}}
  static volatile boolean ready=false;
  static JSONObject request(JSONObject request) throws Exception {
-  String raw=call(request.toString());if(raw==null)throw new Exception("Native client unavailable");
+  return response(call(request.toString()));
+ }
+ static JSONObject requestFileDescriptor(JSONObject request, android.os.ParcelFileDescriptor descriptor) throws Exception {
+  int fd=descriptor.detachFd();
+  try { return response(putFileDescriptor(request.toString(),fd)); }
+  catch (UnsatisfiedLinkError unavailable) {
+   try { android.os.ParcelFileDescriptor.adoptFd(fd).close(); } catch (Exception ignored) {}
+   throw new Exception("Update Wispnet before sending files from Android.");
+  }
+ }
+ private static JSONObject response(String raw) throws Exception {
+  if(raw==null)throw new Exception("Native client unavailable");
   JSONObject reply=new JSONObject(raw);if(!reply.getBoolean("ok"))throw new Failure(reply.optString("error","Operation failed"),reply.optString("code","operation_failed"));return reply.getJSONObject("result");
  }
  static JSONObject command(String op) throws Exception {return request(new JSONObject().put("op",op));}

@@ -13,6 +13,7 @@ import re
 import shlex
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -326,6 +327,46 @@ class Bridge:
                          '--config', str(self.config.resolve())], self.api.state)
         return {}
 
+    def file_target(self, args):
+        host, incarnation = (args.get(key) for key in ('host', 'incarnation'))
+        if (not isinstance(host, str) or not re.fullmatch(r'[0-9a-f]{64}', host)
+            or not isinstance(incarnation, str) or not re.fullmatch(r'[0-9a-f]{64}', incarnation)):
+            raise ValueError('Invalid Files target; refresh this machine')
+        status = self.api.request(op='status')
+        catalog = status['host'] if status['host']['host'] == host else self.api.request(op='catalog', host=host)
+        if (catalog.get('host') != host or not any(
+                service.get('id') == 'files' and service.get('kind') == 'files'
+                and service.get('incarnation') == incarnation
+                for service in catalog.get('services', []))):
+            raise ValueError('Files access unavailable or changed; refresh this machine')
+        return dict(host=host, service='files', incarnation=incarnation)
+
+    def send_file(self, args):
+        workspace = args.get('workspace')
+        if not isinstance(workspace, str) or not re.fullmatch(r'[a-z0-9][a-z0-9._-]{0,63}', workspace):
+            raise ValueError('Choose a receiving folder')
+        local_path, remote_path = args.get('local_path'), args.get('remote_path')
+        if (not isinstance(local_path, str) or '\0' in local_path
+            or not Path(local_path).is_absolute() or not Path(local_path).name):
+            raise ValueError('Choose an absolute local file path')
+        source = Path(local_path)
+        if not stat.S_ISREG(source.lstat().st_mode):
+            raise ValueError('Choose regular files; folders and symbolic links are not supported')
+        # Resolve parent aliases while retaining the final entry for the node's
+        # O_NOFOLLOW check. File content and hashing remain inside the node.
+        source = source.parent.resolve(strict=True) / source.name
+        if (not isinstance(remote_path, str) or not remote_path or '\0' in remote_path
+            or '\\' in remote_path or len(remote_path.encode('utf-8')) > 4096
+            or any(not part or part in ('.', '..') or part.startswith('.wispnet-')
+                   or len(part.encode('utf-8')) > 255 for part in remote_path.split('/'))):
+            raise ValueError('Destination must be a relative file path inside the receiving folder')
+        resume = args.get('resume', True)
+        if type(resume) is not bool:
+            raise ValueError('Resume must be true or false')
+        target = self.file_target(args)
+        return self.api.request(op='file_put', **target, workspace=workspace,
+                                local_path=str(source), remote_path=remote_path, resume=resume)
+
     def dispatch(self, method, args):
         if method == 'startDesktop':
             self.lifecycle(True)
@@ -366,6 +407,15 @@ class Bridge:
             return {'url': browser_url(result['url'])}
         if method == 'openShell':
             return self.open_shell(args)
+        if method == 'fileWorkspaces':
+            return self.api.request(op='file_workspaces', **self.file_target(args))
+        if method == 'fileSend':
+            return self.send_file(args)
+        if method in ('fileStatus', 'fileCancel'):
+            transfer = args.get('transfer')
+            if not isinstance(transfer, str) or not re.fullmatch(r'[0-9a-f]{64}', transfer):
+                raise ValueError('Invalid file transfer handle')
+            return self.api.request(op='file_status' if method == 'fileStatus' else 'file_cancel', transfer=transfer)
         if method == 'shellOpen':
             self.api.request(op='enable')
             return self.api.request(

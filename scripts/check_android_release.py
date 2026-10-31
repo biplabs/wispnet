@@ -72,7 +72,8 @@ def check_libraries(libraries,abi):
     native={f'base/lib/{abi}/libwispnet_android.so'}
     flutter=native|{f'base/lib/{abi}/libflutter.so',f'base/lib/{abi}/libapp.so'}
     terminal=flutter|{f'base/lib/{abi}/libtermux.so',f'base/lib/{abi}/libandroidx.graphics.path.so'}
-    if set(libraries) not in (native,flutter,terminal) or len(libraries)!=len(set(libraries)):
+    drop={f'base/lib/{abi}/libdesktop_drop_ffi.so'}
+    if set(libraries) not in (native,flutter,terminal,flutter|drop,terminal|drop) or len(libraries)!=len(set(libraries)):
         raise ValueError('Unexpected native bundle contents')
 
 

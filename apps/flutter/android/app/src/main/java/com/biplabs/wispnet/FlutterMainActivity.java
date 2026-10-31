@@ -6,6 +6,7 @@ import android.content.*;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.CancellationSignal;
 import androidx.annotation.NonNull;
 import io.flutter.embedding.android.FlutterActivity;
 import io.flutter.embedding.engine.FlutterEngine;
@@ -21,6 +22,8 @@ public final class FlutterMainActivity extends FlutterActivity {
  private final ExecutorService state = Executors.newSingleThreadExecutor();
  private NetworkBridge network;
  private MethodChannel.Result qrResult;
+ private MethodChannel.Result fileResult;
+ private CancellationSignal fileCancellation;
  private String invitation, invitationError, serviceLink;
 
  @Override public void onCreate(Bundle state) {
@@ -49,6 +52,7 @@ public final class FlutterMainActivity extends FlutterActivity {
     return;
    }
    if ("scanQr".equals(call.method) || "importQr".equals(call.method)) { startQr(call.method, result); return; }
+   if ("pickFiles".equals(call.method)) { pickFiles(result); return; }
    if ("openShell".equals(call.method)) {
     try {
      String host = arguments.getString("host"), service = arguments.getString("service"), incarnation = arguments.getString("incarnation");
@@ -105,7 +109,7 @@ public final class FlutterMainActivity extends FlutterActivity {
   });
  }
  private void startQr(String method, MethodChannel.Result result) {
-  if (qrResult != null) { result.error("qr_busy", "A QR request is already in progress", null); return; }
+  if (qrResult != null || fileResult != null) { result.error("qr_busy", "A picker is already in progress", null); return; }
   try {
    qrResult = result;
    if ("importQr".equals(method)) startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE), 103);
@@ -116,8 +120,42 @@ public final class FlutterMainActivity extends FlutterActivity {
    }
   } catch (Exception failure) { qrResult = null; result.error("qr_unavailable", failure.getMessage(), null); }
  }
+ private void pickFiles(MethodChannel.Result result) {
+  if (fileResult != null || qrResult != null) { result.error("files_busy", "A picker is already in progress", null); return; }
+  try {
+   fileResult = result;
+   fileCancellation = new CancellationSignal();
+   startActivityForResult(AndroidFilePicker.intent(), 104);
+  } catch (Exception failure) {
+   fileResult = null; fileCancellation = null;
+   result.error("files_unavailable", "Android's file picker is unavailable.", null);
+  }
+ }
  @Override protected void onActivityResult(int request, int resultCode, Intent data) {
   super.onActivityResult(request, resultCode, data);
+  if (request == 104 && fileResult != null) {
+   MethodChannel.Result result = fileResult;
+   if (resultCode != Activity.RESULT_OK || data == null) {
+    fileResult = null; fileCancellation = null; result.success("{\"files\":[]}"); return;
+   }
+   CancellationSignal cancellation = fileCancellation;
+   work.execute(() -> {
+    try {
+     String reply = AndroidFilePicker.selection(this, data, cancellation).toString();
+     runOnUiThread(() -> {
+      if (fileResult != result) return;
+      fileResult = null; fileCancellation = null; result.success(reply);
+     });
+    } catch (Exception failure) {
+     runOnUiThread(() -> {
+      if (fileResult != result) return;
+      fileResult = null; fileCancellation = null;
+      result.error("files_invalid", failure.getMessage() == null ? "Cannot read these files. Select them again." : failure.getMessage(), null);
+     });
+    }
+   });
+   return;
+  }
   if ((request != 102 && request != 103) || qrResult == null) return;
   MethodChannel.Result result = qrResult; qrResult = null;
   if (resultCode != Activity.RESULT_OK || data == null) { result.success("{}"); return; }
@@ -146,6 +184,8 @@ public final class FlutterMainActivity extends FlutterActivity {
  }
  @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); receiveInvitation(intent); }
  @Override protected void onDestroy() {
+  if (fileCancellation != null) fileCancellation.cancel();
+  if (fileResult != null) { fileResult.error("activity_closed", "File selection interrupted. Select the files again.", null); fileResult = null; }
   if (qrResult != null) { qrResult.error("activity_closed", "QR request interrupted. Try again.", null); qrResult = null; }
   com.biplabs.wispnet.shell.ShellWorkspace.INSTANCE.closeAll(this, false);
   network.close(); work.shutdown(); state.shutdown(); super.onDestroy();

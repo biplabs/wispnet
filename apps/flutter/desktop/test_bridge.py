@@ -96,6 +96,91 @@ class BridgeTests(unittest.TestCase):
         self.bridge.dispatch('shellClose', dict(session='s-1'))
         self.assertEqual(self.calls[-1], {'op': 'shell_close', 'session': 's-1', 'terminate': False})
 
+    def test_file_send_uses_native_jobs_and_fresh_permission_without_reading_content(self):
+        source = self.root / 'data $(literal); sample.npz'
+        source.write_bytes(b'file contents stay in the native node')
+        arguments = dict(host=PEER, incarnation=INCARNATION, workspace='incoming',
+                         local_path=str(source), remote_path='jobs/' + source.name)
+        job = dict(transfer='d' * 64, state='running', phase='preparing', verified_bytes=0, size_bytes=0)
+        original = self.bridge.api.request
+        def request(**args):
+            if args['op'] == 'catalog':
+                self.calls.append(args)
+                return dict(host=PEER, services=[dict(id='files', kind='files', incarnation=INCARNATION)])
+            if args['op'] == 'file_put':
+                self.calls.append(args)
+                return job
+            return original(**args)
+        with patch.object(self.bridge.api, 'request', side_effect=request), \
+             patch.object(Path, 'read_bytes', side_effect=AssertionError('File content crossed Python')), \
+             patch.object(module.subprocess, 'Popen') as process:
+            self.assertEqual(self.bridge.dispatch('fileSend', arguments), job)
+            self.assertEqual(self.calls[-3:], [dict(op='status'), dict(op='catalog', host=PEER),
+                dict(op='file_put', host=PEER, service='files', incarnation=INCARNATION,
+                     workspace='incoming', local_path=str(source), remote_path='jobs/' + source.name, resume=True)])
+            self.assertEqual(self.bridge.dispatch('fileSend', dict(arguments, resume=False)), job)
+            self.assertFalse(self.calls[-1]['resume'])
+            process.assert_not_called()
+
+    def test_files_reject_changed_access_unsafe_sources_and_destination_traversal(self):
+        source = self.root / 'source.bin'
+        source.write_bytes(b'content')
+        link = self.root / 'link.bin'
+        link.symlink_to(source)
+        pipe = self.root / 'pipe'
+        os.mkfifo(pipe)
+        args = dict(host=PEER, incarnation=INCARNATION, workspace='incoming',
+                    local_path=str(source), remote_path='source.bin')
+        # The fixture's authoritative catalog only grants HTTP, even if a stale
+        # display cache says Files is available.
+        self.bridge.records[PEER] = dict(catalog=dict(services=[dict(id='files', kind='files', incarnation=INCARNATION)]))
+        with self.assertRaisesRegex(ValueError, 'Files access unavailable'):
+            self.bridge.dispatch('fileSend', args)
+        for invalid in [dict(args, host='bad'), dict(args, incarnation='stale'),
+                        dict(args, local_path='relative.bin'), dict(args, local_path=str(link)),
+                        dict(args, local_path=str(self.root)), dict(args, local_path=str(pipe)),
+                        dict(args, remote_path='../escaped.bin'), dict(args, remote_path='/absolute.bin'),
+                        dict(args, remote_path='jobs//file'), dict(args, remote_path='jobs/./file'),
+                        dict(args, remote_path='jobs\\file'), dict(args, remote_path='.wispnet-private/file'),
+                        dict(args, remote_path='x' * 256), dict(args, workspace='../outside'),
+                        dict(args, resume='true')]:
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                self.bridge.dispatch('fileSend', invalid)
+        self.assertNotIn('file_put', [call['op'] for call in self.calls])
+        original = self.bridge.api.request
+        def changed(**request):
+            if request['op'] == 'catalog':
+                return dict(host=PEER, services=[dict(id='files', kind='files', incarnation='e' * 64)])
+            return original(**request)
+        with patch.object(self.bridge.api, 'request', side_effect=changed):
+            with self.assertRaisesRegex(ValueError, 'Files access unavailable'):
+                self.bridge.dispatch('fileSend', args)
+        with patch.object(self.bridge.api, 'request', side_effect=module.NodeRejected('PERMISSION_DENIED')):
+            with self.assertRaisesRegex(module.NodeRejected, 'PERMISSION_DENIED'):
+                self.bridge.dispatch('fileSend', args)
+
+    def test_file_folder_discovery_progress_and_cancel_use_bounded_native_metadata(self):
+        self.status['host']['services'] = [dict(id='files', kind='files', incarnation=INCARNATION)]
+        transfer = 'd' * 64
+        original = self.bridge.api.request
+        progress = dict(transfer=transfer, state='running', phase='transferring', verified_bytes=4, size_bytes=8)
+        def request(**args):
+            if args['op'] in ('file_status', 'file_cancel', 'file_workspaces'):
+                self.calls.append(args)
+                return dict(workspaces=['incoming', 'training']) if args['op'] == 'file_workspaces' else progress
+            return original(**args)
+        with patch.object(self.bridge.api, 'request', side_effect=request):
+            self.assertEqual(self.bridge.dispatch('fileWorkspaces', dict(host=OWN, incarnation=INCARNATION)),
+                             dict(workspaces=['incoming', 'training']))
+            self.assertEqual(self.calls[-1], dict(op='file_workspaces', host=OWN, service='files', incarnation=INCARNATION))
+            self.assertEqual(self.bridge.dispatch('fileStatus', dict(transfer=transfer)), progress)
+            self.assertEqual(self.calls[-1], dict(op='file_status', transfer=transfer))
+            self.assertEqual(self.bridge.dispatch('fileCancel', dict(transfer=transfer)), progress)
+            self.assertEqual(self.calls[-1], dict(op='file_cancel', transfer=transfer))
+        for method in ('fileStatus', 'fileCancel'):
+            with self.assertRaisesRegex(ValueError, 'Invalid file transfer'):
+                self.bridge.dispatch(method, dict(transfer='bad'))
+
     def test_terminal_launch_keeps_cli_options_out_of_terminal_arguments(self):
         command = ['/tmp/Wispnet CLI', 'shell', '--session', 'main', '--config', '/tmp/with spaces/host.toml']
         with patch.object(module.sys, 'platform', 'linux'), patch.object(module.shutil, 'which',
@@ -367,6 +452,60 @@ class BridgeTests(unittest.TestCase):
 
 
 class NativeBridgeTest(unittest.TestCase):
+    @unittest.skipUnless((module.ROOT / 'target/debug/wispnet').exists(), 'Build the node first')
+    def test_real_native_file_send_progress_and_idempotent_resume(self):
+        import hashlib
+        import subprocess
+        import time
+        binary = module.ROOT / 'target/debug/wispnet'
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config, state, export = root / 'host.toml', root / 'state', root / 'incoming'
+            export.mkdir()
+            config.write_text('schema_version=2\ndevice_name="File fixture"\nstate_dir=' + json.dumps(str(state)) + '\nlog_level="error"\n[transport]\nbind_addr="127.0.0.1:0"\nrelay_url="https://relay.example"\n')
+            subprocess.run([binary, 'host-init', '--config', config], check=True, capture_output=True, timeout=15)
+            process = subprocess.Popen([binary, 'agent', '--config', config], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                api = module.NodeAPI(config)
+                deadline = time.monotonic() + 15
+                while True:
+                    self.assertIsNone(process.poll())
+                    self.assertLess(time.monotonic(), deadline)
+                    try:
+                        status = api.request(op='status')
+                        break
+                    except (OSError, ValueError):
+                        time.sleep(.05)
+                api.request(op='mutate', operation=dict(op='files', exports={'incoming': str(export)},
+                    allow=[], expected_revision=status['host']['revision']))
+                status = api.request(op='status')
+                files = next(service for service in status['host']['services'] if service['id'] == 'files')
+                content = os.urandom(64 * 1024 + 137)
+                source = root / 'data $(literal); sample.bin'
+                source.write_bytes(content)
+                with patch.dict(os.environ, XDG_DATA_HOME=str(root / 'data'), XDG_CONFIG_HOME=str(root / 'config')):
+                    bridge = module.Bridge(config)
+                args = dict(host=status['host']['host'], incarnation=files['incarnation'], workspace='incoming',
+                            local_path=str(source), remote_path='nested/' + source.name)
+                # Repeating the same send resumes the same content-bound journal
+                # instead of replacing an unrelated existing destination.
+                for attempt in range(2):
+                    result = bridge.dispatch('fileSend', args)
+                    transfer = result['transfer']
+                    deadline = time.monotonic() + 15
+                    while result['state'] == 'running':
+                        self.assertLess(time.monotonic(), deadline)
+                        time.sleep(.02)
+                        result = bridge.dispatch('fileStatus', dict(transfer=transfer))
+                    self.assertEqual(result['state'], 'complete', result)
+                    self.assertEqual(result['verified_bytes'], len(content))
+                    self.assertEqual(result['file']['sha256'], hashlib.sha256(content).hexdigest())
+                    self.assertEqual((export / 'nested' / source.name).read_bytes(), content)
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                    process.wait(timeout=10)
+
     @unittest.skipUnless((module.ROOT / 'target/debug/wispnet').exists(), 'Build the node first')
     def test_real_node_local_catalog_owner_edit_and_fresh_browser_route(self):
         import http.client

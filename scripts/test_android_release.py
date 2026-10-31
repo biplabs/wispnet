@@ -46,6 +46,11 @@ class ReleaseChecks(unittest.TestCase):
         check_libraries(flutter,'arm64-v8a')
         terminal=flutter+['base/lib/arm64-v8a/libtermux.so','base/lib/arm64-v8a/libandroidx.graphics.path.so']
         check_libraries(terminal,'arm64-v8a')
+        drop=['base/lib/arm64-v8a/libdesktop_drop_ffi.so']
+        check_libraries(flutter+drop,'arm64-v8a')
+        check_libraries(terminal+drop,'arm64-v8a')
+        for invalid in [native+drop,terminal+drop+drop,terminal+drop+['base/lib/arm64-v8a/extra.so']]:
+            with self.assertRaises(ValueError):check_libraries(invalid,'arm64-v8a')
         for invalid in [terminal[:-1],terminal+['base/lib/arm64-v8a/extra.so']]:
             with self.assertRaises(ValueError):check_libraries(invalid,'arm64-v8a')
         for invalid in [flutter[:-1],flutter+['base/lib/arm64-v8a/unexpected.so'],flutter+native,[p.replace('arm64-v8a','x86_64') for p in flutter]]:

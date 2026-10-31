@@ -40,7 +40,7 @@ final class HostStore {
   JSONArray services=c.getJSONArray("services");if(services.length()>128||c.getInt("service_count")!=services.length())throw new Exception("Invalid or incomplete catalog");
   String previous="";for(int i=0;i<services.length();i++){
    JSONObject r=services.getJSONObject(i);for(String key:new String[]{"id","incarnation","display_name","kind"})if(!(r.get(key) instanceof String))throw new Exception("Invalid or incomplete catalog");String id=r.getString("id"),name=r.getString("display_name"),kind=r.getString("kind");
-   if(r.length()!=4||!id.matches("[a-z0-9][a-z0-9._-]{0,63}")||id.compareTo(previous)<=0||!r.getString("incarnation").matches("[0-9a-f]{64}")||name.codePoints().allMatch(cp->Character.isWhitespace(cp)||Character.isSpaceChar(cp))||!java.nio.charset.StandardCharsets.UTF_8.newEncoder().canEncode(name)||name.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>128||!("http".equals(kind)||"tcp".equals(kind)||"shell".equals(kind)))throw new Exception("Invalid or incomplete catalog");
+   if(r.length()!=4||!id.matches("[a-z0-9][a-z0-9._-]{0,63}")||id.compareTo(previous)<=0||!r.getString("incarnation").matches("[0-9a-f]{64}")||name.codePoints().allMatch(cp->Character.isWhitespace(cp)||Character.isSpaceChar(cp))||!java.nio.charset.StandardCharsets.UTF_8.newEncoder().canEncode(name)||name.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>128||!("http".equals(kind)||"tcp".equals(kind)||"shell".equals(kind)||"files".equals(kind)))throw new Exception("Invalid or incomplete catalog");
    for(int j=0;j<name.length();j++)if(Character.isISOControl(name.charAt(j)))throw new Exception("Invalid or incomplete catalog");previous=id;
   }
  }

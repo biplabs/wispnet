@@ -6,10 +6,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{File, OpenOptions},
     io::{self, Read, SeekFrom, Write},
-    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+    os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
     time::{Duration, Instant},
@@ -192,6 +192,121 @@ impl Files {
     }
 }
 
+/// Descriptor sources are capabilities supplied by a platform adapter, never
+/// numeric descriptors accepted through the owner JSON protocol.
+#[derive(Clone)]
+enum UploadSource {
+    Path(PathBuf),
+    Descriptor { file: Arc<File>, identity: PathBuf },
+}
+impl UploadSource {
+    fn path(path: &Path) -> Result<Self> {
+        Ok(Self::Path(absolute_file_path(path)?))
+    }
+    fn descriptor(state: &Path, file: File, source_id: &str) -> Result<Self> {
+        if source_id.is_empty() || source_id.len() > 8192 || source_id.contains('\0') {
+            return Err(TransferError::new(
+                "INVALID_ARGUMENT",
+                "Invalid document source identity",
+            ));
+        }
+        if !file.metadata().map_err(TransferError::io)?.is_file() {
+            return Err(TransferError::new(
+                "INVALID_ARGUMENT",
+                "Upload source must be a regular, seekable file",
+            ));
+        }
+        // Positional reads establish readability/seek support without moving a
+        // shared dup() cursor. Pipes, directories, O_PATH and write-only FDs fail.
+        file.read_at(&mut [], 0).map_err(TransferError::io)?;
+        let identity = state.join("document-sources").join(
+            Sha256::digest(source_id.as_bytes())
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
+        );
+        Ok(Self::Descriptor {
+            file: Arc::new(file),
+            identity,
+        })
+    }
+    fn identity(&self) -> &Path {
+        match self {
+            Self::Path(path) => path,
+            Self::Descriptor { identity, .. } => identity,
+        }
+    }
+    async fn hash(&self, cancellation: FileCancellation) -> Result<(u64, String)> {
+        let source = self.clone();
+        blocking(move || match source {
+            Self::Path(path) => {
+                let mut file = safe_open(&path, false, false)?;
+                let size = file.metadata().map_err(TransferError::io)?.len();
+                Ok((size, hash_reader_cancelled(&mut file, Some(&cancellation))?))
+            }
+            Self::Descriptor { file, .. } => {
+                let size = file.metadata().map_err(TransferError::io)?.len();
+                let mut reader = PositionedReader { file, offset: 0 };
+                Ok((
+                    size,
+                    hash_reader_cancelled(&mut reader, Some(&cancellation))?,
+                ))
+            }
+        })
+        .await
+    }
+    async fn reader(&self, offset: u64) -> Result<UploadReader> {
+        match self {
+            Self::Path(path) => {
+                let mut file = tokio::fs::File::from_std(safe_open(path, false, false)?);
+                file.seek(SeekFrom::Start(offset))
+                    .await
+                    .map_err(TransferError::io)?;
+                Ok(UploadReader::Path(file))
+            }
+            Self::Descriptor { file, .. } => Ok(UploadReader::Descriptor(file.clone())),
+        }
+    }
+}
+struct PositionedReader {
+    file: Arc<File>,
+    offset: u64,
+}
+impl Read for PositionedReader {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let count = self.file.read_at(buffer, self.offset)?;
+        self.offset += count as u64;
+        Ok(count)
+    }
+}
+enum UploadReader {
+    Path(tokio::fs::File),
+    Descriptor(Arc<File>),
+}
+impl UploadReader {
+    async fn chunk(&mut self, offset: u64, length: usize) -> Result<Vec<u8>> {
+        match self {
+            Self::Path(file) => {
+                let mut bytes = vec![0; length];
+                file.read_exact(&mut bytes)
+                    .await
+                    .map_err(TransferError::io)?;
+                Ok(bytes)
+            }
+            Self::Descriptor(file) => {
+                let file = file.clone();
+                blocking(move || {
+                    let mut bytes = vec![0; length];
+                    file.read_exact_at(&mut bytes, offset)
+                        .map_err(TransferError::io)?;
+                    Ok(bytes)
+                })
+                .await
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct Binding {
     version: u8,
@@ -237,6 +352,31 @@ impl Drop for Resources {
 }
 
 impl Client {
+    /// Discover the names of receiving folders through the authenticated Files
+    /// service. This exposes neither filesystem paths nor existing file names.
+    pub async fn list_file_workspaces(self: &Arc<Self>, target: FileTarget) -> Result<Vec<String>> {
+        let (mut stream, _resources) = self.file_stream(&target).await?;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            write_request(&mut stream, &Request::Workspaces)
+                .await
+                .map_err(TransferError::io)?;
+            match response(&mut stream).await? {
+                Response::Workspaces { workspaces }
+                    if workspaces.len() <= 32
+                        && workspaces
+                            .iter()
+                            .all(|name| wispnet_core::protocol::valid_service_id(name))
+                        && workspaces.iter().collect::<BTreeSet<_>>().len() == workspaces.len() =>
+                {
+                    Ok(workspaces)
+                }
+                _ => Err(protocol_error()),
+            }
+        })
+        .await
+        .map_err(|_| TransferError::new("UNAVAILABLE", "Files folder discovery timed out"))?
+    }
+
     /// Start a resumable upload. Dropping the future or cancelling preserves the
     /// acknowledged remote prefix; the same call can be repeated after restart.
     pub async fn put_file(
@@ -247,6 +387,36 @@ impl Client {
         remote_path: &str,
         options: TransferOptions,
     ) -> Result<FileInfo> {
+        let source = UploadSource::path(local_path)?;
+        self.put_source(target, workspace, source, remote_path, options)
+            .await
+    }
+
+    /// Upload an already-authorized readable document descriptor without a
+    /// staging copy. The stable source identity is hashed in private journals;
+    /// content size and SHA-256 still bind every resumable transfer.
+    pub async fn put_file_descriptor(
+        self: &Arc<Self>,
+        target: FileTarget,
+        workspace: &str,
+        file: File,
+        source_id: &str,
+        remote_path: &str,
+        options: TransferOptions,
+    ) -> Result<FileInfo> {
+        let source = UploadSource::descriptor(&self.state, file, source_id)?;
+        self.put_source(target, workspace, source, remote_path, options)
+            .await
+    }
+
+    async fn put_source(
+        self: &Arc<Self>,
+        target: FileTarget,
+        workspace: &str,
+        source: UploadSource,
+        remote_path: &str,
+        options: TransferOptions,
+    ) -> Result<FileInfo> {
         let mut drop_guard = CancelOnDrop {
             cancellation: options.cancellation.clone(),
             armed: true,
@@ -254,7 +424,7 @@ impl Client {
         let result = tokio::select! {
             biased;
             _ = options.cancellation.cancelled() => Err(TransferError::new("CANCELLED", "Transfer cancelled; resumable data retained")),
-            result = self.put_file_inner(target, workspace, local_path, remote_path, &options) => result,
+            result = self.put_file_inner(target, workspace, source, remote_path, &options) => result,
         };
         drop_guard.armed = false;
         result
@@ -264,6 +434,18 @@ impl Client {
         value: &Value,
     ) -> std::result::Result<Value, String> {
         match value["op"].as_str().unwrap_or("") {
+            "file_workspaces" => {
+                let target = FileTarget {
+                    host: crate::peer(value)?,
+                    service: value["service"].as_str().unwrap_or("files").into(),
+                    incarnation: crate::argument(value, "incarnation")?.into(),
+                };
+                let workspaces = self
+                    .list_file_workspaces(target)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok(json!({"workspaces":workspaces}))
+            }
             "file_status" | "file_cancel" => {
                 let id = crate::argument(value, "transfer")?;
                 let job = self
@@ -281,119 +463,146 @@ impl Client {
                 Ok(status)
             }
             "file_put" => {
-                let target = FileTarget {
-                    host: crate::peer(value)?,
-                    service: value["service"].as_str().unwrap_or("files").into(),
-                    incarnation: crate::argument(value, "incarnation")?.into(),
-                };
-                validate_target(&target).map_err(|e| e.to_string())?;
-                let workspace = crate::argument(value, "workspace")?.to_owned();
-                let remote_path = crate::argument(value, "remote_path")?.to_owned();
-                let local_path = PathBuf::from(crate::argument(value, "local_path")?);
-                if !local_path.is_absolute() {
-                    return Err("Local file path must be absolute".into());
-                }
-                let resume = value
-                    .get("resume")
-                    .map(|v| v.as_bool().ok_or("resume must be a boolean"))
-                    .transpose()?
-                    .unwrap_or(true);
-                let permit = self
-                    .files
-                    .slots
-                    .clone()
-                    .try_acquire_owned()
-                    .map_err(|_| "RESOURCE_LIMIT: two file transfers are already active")?;
-                let cancellation = FileCancellation::default();
-                let id = crate::token();
-                let job = Arc::new(Job {
-                    host: target.host,
-                    cancellation: cancellation.clone(),
-                    status: Mutex::new(
-                        json!({"transfer":id,"state":"running","phase":"preparing","verified_bytes":0,"size_bytes":0}),
-                    ),
-                    finished: Mutex::new(None),
-                });
+                if ["source_fd", "fd", "source_id"]
+                    .iter()
+                    .any(|name| value.get(name).is_some())
                 {
-                    let mut jobs = self.files.jobs.lock().unwrap_or_else(|e| e.into_inner());
-                    jobs.retain(|_, job| {
-                        job.finished
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .is_none_or(|at| at.elapsed() < Duration::from_secs(3600))
-                    });
-                    if jobs.len() >= 64 {
-                        let oldest = jobs
-                            .iter()
-                            .filter_map(|(id, job)| {
-                                job.finished
-                                    .lock()
-                                    .unwrap_or_else(|e| e.into_inner())
-                                    .map(|at| (id.clone(), at))
-                            })
-                            .min_by_key(|(_, at)| *at)
-                            .map(|(id, _)| id);
-                        if let Some(id) = oldest {
-                            jobs.remove(&id);
-                        } else {
-                            return Err("RESOURCE_LIMIT: file transfer history is full".into());
-                        }
-                    }
-                    jobs.insert(id, job.clone());
+                    return Err("Document descriptors require the platform capability API".into());
                 }
-                let job_progress = job.clone();
-                let options = TransferOptions {
-                    resume,
-                    cancellation,
-                    progress: Some(Arc::new(move |progress| {
-                        let mut status = job_progress
-                            .status
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner());
-                        status["phase"] = json!(progress.phase);
-                        status["verified_bytes"] = json!(progress.verified_bytes);
-                        status["size_bytes"] = json!(progress.size_bytes);
-                    })),
-                };
-                let client = self.clone();
-                let started = Instant::now();
-                let operation_job = job.clone();
-                tokio::spawn(async move {
-                    let _permit = permit;
-                    let result = client
-                        .put_file(target, &workspace, &local_path, &remote_path, options)
-                        .await;
-                    let mut status = operation_job
-                        .status
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    status["duration_ms"] = json!(started.elapsed().as_millis() as u64);
-                    match result {
-                        Ok(file) => {
-                            status["state"] = json!("complete");
-                            status["phase"] = json!("complete");
-                            status["verified_bytes"] = json!(file.size_bytes);
-                            status["size_bytes"] = json!(file.size_bytes);
-                            status["file"] = json!(file);
-                        }
-                        Err(error) => {
-                            status["state"] = json!(if error.code == "CANCELLED" {
-                                "cancelled"
-                            } else {
-                                "failed"
-                            });
-                            status["error"] = json!(error);
-                        }
-                    }
-                    *operation_job
-                        .finished
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
-                });
-                Ok(job.status.lock().unwrap_or_else(|e| e.into_inner()).clone())
+                let path = PathBuf::from(crate::argument(value, "local_path")?);
+                let source = UploadSource::path(&path).map_err(|error| error.to_string())?;
+                self.start_file_job(value, source).await
             }
             _ => Err("Unsupported file operation".into()),
         }
+    }
+    /// Starts a descriptor-backed native job. Possession of the File is
+    /// required; a caller cannot name another process descriptor through JSON.
+    pub async fn start_file_descriptor_job(
+        self: &Arc<Self>,
+        value: &Value,
+        file: File,
+    ) -> std::result::Result<Value, String> {
+        if value["op"] != "file_put" {
+            return Err("Unsupported descriptor operation".into());
+        }
+        let source_id = crate::argument(value, "source_id")?;
+        let source = UploadSource::descriptor(&self.state, file, source_id)
+            .map_err(|error| error.to_string())?;
+        self.start_file_job(value, source).await
+    }
+
+    async fn start_file_job(
+        self: &Arc<Self>,
+        value: &Value,
+        source: UploadSource,
+    ) -> std::result::Result<Value, String> {
+        let target = FileTarget {
+            host: crate::peer(value)?,
+            service: value["service"].as_str().unwrap_or("files").into(),
+            incarnation: crate::argument(value, "incarnation")?.into(),
+        };
+        validate_target(&target).map_err(|e| e.to_string())?;
+        let workspace = crate::argument(value, "workspace")?.to_owned();
+        let remote_path = crate::argument(value, "remote_path")?.to_owned();
+        let resume = value
+            .get("resume")
+            .map(|v| v.as_bool().ok_or("resume must be a boolean"))
+            .transpose()?
+            .unwrap_or(true);
+        let permit = self
+            .files
+            .slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| "RESOURCE_LIMIT: two file transfers are already active")?;
+        let cancellation = FileCancellation::default();
+        let id = crate::token();
+        let job = Arc::new(Job {
+            host: target.host,
+            cancellation: cancellation.clone(),
+            status: Mutex::new(
+                json!({"transfer":id,"state":"running","phase":"preparing","verified_bytes":0,"size_bytes":0}),
+            ),
+            finished: Mutex::new(None),
+        });
+        {
+            let mut jobs = self.files.jobs.lock().unwrap_or_else(|e| e.into_inner());
+            jobs.retain(|_, job| {
+                job.finished
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .is_none_or(|at| at.elapsed() < Duration::from_secs(3600))
+            });
+            if jobs.len() >= 64 {
+                let oldest = jobs
+                    .iter()
+                    .filter_map(|(id, job)| {
+                        job.finished
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .map(|at| (id.clone(), at))
+                    })
+                    .min_by_key(|(_, at)| *at)
+                    .map(|(id, _)| id);
+                if let Some(id) = oldest {
+                    jobs.remove(&id);
+                } else {
+                    return Err("RESOURCE_LIMIT: file transfer history is full".into());
+                }
+            }
+            jobs.insert(id, job.clone());
+        }
+        let job_progress = job.clone();
+        let options = TransferOptions {
+            resume,
+            cancellation,
+            progress: Some(Arc::new(move |progress| {
+                let mut status = job_progress
+                    .status
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                status["phase"] = json!(progress.phase);
+                status["verified_bytes"] = json!(progress.verified_bytes);
+                status["size_bytes"] = json!(progress.size_bytes);
+            })),
+        };
+        let client = self.clone();
+        let started = Instant::now();
+        let operation_job = job.clone();
+        tokio::spawn(async move {
+            let _permit = permit;
+            let result = client
+                .put_source(target, &workspace, source, &remote_path, options)
+                .await;
+            let mut status = operation_job
+                .status
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            status["duration_ms"] = json!(started.elapsed().as_millis() as u64);
+            match result {
+                Ok(file) => {
+                    status["state"] = json!("complete");
+                    status["phase"] = json!("complete");
+                    status["verified_bytes"] = json!(file.size_bytes);
+                    status["size_bytes"] = json!(file.size_bytes);
+                    status["file"] = json!(file);
+                }
+                Err(error) => {
+                    status["state"] = json!(if error.code == "CANCELLED" {
+                        "cancelled"
+                    } else {
+                        "failed"
+                    });
+                    status["error"] = json!(error);
+                }
+            }
+            *operation_job
+                .finished
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+        });
+        Ok(job.status.lock().unwrap_or_else(|e| e.into_inner()).clone())
     }
     async fn open_file_stream(
         self: &Arc<Self>,
@@ -555,40 +764,29 @@ impl Client {
         self: &Arc<Self>,
         target: FileTarget,
         workspace: &str,
-        local_path: &Path,
+        source: UploadSource,
         remote_path: &str,
         options: &TransferOptions,
     ) -> Result<FileInfo> {
         validate_target(&target)?;
-        let local_path = absolute_file_path(local_path)?;
+
         let binding = Binding {
             version: 1,
             own: self.endpoint.id().to_string(),
             target: target.clone(),
             workspace: workspace.into(),
             remote_path: remote_path.into(),
-            local_path: local_path.clone(),
-            direction: "put".into(),
+            local_path: source.identity().to_owned(),
+            direction: if matches!(source, UploadSource::Descriptor { .. }) {
+                "put_descriptor"
+            } else {
+                "put"
+            }
+            .into(),
         };
         let resume = self.prepare_resume(binding.clone()).await?;
         options.report("hashing", 0, 0);
-        let source_path = local_path.clone();
-        let cancellation = options.cancellation.clone();
-        let (size_bytes, sha256) = blocking(move || {
-            let mut file = safe_open(&source_path, false, false)?;
-            let metadata = file.metadata().map_err(TransferError::io)?;
-            if !metadata.is_file() {
-                return Err(TransferError::new(
-                    "INVALID_ARGUMENT",
-                    "Upload source must be a regular file",
-                ));
-            }
-            Ok((
-                metadata.len(),
-                hash_reader_cancelled(&mut file, Some(&cancellation))?,
-            ))
-        })
-        .await?;
+        let (size_bytes, sha256) = source.hash(options.cancellation.clone()).await?;
         let journal_path = resume.journal.clone();
         let old = blocking(move || load_journal(&journal_path)).await?;
         let mut journal = if options.resume {
@@ -609,7 +807,7 @@ impl Client {
             let result = self
                 .upload_attempt(
                     &target,
-                    &local_path,
+                    &source,
                     &resume.journal,
                     &resume._lock,
                     &mut journal,
@@ -630,7 +828,7 @@ impl Client {
     async fn upload_attempt(
         self: &Arc<Self>,
         target: &FileTarget,
-        local_path: &Path,
+        source: &UploadSource,
         journal_path: &Path,
         resume_lock: &Arc<File>,
         journal: &mut Journal,
@@ -696,11 +894,7 @@ impl Client {
         journal.committed_offset = offset;
         persist(journal_path, journal, resume_lock).await?;
         options.report("transferring", offset, journal.size_bytes);
-        let mut source = tokio::fs::File::from_std(safe_open(local_path, false, false)?);
-        source
-            .seek(SeekFrom::Start(offset))
-            .await
-            .map_err(TransferError::io)?;
+        let mut source = source.reader(offset).await?;
         let (mut reader, mut writer) = tokio::io::split(stream);
         let slots = Arc::new(Semaphore::new(PIPELINE));
         let (queued, mut expected) = mpsc::channel(PIPELINE);
@@ -713,11 +907,9 @@ impl Client {
                     .acquire_owned()
                     .await
                     .map_err(|_| protocol_error())?;
-                let mut data = vec![0; (size - at).min(chunk_size as u64) as usize];
-                source
-                    .read_exact(&mut data)
-                    .await
-                    .map_err(TransferError::io)?;
+                let data = source
+                    .chunk(at, (size - at).min(chunk_size as u64) as usize)
+                    .await?;
                 let (data, digest) = blocking(move || {
                     let digest = wispnet_files::sha256(&data);
                     Ok((data, digest))

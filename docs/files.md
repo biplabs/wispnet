@@ -66,6 +66,32 @@ metadata only (`file_put`), then exposes `file_status` and
 `files cancel TRANSFER`. Background job handles are ephemeral; repeat put to
 recover durable resume state after a node restart.
 
+On desktop, drop one or more files into the Wispnet pop-up or onto a remote
+device's **Files** service. Choose its receiving folder and select **Send files**.
+The transfer panel shows progress, cancellation and resume actions. Hiding the
+pop-up or closing the panel keeps submitted transfers running. Files are queued
+one at a time and retain their original names; folders must first be archived.
+The recipient must already have granted Files access.
+
+On Android, tap a device's **Files** service, choose its receiving folder, then
+use **Choose files** to select one or more documents in Android's system picker.
+Select **Send files** to queue the batch. Two files can run concurrently; each
+has its own progress, cancel and resume controls. The network service retains
+the queue when the panel closes or the UI is recreated. Going offline cancels
+its active and queued transfers. After a network-process restart, select the
+original documents again to recover their durable resume state.
+
+Regular Android documents stream directly through their read-only descriptors.
+Providers that expose a stream or a file slice are prepared in private temporary
+storage with bounded buffers and cancellation, then sent through the same native
+protocol. Temporary copies are removed when the transfer finishes or is cancelled.
+File contents never cross Flutter or the UI's Binder connection.
+
+Receiving folder names are discovered through the authenticated Files service
+(`file_workspaces` in the owner API, `Client::list_file_workspaces` in the SDK).
+This returns configured export names only. Older receivers can still accept
+uploads when their owner supplies the shared folder name manually.
+
 The Rust SDK exposes `Client::put_file`, `FileTarget`,
 `TransferOptions`, progress callbacks, and `FileCancellation` in
 `wispnet_client::files`.
