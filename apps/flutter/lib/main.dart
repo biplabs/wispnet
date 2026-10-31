@@ -13,7 +13,8 @@ void main() {
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
       statusBarIconBrightness: Brightness.light,
-      systemNavigationBarColor: Color(0xff070b14),
+      systemNavigationBarColor: Colors.transparent,
+      systemNavigationBarContrastEnforced: false,
       systemNavigationBarIconBrightness: Brightness.light,
     ),
   );

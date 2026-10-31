@@ -1003,7 +1003,9 @@ class _WispHomeState extends State<WispHome>
       key: const ValueKey('directory'),
       onRefresh: refresh,
       child: ListView(
-        padding: const EdgeInsets.only(bottom: 24),
+        padding: EdgeInsets.only(
+          bottom: 24 + MediaQuery.viewPaddingOf(context).bottom,
+        ),
         physics: const AlwaysScrollableScrollPhysics(),
         children: [
           if (local.isNotEmpty)
@@ -1170,6 +1172,7 @@ class _WispHomeState extends State<WispHome>
                       : const AlwaysStoppedAnimation(0.0)
                 : const AlwaysStoppedAnimation(1.0),
             child: SafeArea(
+              bottom: false,
               child: Center(
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 1200),
@@ -1256,6 +1259,11 @@ class _WispHomeState extends State<WispHome>
                         ),
                         shellDock(),
                         uploadDocks(),
+                        if (minimizedShells.isNotEmpty ||
+                            fileTransfers.jobs.any((job) => !job.finished))
+                          SizedBox(
+                            height: MediaQuery.viewPaddingOf(context).bottom,
+                          ),
                       ],
                     ),
                   ),
