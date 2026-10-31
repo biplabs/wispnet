@@ -2,7 +2,7 @@
 //! PTY/session mechanics adapted from WispShell. Sessions are owned by the
 //! manager, not the client connection, and are scoped by the caller's authority.
 use crate::{ClientFrame, ServerFrame, read_client, valid_session, valid_size, write_server};
-use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::{
     collections::{HashMap, VecDeque},
     io::{self, Read, Write},
@@ -66,7 +66,7 @@ struct State {
 struct Session {
     master: Mutex<Box<dyn MasterPty + Send>>,
     writer: Mutex<Box<dyn Write + Send>>,
-    killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+    termination: std::sync::mpsc::Sender<()>,
     state: Arc<Mutex<State>>,
     space: Arc<Condvar>,
 }
@@ -139,12 +139,14 @@ fn shell_command(shell: &str) -> CommandBuilder {
 }
 impl Session {
     fn terminate(&self) {
-        self.state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .terminated = true;
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.terminated {
+            return;
+        }
+        state.terminated = true;
+        drop(state);
         self.space.notify_all();
-        let _ = self.killer.lock().unwrap_or_else(|e| e.into_inner()).kill();
+        let _ = self.termination.send(());
     }
     fn spawn(shell: &str, cols: u16, rows: u16) -> io::Result<Self> {
         let pair = native_pty_system()
@@ -159,7 +161,7 @@ impl Session {
             .slave
             .spawn_command(shell_command(shell))
             .map_err(pty_error)?;
-        let killer = child.clone_killer();
+        let (termination, termination_rx) = std::sync::mpsc::channel();
         drop(pair.slave);
         let mut reader = pair.master.try_clone_reader().map_err(pty_error)?;
         let writer = pair.master.take_writer().map_err(pty_error)?;
@@ -212,13 +214,30 @@ impl Session {
         });
         let exit_state = state.clone();
         std::thread::spawn(move || {
-            let code = child.wait().map(|status| status.exit_code()).unwrap_or(1);
+            let code = loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => break status.exit_code(),
+                    Err(_) => break 1,
+                    Ok(None) => {}
+                }
+                match termination_rx.recv_timeout(Duration::from_millis(50)) {
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                    Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        // Keep signaling and reaping with the same child owner.
+                        // Its kill implementation escalates ignored hangups;
+                        // clone_killer only sends SIGHUP on Unix. This thread
+                        // also keeps the grace period off the async runtime.
+                        let _ = child.kill();
+                        break child.wait().map(|status| status.exit_code()).unwrap_or(1);
+                    }
+                }
+            };
             exit_state.lock().unwrap_or_else(|e| e.into_inner()).exited = Some(code);
         });
         Ok(Self {
             master: Mutex::new(pair.master),
             writer: Mutex::new(writer),
-            killer: Mutex::new(killer),
+            termination,
             state,
             space,
         })
@@ -896,6 +915,57 @@ mod tests {
             .attach("inc/peer".into(), "main".into(), 80, 24)
             .unwrap();
         assert!(!Arc::ptr_eq(&session, &fresh));
+    }
+    #[tokio::test]
+    async fn revocation_terminates_a_session_that_ignores_hangup() {
+        let manager = SessionManager::with_shell("/bin/sh");
+        let session = manager
+            .attach("inc/peer".into(), "main".into(), 80, 24)
+            .unwrap();
+        session
+            .writer
+            .lock()
+            .unwrap()
+            .write_all(b"trap '' HUP; printf '\\122\\105\\126\\117\\113\\105\\137\\122\\105\\101\\104\\131\\012'; while :; do :; done\n")
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let ready = {
+                    let state = session.state.lock().unwrap();
+                    let output: Vec<_> = state
+                        .history
+                        .iter()
+                        .flat_map(|part| &part.data)
+                        .copied()
+                        .collect();
+                    output
+                        .windows(b"REVOKE_READY".len())
+                        .any(|part| part == b"REVOKE_READY")
+                };
+                if ready {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(manager.retain_scopes(|_| false), 1);
+        assert!(manager.inner.sessions.lock().unwrap().is_empty());
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let finished = {
+                    let state = session.state.lock().unwrap();
+                    state.exited.is_some() && state.output_done
+                };
+                if finished {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
     }
     #[tokio::test]
     async fn scopes_isolate_sessions_and_no_echo_state_is_reported() {
