@@ -9,6 +9,7 @@ import argparse
 import base64
 import hashlib
 import json
+import secrets
 from pathlib import Path
 import shlex
 import subprocess
@@ -24,6 +25,7 @@ from wispnet_desktop.api import NodeAPI
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--receiving', action='store_true', help='Test desktop-to-Android receiving through the system folder picker')
     parser.add_argument('--serial', required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--apk', type=Path, default=ROOT / 'apps/flutter/build/app/outputs/flutter-apk/app-debug.apk')
@@ -42,6 +44,12 @@ def main():
             raise SystemExit(f'Build the current APK first: {apk}')
         adb('install', '-r', apk)
     adb('shell', 'pm', 'grant', 'app.wispnet.android', 'android.permission.POST_NOTIFICATIONS')
+    receiving_folder = 'WispnetReceiveTest-' + secrets.token_hex(6)
+    if args.receiving:
+        adb('shell', 'mkdir', '-p', '/sdcard/Documents/' + receiving_folder)
+        adb('shell', 'run-as', 'app.wispnet.android', 'rm', '-f',
+            'cache/android-receiving-ready.json',
+            *['cache/android-receiving-host-' + phase + '.json' for phase in ['send', 'offline', 'resume', 'revoked']])
     binary = ROOT / 'target/debug/wispnet'
     with tempfile.TemporaryDirectory(prefix='wispnet-android-files-') as directory:
         temporary = Path(directory)
@@ -99,24 +107,77 @@ def main():
                     except Exception as error:
                         errors.append(str(error))
 
+                if args.receiving:
+                    receiving_files = {}
+                    handled = set()
+                    def reverse_uploads():
+                        while not stopped.wait(.2):
+                            try:
+                                ready = json.loads(adb('exec-out', 'run-as', 'app.wispnet.android', 'cat', 'cache/android-receiving-ready.json').stdout)
+                            except (subprocess.CalledProcessError, ValueError):
+                                continue
+                            phase, peer = ready['phase'], ready['peer']
+                            if phase in handled:
+                                continue
+                            handled.add(phase)
+                            result = {'success': False}
+                            try:
+                                def send(path, content, success=True):
+                                    source = temporary / ('source-' + hashlib.sha256(content).hexdigest())
+                                    source.write_bytes(content)
+                                    command = [binary, 'files', 'put', peer, '', str(source), path, '--config', config]
+                                    uploaded = subprocess.run(command, capture_output=True, text=True, timeout=80)
+                                    (args.output / ('receiving-' + phase + '-' + path.replace('/', '_') + '.log')).write_text(uploaded.stdout + uploaded.stderr)
+                                    if (uploaded.returncode == 0) != success:
+                                        raise AssertionError(f'Unexpected upload result for {phase}/{path}: {uploaded.stderr}')
+                                    if success:
+                                        receipt = json.loads(uploaded.stdout)
+                                        digest = hashlib.sha256(content).hexdigest()
+                                        if receipt['file']['sha256'] != digest or receipt['file']['size_bytes'] != len(content):
+                                            raise AssertionError('Native sender receipt mismatch')
+                                        receiving_files[path] = {'sha256': digest, 'size_bytes': len(content)}
+                                if phase == 'send':
+                                    content = bytes(range(256)) * 32768 + b'Android receiver'
+                                    send('android-received.bin', content)
+                                    send('android-received.bin', content)
+                                    send('android-received.bin', b'never overwrite this file', success=False)
+                                    send('nested/資料.bin', 'Unicode contents 資料'.encode())
+                                    send('empty.bin', b'')
+                                elif phase == 'offline':
+                                    send('resume.bin', b'resume after going online' * 32768, success=False)
+                                elif phase == 'resume':
+                                    send('resume.bin', b'resume after going online' * 32768)
+                                elif phase == 'revoked':
+                                    send('denied.bin', b'permission revoked', success=False)
+                                else:
+                                    raise AssertionError(f'Unknown receiver phase {phase}')
+                                result = {'success': True, 'files': receiving_files}
+                            except Exception as failure:
+                                errors.append(str(failure))
+                                result['error'] = str(failure)
+                            adb('shell', 'run-as', 'app.wispnet.android', 'sh', '-c',
+                                shlex.quote(f'cat > cache/android-receiving-host-{phase}.json'), input=json.dumps(result).encode())
+                    threading.Thread(target=reverse_uploads, daemon=True).start()
                 watcher = threading.Thread(target=approve, daemon=True)
                 watcher.start()
                 command = ['am', 'instrument', '-w', '-r', '-e', 'host', host,
                            '-e', 'invitation', encoded, '-e', 'workspace', 'training',
                            'app.wispnet.android.test/com.biplabs.wispnet.FilesTransferInstrumentation']
-                result = adb('shell', ' '.join(map(shlex.quote, command)), text=True, timeout=240)
+                if args.receiving:
+                    command[4:4] = ['-e', 'receiving', 'true', '-e', 'receiving_folder', receiving_folder]
+                result = adb('shell', ' '.join(map(shlex.quote, command)), text=True, timeout=480)
                 (args.output / 'instrumentation.log').write_text(result.stdout + result.stderr)
                 if errors:
                     raise RuntimeError(f'Fixture approval failed: {errors}')
                 if 'INSTRUMENTATION_CODE: -1' not in result.stdout:
                     raise RuntimeError('Android integration failed; inspect instrumentation.log')
                 raw = adb('exec-out', 'run-as', 'app.wispnet.android', 'cat',
-                          'cache/android-files-result.json').stdout
+                          ('cache/android-receiving-result.json' if args.receiving else 'cache/android-files-result.json')).stdout
                 receipt = json.loads(raw)
                 if not receipt.get('success'):
                     raise RuntimeError(f'Android integration failed: {receipt}')
                 verified = []
-                for file in receipt['files']:
+                for file in receipt.get('files', []):
                     destination = export / file['path']
                     if not destination.is_file() or destination.is_symlink():
                         raise AssertionError(f'Expected a completed regular file: {file["path"]}')
@@ -125,10 +186,14 @@ def main():
                     if digest != file['sha256'] or destination.stat().st_size != file['size_bytes']:
                         raise AssertionError(f'Destination hash/size mismatch: {file["path"]}')
                     verified.append(file['path'])
-                receipt['host_verified_destinations'] = verified
+                if args.receiving:
+                    verified = list(receipt['received_files'])
+                    receipt['provider_verified_destinations'] = verified
+                else:
+                    receipt['host_verified_destinations'] = verified
                 receipt['isolated_host_only'] = True
                 (args.output / 'native-verification.json').write_text(json.dumps(receipt, indent=2) + '\n')
-                print(json.dumps({'native_android_files_passed': True, 'verified_files': verified}))
+                print(json.dumps({'native_android_files_passed': True, 'receiving': args.receiving, 'verified_files': verified}))
             finally:
                 stopped.set()
                 if watcher:

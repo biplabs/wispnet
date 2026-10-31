@@ -4914,7 +4914,9 @@ name = "wispnet-android"
 version = "0.1.0"
 dependencies = [
  "jni 0.21.1",
+ "serde_json",
  "wispnet-client",
+ "wispnet-files",
  "zeroize",
 ]
 

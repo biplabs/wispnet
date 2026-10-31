@@ -270,6 +270,7 @@ pub struct TunnelHost {
     stop: watch::Sender<bool>,
     worker: Option<JoinHandle<()>>,
     counts: ActiveCounts,
+    files: Option<wispnet_files::FileService>,
 }
 impl TunnelHost {
     pub async fn bind(
@@ -301,6 +302,25 @@ impl TunnelHost {
             return Err(TunnelError::Transport("host authority identity mismatch"));
         }
         Self::bind_services(secret, config, Services::host(authority)?).await
+    }
+    pub async fn bind_host_with_files(
+        secret: &SecretKey,
+        config: &TransportConfig,
+        authority: wispnet_registry::host::Authority,
+        files: wispnet_files::FileService,
+    ) -> Result<Self, TunnelError> {
+        config
+            .validate()
+            .map_err(|_| TunnelError::Transport("invalid transport limits"))?;
+        if authority.host() != secret.public() {
+            return Err(TunnelError::Transport("host authority identity mismatch"));
+        }
+        Self::bind_services(
+            secret,
+            config,
+            Services::Host(authority, ShellSessions::default(), files),
+        )
+        .await
     }
     async fn bind_services(
         secret: &SecretKey,
@@ -348,6 +368,10 @@ impl TunnelHost {
             .map_err(|_| TunnelError::Transport("cannot bind Iroh endpoint"))?;
         let counts = ActiveCounts::default();
         let (stop, receiver) = watch::channel(false);
+        let files = match &services {
+            Services::Host(_, _, files) => Some(files.clone()),
+            _ => None,
+        };
         let worker = tokio::spawn(serve(
             endpoint.clone(),
             config.clone(),
@@ -360,7 +384,13 @@ impl TunnelHost {
             stop,
             worker: Some(worker),
             counts,
+            files,
         })
+    }
+    pub fn set_files_enabled(&self, enabled: bool) {
+        if let Some(files) = &self.files {
+            files.set_enabled(enabled);
+        }
     }
     pub fn endpoint(&self) -> &Endpoint {
         &self.endpoint

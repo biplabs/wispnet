@@ -97,6 +97,30 @@ the queue when the panel closes or the UI is recreated. Going offline cancels
 its active and queued transfers. After a network-process restart, select the
 original documents again to recover their durable resume state.
 
+To receive on Android, open **Settings → Receive files**, choose a folder with
+Android's system folder picker, check the paired devices allowed to send, and
+save. The gear changes the single receiving folder. Removing it revokes all
+Files grants when saved. Pairing alone never grants receiving permission, and
+senders never see the folder location. Android restricts selecting storage and
+Downloads roots; select or create a subfolder such as `Downloads/Wispnet` instead.
+Folder access uses a persisted Storage Access Framework grant, without broad
+storage permissions.
+
+Receiving runs in the existing foreground network service, so it continues when
+the UI is in the background. Go online before receiving; going offline refuses
+incoming transfers and preserves resumable native data. Android process death
+requires going online again, using the same identity and saved folder/grants.
+If folder access is withdrawn, choose the folder again in settings.
+
+Native uploads first verify their SHA-256 in private resumable storage. The
+Android adapter then streams the verified bytes into the chosen provider; the
+sender receives success only after the provider stream closes successfully and
+the publication receipt is durable. A provider file may be visible while this
+final copy is in progress. Receipts bind retries to the same document, and
+existing destinations are never replaced. Cancelled/failed copies are removed
+when provider access permits; abandoned provider copies and private receipts
+are cleaned after 48 hours. Successfully received documents are retained.
+
 Regular Android documents stream directly through their read-only descriptors.
 Providers that expose a stream or a file slice are prepared in private temporary
 storage with bounded buffers and cancellation, then sent through the same native

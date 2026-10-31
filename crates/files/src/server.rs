@@ -44,9 +44,30 @@ impl Default for Limits {
     }
 }
 
+/// A platform storage adapter publishes verified bytes before upload success.
+/// Implementations must be idempotent by transfer_id and never replace unrelated
+/// files. The private staging root identifies the owner-selected destination.
+pub trait Publisher: Send + Sync {
+    fn publish(
+        &self,
+        publication: Publication<'_>,
+        source: File,
+        cancel: Arc<AtomicBool>,
+    ) -> io::Result<()>;
+}
+pub struct Publication<'a> {
+    pub transfer_id: &'a str,
+    pub root: &'a Path,
+    pub path: &'a str,
+    pub size_bytes: u64,
+    pub sha256: &'a str,
+}
+
 #[derive(Clone)]
 pub struct FileService(Arc<Inner>);
 struct Inner {
+    publisher: Option<Arc<dyn Publisher>>,
+    enabled: AtomicBool,
     directory: File,
     state: PathBuf,
     limits: Limits,
@@ -114,6 +135,7 @@ impl From<io::Error> for Failure {
             Some(libc::ENOENT) => ErrorCode::NotFound,
             Some(libc::EACCES | libc::EPERM) => ErrorCode::PathDenied,
             _ if error.kind() == io::ErrorKind::PermissionDenied => ErrorCode::PathDenied,
+            _ if error.kind() == io::ErrorKind::AlreadyExists => ErrorCode::Conflict,
             _ => ErrorCode::Unavailable,
         };
         fail(code)
@@ -185,6 +207,13 @@ impl FileService {
         Self::with_limits(state_dir, Limits::default())
     }
     pub fn with_limits(state_dir: PathBuf, limits: Limits) -> io::Result<Self> {
+        Self::with_publisher(state_dir, limits, None)
+    }
+    pub fn with_publisher(
+        state_dir: PathBuf,
+        limits: Limits,
+        publisher: Option<Arc<dyn Publisher>>,
+    ) -> io::Result<Self> {
         fs::create_dir_all(&state_dir)?;
         if fs::symlink_metadata(&state_dir)?.file_type().is_symlink() {
             return Err(io::Error::new(
@@ -202,6 +231,8 @@ impl FileService {
             open_directory(parent)?.sync_all()?;
         }
         Ok(Self(Arc::new(Inner {
+            publisher,
+            enabled: AtomicBool::new(true),
             directory,
             state: state_dir,
             limits,
@@ -209,6 +240,9 @@ impl FileService {
             locks: Mutex::new(HashMap::new()),
             bulk: Arc::new(Semaphore::new(4)),
         })))
+    }
+    pub fn set_enabled(&self, enabled: bool) {
+        self.0.enabled.store(enabled, Ordering::Release);
     }
     /// Called by the node's maintenance timer, including while no peers connect.
     pub async fn cleanup_expired(&self) -> io::Result<()> {
@@ -506,6 +540,9 @@ impl FileService {
         file.set_len(manifest.committed_offset)?;
         file.seek(SeekFrom::Start(manifest.committed_offset))?;
         for request in requests {
+            if !self.0.enabled.load(Ordering::Acquire) {
+                return Err(fail(ErrorCode::Unavailable));
+            }
             canceled(cancel)?;
             if lock.abort.load(Ordering::Acquire) {
                 return Err(fail(ErrorCode::Conflict));
@@ -699,6 +736,9 @@ impl FileService {
     // Recover the crash window after the no-replace destination link was made
     // but before committed metadata was durable. Never unlink the destination.
     fn recover_commit(&self, manifest: &mut Manifest, cancel: &AtomicBool) -> Result<bool> {
+        if self.0.publisher.is_some() {
+            return Ok(false);
+        }
         if manifest.state != TransferState::Uploading
             || manifest.committed_offset != manifest.size_bytes
         {
@@ -795,8 +835,11 @@ impl FileService {
         incarnation: &str,
         exports: &BTreeMap<String, PathBuf>,
         request: Request,
-        cancel: &AtomicBool,
+        cancel: &Arc<AtomicBool>,
     ) -> Result<Response> {
+        if !self.0.enabled.load(Ordering::Acquire) {
+            return Err(fail(ErrorCode::Unavailable));
+        }
         canceled(cancel)?;
         match request {
             Request::Workspaces => Ok(Response::Workspaces {
@@ -1082,6 +1125,34 @@ impl FileService {
                 canceled(cancel)?;
                 if lock.abort.load(Ordering::Acquire) {
                     return Err(fail(ErrorCode::Conflict));
+                }
+                if let Some(publisher) = &self.0.publisher {
+                    file.seek(SeekFrom::Start(0))?;
+                    publisher.publish(
+                        Publication {
+                            transfer_id: &manifest.transfer_id,
+                            root: &manifest.root,
+                            path: &manifest.path,
+                            size_bytes: manifest.size_bytes,
+                            sha256: &manifest.sha256,
+                        },
+                        file.try_clone()?,
+                        cancel.clone(),
+                    )?;
+                    canceled(cancel)?;
+                    if !self.0.enabled.load(Ordering::Acquire) {
+                        return Err(fail(ErrorCode::Unavailable));
+                    }
+                    let file_info =
+                        info(&manifest.path, manifest.sha256.clone(), &file.metadata()?);
+                    manifest.state = TransferState::Committed;
+                    manifest.file = Some(file_info.clone());
+                    // Persist success before dropping the only private staged copy.
+                    // A crash before this save retries the idempotent publisher.
+                    self.save(&manifest)?;
+                    unlink_at(&directory, &partial)?;
+                    directory.sync_all()?;
+                    return Ok(Response::File { file: file_info });
                 }
                 // Hard-link creation is atomic and refuses to replace any
                 // destination. Keep the partial link until committed metadata
@@ -1469,6 +1540,115 @@ mod tests {
         let alias = temporary.path().join("alias");
         std::os::unix::fs::symlink(&ancestor, &alias).unwrap();
         assert!(open_directory(&alias.join("app-private/files")).is_err());
+    }
+
+    #[derive(Default)]
+    struct TestPublisher {
+        fail: AtomicBool,
+        publications: Mutex<BTreeMap<String, Vec<u8>>>,
+        calls: AtomicUsize,
+    }
+    impl Publisher for TestPublisher {
+        fn publish(
+            &self,
+            publication: Publication<'_>,
+            mut file: File,
+            cancel: Arc<AtomicBool>,
+        ) -> io::Result<()> {
+            assert!(!cancel.load(Ordering::Acquire));
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            if self.fail.load(Ordering::Acquire) {
+                return Err(io::Error::other("provider unavailable"));
+            }
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)?;
+            assert_eq!(sha256(&bytes), publication.sha256);
+            assert_eq!(bytes.len() as u64, publication.size_bytes);
+            self.publications
+                .lock()
+                .unwrap()
+                .entry(publication.transfer_id.into())
+                .or_insert(bytes);
+            Ok(())
+        }
+    }
+    #[tokio::test]
+    async fn platform_publication_is_verified_retryable_and_acknowledged_only_after_save() {
+        let mut f = Fixture::new();
+        let publisher = Arc::new(TestPublisher::default());
+        f.service = FileService::with_publisher(
+            f.state.clone(),
+            Limits::default(),
+            Some(publisher.clone()),
+        )
+        .unwrap();
+        let id = f
+            .begin("phone.bin", b"verified bytes", "platform-storage")
+            .await;
+        f.write(&id, 0, b"verified bytes").await;
+        publisher.fail.store(true, Ordering::Release);
+        error(
+            f.call(Request::UploadCommit {
+                transfer_id: id.clone(),
+            })
+            .await,
+            ErrorCode::Unavailable,
+        );
+        assert_eq!(f.service.load(&id).unwrap().state, TransferState::Uploading);
+        assert!(f.root.join(format!(".wispnet-upload-{id}")).exists());
+        publisher.fail.store(false, Ordering::Release);
+        // Also cover the crash after the provider saved a file but before native
+        // committed metadata. The adapter reuses that same transfer's document.
+        publisher
+            .publications
+            .lock()
+            .unwrap()
+            .insert(id.clone(), b"verified bytes".to_vec());
+        f.service = FileService::with_publisher(
+            f.state.clone(),
+            Limits::default(),
+            Some(publisher.clone()),
+        )
+        .unwrap();
+        assert!(matches!(
+            f.call(Request::UploadCommit {
+                transfer_id: id.clone()
+            })
+            .await,
+            Response::File { .. }
+        ));
+        assert!(!f.root.join(format!(".wispnet-upload-{id}")).exists());
+        assert_eq!(publisher.publications.lock().unwrap().len(), 1);
+        assert_eq!(
+            publisher.publications.lock().unwrap()[&id],
+            b"verified bytes"
+        );
+        let calls = publisher.calls.load(Ordering::Relaxed);
+        assert!(matches!(
+            f.call(Request::UploadCommit { transfer_id: id }).await,
+            Response::File { .. }
+        ));
+        assert_eq!(publisher.calls.load(Ordering::Relaxed), calls);
+    }
+    #[tokio::test]
+    async fn platform_receiver_offline_preserves_offsets_and_reenables_resume() {
+        let f = Fixture::new();
+        let id = f.begin("resume.bin", b"1234", "offline").await;
+        f.write(&id, 0, b"12").await;
+        f.service.set_enabled(false);
+        error(f.write(&id, 2, b"34").await, ErrorCode::Unavailable);
+        assert_eq!(f.service.load(&id).unwrap().committed_offset, 2);
+        f.service.set_enabled(true);
+        assert!(matches!(
+            f.write(&id, 2, b"34").await,
+            Response::Written {
+                committed_offset: 4
+            }
+        ));
+        assert!(matches!(
+            f.call(Request::UploadCommit { transfer_id: id }).await,
+            Response::File { .. }
+        ));
     }
 
     struct Fixture {

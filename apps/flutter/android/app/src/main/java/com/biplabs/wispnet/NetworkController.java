@@ -19,6 +19,9 @@ final class NetworkController extends ContextWrapper {
  JSONObject dispatch(String method, JSONObject args) throws Exception {
   HostStore store = new HostStore(this);
   switch (method) {
+   case "receivingStatus": return new AndroidReceiving(this).status();
+   case "prepareReceivingFolder": return new AndroidReceiving(this).prepare(android.net.Uri.parse(args.getString("uri")));
+   case "saveReceiving": return new AndroidReceiving(this).configure(args);
    case "fileWorkspaces":
    case "fileSend": {
     if (!service.enabled) throw new Exception("Go online before sending files");

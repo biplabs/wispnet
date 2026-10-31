@@ -48,7 +48,7 @@ public final class AccessService extends Service {
  private ConnectivityManager manager;
  private ConnectivityManager.NetworkCallback callback;
  public void onCreate(){
-  super.onCreate();controller=new NetworkController(this);profileWork.scheduleWithFixedDelay(()->{if(enabled)DeviceProfile.syncAll(this);},5,30,TimeUnit.SECONDS);NotificationManager nm=getSystemService(NotificationManager.class);
+  super.onCreate();controller=new NetworkController(this);profileWork.scheduleWithFixedDelay(()->{if(enabled){DeviceProfile.syncAll(this);new AndroidReceiving(this).cleanup();}},5,30,TimeUnit.SECONDS);NotificationManager nm=getSystemService(NotificationManager.class);
   nm.createNotificationChannel(new NotificationChannel("access","Wispnet browser access",NotificationManager.IMPORTANCE_LOW));
   manager=getSystemService(ConnectivityManager.class);current=manager.getActiveNetwork();
   networkStatus=current==null?"No network. Reconnect, then reopen the service.":"Network available";
@@ -62,7 +62,7 @@ public final class AccessService extends Service {
   Intent stop=new Intent(this,AccessService.class).setAction("stop");
   PendingIntent pending=PendingIntent.getService(this,2,stop,PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
   PendingIntent open=PendingIntent.getActivity(this,1,getPackageManager().getLaunchIntentForPackage(getPackageName()),PendingIntent.FLAG_IMMUTABLE);
-  return new Notification.Builder(this,"access").setSmallIcon(R.drawable.ic_stat_wispnet).setContentTitle(title).setContentText("Access to your paired systems is enabled").setContentIntent(open).addAction(new Notification.Action.Builder(null,"Go offline",pending).build()).setOngoing(true).setOnlyAlertOnce(true).setShowWhen(false).setCategory(Notification.CATEGORY_SERVICE).setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE).build();
+  return new Notification.Builder(this,"access").setSmallIcon(R.drawable.ic_stat_wispnet).setContentTitle(title).setContentText("Paired services and permitted file transfers are available").setContentIntent(open).addAction(new Notification.Action.Builder(null,"Go offline",pending).build()).setOngoing(true).setOnlyAlertOnce(true).setShowWhen(false).setCategory(Notification.CATEGORY_SERVICE).setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE).build();
  }
  // Call while holding networkLock. Drain every generation, including a callback
  // arriving during native recovery; coalescing must never lose the final network.
@@ -111,7 +111,7 @@ public final class AccessService extends Service {
      synchronized(networkLock){
       if(destroyed||!requestedOnline)return;
       Native.command("network");
-      Native.command("enable");enabled=true;controller.filesOnline();
+      Native.command("enable");Native.receivingOnline=true;enabled=true;controller.filesOnline();
       networkStatus=current==null?"No network. Waiting for a connection…":"Network available";
       online.complete(null);
       getSystemService(NotificationManager.class).notify(1,notification("Wispnet online"));
@@ -123,11 +123,11 @@ public final class AccessService extends Service {
   }
  }
  void stopAccess(){
-  synchronized(networkLock){ requestedOnline=false;online.completeExceptionally(new IllegalStateException("Wispnet is offline"));enabled=false;controller.cancelFiles();try{if(Native.ready)Native.command("stop");}catch(Exception ignored){} }
+  synchronized(networkLock){ Native.receivingOnline=false;requestedOnline=false;online.completeExceptionally(new IllegalStateException("Wispnet is offline"));enabled=false;controller.cancelFiles();try{if(Native.ready)Native.command("stop");}catch(Exception ignored){} }
   stopForeground(STOP_FOREGROUND_REMOVE);stopSelf();
  }
  public void onDestroy(){
-  enabled=false;synchronized(networkLock){destroyed=true;}
+  Native.receivingOnline=false;enabled=false;synchronized(networkLock){destroyed=true;}
   try{if(callback!=null)manager.unregisterNetworkCallback(callback);}catch(Exception ignored){}
   try{Native.command("stop");}catch(Exception ignored){}
   controller.close();profileWork.shutdownNow();networkWork.shutdown();networkStatus="Access stopped. Go online to use your saved service addresses.";

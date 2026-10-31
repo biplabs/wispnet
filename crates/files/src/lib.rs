@@ -5,7 +5,7 @@
 mod protocol;
 mod server;
 pub use protocol::*;
-pub use server::{FileService, Limits};
+pub use server::{FileService, Limits, Publication, Publisher};
 
 use sha2::{Digest, Sha256};
 use std::{

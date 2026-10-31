@@ -23,6 +23,7 @@ public final class FlutterMainActivity extends FlutterActivity {
  private NetworkBridge network;
  private MethodChannel.Result qrResult;
  private MethodChannel.Result fileResult;
+ private MethodChannel.Result folderResult;
  private CancellationSignal fileCancellation;
  private String invitation, invitationError, serviceLink;
 
@@ -52,6 +53,15 @@ public final class FlutterMainActivity extends FlutterActivity {
     return;
    }
    if ("scanQr".equals(call.method) || "importQr".equals(call.method)) { startQr(call.method, result); return; }
+   if ("pickReceivingFolder".equals(call.method)) {
+    if (folderResult != null || fileResult != null || qrResult != null) { result.error("picker_busy", "A picker is already in progress", null); return; }
+    folderResult = result;
+    try { startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+      .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION), 105); }
+    catch (Exception failure) { folderResult = null; result.error("folder_unavailable", "Android's folder picker is unavailable", null); }
+    return;
+   }
    if ("pickFiles".equals(call.method)) { pickFiles(result); return; }
    if ("openShell".equals(call.method)) {
     try {
@@ -109,7 +119,7 @@ public final class FlutterMainActivity extends FlutterActivity {
   });
  }
  private void startQr(String method, MethodChannel.Result result) {
-  if (qrResult != null || fileResult != null) { result.error("qr_busy", "A picker is already in progress", null); return; }
+  if (folderResult != null || qrResult != null || fileResult != null) { result.error("qr_busy", "A picker is already in progress", null); return; }
   try {
    qrResult = result;
    if ("importQr".equals(method)) startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE), 103);
@@ -121,7 +131,7 @@ public final class FlutterMainActivity extends FlutterActivity {
   } catch (Exception failure) { qrResult = null; result.error("qr_unavailable", failure.getMessage(), null); }
  }
  private void pickFiles(MethodChannel.Result result) {
-  if (fileResult != null || qrResult != null) { result.error("files_busy", "A picker is already in progress", null); return; }
+  if (folderResult != null || fileResult != null || qrResult != null) { result.error("files_busy", "A picker is already in progress", null); return; }
   try {
    fileResult = result;
    fileCancellation = new CancellationSignal();
@@ -133,6 +143,24 @@ public final class FlutterMainActivity extends FlutterActivity {
  }
  @Override protected void onActivityResult(int request, int resultCode, Intent data) {
   super.onActivityResult(request, resultCode, data);
+  if (request == 105 && folderResult != null) {
+   MethodChannel.Result result = folderResult;
+   if (resultCode != Activity.RESULT_OK || data == null || data.getData() == null) {
+    folderResult = null; result.success("{}"); return;
+   }
+   Uri tree = data.getData();
+   int flags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+   work.execute(() -> {
+    try {
+     getContentResolver().takePersistableUriPermission(tree, flags);
+     String reply = network.request("prepareReceivingFolder", new JSONObject().put("uri", tree.toString())).toString();
+     runOnUiThread(() -> { if (folderResult != result) return; folderResult = null; result.success(reply); });
+    } catch (Exception failure) {
+     runOnUiThread(() -> { if (folderResult != result) return; folderResult = null; result.error("folder_invalid", "Cannot use this folder. Choose a writable folder and allow access.", null); });
+    }
+   });
+   return;
+  }
   if (request == 104 && fileResult != null) {
    MethodChannel.Result result = fileResult;
    if (resultCode != Activity.RESULT_OK || data == null) {
@@ -186,6 +214,7 @@ public final class FlutterMainActivity extends FlutterActivity {
  @Override protected void onDestroy() {
   if (fileCancellation != null) fileCancellation.cancel();
   if (fileResult != null) { fileResult.error("activity_closed", "File selection interrupted. Select the files again.", null); fileResult = null; }
+  if (folderResult != null) { folderResult.error("activity_closed", "Folder selection interrupted. Choose the folder again.", null); folderResult = null; }
   if (qrResult != null) { qrResult.error("activity_closed", "QR request interrupted. Try again.", null); qrResult = null; }
   com.biplabs.wispnet.shell.ShellWorkspace.INSTANCE.closeAll(this, false);
   network.close(); work.shutdown(); state.shutdown(); super.onDestroy();

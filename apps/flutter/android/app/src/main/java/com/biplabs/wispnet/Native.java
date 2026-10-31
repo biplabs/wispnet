@@ -34,8 +34,19 @@ public final class Native {
   JSONObject reply=new JSONObject(raw);if(!reply.getBoolean("ok"))throw new Failure(reply.optString("error","Operation failed"),reply.optString("code","operation_failed"));return reply.getJSONObject("result");
  }
  static JSONObject command(String op) throws Exception {return request(new JSONObject().put("op",op));}
+ private static volatile Context receivingContext;
+ static volatile boolean receivingOnline;
+ static native boolean publicationCancelled(String transfer);
+ static String publishReceivedFile(String request, int descriptor) {
+  try {
+   if (receivingContext == null) return "denied";
+   return new AndroidReceiving(receivingContext).publish(new JSONObject(request), descriptor);
+  } catch (SecurityException denied) { return "denied"; }
+  catch (Exception failure) { return "unavailable"; }
+ }
  static synchronized void ensure(Context context) throws Exception {
   if(ready)return;
+  receivingContext=context.getApplicationContext();
   SharedPreferences prefs=context.getSharedPreferences("identity",Context.MODE_PRIVATE);
   KeyStore store=KeyStore.getInstance("AndroidKeyStore");store.load(null);
   String encrypted=prefs.getString("encrypted_device_key",null);String key;

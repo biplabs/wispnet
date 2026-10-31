@@ -32,6 +32,27 @@ Identity is wrapped using a non-exportable Android Keystore AES-GCM key. Pins an
 Catalog refreshes run independently. Cached listings show their age/status and cannot authorize access: opening fetches the owning host's catalog again and every new tunnel is checked by that host. Catalog rollback or a changed host generation requires explicit attention/re-pairing.
 
 
+## Receive files
+
+Open **Settings → Receive files**. Choose a writable receiving folder with the
+system folder picker, select the paired computers allowed to send, then save.
+Use the gear to change the folder. The destination stays private to Android;
+senders only see their Files permission. Keep Wispnet online to receive while
+other apps are open. See [Files](files.md) for resume and storage behavior.
+
+On a disposable emulator, build an x86_64 app and instrumentation APK, then run:
+
+```sh
+WISPNET_ANDROID_ABI=x86_64 scripts/build_android.sh
+(cd apps/flutter/android && ./gradlew -Ptarget-platform=android-x64 :app:assembleDebugAndroidTest)
+python3 scripts/test_android_files.py --serial emulator-5554 --receiving --output /tmp/wispnet-receiving-check
+```
+
+This uses a real system folder grant and an isolated desktop identity to verify
+background QUIC uploads, contents, safe retries, offline resume and revocation.
+The fixture creates a unique `Documents/WispnetReceiveTest-*` folder on the
+disposable emulator; it refuses physical devices.
+
 ## Verification
 
 Run `scripts/test_flutter.sh` for adapter and widget tests. Build the real Android

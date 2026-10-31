@@ -23,6 +23,7 @@ public final class FilesTransferInstrumentation extends Instrumentation {
 
  @Override public void onCreate(Bundle arguments) { this.arguments = arguments == null ? Bundle.EMPTY : new Bundle(arguments); start(); }
  @Override public void onStart() {
+  if ("true".equals(arguments.getString("receiving"))) { new AndroidReceivingChecks(this, arguments).run(); return; }
   Bundle result = new Bundle(); JSONObject report = new JSONObject();
   try {
    String host = arguments.getString("host"), invitation = arguments.getString("invitation");

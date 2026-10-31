@@ -180,11 +180,19 @@ impl Client {
         }))
     }
     /// Android shares its existing protected identity with a status/catalog endpoint.
-    /// It has no registered services and grants no services to paired hosts.
+    /// Files receiving is configured explicitly by the local Android owner.
     pub async fn new_peer(
         key: SecretKey,
         state: PathBuf,
         config: TransportConfig,
+    ) -> Result<Arc<Self>, String> {
+        Self::new_peer_with_publisher(key, state, config, None).await
+    }
+    pub async fn new_peer_with_publisher(
+        key: SecretKey,
+        state: PathBuf,
+        config: TransportConfig,
+        publisher: Option<Arc<dyn wispnet_files::Publisher>>,
     ) -> Result<Arc<Self>, String> {
         let directory = state.clone();
         let own = key.public();
@@ -217,9 +225,22 @@ impl Client {
         })
         .await
         .map_err(|_| "Cannot prepare pairing state")??;
-        let host = wispnet_agent::tunnel::TunnelHost::bind_host(&key, &config, authority.clone())
-            .await
-            .map_err(|e| e.to_string())?;
+        let platform_storage = publisher.is_some();
+        let files = wispnet_files::FileService::with_publisher(
+            state.join("files"),
+            wispnet_files::Limits::default(),
+            publisher,
+        )
+        .map_err(|e| e.to_string())?;
+        files.set_enabled(!platform_storage);
+        let host = wispnet_agent::tunnel::TunnelHost::bind_host_with_files(
+            &key,
+            &config,
+            authority.clone(),
+            files,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
         Ok(Arc::new(Self {
             shells: shell::Shells::default(),
             files: files::Files::default(),
@@ -389,6 +410,36 @@ impl Client {
             "shell_open" => self.shell_open(value).await,
             "shell_input" | "shell_resize" | "shell_poll" | "shell_close" => {
                 self.shells.command(value).await
+            }
+            "local_files_status" => {
+                let snapshot = self
+                    .local_authority
+                    .as_ref()
+                    .ok_or("Local host unavailable")?
+                    .snapshot()
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok(
+                    json!({"revision":snapshot.revision,"clients":snapshot.clients,"exports":snapshot.file_exports,
+                    "allow":snapshot.services.iter().find(|s| s.id == "files").map(|s| &s.allow)}),
+                )
+            }
+            "local_files_configure" => {
+                let directory = self.state.clone();
+                let own = self.endpoint.id();
+                let operation: wispnet_registry::host::Mutation = serde_json::from_value(json!({
+                    "op":"files","expected_revision":value["expected_revision"],"exports":value["exports"],"allow":value["allow"]
+                })).map_err(|_| "Invalid Files settings")?;
+                let revision = tokio::task::spawn_blocking(move || {
+                    let (mut store, owner) = wispnet_registry::host::owner_store(&directory, own)
+                        .map_err(|e| e.to_string())?;
+                    store
+                        .host_mutate(own, &owner, operation)
+                        .map_err(|e| e.to_string())
+                })
+                .await
+                .map_err(|_| "Cannot save Files settings")??;
+                Ok(json!({"revision":revision}))
             }
             "identity" => Ok(json!({"peer":self.endpoint.id().to_string()})),
             "pairing_state" => {
@@ -654,9 +705,15 @@ impl Client {
                     // before the user opens its tile on this device.
                     let _ = self.service_list().await;
                 }
+                if let Some(host) = &self._host {
+                    host.set_files_enabled(true);
+                }
                 Ok(json!({"enabled":true}))
             }
             "stop" => {
+                if let Some(host) = &self._host {
+                    host.set_files_enabled(false);
+                }
                 self.shells.close_all().await;
                 self.files.cancel_host(None);
                 let _guard = self.gateway.settings_lock.lock().await;
@@ -717,6 +774,12 @@ pub fn put_file_descriptor(text: &str, file: std::fs::File) -> String {
 }
 
 pub fn call(text: &str) -> String {
+    call_with_publisher(text, None)
+}
+pub fn call_with_publisher(
+    text: &str,
+    publisher: Option<Arc<dyn wispnet_files::Publisher>>,
+) -> String {
     let outcome = (|| -> Result<Value, String> {
         if text.len() > 16384 {
             return Err("App request too large".into());
@@ -733,7 +796,9 @@ pub fn call(text: &str) -> String {
             let config = app_transport_config(&value)?;
             let mut client = CLIENT.lock().map_err(|_| "Native state unavailable")?;
             if client.is_none() {
-                *client = Some(runtime().block_on(Client::new_peer(key, state, config))?);
+                *client = Some(runtime().block_on(Client::new_peer_with_publisher(
+                    key, state, config, publisher,
+                ))?);
             }
             return Ok(
                 json!({"ready":true,"peer":client.as_ref().expect("initialized").endpoint.id().to_string()}),

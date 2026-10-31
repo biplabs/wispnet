@@ -956,6 +956,19 @@ class _SettingsFormState extends State<SettingsForm> {
       ),
       if (Theme.of(context).platform == TargetPlatform.android) ...[
         const SizedBox(height: 12),
+        OutlinedButton.icon(
+          key: const ValueKey('receiving-settings'),
+          onPressed: saving
+              ? null
+              : () => showWispSheet<void>(
+                  context,
+                  title: 'Files access',
+                  child: AndroidReceivingSettings(backend: widget.backend),
+                ),
+          icon: const Icon(Icons.folder_outlined),
+          label: const Text('Receive files'),
+        ),
+        const SizedBox(height: 12),
         OutlinedButton(
           onPressed: saving
               ? null
@@ -1023,5 +1036,174 @@ class _SettingsFormState extends State<SettingsForm> {
         ),
       ],
     ],
+  );
+}
+
+class AndroidReceivingSettings extends StatefulWidget {
+  const AndroidReceivingSettings({super.key, required this.backend});
+  final WispnetBackend backend;
+  @override
+  State<AndroidReceivingSettings> createState() =>
+      _AndroidReceivingSettingsState();
+}
+
+class _AndroidReceivingSettingsState extends State<AndroidReceivingSettings> {
+  bool busy = true, available = false, online = false;
+  String folder = '', label = '';
+  String? error;
+  int? revision;
+  List<Map<String, dynamic>> clients = [];
+  final allow = <String>{};
+  @override
+  void initState() {
+    super.initState();
+    load();
+  }
+
+  String describe(Object e) =>
+      e is PlatformException ? e.message ?? e.code : e.toString();
+  Future<void> load() async {
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    try {
+      final result = await widget.backend.invoke('receivingStatus');
+      if (!mounted) return;
+      setState(() {
+        revision = result['revision'] as int;
+        folder = result['folder'] as String? ?? '';
+        label = result['label'] as String? ?? '';
+        available = result['available'] == true;
+        online = result['online'] == true;
+        clients = (result['clients'] as List).cast<Map<String, dynamic>>();
+        allow
+          ..clear()
+          ..addAll((result['allow'] as List).cast<String>());
+      });
+    } catch (e) {
+      if (mounted) setState(() => error = describe(e));
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<void> pick() async {
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    try {
+      final result = await widget.backend.invoke('pickReceivingFolder');
+      if (!mounted || result['folder'] == null) {
+        return;
+      }
+      setState(() {
+        folder = result['folder'] as String;
+        label = result['label'] as String;
+        available = true;
+      });
+    } catch (e) {
+      if (mounted) setState(() => error = describe(e));
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<void> save() async {
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    try {
+      await widget.backend.invoke('saveReceiving', {
+        'expected_revision': revision,
+        'folder': folder,
+        'allow': allow.toList(),
+      });
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      if (mounted) {
+        setState(() => error = '${describe(e)} Refresh and try again.');
+      }
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => PopScope(
+    canPop: !busy,
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text(
+          'Choose a folder on this device. Selected devices can send files without confirming each transfer. Your receiving location stays private.',
+        ),
+        const SizedBox(height: 12),
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.folder_outlined, color: WispColors.cyan),
+          title: Text(label.isEmpty ? 'Choose receiving folder' : label),
+          subtitle: folder.isNotEmpty && !available
+              ? const Text('Folder access needs to be renewed')
+              : null,
+          onTap: busy ? null : pick,
+          trailing: IconButton(
+            key: const ValueKey('receiving-folder-picker'),
+            tooltip: 'Change receiving folder',
+            onPressed: busy ? null : pick,
+            icon: const Icon(Icons.settings_outlined),
+          ),
+        ),
+        if (folder.isNotEmpty)
+          TextButton(
+            key: const ValueKey('receiving-folder-remove'),
+            onPressed: busy
+                ? null
+                : () => setState(() {
+                    folder = '';
+                    label = '';
+                    available = false;
+                    allow.clear();
+                  }),
+            child: const Text('Remove receiving folder'),
+          ),
+        if (!online)
+          const Text(
+            'Go online to receive files. Your folder and permissions will be saved.',
+          ),
+        if (clients.isEmpty && !busy)
+          const Text('Pair a device first to grant it Files access.'),
+        for (final client in clients)
+          CheckboxListTile(
+            key: ValueKey('receiving-allow-${client['peer']}'),
+            contentPadding: EdgeInsets.zero,
+            title: Text(client['name'] as String),
+            subtitle: Text((client['peer'] as String).substring(0, 8)),
+            value: allow.contains(client['peer']),
+            onChanged: busy || !available
+                ? null
+                : (checked) => setState(() {
+                    if (checked == true) {
+                      allow.add(client['peer'] as String);
+                    } else {
+                      allow.remove(client['peer']);
+                    }
+                  }),
+          ),
+        if (error != null)
+          Text(error!, style: const TextStyle(color: WispColors.error)),
+        TextButton(onPressed: busy ? null : load, child: const Text('Refresh')),
+        FilledButton(
+          key: const ValueKey('receiving-save'),
+          onPressed:
+              busy || revision == null || (folder.isNotEmpty && !available)
+              ? null
+              : save,
+          child: Text(busy ? 'Please wait…' : 'Save folder and access'),
+        ),
+      ],
+    ),
   );
 }
