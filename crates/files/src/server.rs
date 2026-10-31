@@ -813,6 +813,18 @@ impl FileService {
                     return Err(fail(ErrorCode::InvalidArgument));
                 }
                 components(&path)?;
+                // Desktop/mobile senders leave destination selection to the
+                // receiver. Bind the resolved export privately so resume and
+                // policy checks retain the same guarantees as named uploads.
+                let workspace = if workspace.is_empty() {
+                    exports
+                        .keys()
+                        .next()
+                        .cloned()
+                        .ok_or_else(|| fail(ErrorCode::Unavailable))?
+                } else {
+                    workspace
+                };
                 let root = self.export(exports, &workspace)?.to_path_buf();
                 let id = sha256(
                     &serde_json::to_vec(&(peer, incarnation, &idempotency_key))
@@ -1524,6 +1536,127 @@ mod tests {
             }
             response => panic!("expected {expected:?}, got {response:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn receiver_default_upload_is_private_resumable_and_keeps_named_targets() {
+        let mut f = Fixture::new();
+        let other = f.root.parent().unwrap().join("other-private-folder");
+        fs::create_dir(&other).unwrap();
+        f.exports.insert("z-other".into(), other.clone());
+        let bytes = b"sender never needs the receiving folder";
+        let begin = Request::UploadBegin {
+            workspace: String::new(),
+            path: "sample.bin".into(),
+            size_bytes: bytes.len() as u64,
+            sha256: sha256(bytes),
+            idempotency_key: "receiver-default".into(),
+        };
+        let started = f.call(begin.clone()).await;
+        let Response::Upload {
+            transfer_id: id, ..
+        } = &started
+        else {
+            panic!("unexpected default upload: {started:?}");
+        };
+        let id = id.clone();
+        let wire = serde_json::to_string(&started).unwrap();
+        assert!(!wire.contains("training.v1"));
+        assert!(!wire.contains(f.root.to_str().unwrap()));
+        assert_eq!(
+            f.write(&id, 0, &bytes[..12]).await,
+            Response::Written {
+                committed_offset: 12
+            }
+        );
+        f.service = FileService::new(f.state.clone()).unwrap();
+        assert!(matches!(
+            f.call(begin).await,
+            Response::Upload { transfer_id, committed_offset: 12, .. } if transfer_id == id
+        ));
+        assert_eq!(
+            f.write(&id, 12, &bytes[12..]).await,
+            Response::Written {
+                committed_offset: bytes.len() as u64
+            }
+        );
+        let committed = f
+            .call(Request::UploadCommit {
+                transfer_id: id.clone(),
+            })
+            .await;
+        assert!(matches!(&committed, Response::File { file } if file.path == "sample.bin"));
+        assert_eq!(fs::read(f.root.join("sample.bin")).unwrap(), bytes);
+        assert!(!other.join("sample.bin").exists());
+        for response in [
+            committed,
+            f.call(Request::UploadStatus { transfer_id: id }).await,
+        ] {
+            let wire = serde_json::to_string(&response).unwrap();
+            assert!(!wire.contains("training.v1"));
+            assert!(!wire.contains(f.root.to_str().unwrap()));
+        }
+        // Explicit CLI/SDK workspaces continue to select their named export.
+        let named = f
+            .call(Request::UploadBegin {
+                workspace: "z-other".into(),
+                path: "named-empty.bin".into(),
+                size_bytes: 0,
+                sha256: sha256(b""),
+                idempotency_key: "named-target".into(),
+            })
+            .await;
+        let Response::Upload { transfer_id, .. } = named else {
+            panic!("unexpected named upload: {named:?}");
+        };
+        assert!(matches!(
+            f.call(Request::UploadCommit { transfer_id }).await,
+            Response::File { .. }
+        ));
+        assert!(other.join("named-empty.bin").is_file());
+        assert!(!f.root.join("named-empty.bin").exists());
+    }
+
+    #[tokio::test]
+    async fn receiver_default_requires_an_export_and_retains_private_binding_checks() {
+        let f = Fixture::new();
+        let request = Request::UploadBegin {
+            workspace: String::new(),
+            path: "sample.bin".into(),
+            size_bytes: 1,
+            sha256: sha256(b"a"),
+            idempotency_key: "default-binding".into(),
+        };
+        error(
+            f.service
+                .dispatch("peer-a", "inc-a", &BTreeMap::new(), request.clone())
+                .await,
+            ErrorCode::Unavailable,
+        );
+        let started = f.call(request.clone()).await;
+        let Response::Upload { transfer_id, .. } = started else {
+            panic!("unexpected default upload: {started:?}");
+        };
+        let replacement = f.root.parent().unwrap().join("replacement");
+        fs::create_dir(&replacement).unwrap();
+        let exports = BTreeMap::from([("training.v1".into(), replacement)]);
+        error(
+            f.service
+                .dispatch("peer-a", "inc-a", &exports, request)
+                .await,
+            ErrorCode::ServiceChanged,
+        );
+        error(
+            f.service
+                .dispatch(
+                    "peer-a",
+                    "inc-a",
+                    &exports,
+                    Request::UploadStatus { transfer_id },
+                )
+                .await,
+            ErrorCode::ServiceChanged,
+        );
     }
 
     #[tokio::test]

@@ -120,6 +120,11 @@ class BridgeTests(unittest.TestCase):
                      workspace='incoming', local_path=str(source), remote_path='jobs/' + source.name, resume=True)])
             self.assertEqual(self.bridge.dispatch('fileSend', dict(arguments, resume=False)), job)
             self.assertFalse(self.calls[-1]['resume'])
+            for receiver_default in (dict(arguments, workspace=''),
+                                     {key: value for key, value in arguments.items() if key != 'workspace'}):
+                self.assertEqual(self.bridge.dispatch('fileSend', receiver_default), job)
+                self.assertEqual(self.calls[-1]['workspace'], '')
+            self.assertNotIn('file_workspaces', [call['op'] for call in self.calls])
             process.assert_not_called()
 
     def test_files_reject_changed_access_unsafe_sources_and_destination_traversal(self):
@@ -180,47 +185,6 @@ class BridgeTests(unittest.TestCase):
         for method in ('fileStatus', 'fileCancel'):
             with self.assertRaisesRegex(ValueError, 'Invalid file transfer'):
                 self.bridge.dispatch(method, dict(transfer='bad'))
-
-    def test_receiving_folder_preference_is_private_persistent_and_per_device(self):
-        self.calls.clear()
-        self.assertEqual(self.bridge.dispatch('fileWorkspacePreference', dict(host=PEER)), dict(workspace=None))
-        self.assertEqual(self.bridge.dispatch('saveFileWorkspacePreference', dict(host=PEER, workspace='training')), {})
-        self.bridge.dispatch('saveFileWorkspacePreference', dict(host=OWN, workspace='incoming'))
-        restarted = module.Bridge(self.config)
-        self.assertEqual(restarted.dispatch('fileWorkspacePreference', dict(host=PEER)), dict(workspace='training'))
-        self.assertEqual(restarted.dispatch('fileWorkspacePreference', dict(host=OWN)), dict(workspace='incoming'))
-        self.assertEqual(restarted.path.stat().st_mode & 0o777, 0o600)
-        self.assertEqual(self.calls, [], 'Display preferences must not change Files access')
-
-    def test_receiving_folder_preference_rejects_invalid_targets_and_names(self):
-        for method in ('fileWorkspacePreference', 'saveFileWorkspacePreference'):
-            for host in (None, '', 'bad', 'a' * 63, 'A' * 64, ['a' * 64]):
-                with self.subTest(method=method, host=host), self.assertRaises(ValueError):
-                    self.bridge.dispatch(method, dict(host=host, workspace='incoming'))
-        for workspace in (None, '', '../incoming', '/incoming', 'Incoming', '.hidden', 'a' * 65, 123):
-            with self.subTest(workspace=workspace), self.assertRaises(ValueError):
-                self.bridge.dispatch('saveFileWorkspacePreference', dict(host=PEER, workspace=workspace))
-        self.assertFalse(self.bridge.path.exists())
-
-    def test_removing_a_device_clears_its_receiving_folder_preference(self):
-        self.bridge.dispatch('saveFileWorkspacePreference', dict(host=PEER, workspace='training'))
-        self.bridge.dispatch('saveFileWorkspacePreference', dict(host=OWN, workspace='incoming'))
-        self.bridge.dispatch('removeHost', dict(host=PEER))
-        restarted = module.Bridge(self.config)
-        self.assertEqual(restarted.dispatch('fileWorkspacePreference', dict(host=PEER)), dict(workspace=None))
-        self.assertEqual(restarted.dispatch('fileWorkspacePreference', dict(host=OWN)), dict(workspace='incoming'))
-
-    def test_receiving_folder_preference_keeps_previous_value_if_persistence_fails(self):
-        for previous in (None, 'incoming'):
-            with self.subTest(previous=previous):
-                if previous is not None:
-                    self.bridge.dispatch('saveFileWorkspacePreference', dict(host=PEER, workspace=previous))
-                with patch.object(self.bridge, 'save', side_effect=OSError('Disk full')):
-                    with self.assertRaisesRegex(OSError, 'Disk full'):
-                        self.bridge.dispatch('saveFileWorkspacePreference', dict(host=PEER, workspace='training'))
-                self.assertEqual(self.bridge.dispatch('fileWorkspacePreference', dict(host=PEER)), dict(workspace=previous))
-                restarted = module.Bridge(self.config)
-                self.assertEqual(restarted.dispatch('fileWorkspacePreference', dict(host=PEER)), dict(workspace=previous))
 
     def test_terminal_launch_keeps_cli_options_out_of_terminal_arguments(self):
         command = ['/tmp/Wispnet CLI', 'shell', '--session', 'main', '--config', '/tmp/with spaces/host.toml']
@@ -526,7 +490,7 @@ class NativeBridgeTest(unittest.TestCase):
                 source.write_bytes(content)
                 with patch.dict(os.environ, XDG_DATA_HOME=str(root / 'data'), XDG_CONFIG_HOME=str(root / 'config')):
                     bridge = module.Bridge(config)
-                args = dict(host=status['host']['host'], incarnation=files['incarnation'], workspace='incoming',
+                args = dict(host=status['host']['host'], incarnation=files['incarnation'], workspace='',
                             local_path=str(source), remote_path='nested/' + source.name)
                 # Repeating the same send resumes the same content-bound journal
                 # instead of replacing an unrelated existing destination.
@@ -542,6 +506,8 @@ class NativeBridgeTest(unittest.TestCase):
                     self.assertEqual(result['verified_bytes'], len(content))
                     self.assertEqual(result['file']['sha256'], hashlib.sha256(content).hexdigest())
                     self.assertEqual((export / 'nested' / source.name).read_bytes(), content)
+                    self.assertNotIn(str(export), json.dumps(result))
+                    self.assertNotIn('incoming', json.dumps(result))
             finally:
                 if process.poll() is None:
                     process.terminate()

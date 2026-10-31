@@ -48,6 +48,7 @@ pub enum Request {
     /// Names of configured receiving folders; never a directory listing.
     Workspaces,
     UploadBegin {
+        /// Empty selects the receiver's default export without discovery.
         workspace: String,
         path: String,
         size_bytes: u64,

@@ -358,8 +358,7 @@ class _WispHomeState extends State<WispHome>
       await Future.wait(submitted.map((job) => job.done));
       return;
     }
-    final send =
-        'wispnet files put ${machine.id} WORKSPACE /local/file relative/path';
+    final send = "wispnet files put ${machine.id} '' /local/file filename";
     await showWispSheet<void>(
       context,
       title: 'Send files to ${machine.name}',
@@ -371,7 +370,7 @@ class _WispHomeState extends State<WispHome>
           ),
           const SizedBox(height: 12),
           const Text(
-            'Replace WORKSPACE with an exported folder name, /local/file with your local file path, and relative/path with the path inside the exported folder.',
+            'Replace /local/file with the file to send and filename with its name. This computer chooses where received files are saved.',
           ),
           const SizedBox(height: 16),
           const Text('Send a file'),

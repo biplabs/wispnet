@@ -219,69 +219,114 @@ class _DesktopSettingsState extends State<DesktopSettings> {
     );
   }
 
-  Map<String, String> parseFileExports(String text) {
-    final roots = <String, String>{};
-    for (final raw in text.split('\n')) {
-      final line = raw.trim();
-      if (line.isEmpty) continue;
-      final split = line.indexOf('=');
-      final name = split < 0 ? '' : line.substring(0, split);
-      final root = split < 0 ? '' : line.substring(split + 1);
-      if (!RegExp(r'^[a-z0-9][a-z0-9._-]{0,63}$').hasMatch(name) ||
-          !root.startsWith('/') ||
-          roots.containsKey(name)) {
-        throw Exception('Use a unique name=/absolute/folder on each line.');
-      }
-      roots[name] = root;
-    }
-    return roots;
-  }
-
   Future<void> editFiles(Map<String, dynamic> service) async {
     final revision = status!['host']['revision'] as int;
     final allowed = (service['allow'] as List? ?? []).cast<String>().toSet();
     final devices = List<Map<String, dynamic>>.of(clients);
-    final currentExports = (status!['host']['file_exports'] as Map? ?? {});
-    final exports = TextEditingController(
-      text: currentExports.entries.map((e) => '${e.key}=${e.value}').join('\n'),
+    var exports = Map<String, String>.from(
+      status!['host']['file_exports'] as Map? ?? {},
     );
+    var picking = false;
+    String? pickerFailure;
     await showWispSheet<void>(
       context,
       title: 'Files access',
       child: _ActionForm(
-        controllers: [exports],
         builder: (context, submit, working, failure) => StatefulBuilder(
           builder: (context, update) {
-            var hasFolders = false;
-            try {
-              hasFolders = parseFileExports(exports.text).isNotEmpty;
-            } catch (_) {
-              // The form reports invalid folder entries when saved.
+            final hasFolders = exports.isNotEmpty;
+            final folder = hasFolders ? exports.values.first : null;
+            Future<void> chooseFolder() async {
+              if (working || picking) return;
+              update(() {
+                picking = true;
+                pickerFailure = null;
+              });
+              try {
+                final response = await widget.backend.invoke('pickFolder', {
+                  'initialPath': ?folder,
+                });
+                if (!context.mounted) return;
+                final path = response['path'];
+                if (path == null) return;
+                if (path is! String ||
+                    !path.startsWith('/') ||
+                    path.contains('\u0000')) {
+                  throw const FormatException(
+                    'Choose an existing receiving folder.',
+                  );
+                }
+                update(() {
+                  exports = {exports.keys.firstOrNull ?? 'incoming': path};
+                });
+              } catch (error) {
+                if (context.mounted) {
+                  update(() => pickerFailure = failureMessage(error));
+                }
+              } finally {
+                if (context.mounted) update(() => picking = false);
+              }
             }
+
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 const Text(
-                  'Choose a folder to receive files. Selected devices can send files into these folders without confirming each transfer. Transfers can resume after disconnects.',
+                  'Choose where this computer receives files. Selected devices can send files without confirming each transfer. The receiving location stays private to this computer.',
                 ),
                 const SizedBox(height: 12),
-                TextField(
-                  controller: exports,
-                  enabled: !working,
-                  onChanged: (_) => update(() {}),
-                  minLines: 2,
-                  maxLines: 6,
-                  decoration: const InputDecoration(
-                    labelText: 'Exported folders',
-                    hintText: 'training=/absolute/path/to/training',
-                    helperText: 'One name=/absolute/folder per line. Folders must already exist. Removing every folder revokes Files access.',
-                    helperMaxLines: 3,
+                if (folder != null)
+                  ListTile(
+                    key: const ValueKey('receiving-folder'),
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(
+                      Icons.folder_outlined,
+                      color: WispColors.cyan,
+                    ),
+                    title: const Text('Receiving folder'),
+                    subtitle: Text(folder),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          tooltip: 'Change receiving folder',
+                          onPressed: working || picking ? null : chooseFolder,
+                          icon: const Icon(Icons.settings_outlined),
+                        ),
+                        IconButton(
+                          tooltip: 'Remove receiving folder',
+                          onPressed: working || picking
+                              ? null
+                              : () => update(() {
+                                  exports.clear();
+                                  pickerFailure = null;
+                                }),
+                          icon: const Icon(Icons.close),
+                        ),
+                      ],
+                    ),
+                  )
+                else
+                  OutlinedButton.icon(
+                    key: const ValueKey('choose-receiving-folder'),
+                    onPressed: working || picking ? null : chooseFolder,
+                    icon: const Icon(Icons.folder_open_outlined),
+                    label: const Text('Choose folder'),
                   ),
-                ),
+                if (exports.length > 1)
+                  Text(
+                    'Choosing a folder replaces the ${exports.length} receiving folders currently configured.',
+                  ),
+                if (picking) const LinearProgressIndicator(),
+                if (pickerFailure != null)
+                  Text(
+                    pickerFailure!,
+                    style: const TextStyle(color: WispColors.error),
+                  ),
                 const SizedBox(height: 12),
                 Text(
                   hasFolders
-                      ? 'Select paired devices allowed to send files into these folders. Leave all unchecked to disable incoming transfers.'
+                      ? 'Select paired devices allowed to send files. Leave all unchecked to disable incoming transfers. Removing the folder revokes Files access.'
                       : 'Set a shared folder before granting Files access.',
                 ),
                 for (final c in devices)
@@ -290,7 +335,7 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                     title: Text(c['name'] as String),
                     subtitle: Text(c['peer'] as String),
                     value: hasFolders && allowed.contains(c['peer']),
-                    onChanged: working || !hasFolders
+                    onChanged: working || picking || !hasFolders
                         ? null
                         : (value) => update(() {
                             if (value!) {
@@ -306,16 +351,15 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                     style: const TextStyle(color: WispColors.error),
                   ),
                 FilledButton(
-                  onPressed: working
+                  onPressed: working || picking
                       ? null
                       : () => submit(() async {
-                          final roots = parseFileExports(exports.text);
                           await mutate({
                             'op': 'files',
-                            'allow': roots.isEmpty
+                            'allow': exports.isEmpty
                                 ? <String>[]
                                 : allowed.toList(),
-                            'exports': roots,
+                            'exports': exports,
                           }, revision);
                         }),
                   child: const Text('Save folders and access'),

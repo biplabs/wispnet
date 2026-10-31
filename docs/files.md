@@ -25,7 +25,10 @@ wispnet files-access --export training=/srv/training --allow FULL_CLIENT_PUBLIC_
 ```
 
 Use `--config /absolute/path/host.toml` when managing a nondefault node.
-Desktop settings also provide **Files access** for exports and device grants.
+Desktop settings provide **Files access** with a native folder picker and device
+grants. Choose the receiving folder there; the path is shown only on that device.
+Use the gear beside the selected folder to change it. Removing the folder
+disables incoming transfers and revokes Files grants when saved.
 Export roots must be existing absolute directories without symlink components;
 they cannot overlap Wispnet's private state directory. The grant applies to all
 configured exports. Remote paths are relative to the selected export.
@@ -67,16 +70,16 @@ metadata only (`file_put`), then exposes `file_status` and
 recover durable resume state after a node restart.
 
 On desktop, drop one or more files into the Wispnet pop-up or onto a remote
-device's **Files** service. The panel shows its default receiving folder;
-use the gear beside it to choose a different default, then select **Send files**.
-The default is remembered separately for each device on this sender.
+device's **Files** service, then select **Send files**. The receiving device
+chooses the destination; the sender neither selects nor sees its receiving
+folder. The app does not discover receiving folder names.
 The transfer panel shows progress, cancellation and resume actions. Hiding the
 pop-up or closing the panel keeps submitted transfers running. Files are queued
 one at a time and retain their original names; folders must first be archived.
 The recipient must already have granted Files access.
 
-On Android, tap a device's **Files** service, check its default receiving folder, then
-use **Choose files** to select one or more documents in Android's system picker.
+On Android, tap a device's **Files** service and use **Choose files** to select
+one or more documents in Android's system picker.
 Select **Send files** to queue the batch. Two files can run concurrently; each
 has its own progress, cancel and resume controls. The network service retains
 the queue when the panel closes or the UI is recreated. Going offline cancels
@@ -89,10 +92,11 @@ storage with bounded buffers and cancellation, then sent through the same native
 protocol. Temporary copies are removed when the transfer finishes or is cancelled.
 File contents never cross Flutter or the UI's Binder connection.
 
-Receiving folder names are discovered through the authenticated Files service
-(`file_workspaces` in the owner API, `Client::list_file_workspaces` in the SDK).
-This returns configured export names only. Older receivers can still accept
-uploads when their owner supplies the shared folder name manually.
+App uploads use an empty workspace selector, which the receiving host resolves
+to its configured receiving folder without returning its name or filesystem
+path. Existing configurations with multiple exports use the first export in
+name order for these uploads. Explicit named exports remain available to the
+CLI and SDK; authenticated legacy folder discovery returns export aliases only.
 
 The Rust SDK exposes `Client::put_file`, `FileTarget`,
 `TransferOptions`, progress callbacks, and `FileCancellation` in

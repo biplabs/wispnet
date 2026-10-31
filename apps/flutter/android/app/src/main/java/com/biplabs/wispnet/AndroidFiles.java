@@ -84,7 +84,8 @@ final class AndroidFiles implements AutoCloseable {
       Intent.FLAG_GRANT_READ_URI_PERMISSION) != PackageManager.PERMISSION_GRANTED)
    throw new Exception("File access expired. Select the file again using Choose files.");
   JSONObject request = target(args).put("op", "file_put")
-      .put("workspace", FileTransferRules.folder(args.getString("workspace")))
+      .put("workspace", FileTransferRules.uploadFolder(!args.has("workspace") ? "" :
+          args.opt("workspace") instanceof String ? args.getString("workspace") : null))
       .put("remote_path", FileTransferRules.filename(args.getString("remote_path")))
       .put("source_id", source);
   if (args.has("resume") && !(args.get("resume") instanceof Boolean))

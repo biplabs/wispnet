@@ -32,5 +32,10 @@ final class FileTransferRules {
   return value;
  }
 
+ static String uploadFolder(String value) throws Exception {
+  // The receiver selects its configured default; explicit SDK targets remain valid.
+  return "".equals(value) ? "" : folder(value);
+ }
+
  private FileTransferRules() {}
 }

@@ -91,6 +91,10 @@ class DesktopBackend implements WispnetBackend {
     String method, [
     Map<String, dynamic> arguments = const {},
   ]) async {
+    if (method == 'pickFolder') {
+      final path = await shell.invokeMethod<String>('pickFolder', arguments);
+      return path == null ? {} : {'path': path};
+    }
     if (method == 'takeLink') {
       try {
         final link = await shell.invokeMethod<String>('takeLink');

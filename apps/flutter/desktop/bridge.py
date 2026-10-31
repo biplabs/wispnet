@@ -342,8 +342,8 @@ class Bridge:
         return dict(host=host, service='files', incarnation=incarnation)
 
     def send_file(self, args):
-        workspace = args.get('workspace')
-        if not isinstance(workspace, str) or not re.fullmatch(r'[a-z0-9][a-z0-9._-]{0,63}', workspace):
+        workspace = args.get('workspace', '')
+        if not isinstance(workspace, str) or workspace and not re.fullmatch(r'[a-z0-9][a-z0-9._-]{0,63}', workspace):
             raise ValueError('Choose a receiving folder')
         local_path, remote_path = args.get('local_path'), args.get('remote_path')
         if (not isinstance(local_path, str) or '\0' in local_path
@@ -407,24 +407,6 @@ class Bridge:
             return {'url': browser_url(result['url'])}
         if method == 'openShell':
             return self.open_shell(args)
-        if method in ('fileWorkspacePreference', 'saveFileWorkspacePreference'):
-            host = args.get('host')
-            if not isinstance(host, str) or not re.fullmatch(r'[0-9a-f]{64}', host):
-                raise ValueError('Invalid Files target; refresh this machine')
-            with self.lock:
-                if method == 'fileWorkspacePreference':
-                    return {'workspace': self.preferences.get('file_workspaces', {}).get(host)}
-                workspace = args.get('workspace')
-                if not isinstance(workspace, str) or not re.fullmatch(r'[a-z0-9][a-z0-9._-]{0,63}', workspace):
-                    raise ValueError('Choose a receiving folder')
-                previous = self.preferences
-                self.preferences = {**previous, 'file_workspaces': {**previous.get('file_workspaces', {}), host: workspace}}
-                try:
-                    self.save()
-                except Exception:
-                    self.preferences = previous
-                    raise
-            return {}
         if method == 'fileWorkspaces':
             return self.api.request(op='file_workspaces', **self.file_target(args))
         if method == 'fileSend':
@@ -490,7 +472,6 @@ class Bridge:
             with self.lock:
                 self.records.pop(args['host'], None)
                 self.preferences.get('device_ids', {}).pop(args['host'], None)
-                self.preferences.get('file_workspaces', {}).pop(args['host'], None)
                 self.display.get('hosts', {}).pop(args['host'], None)
                 self.cache.remove(args['host'])
                 self.save()

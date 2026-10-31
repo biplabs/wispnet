@@ -230,6 +230,8 @@ class LinkFake extends FakeBackend {
 
 class DesktopFake extends FakeBackend {
   final ownerCalls = <Map<String, dynamic>>[];
+  String? pickedFolder = '/srv/receiving';
+  Object? folderPickerError;
   final status = <String, dynamic>{
     'host': {
       'host': 'd' * 64,
@@ -273,6 +275,11 @@ class DesktopFake extends FakeBackend {
     String method, [
     Map<String, dynamic> arguments = const {},
   ]) async {
+    if (method == 'pickFolder') {
+      calls.add((method, arguments));
+      if (folderPickerError case final Object error) throw error;
+      return {if (pickedFolder != null) 'path': pickedFolder};
+    }
     if (method == 'settings' && arguments['host'] == 'd' * 64) {
       calls.add((method, arguments));
       return {'port': '', 'url': 'http://shared-web.localhost:18000/'};
@@ -2348,9 +2355,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Send files to hibreak'), findsOneWidget);
     expect(
-      find.text(
-        'wispnet files put ${'d' * 64} WORKSPACE /local/file relative/path',
-      ),
+      find.text("wispnet files put ${'d' * 64} '' /local/file filename"),
       findsOneWidget,
     );
     expect(
@@ -2374,7 +2379,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Manage folders and access'));
       await tester.pumpAndSettle();
-      final field = find.widgetWithText(TextField, 'Exported folders');
+      expect(find.byType(TextField), findsNothing);
       final checkbox = find.byType(CheckboxListTile);
       expect(tester.widget<CheckboxListTile>(checkbox).onChanged, isNull);
       expect(
@@ -2385,11 +2390,13 @@ void main() {
         find.textContaining('without confirming each transfer'),
         findsOneWidget,
       );
-      await tester.enterText(field, 'training=relative');
-      await tester.pump();
-      expect(tester.widget<CheckboxListTile>(checkbox).onChanged, isNull);
-      await tester.enterText(field, 'training=/srv/training');
-      await tester.pump();
+      await tester.tap(find.text('Choose folder'));
+      await tester.pumpAndSettle();
+      expect(
+        backend.calls.where((call) => call.$1 == 'pickFolder').single.$2,
+        {},
+      );
+      expect(find.text('/srv/receiving'), findsOneWidget);
       expect(tester.widget<CheckboxListTile>(checkbox).onChanged, isNotNull);
       await tester.tap(checkbox);
       await tester.ensureVisible(find.text('Save folders and access'));
@@ -2398,7 +2405,7 @@ void main() {
       expect(backend.ownerCalls.single['operation'], {
         'op': 'files',
         'allow': [peer],
-        'exports': {'training': '/srv/training'},
+        'exports': {'incoming': '/srv/receiving'},
         'expected_revision': 7,
       });
       await close(tester);
@@ -2420,10 +2427,7 @@ void main() {
         tester.widget<CheckboxListTile>(find.byType(CheckboxListTile)).value,
         true,
       );
-      await tester.enterText(
-        find.widgetWithText(TextField, 'Exported folders'),
-        '',
-      );
+      await tester.tap(find.byTooltip('Remove receiving folder'));
       await tester.pump();
       final checkbox = tester.widget<CheckboxListTile>(
         find.byType(CheckboxListTile),
@@ -2485,7 +2489,7 @@ void main() {
       },
     );
   }
-  testWidgets('built-in files manages exported folders and explicit grants', (
+  testWidgets('built-in files picks a receiving folder and explicit grants', (
     tester,
   ) async {
     final backend = DesktopFake();
@@ -2505,18 +2509,102 @@ void main() {
     expect(find.text('Edit'), findsNothing);
     await tester.tap(find.text('Manage folders and access'));
     await tester.pumpAndSettle();
-    expect(find.widgetWithText(TextField, 'Port'), findsNothing);
-    final field = find.widgetWithText(TextField, 'Exported folders');
-    expect(
-      tester.widget<TextField>(field).controller!.text,
-      'training=/srv/training',
-    );
-    await tester.enterText(
-      field,
-      'training=/srv/training\noutputs=/srv/outputs',
-    );
+    expect(find.byType(TextField), findsNothing);
+    expect(find.text('/srv/training'), findsOneWidget);
+    expect(find.text('training'), findsNothing);
+    backend.pickedFolder = '/srv/outputs';
+    await tester.tap(find.byTooltip('Change receiving folder'));
+    await tester.pumpAndSettle();
+    expect(backend.calls.where((call) => call.$1 == 'pickFolder').single.$2, {
+      'initialPath': '/srv/training',
+    });
+    expect(find.text('/srv/outputs'), findsOneWidget);
+    expect(find.text('/srv/training'), findsNothing);
+    await screenshot(tester, 'desktop-files-receiving-folder');
     await tester.tap(find.byType(CheckboxListTile));
     await tester.ensureVisible(find.text('Save folders and access'));
+    await tester.tap(find.text('Save folders and access'));
+    await tester.pumpAndSettle();
+    expect(backend.ownerCalls.single['operation'], {
+      'op': 'files',
+      'allow': [peer],
+      'exports': {'training': '/srv/outputs'},
+      'expected_revision': 7,
+    });
+    await close(tester);
+  });
+  testWidgets(
+    'cancelling or failing the receiving folder picker preserves settings',
+    (tester) async {
+      final backend = filesBackend(
+        exports: {'incoming': '/srv/incoming'},
+        allow: [peer],
+      )..pickedFolder = null;
+      await mount(tester, backend, size: const Size(1000, 1000));
+      await tester.tap(find.byTooltip('Settings for files on hibreak'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Manage folders and access'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Change receiving folder'));
+      await tester.pumpAndSettle();
+      expect(find.text('/srv/incoming'), findsOneWidget);
+      expect(
+        tester.widget<CheckboxListTile>(find.byType(CheckboxListTile)).value,
+        true,
+      );
+      backend.folderPickerError = StateError('Folder picker unavailable');
+      await tester.tap(find.byTooltip('Change receiving folder'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Folder picker unavailable'), findsOneWidget);
+      expect(find.text('/srv/incoming'), findsOneWidget);
+      await tester.tap(find.text('Save folders and access'));
+      await tester.pumpAndSettle();
+      expect(backend.ownerCalls.single['operation'], {
+        'op': 'files',
+        'allow': [peer],
+        'exports': {'incoming': '/srv/incoming'},
+        'expected_revision': 7,
+      });
+      await close(tester);
+    },
+  );
+  testWidgets('a long receiving folder fits the narrow owner sheet', (
+    tester,
+  ) async {
+    const path =
+        '/home/johnny/Research data/very-long-receiving-folder-name/experiment-results/November 2026/received-files';
+    final backend = filesBackend(exports: {'incoming': path}, allow: [peer]);
+    await mount(tester, backend, size: const Size(390, 844));
+    await tester.ensureVisible(find.byTooltip('Settings for files on hibreak'));
+    await tester.tap(find.byTooltip('Settings for files on hibreak'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Manage folders and access'));
+    await tester.pumpAndSettle();
+    expect(find.text(path), findsOneWidget);
+    expect(find.byType(TextField), findsNothing);
+    final change = tester.getRect(find.byTooltip('Change receiving folder'));
+    expect(change.right, lessThanOrEqualTo(390));
+    expect(change.left, greaterThanOrEqualTo(0));
+    expect(tester.takeException(), isNull);
+    await screenshot(tester, 'desktop-files-receiving-folder-narrow');
+    await close(tester);
+  });
+  testWidgets('grant-only saves preserve existing multiple receiving folders', (
+    tester,
+  ) async {
+    final backend = filesBackend(
+      exports: {'training': '/srv/training', 'outputs': '/srv/outputs'},
+    );
+    await mount(tester, backend, size: const Size(1000, 1000));
+    await tester.tap(find.byTooltip('Settings for files on hibreak'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Manage folders and access'));
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('replaces the 2 receiving folders'),
+      findsOneWidget,
+    );
+    await tester.tap(find.byType(CheckboxListTile));
     await tester.tap(find.text('Save folders and access'));
     await tester.pumpAndSettle();
     expect(backend.ownerCalls.single['operation'], {
@@ -2525,6 +2613,7 @@ void main() {
       'exports': {'training': '/srv/training', 'outputs': '/srv/outputs'},
       'expected_revision': 7,
     });
+    expect(backend.calls.where((call) => call.$1 == 'pickFolder'), isEmpty);
     await close(tester);
   });
   testWidgets('ordinary services reject the reserved shell ID', (tester) async {

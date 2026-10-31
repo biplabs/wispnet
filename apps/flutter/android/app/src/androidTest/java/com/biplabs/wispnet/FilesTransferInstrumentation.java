@@ -53,7 +53,6 @@ public final class FilesTransferInstrumentation extends Instrumentation {
    JSONArray folders = request("fileWorkspaces", target).getJSONArray("workspaces");
    boolean listed = false; for (int n = 0; n < folders.length(); n++) if (workspace.equals(folders.getString(n))) listed = true;
    require(listed, "Receiving folder was not discovered"); checks.put("authenticated receiving-folder discovery");
-   receivingFolderPreference();
    directCancellationResume();
    individualAndQueuedCancellation();
    completeFile("pipe", 8L * 1024 * 1024, 73, "android-pipe.bin");
@@ -72,27 +71,6 @@ public final class FilesTransferInstrumentation extends Instrumentation {
    try { getTargetContext().getContentResolver().call(Uri.parse("content://" + FilesTestProvider.AUTHORITY), "clean", null, null); }
    catch (Exception ignored) {}
   }
- }
-
- private void receivingFolderPreference() throws Exception {
-  String host = target.getString("host");
-  JSONObject preference = new JSONObject().put("host", host);
-  require(request("fileWorkspacePreference", preference).isNull("workspace"), "A fresh fixture unexpectedly has a saved receiving folder");
-  request("saveFileWorkspacePreference", new JSONObject(preference.toString()).put("workspace", workspace));
-  require(workspace.equals(getTargetContext().getSharedPreferences("file-workspaces", Context.MODE_PRIVATE).getString(host, null)),
-      "The network process did not persist the receiving folder");
-  bridge.close(); bridge = new NetworkBridge(getTargetContext());
-  require(workspace.equals(request("fileWorkspacePreference", preference).getString("workspace")), "Receiving folder was lost when reconnecting the UI");
-  String other = host.startsWith("a") ? "b".repeat(64) : "a".repeat(64);
-  require(request("fileWorkspacePreference", new JSONObject().put("host", other)).isNull("workspace"), "Receiving folder leaked to another device");
-  for (Object invalid : new Object[]{"../outside", "Incoming", "/incoming", 123}) {
-   boolean rejected = false;
-   try { request("saveFileWorkspacePreference", new JSONObject(preference.toString()).put("workspace", invalid)); }
-   catch (Exception expected) { rejected = true; }
-   require(rejected, "An invalid receiving folder was accepted");
-  }
-  require(workspace.equals(request("fileWorkspacePreference", preference).getString("workspace")), "A rejected folder changed the preference");
-  checks.put("private persistent per-device receiving-folder preference");
  }
 
  private void directCancellationResume() throws Exception {

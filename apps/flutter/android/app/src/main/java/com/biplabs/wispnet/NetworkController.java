@@ -12,7 +12,6 @@ final class NetworkController extends ContextWrapper {
  private final AndroidFiles files;
  final ExecutorService work = Executors.newFixedThreadPool(4);
  private static final AtomicBoolean pairing = new AtomicBoolean();
- private static final Object FILE_WORKSPACE_LOCK = new Object();
  NetworkController(AccessService service) { super(service); this.service = service; this.files = new AndroidFiles(service); }
  void close() { files.close(); work.shutdown(); }
  void cancelFiles() { files.stop(); }
@@ -20,25 +19,6 @@ final class NetworkController extends ContextWrapper {
  JSONObject dispatch(String method, JSONObject args) throws Exception {
   HostStore store = new HostStore(this);
   switch (method) {
-   case "fileWorkspacePreference":
-   case "saveFileWorkspacePreference": {
-    String host = args.opt("host") instanceof String ? args.getString("host") : "";
-    if (!host.matches("[0-9a-f]{64}")) throw new Exception("Invalid Files target. Refresh this device.");
-    SharedPreferences preferences = getSharedPreferences("file-workspaces", Context.MODE_PRIVATE);
-    synchronized (FILE_WORKSPACE_LOCK) {
-     if ("fileWorkspacePreference".equals(method))
-      return new JSONObject().put("workspace", preferences.contains(host) ? preferences.getString(host, null) : JSONObject.NULL);
-     String workspace = FileTransferRules.folder(args.opt("workspace") instanceof String ? args.getString("workspace") : null);
-     String previous = preferences.getString(host, null);
-     if (!preferences.edit().putString(host, workspace).commit()) {
-      // SharedPreferences updates memory before writing disk. Restore its old
-      // value so a failed save also remains unchanged when the sheet reopens.
-      preferences.edit().putString(host, previous).apply();
-      throw new Exception("Cannot save receiving folder");
-     }
-    }
-    return new JSONObject();
-   }
    case "fileWorkspaces":
    case "fileSend": {
     if (!service.enabled) throw new Exception("Go online before sending files");
@@ -92,9 +72,6 @@ final class NetworkController extends ContextWrapper {
    case "removeHost": {
     files.cancelHost(args.getString("host"));
     store.remove(args.getString("host"));
-    synchronized (FILE_WORKSPACE_LOCK) {
-     getSharedPreferences("file-workspaces", Context.MODE_PRIVATE).edit().remove(args.getString("host")).apply();
-    }
     if (store.all().length() == 0) service.stopAccess();
     return new JSONObject();
    }

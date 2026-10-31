@@ -32,4 +32,12 @@ public final class FileTransferRulesTest {
   for (String invalid : new String[]{"", "../incoming", "/incoming", "Incoming", ".hidden", "a".repeat(65)})
    assertThrows(Exception.class, () -> FileTransferRules.folder(invalid));
  }
+
+ @Test public void uploadsCanUseTheReceiversDefaultWithoutKnowingItsName() throws Exception {
+  assertEquals("", FileTransferRules.uploadFolder(""));
+  assertEquals("training.v1", FileTransferRules.uploadFolder("training.v1"));
+  assertThrows(Exception.class, () -> FileTransferRules.uploadFolder(null));
+  for (String invalid : new String[]{"../incoming", "/incoming", "Incoming", ".hidden", "a".repeat(65)})
+   assertThrows(Exception.class, () -> FileTransferRules.uploadFolder(invalid));
+ }
 }

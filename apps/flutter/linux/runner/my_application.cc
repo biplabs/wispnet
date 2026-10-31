@@ -1,6 +1,7 @@
 #include "my_application.h"
 #include <flutter_linux/flutter_linux.h>
 #include <libayatana-appindicator/app-indicator.h>
+#include <stdlib.h>
 #include "flutter/generated_plugin_registrant.h"
 
 struct _MyApplication {
@@ -10,6 +11,8 @@ struct _MyApplication {
   FlMethodChannel* channel;
   AppIndicator* tray;
   GtkWidget* status;
+  GtkFileChooserNative* folder_picker;
+  FlMethodCall* folder_call;
   gboolean background;
   GQueue* links;
 };
@@ -51,9 +54,55 @@ static gboolean hide_window(GtkWidget* window, GdkEvent*, gpointer) {
 static void first_frame_cb(MyApplication* self, FlView*) {
   if (!self->background) show_window(nullptr, self);
 }
+static void folder_picked(GtkNativeDialog* dialog, gint response, gpointer data) {
+  MyApplication* self = MY_APPLICATION(data);
+  g_autoptr(FlMethodCall) call = self->folder_call;
+  self->folder_call = nullptr;
+  self->folder_picker = nullptr;
+  if (response == GTK_RESPONSE_ACCEPT) {
+    g_autofree gchar* selected = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+    g_autofree gchar* path = selected ? realpath(selected, nullptr) : nullptr;
+    if (path && g_file_test(path, G_FILE_TEST_IS_DIR) && g_utf8_validate(path, -1, nullptr)) {
+      g_autoptr(FlValue) value = fl_value_new_string(path);
+      fl_method_call_respond_success(call, value, nullptr);
+    } else {
+      fl_method_call_respond_error(call, "folder_unavailable", "Choose an existing local folder.", nullptr, nullptr);
+    }
+  } else {
+    fl_method_call_respond_success(call, nullptr, nullptr);
+  }
+  gtk_native_dialog_destroy(dialog);
+  g_object_unref(dialog);
+  g_object_unref(self);
+}
+static void pick_folder(MyApplication* self, FlMethodCall* call) {
+  if (self->folder_picker) {
+    fl_method_call_respond_error(call, "picker_busy", "A folder picker is already open.", nullptr, nullptr);
+    return;
+  }
+  self->folder_picker = gtk_file_chooser_native_new("Choose receiving folder", self->window,
+      GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER, "Choose folder", "Cancel");
+  GtkFileChooser* chooser = GTK_FILE_CHOOSER(self->folder_picker);
+  gtk_file_chooser_set_select_multiple(chooser, FALSE);
+  gtk_file_chooser_set_local_only(chooser, TRUE);
+  gtk_native_dialog_set_modal(GTK_NATIVE_DIALOG(self->folder_picker), TRUE);
+  FlValue* args = fl_method_call_get_args(call);
+  FlValue* initial = args && fl_value_get_type(args) == FL_VALUE_TYPE_MAP
+      ? fl_value_lookup_string(args, "initialPath") : nullptr;
+  if (initial && fl_value_get_type(initial) == FL_VALUE_TYPE_STRING) {
+    const gchar* path = fl_value_get_string(initial);
+    if (g_path_is_absolute(path) && g_file_test(path, G_FILE_TEST_IS_DIR))
+      gtk_file_chooser_set_current_folder(chooser, path);
+  }
+  self->folder_call = FL_METHOD_CALL(g_object_ref(call));
+  g_signal_connect(self->folder_picker, "response", G_CALLBACK(folder_picked), g_object_ref(self));
+  gtk_native_dialog_show(GTK_NATIVE_DIALOG(self->folder_picker));
+}
 static void shell_call(FlMethodChannel*, FlMethodCall* call, gpointer data) {
   MyApplication* self = MY_APPLICATION(data);
-  if (strcmp(fl_method_call_get_name(call), "takeLink") == 0) {
+  if (strcmp(fl_method_call_get_name(call), "pickFolder") == 0) {
+    pick_folder(self, call);
+  } else if (strcmp(fl_method_call_get_name(call), "takeLink") == 0) {
     g_autofree gchar* link = static_cast<gchar*>(g_queue_pop_head(self->links));
     g_autoptr(FlValue) value = link ? fl_value_new_string(link) : fl_value_new_null();
     fl_method_call_respond_success(call, value, nullptr);
