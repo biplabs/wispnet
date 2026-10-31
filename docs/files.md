@@ -67,13 +67,15 @@ metadata only (`file_put`), then exposes `file_status` and
 recover durable resume state after a node restart.
 
 On desktop, drop one or more files into the Wispnet pop-up or onto a remote
-device's **Files** service. Choose its receiving folder and select **Send files**.
+device's **Files** service. The panel shows its default receiving folder;
+use the gear beside it to choose a different default, then select **Send files**.
+The default is remembered separately for each device on this sender.
 The transfer panel shows progress, cancellation and resume actions. Hiding the
 pop-up or closing the panel keeps submitted transfers running. Files are queued
 one at a time and retain their original names; folders must first be archived.
 The recipient must already have granted Files access.
 
-On Android, tap a device's **Files** service, choose its receiving folder, then
+On Android, tap a device's **Files** service, check its default receiving folder, then
 use **Choose files** to select one or more documents in Android's system picker.
 Select **Send files** to queue the batch. Two files can run concurrently; each
 has its own progress, cancel and resume controls. The network service retains

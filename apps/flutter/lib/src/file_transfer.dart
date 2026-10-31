@@ -433,7 +433,7 @@ class FileSendSheet extends StatefulWidget {
 }
 
 class _FileSendSheetState extends State<FileSendSheet> {
-  final folder = TextEditingController();
+  String folder = '';
   final List<_SelectedFile> selected = [];
   List<String> workspaces = [];
   bool loading = true, manual = false, picking = false;
@@ -457,16 +457,49 @@ class _FileSendSheetState extends State<FileSendSheet> {
       if (workspaces.isEmpty) {
         feedback = 'This device has no receiving folders. Ask its owner to set one in Files access.';
       } else {
-        folder.text = workspaces.first;
+        folder = workspaces.first;
       }
     } catch (error) {
       if (!mounted) return;
       manual = true;
       feedback =
-          'Could not load receiving folders. Enter the shared folder name supplied by the recipient. ${failureMessage(error)}';
-    } finally {
-      if (mounted) setState(() => loading = false);
+          'Could not load receiving folders. Use the gear to enter the shared folder name supplied by the recipient. ${failureMessage(error)}';
     }
+    try {
+      final preference = await widget.backend.invoke(
+        'fileWorkspacePreference',
+        {'host': widget.machine.id},
+      );
+      if (!mounted) return;
+      final saved = preference['workspace'] as String?;
+      if (saved != null && (manual || workspaces.contains(saved))) {
+        folder = saved;
+      }
+    } catch (error) {
+      if (!mounted) return;
+      feedback = [
+        ?feedback,
+        'Could not load the default receiving folder. ${failureMessage(error)}',
+      ].join(' ');
+    }
+    if (mounted) setState(() => loading = false);
+  }
+
+  Future<void> changeFolder() async {
+    await showWispSheet<void>(
+      context,
+      title: 'Default receiving folder',
+      child: _ReceivingFolderSettings(
+        backend: widget.backend,
+        host: widget.machine.id,
+        folder: folder,
+        workspaces: workspaces,
+        manual: manual,
+        onSaved: (chosen) {
+          if (mounted) setState(() => folder = chosen);
+        },
+      ),
+    );
   }
 
   Future<void> addFiles(List<String> paths) async {
@@ -528,7 +561,7 @@ class _FileSendSheetState extends State<FileSendSheet> {
   }
 
   void send() {
-    final workspace = folder.text.trim();
+    final workspace = folder.trim();
     if (selected.isEmpty || loading || picking) return;
     if (!RegExp(r'^[a-z0-9][a-z0-9._-]{0,63}$').hasMatch(workspace)) {
       setState(
@@ -567,7 +600,6 @@ class _FileSendSheetState extends State<FileSendSheet> {
     for (final file in selected) {
       file.release();
     }
-    folder.dispose();
     super.dispose();
   }
 
@@ -581,24 +613,22 @@ class _FileSendSheetState extends State<FileSendSheet> {
       const SizedBox(height: 16),
       if (loading)
         const LinearProgressIndicator()
-      else if (manual)
-        TextField(
+      else if (manual || workspaces.isNotEmpty)
+        ListTile(
           key: const ValueKey('file-workspace'),
-          controller: folder,
-          decoration: const InputDecoration(
-            labelText: 'Shared receiving folder',
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.folder_outlined, color: WispColors.cyan),
+          title: const Text('Receiving folder'),
+          subtitle: Text(
+            folder.isEmpty ? 'Choose a default folder' : folder,
+            style: const TextStyle(color: WispColors.text, fontSize: 16),
           ),
-        )
-      else if (workspaces.isNotEmpty)
-        DropdownButtonFormField<String>(
-          key: const ValueKey('file-workspace'),
-          initialValue: folder.text,
-          isExpanded: true,
-          decoration: const InputDecoration(labelText: 'Receiving folder'),
-          items: workspaces
-              .map((name) => DropdownMenuItem(value: name, child: Text(name)))
-              .toList(),
-          onChanged: (name) => folder.text = name ?? '',
+          trailing: IconButton(
+            key: const ValueKey('file-workspace-settings'),
+            tooltip: 'Change default receiving folder',
+            onPressed: changeFolder,
+            icon: const Icon(Icons.settings_outlined),
+          ),
         ),
       const SizedBox(height: 16),
       if (widget.desktop)
@@ -669,6 +699,7 @@ class _FileSendSheetState extends State<FileSendSheet> {
             selected.isEmpty ||
                 loading ||
                 picking ||
+                folder.isEmpty ||
                 (!manual && workspaces.isEmpty)
             ? null
             : send,
@@ -680,6 +711,114 @@ class _FileSendSheetState extends State<FileSendSheet> {
       const SizedBox(height: 16),
       FileTransferList(transfers: widget.transfers, host: widget.machine.id),
     ],
+  );
+}
+
+class _ReceivingFolderSettings extends StatefulWidget {
+  const _ReceivingFolderSettings({
+    required this.backend,
+    required this.host,
+    required this.folder,
+    required this.workspaces,
+    required this.manual,
+    required this.onSaved,
+  });
+  final WispnetBackend backend;
+  final String host, folder;
+  final List<String> workspaces;
+  final bool manual;
+  final ValueChanged<String> onSaved;
+
+  @override
+  State<_ReceivingFolderSettings> createState() =>
+      _ReceivingFolderSettingsState();
+}
+
+class _ReceivingFolderSettingsState extends State<_ReceivingFolderSettings> {
+  late final folder = TextEditingController(text: widget.folder);
+  bool saving = false;
+  String? feedback;
+
+  Future<void> save(String name) async {
+    if (saving) return;
+    final workspace = name.trim();
+    if (!RegExp(r'^[a-z0-9][a-z0-9._-]{0,63}$').hasMatch(workspace)) {
+      setState(() => feedback = 'Enter the shared receiving folder name.');
+      return;
+    }
+    setState(() {
+      saving = true;
+      feedback = null;
+    });
+    final route = ModalRoute.of(context);
+    try {
+      await widget.backend.invoke('saveFileWorkspacePreference', {
+        'host': widget.host,
+        'workspace': workspace,
+      });
+      widget.onSaved(workspace);
+      if (mounted && route?.isCurrent == true) Navigator.of(context).pop();
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          saving = false;
+          feedback =
+              'Could not save the default folder. ${failureMessage(error)}';
+        });
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    folder.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => PopScope(
+    canPop: !saving,
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text('Use this folder whenever you send files to this device.'),
+        const SizedBox(height: 12),
+        if (widget.manual) ...[
+          TextField(
+            key: const ValueKey('file-workspace-name'),
+            controller: folder,
+            enabled: !saving,
+            decoration: const InputDecoration(
+              labelText: 'Shared receiving folder',
+            ),
+            onSubmitted: save,
+          ),
+          const SizedBox(height: 12),
+          FilledButton(
+            onPressed: saving ? null : () => save(folder.text),
+            child: const Text('Save default'),
+          ),
+        ] else
+          for (final name in widget.workspaces)
+            Material(
+              color: Colors.transparent,
+              child: ListTile(
+                title: Text(name),
+                selected: name == widget.folder,
+                trailing: name == widget.folder
+                    ? const Icon(Icons.check)
+                    : null,
+                enabled: !saving,
+                onTap: () => save(name),
+              ),
+            ),
+        if (saving) const LinearProgressIndicator(),
+        if (feedback != null) ...[
+          const SizedBox(height: 12),
+          Text(feedback!, style: const TextStyle(color: WispColors.amber)),
+        ],
+      ],
+    ),
   );
 }
 

@@ -1,16 +1,19 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:desktop_drop/desktop_drop.dart';
 // Native drag events use the same test transport seam as the plugin's tests.
 // ignore: implementation_imports
 import 'package:desktop_drop/src/native_transport.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wispnet/src/app.dart';
 import 'package:wispnet/src/backend.dart';
 import 'package:wispnet/src/file_transfer.dart';
+import 'package:wispnet/src/theme.dart';
 
 final _host = 'a' * 64;
 final _incarnation = 'b' * 64;
@@ -23,8 +26,11 @@ class _FilesBackend implements WispnetBackend {
   final calls = <(String, Map<String, dynamic>)>[];
   final states = <String, Map<String, dynamic>>{};
   List<String> workspaces = ['incoming', 'training'];
+  final defaults = <String, String>{};
   Object? sendError;
   Object? discoveryError;
+  Object? preferenceError;
+  Completer<void>? preferenceSave;
   int nextId = 0;
 
   List<Map<String, dynamic>> get sends => calls
@@ -80,6 +86,14 @@ class _FilesBackend implements WispnetBackend {
       case 'fileWorkspaces':
         if (discoveryError case final Object error) throw error;
         return {'workspaces': workspaces};
+      case 'fileWorkspacePreference':
+        return {'workspace': defaults[arguments['host']]};
+      case 'saveFileWorkspacePreference':
+        await preferenceSave?.future;
+        if (preferenceError case final Object error) throw error;
+        defaults[arguments['host'] as String] =
+            arguments['workspace'] as String;
+        return {};
       case 'fileSend':
         if (sendError case final Object error) {
           sendError = null;
@@ -115,6 +129,21 @@ Future<void> _pumpStatus(WidgetTester tester) async {
   await tester.pump();
 }
 
+Future<void> _screenshot(WidgetTester tester, String name) async {
+  final directory = Platform.environment['WISPNET_SCREENSHOTS'];
+  if (directory == null) return;
+  await tester.runAsync(() async {
+    final boundary = tester.renderObject<RenderRepaintBoundary>(
+      find.byKey(const ValueKey('file-send-capture')),
+    );
+    final image = await boundary.toImage();
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+    Directory(directory).createSync(recursive: true);
+    File('$directory/$name.png').writeAsBytesSync(bytes!.buffer.asUint8List());
+    image.dispose();
+  });
+}
+
 Widget _sheet(_FilesBackend backend, DesktopFileTransfers transfers) =>
     MaterialApp(
       home: Scaffold(
@@ -131,6 +160,17 @@ Widget _sheet(_FilesBackend backend, DesktopFileTransfers transfers) =>
     );
 
 void main() {
+  setUpAll(() async {
+    final fonts = FontLoader('Roboto')
+      ..addFont(rootBundle.load('assets/fonts/Roboto-Regular.ttf'))
+      ..addFont(rootBundle.load('assets/fonts/Roboto-Medium.ttf'))
+      ..addFont(rootBundle.load('assets/fonts/Roboto-Bold.ttf'));
+    await fonts.load();
+    await (FontLoader(
+      'MaterialIcons',
+    )..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'))).load();
+  });
+
   testWidgets('native jobs run sequentially and preserve the selected target', (
     tester,
   ) async {
@@ -286,10 +326,14 @@ void main() {
     expect(find.text('weights.bin'), findsOneWidget);
     expect(find.text('config.json'), findsOneWidget);
 
-    await tester.tap(find.byKey(const ValueKey('file-workspace')));
+    expect(find.byType(DropdownButtonFormField<String>), findsNothing);
+    expect(find.text('incoming'), findsOneWidget);
+    expect(find.text('training'), findsNothing);
+    await tester.tap(find.byTooltip('Change default receiving folder'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('training').last);
     await tester.pumpAndSettle();
+    expect(backend.defaults[_host], 'training');
     await tester.tap(find.byKey(const ValueKey('file-send')));
     await tester.pump();
     expect(transfers.jobs, hasLength(2));
@@ -303,6 +347,149 @@ void main() {
     expect(backend.sends, hasLength(2));
     backend.complete(transfers.jobs.last.transfer!);
     await _pumpStatus(tester);
+  });
+
+  testWidgets(
+    'the default folder survives reopening and falls back if removed',
+    (tester) async {
+      final backend = _FilesBackend();
+      final transfers = DesktopFileTransfers(backend);
+      addTearDown(transfers.dispose);
+      await tester.pumpWidget(_sheet(backend, transfers));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Change default receiving folder'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('training'));
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+      await tester.pumpWidget(_sheet(backend, transfers));
+      await tester.pumpAndSettle();
+      expect(find.text('training'), findsOneWidget);
+      expect(find.text('incoming'), findsNothing);
+
+      await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+      backend.workspaces = ['incoming'];
+      await tester.pumpWidget(_sheet(backend, transfers));
+      await tester.pumpAndSettle();
+      expect(find.text('incoming'), findsOneWidget);
+      expect(find.text('training'), findsNothing);
+      expect(backend.sends, isEmpty);
+    },
+  );
+
+  testWidgets('closing settings or failing to save keeps the current folder', (
+    tester,
+  ) async {
+    final backend = _FilesBackend()
+      ..preferenceError = StateError('Preferences are read-only');
+    final transfers = DesktopFileTransfers(backend);
+    addTearDown(transfers.dispose);
+    await tester.pumpWidget(_sheet(backend, transfers));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Change default receiving folder'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('training'));
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('Could not save the default folder'),
+      findsOneWidget,
+    );
+    expect(backend.defaults, isEmpty);
+    await tester.tap(find.byTooltip('Close'));
+    await tester.pumpAndSettle();
+    expect(find.text('incoming'), findsOneWidget);
+    expect(find.text('training'), findsNothing);
+    expect(backend.sends, isEmpty);
+  });
+
+  testWidgets('the gear accepts a shared name when discovery is unavailable', (
+    tester,
+  ) async {
+    final backend = _FilesBackend()..discoveryError = StateError('Offline');
+    final transfers = DesktopFileTransfers(backend);
+    addTearDown(transfers.dispose);
+    await tester.pumpWidget(_sheet(backend, transfers));
+    await tester.pumpAndSettle();
+    expect(find.byType(TextField), findsNothing);
+    expect(
+      tester
+          .widget<FilledButton>(find.byKey(const ValueKey('file-send')))
+          .onPressed,
+      isNull,
+    );
+    await tester.tap(find.byTooltip('Change default receiving folder'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '../invalid');
+    await tester.tap(find.text('Save default'));
+    await tester.pumpAndSettle();
+    expect(backend.defaults, isEmpty);
+    expect(
+      find.text('Enter the shared receiving folder name.'),
+      findsOneWidget,
+    );
+    await tester.enterText(find.byType(TextField), 'training');
+    await tester.tap(find.text('Save default'));
+    await tester.pumpAndSettle();
+    expect(backend.defaults[_host], 'training');
+    expect(find.byType(TextField), findsNothing);
+    expect(find.text('training'), findsOneWidget);
+    expect(
+      tester
+          .widget<FilledButton>(find.byKey(const ValueKey('file-send')))
+          .onPressed,
+      isNotNull,
+    );
+    expect(backend.sends, isEmpty);
+  });
+
+  testWidgets('closing settings during a save keeps the send sheet open', (
+    tester,
+  ) async {
+    final backend = _FilesBackend()..preferenceSave = Completer<void>();
+    final transfers = DesktopFileTransfers(backend);
+    addTearDown(transfers.dispose);
+    await tester.pumpWidget(
+      RepaintBoundary(
+        key: const ValueKey('file-send-capture'),
+        child: MaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: wispTheme(),
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => TextButton(
+                onPressed: () => showWispSheet<void>(
+                  context,
+                  title: 'Send files to Receiving desktop',
+                  child: FileSendSheet(
+                    backend: backend,
+                    machine: _machine,
+                    incarnation: _incarnation,
+                    transfers: transfers,
+                  ),
+                ),
+                child: const Text('Open send sheet'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open send sheet'));
+    await tester.pumpAndSettle();
+    await _screenshot(tester, 'file-send-default');
+    await tester.tap(find.byTooltip('Change default receiving folder'));
+    await tester.pumpAndSettle();
+    await _screenshot(tester, 'file-send-folder-settings');
+    await tester.tap(find.text('training'));
+    await tester.pump();
+    await tester.tap(find.byTooltip('Close').last);
+    await tester.pump();
+    backend.preferenceSave!.complete();
+    await tester.pumpAndSettle();
+    expect(find.byType(FileSendSheet), findsOneWidget);
+    expect(find.text('Default receiving folder'), findsNothing);
+    expect(find.text('training'), findsOneWidget);
+    expect(backend.defaults[_host], 'training');
   });
 
   testWidgets('a denied folder lookup never starts a transfer automatically', (

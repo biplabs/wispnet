@@ -36,6 +36,7 @@ class _AndroidFilesBackend implements WispnetBackend {
   bool enabled = true;
   Object? pickerError;
   int nextId = 0;
+  String? defaultWorkspace;
 
   List<Map<String, dynamic>> get sends => calls
       .where((call) => call.$1 == 'fileSend')
@@ -77,6 +78,11 @@ class _AndroidFilesBackend implements WispnetBackend {
         return {
           'workspaces': ['incoming', 'training'],
         };
+      case 'fileWorkspacePreference':
+        return {'workspace': defaultWorkspace};
+      case 'saveFileWorkspacePreference':
+        defaultWorkspace = arguments['workspace'] as String;
+        return {};
       case 'pickFiles':
         if (pickerError != null) throw pickerError!;
         return {'files': picked};
@@ -145,6 +151,12 @@ void main() {
       await tester.pumpWidget(_sheet(backend, transfers));
       await tester.pump();
       expect(find.byType(FileDropArea), findsNothing);
+      expect(find.byType(DropdownButtonFormField<String>), findsNothing);
+      await tester.tap(find.byTooltip('Change default receiving folder'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('training'));
+      await tester.pumpAndSettle();
+      expect(backend.defaultWorkspace, 'training');
       await tester.tap(find.byKey(const ValueKey('file-pick')));
       await tester.pump();
       expect(find.text('model weights.bin'), findsOneWidget);
@@ -164,7 +176,7 @@ void main() {
         _sources.map((file) => file['path']),
       );
       expect(
-        backend.sends.every((send) => send['workspace'] == 'incoming'),
+        backend.sends.every((send) => send['workspace'] == 'training'),
         isTrue,
       );
       expect(
