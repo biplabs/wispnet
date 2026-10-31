@@ -347,13 +347,16 @@ async fn stream_and_connection_limits_deny_without_extra_backend_and_release_cap
 
 #[tokio::test]
 async fn slow_reader_applies_backpressure_and_cancellation_releases_backend() {
+    // A response must exceed both 64 MiB QUIC windows and the TCP buffers to
+    // demonstrate backpressure. Reuse one chunk to keep fixture memory bounded.
+    const RESPONSE_BYTES: usize = 256 * 1024 * 1024;
     let written = Arc::new(AtomicUsize::new(0));
     let written_inner = written.clone();
     let backend = backend(move |mut socket| {
         let written = written_inner.clone();
         async move {
             let chunk = [7u8; 16384];
-            for _ in 0..4096 {
+            for _ in 0..RESPONSE_BYTES / chunk.len() {
                 if socket.write_all(&chunk).await.is_err() {
                     break;
                 }
@@ -373,11 +376,30 @@ async fn slow_reader_applies_backpressure_and_cancellation_releases_backend() {
     let (endpoint, connection) = connected(&host, &key).await;
     let stream = tunnel::open_service(&connection, "large").await.unwrap();
     until(|| written.load(Ordering::SeqCst) > 0).await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    assert!(
-        written.load(Ordering::SeqCst) < 64 * 1024 * 1024,
-        "whole response was consumed while client did not read"
-    );
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let mut previous = written.load(Ordering::SeqCst);
+        let mut unchanged_since = tokio::time::Instant::now();
+        loop {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let current = written.load(Ordering::SeqCst);
+            assert!(
+                current < RESPONSE_BYTES,
+                "whole response was consumed while client did not read"
+            );
+            assert!(
+                backend.live.load(Ordering::SeqCst) > 0,
+                "backend writer exited before backpressure was observed"
+            );
+            if current != previous {
+                previous = current;
+                unchanged_since = tokio::time::Instant::now();
+            } else if unchanged_since.elapsed() >= Duration::from_millis(200) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("backend writes did not stall while the client was not reading");
     drop(stream);
     until(|| host.counts().streams() == 0 && backend.live.load(Ordering::SeqCst) == 0).await;
     endpoint.close().await;
