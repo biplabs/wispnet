@@ -112,6 +112,12 @@ windows are 64 MiB per stream, 128 MiB receive per connection, and 64 MiB send p
 connection. These are bounded ceilings rather than eager allocations. At
 100 ms RTT, 1 Gbit/s needs approximately 12.5 MB in flight; at 200 ms, 25 MB.
 
+Linux hosts use a high-resolution monotonic timer for shared Iroh/QUIC protocol
+deadlines, reducing late pacing wakeups during sustained transfers. This applies
+to Shell, control and other native services as well as Files. Timer failures fall
+back to the existing Tokio timer, which other platforms continue to use. Files
+still runs inside the existing Wispnet daemon.
+
 Run the optional 1 GiB native upload/restart/resume benchmark:
 
 ```sh

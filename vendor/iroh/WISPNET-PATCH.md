@@ -58,3 +58,18 @@ The existing owned net-report task probes mapping protocols in parallel with
 UDP discovery and retries acquisition after that probe. Major link changes
 replace the mapping service/cache and reattach its address watcher, so old-network
 leases are not advertised or reported on a new network.
+
+`src/runtime.rs` and `src/runtime/linux.rs` use Linux `timerfd` for the shared
+Noq protocol timer, including packet pacing, loss recovery and idle deadlines.
+The descriptor uses `CLOCK_MONOTONIC`, is nonblocking/close-on-exec, and is owned
+by Tokio's read-only `AsyncFd` registration. Rearming replaces the previous
+deadline, and polling checks the current deadline before reporting completion.
+Timer setup or I/O failure falls back to Noq's existing Tokio timer; paused or
+shifted Tokio clocks also retain that timer. Other platforms keep the existing
+runtime. `Cargo.toml` adds the Linux-only `libc` dependency.
+
+This applies to every Iroh connection, including Files, Shell and control
+traffic. Congestion control, transport windows, packet batching and executor
+threading are unchanged. Workspace tests include the exact timer implementation
+from `crates/agent/src/lib.rs` because this vendored crate is excluded from the
+workspace; they cover deadlines, rearming, fallback and descriptor ownership.

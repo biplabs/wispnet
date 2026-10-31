@@ -6,6 +6,9 @@ use tokio_util::sync::CancellationToken;
 #[cfg(not(wasm_browser))]
 use tokio_util::task::TaskTracker;
 
+#[cfg(target_os = "linux")]
+mod linux;
+
 #[derive(Debug)]
 pub(crate) struct Runtime {
     id: EndpointId,
@@ -66,7 +69,14 @@ impl Runtime {
 impl noq::Runtime for Runtime {
     #[cfg(not(wasm_browser))]
     fn new_timer(&self, i: std::time::Instant) -> Pin<Box<dyn noq::AsyncTimer>> {
-        noq::TokioRuntime.new_timer(i)
+        #[cfg(target_os = "linux")]
+        {
+            linux::new_timer(i)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            noq::TokioRuntime.new_timer(i)
+        }
     }
 
     #[cfg(wasm_browser)]

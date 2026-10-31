@@ -30,6 +30,10 @@ n0-future = "=0.3.2"
 iroh-relay = { version = "=1.3.0", default-features = false, features = ["server"] }
 rcgen = "=0.14.8"
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std"] }
+tokio = { workspace = true, features = ["test-util"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 wispnet-shell = { workspace = true, features = ["host"] }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+noq = { version = "=1.3.0", default-features = false }

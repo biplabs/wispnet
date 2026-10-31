@@ -15,6 +15,8 @@ if [ "$(uname -s)" = Darwin ]; then
 fi
 node --test experiments/relay-compatibility/test/*.test.js
 cargo fmt --all --check
+# The patched Iroh runtime is excluded from workspace formatting.
+rustfmt --edition 2024 --check vendor/iroh/src/runtime.rs
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 cargo test -p wispnet-cli --example external_network_probe --locked

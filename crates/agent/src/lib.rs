@@ -65,3 +65,8 @@ pub async fn run(
 
 #[cfg(any(target_os = "android", test))]
 mod os_dns;
+
+// Exercise the exact vendored implementation in the workspace's required tests.
+#[cfg(all(test, target_os = "linux"))]
+#[path = "../../../vendor/iroh/src/runtime/linux.rs"]
+mod quic_timer_tests;

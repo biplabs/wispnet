@@ -513,6 +513,9 @@ features = [
 version = "0.3"
 features = ["env-filter"]
 
+[target.'cfg(target_os = "linux")'.dependencies.libc]
+version = "0.2"
+
 [target.'cfg(target_os = "linux")'.dev-dependencies.ctor]
 version = "1.0"
 
