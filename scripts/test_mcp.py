@@ -96,6 +96,12 @@ class MCPTests(unittest.TestCase):
                                       'expected_revision': snapshot()['revision'] if revision is None else revision,
                                       **extra}})
 
+                def configure_files(folder, allow, revision=None, **extra):
+                    return rpc('tools/call', {'name': 'wispnet_set_files_access',
+                        'arguments': {'receiving_folder': folder, 'allow': allow,
+                                      'expected_revision': snapshot()['revision'] if revision is None else revision,
+                                      **extra}})
+
                 advertised = rpc('tools/list')['result']['tools']
                 for name in ['wispnet_grant_service_access', 'wispnet_revoke_service_access']:
                     schema = next(t['inputSchema'] for t in advertised if t['name'] == name)
@@ -103,7 +109,64 @@ class MCPTests(unittest.TestCase):
                     self.assertEqual(set(schema['required']), {'service', 'peer', 'expected_revision'})
                     self.assertFalse(schema['additionalProperties'])
 
-                for service in ['web', 'raw', 'shell']:
+                files_tool = next(t for t in advertised if t['name'] == 'wispnet_set_files_access')
+                schema = files_tool['inputSchema']
+                self.assertEqual(set(schema['properties']), {'receiving_folder', 'allow', 'expected_revision'})
+                self.assertEqual(set(schema['required']), set(schema['properties']))
+                self.assertFalse(schema['additionalProperties'])
+                self.assertFalse(files_tool['annotations']['readOnlyHint'])
+                downloads = root / 'Downloads'
+                downloads.mkdir()
+                before = snapshot()
+                result = configure_files(str(downloads), [existing_peer], revision=before['revision'])
+                self.assertFalse(result['result']['isError'], result)
+                after = snapshot()
+                self.assertEqual(after['revision'], before['revision'] + 1)
+                self.assertEqual(after['file_exports'], {'incoming': str(downloads)})
+                self.assertEqual(next(s['allow'] for s in after['services'] if s['id'] == 'files'), [existing_peer])
+                self.assertEqual(after['clients'], before['clients'])
+                self.assertEqual(after['generation'], before['generation'])
+                self.assertEqual([s for s in after['services'] if s['id'] != 'files'],
+                                 [s for s in before['services'] if s['id'] != 'files'])
+                self.assertTrue(configure_files(str(downloads), [], revision=before['revision'])['result']['isError'])
+                self.assertEqual(snapshot(), after)
+
+                alias = root / 'downloads-alias'
+                alias.symlink_to(downloads, target_is_directory=True)
+                for folder, allow in [
+                        ('relative/folder', [existing_peer]),
+                        (str(root / 'missing'), [existing_peer]),
+                        (str(alias), [existing_peer]),
+                        (str(state), [existing_peer]),
+                        (str(root), [existing_peer]),
+                        (str(downloads), [unapproved]),
+                        (str(downloads), [existing_peer, existing_peer]),
+                        (str(downloads), ['z' * 64]),
+                        ('', [existing_peer])]:
+                    with self.subTest(folder=folder, allow=allow):
+                        before = snapshot()
+                        rejected = configure_files(folder, allow)
+                        self.assertTrue(rejected['result']['isError'], rejected)
+                        self.assertEqual(snapshot(), before)
+                before = snapshot()
+                invalid = configure_files(str(downloads), [], exports={'extra': str(root)})
+                self.assertEqual(invalid['error']['code'], -32602)
+                self.assertEqual(snapshot(), before)
+
+                # Switching the receiver's folder changes only Files and preserves pairing.
+                replacement = root / 'Other downloads'
+                replacement.mkdir()
+                result = configure_files(str(replacement), [existing_peer])
+                self.assertFalse(result['result']['isError'], result)
+                changed = snapshot()
+                self.assertEqual(changed['file_exports'], {'incoming': str(replacement)})
+                self.assertNotEqual(next(s['incarnation'] for s in changed['services'] if s['id'] == 'files'),
+                                    next(s['incarnation'] for s in before['services'] if s['id'] == 'files'))
+                self.assertEqual(changed['clients'], before['clients'])
+                self.assertEqual([s for s in changed['services'] if s['id'] != 'files'],
+                                 [s for s in before['services'] if s['id'] != 'files'])
+
+                for service in ['web', 'raw', 'shell', 'files']:
                     before = snapshot()
                     result = grant(service, recipient, revision=before['revision'])
                     self.assertNotIn('error', result)
@@ -131,7 +194,7 @@ class MCPTests(unittest.TestCase):
                 self.assertEqual(set(shell['allow']), {existing_peer, recipient})
                 self.assertEqual(len(shell['allow']), 2)
 
-                for service, peer in [('missing', recipient), ('web', unapproved)]:
+                for service, peer in [('missing', recipient), ('web', unapproved), ('files', unapproved)]:
                     before = snapshot()
                     rejected = grant(service, peer)
                     self.assertTrue(rejected['result']['isError'], rejected)
@@ -142,7 +205,7 @@ class MCPTests(unittest.TestCase):
                 self.assertEqual(snapshot(), before)
 
                 # Revoke one service at a time while other grants and pairings remain.
-                for service in ['web', 'raw', 'shell']:
+                for service in ['web', 'raw', 'shell', 'files']:
                     before = snapshot()
                     result = revoke(service, recipient, revision=before['revision'])
                     self.assertNotIn('error', result)
@@ -176,6 +239,15 @@ class MCPTests(unittest.TestCase):
                 invalid = revoke('shell', recipient, backend='127.0.0.1:22')
                 self.assertEqual(invalid['error']['code'], -32602)
                 self.assertEqual(snapshot(), before)
+                # Clearing requires both empty fields and revokes only Files access.
+                result = configure_files('', [])
+                self.assertFalse(result['result']['isError'], result)
+                cleared = snapshot()
+                self.assertEqual(cleared['file_exports'], {})
+                self.assertEqual(next(s['allow'] for s in cleared['services'] if s['id'] == 'files'), [])
+                self.assertEqual(cleared['clients'], before['clients'])
+                self.assertEqual([s for s in cleared['services'] if s['id'] != 'files'],
+                                 [s for s in before['services'] if s['id'] != 'files'])
             finally:
                 process.terminate()
                 process.wait(timeout=10)

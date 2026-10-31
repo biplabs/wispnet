@@ -29,6 +29,9 @@ Desktop settings provide **Files access** with a native folder picker and device
 grants. Choose the receiving folder there; the path is shown only on that device.
 Use the gear beside the selected folder to change it. Removing the folder
 disables incoming transfers and revokes Files grants when saved.
+MCP agents can use the owner-only `wispnet_set_files_access` tool to set the
+receiving folder and its complete device allow list in one revision-checked
+operation; see [MCP configuration](service-registry.md).
 Export roots must be existing absolute directories without symlink components;
 they cannot overlap Wispnet's private state directory. The grant applies to all
 configured exports. Remote paths are relative to the selected export.

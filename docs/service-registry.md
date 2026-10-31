@@ -226,6 +226,33 @@ The device stays paired, and its access to other services remains unchanged.
 Both tools require an existing service and an approved device; repeating a grant
 or revocation is safe when submitted with the current revision.
 
+Use `wispnet_set_files_access` to configure this computer's receiving folder and
+the complete list of paired devices allowed to send files into it, atomically:
+
+```json
+{
+  "name": "wispnet_set_files_access",
+  "arguments": {
+    "expected_revision": 67,
+    "receiving_folder": "/home/you/Downloads",
+    "allow": ["FULL_PAIRED_DEVICE_ID"]
+  }
+}
+```
+
+Read `wispnet_status` first and use its current revision. This owner-only tool
+replaces all configured receiving folders with the chosen folder and replaces
+the entire Files allow list; include every existing Files grant you want to
+keep. Other services and pairings are preserved. The folder must already exist,
+be absolute, have no symlink components, and stay outside Wispnet's private
+state. Senders do not receive its filesystem path.
+
+Use `receiving_folder: ""` together with `allow: []` to clear the folder and
+revoke incoming Files access. Use a nonempty folder with `allow: []` to keep the
+folder configured while allowing no remote devices. Once a folder is configured,
+the generic grant/revoke tools above can change one device's Files permission
+without replacing the folder or other grants.
+
 Use `wispnet_run_shell_command` to run a command on a paired desktop host that
 has granted this device Shell access:
 

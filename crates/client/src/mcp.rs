@@ -86,6 +86,7 @@ fn tools(owner: bool) -> Vec<Value> {
             tool("wispnet_transport", "Inspect local network, relay and peer transport diagnostics.",json!({}),&[],true),
             tool("wispnet_grant_service_access", "Grant an already paired device access to an existing service, including Shell or Files. Files requires a configured shared folder and grants ongoing permission to send files into the host's configured folders without confirming each transfer; it does not permit reading or downloading host files. Preserves other grants and service settings. Read status first and supply its current revision.",json!({"expected_revision":revision,"service":{"type":"string"},"peer":peer}),&["expected_revision","service","peer"],false),
             tool("wispnet_revoke_service_access", "Revoke one paired device's access to an existing service of any kind, including Shell. Preserves pairing, other grants and service settings. Read status first and supply its current revision.",json!({"expected_revision":revision,"service":{"type":"string"},"peer":peer}),&["expected_revision","service","peer"],false),
+            tool("wispnet_set_files_access", "Set this receiving computer's Files folder and complete device allow list. Owner-only: read status first and supply its current revision. Replaces all Files exports with one incoming folder and replaces all Files grants; preserves other services and pairings. receiving_folder must be an existing absolute directory without symlink components. To clear the receiving folder and revoke all Files access, supply receiving_folder as an empty string and allow as an empty array. allow must explicitly contain the full public IDs of every paired device permitted to send files. Granted devices may send without confirming each transfer, but cannot read or download host files; senders do not need the receiving folder's location.",json!({"expected_revision":revision,"receiving_folder":{"type":"string","maxLength":4096},"allow":{"type":"array","maxItems":128,"uniqueItems":true,"items":{"type":"string","minLength":64,"maxLength":64,"pattern":"^[0-9a-f]{64}$"}}}),&["expected_revision","receiving_folder","allow"],false),
             tool("wispnet_set_service", "Create/update a local service and its complete device allow list. Read status first; supply its current revision. Existing service IDs preserve identity. Empty allow grants no remote devices.",json!({"expected_revision":revision,"id":{"type":"string"},"backend":{"type":"string"},"allow":{"type":"array","items":peer},"kind":{"type":"string","enum":["http","tcp"]}}),&["expected_revision","id","backend","allow","kind"],false),
             tool("wispnet_remove_service", "Remove a local service at the current policy revision.",json!({"expected_revision":revision,"id":{"type":"string"}}),&["expected_revision","id"],false),
             tool("wispnet_approve_invitation", "Approve a pending pairing invitation and grant the explicitly supplied existing services. Read status and inspect the invitation first.",json!({"expected_revision":revision,"invitation":{"type":"string"},"services":{"type":"array","items":{"type":"string"}}}),&["expected_revision","invitation","services"],false),
@@ -198,6 +199,24 @@ async fn call(client: Arc<Client>, name: &str, args: Value) -> Result<Value, Str
         }
         "wispnet_status" => owner(&client, json!({"op":"status"})).await,
         "wispnet_transport" => owner(&client, json!({"op":"transport_status"})).await,
+        "wispnet_set_files_access" => {
+            let folder = args["receiving_folder"]
+                .as_str()
+                .ok_or("Invalid receiving folder")?;
+            let exports = if folder.is_empty() {
+                json!({})
+            } else {
+                json!({"incoming":folder})
+            };
+            owner(
+                &client,
+                json!({"op":"mutate","operation":{
+                    "op":"files","expected_revision":args["expected_revision"],
+                    "allow":args["allow"],"exports":exports
+                }}),
+            )
+            .await
+        }
         _ => {
             let op = match name {
                 "wispnet_grant_service_access" => "grant_service",
@@ -523,6 +542,49 @@ mod tests {
             Duration::from_secs(60)
         );
     }
+    #[test]
+    fn files_access_is_owner_only_and_requires_a_complete_bounded_policy() {
+        let name = "wispnet_set_files_access";
+        assert!(!tools(false).iter().any(|tool| tool["name"] == name));
+        let list = tools(true);
+        let tool = list.iter().find(|tool| tool["name"] == name).unwrap();
+        assert_eq!(tool["annotations"]["readOnlyHint"], false);
+        let schema = &tool["inputSchema"];
+        assert_eq!(schema["additionalProperties"], false);
+        let args = json!({
+            "expected_revision":66,
+            "receiving_folder":"/home/owner/Downloads",
+            "allow":["ab".repeat(32)]
+        });
+        assert!(valid(&args, schema));
+        assert!(valid(
+            &json!({"expected_revision":67,"receiving_folder":"","allow":[]}),
+            schema
+        ));
+        for key in ["expected_revision", "receiving_folder", "allow"] {
+            let mut missing = args.clone();
+            missing.as_object_mut().unwrap().remove(key);
+            assert!(!valid(&missing, schema), "missing {key}");
+        }
+        for (key, value) in [
+            ("expected_revision", json!(-1)),
+            ("expected_revision", json!(66.5)),
+            ("receiving_folder", json!(null)),
+            ("receiving_folder", json!("/".repeat(4097))),
+            ("allow", json!("all")),
+            ("allow", json!(["Pixel10Pro"])),
+            ("allow", json!(["a".repeat(65)])),
+            ("allow", json!(vec!["ab".repeat(32); 129])),
+            ("exports", json!({"arbitrary":"/private"})),
+            ("host", json!("ab".repeat(32))),
+            ("service", json!("shell")),
+        ] {
+            let mut invalid = args.clone();
+            invalid[key] = value;
+            assert!(!valid(&invalid, schema), "invalid {key}");
+        }
+    }
+
     #[test]
     fn generic_service_access_tools_are_owner_only_and_have_no_type_or_backend_input() {
         let list = tools(true);
