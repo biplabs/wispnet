@@ -1306,7 +1306,8 @@ fn open_file_at(directory: &File, name: &str, flags: i32, mode: libc::mode_t) ->
             directory.as_raw_fd(),
             name.as_ptr(),
             flags | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
-            mode,
+            // Darwin mode_t is u16; variadic C arguments require promotion.
+            mode as libc::c_uint,
         )
     };
     if fd < 0 {
