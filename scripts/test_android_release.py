@@ -1,10 +1,12 @@
+import io
 import os
+import zipfile
 from pathlib import Path
 import struct
 import subprocess
 import unittest
 import xml.etree.ElementTree as ET
-from check_android_release import check_elf,check_manifest,check_libraries
+from check_android_release import check_elf,check_manifest,check_libraries,check_jni_callbacks
 
 class ReleaseChecks(unittest.TestCase):
     def elf(self,align=16384,relro_end=16384,machine=183):
@@ -74,5 +76,64 @@ class ReleaseChecks(unittest.TestCase):
         for name in ['WISPNET_UPLOAD_KEYSTORE','WISPNET_UPLOAD_STORE_PASSWORD','WISPNET_UPLOAD_KEY_ALIAS','WISPNET_UPLOAD_KEY_PASSWORD']:env.pop(name,None)
         result=subprocess.run([str(Path(__file__).resolve().parent/'build_android_release.sh'),'--signed'],env=env,capture_output=True,text=True,timeout=5)
         self.assertNotEqual(result.returncode,0);self.assertIn('requires all four',result.stderr)
+
+
+class JniReleaseChecks(unittest.TestCase):
+    def dex(self, omitted=(), renamed=False, static=True, body=True, signature=True):
+        # Small DEX table fixture. References stay present when definitions are
+        # omitted, reproducing the difference between strings and callable ABI.
+        names = ['call', 'publicationCancelled', 'publishReceivedFile', 'putFileDescriptor']
+        strings = ['Lcom/biplabs/wispnet/Native;', 'Ljava/lang/String;', 'I', 'Z', *names]
+        if renamed: strings[6] = 'renamedByR8'
+        data = bytearray(112 + len(strings)*4 + 4*4 + 3*12 + 4*8 + 32)
+        data[:8] = b'dex\n035\0'
+        strings_off = 112; types_off = strings_off + len(strings)*4
+        protos_off = types_off + 16; methods_off = protos_off + 36; classes_off = methods_off + 32
+        for at, size, offset in [(56,len(strings),strings_off),(64,4,types_off),(72,3,protos_off),(88,4,methods_off),(96,1,classes_off)]:
+            struct.pack_into('<II',data,at,size,offset)
+        for index, text in enumerate(strings):
+            struct.pack_into('<I',data,strings_off+index*4,len(data))
+            data.extend(bytes([len(text)]) + text.encode() + b'\0')
+        for index in range(4): struct.pack_into('<I',data,types_off+index*4,index)
+        for index, (result, parameters) in enumerate([(1,[1]),(3,[1]),(1,[1,2])]):
+            while len(data)%4: data.append(0)
+            offset = len(data); data.extend(struct.pack('<I',len(parameters)))
+            for parameter in parameters: data.extend(struct.pack('<H',parameter))
+            struct.pack_into('<III',data,protos_off+index*12,0,3 if index==2 and not signature else result,offset)
+        for index, proto in enumerate([0,1,2,2]): struct.pack_into('<HHI',data,methods_off+index*8,0,proto,4+index)
+        struct.pack_into('<I',data,classes_off+24,len(data))
+        definitions = [i for i,name in enumerate(names) if name not in omitted]
+        data.extend(bytes([0,0,len(definitions),0])); previous = 0
+        def uleb(value):
+            encoded=bytearray()
+            while value>=128: encoded.append((value&127)|128); value>>=7
+            encoded.append(value); return encoded
+        for index in definitions:
+            java = index==2
+            flags = (8 if static or not java else 0) | (0 if java else 256)
+            data.extend(uleb(index-previous)+uleb(flags)+uleb(1 if java and body else 0)); previous=index
+        return bytes(data)
+
+    def verify(self, data, entry='base/dex/classes2.dex'):
+        stream=io.BytesIO()
+        with zipfile.ZipFile(stream,'w') as archive: archive.writestr(entry,data)
+        with zipfile.ZipFile(stream) as archive: check_jni_callbacks(archive)
+
+    def test_callable_jni_survives_in_actual_apk_and_bundle_dex(self):
+        for entry in ['classes.dex','classes2.dex','base/dex/classes.dex','base/dex/classes12.dex']:
+            self.verify(self.dex(),entry)
+
+    def test_removed_callbacks_fail_even_when_method_references_remain(self):
+        for missing in [('publishReceivedFile',),('publicationCancelled',),('call',),('putFileDescriptor',)]:
+            with self.subTest(missing=missing), self.assertRaisesRegex(ValueError,missing[0]):
+                self.verify(self.dex(omitted=missing))
+
+    def test_renamed_nonstatic_or_bodyless_callback_is_not_callable(self):
+        for broken in [self.dex(renamed=True),self.dex(static=False),self.dex(body=False),self.dex(signature=False)]:
+            with self.assertRaisesRegex(ValueError,'publishReceivedFile'): self.verify(broken)
+
+    def test_dex_in_assets_cannot_stand_in_for_installed_application_code(self):
+        with self.assertRaisesRegex(ValueError,'publishReceivedFile'):
+            self.verify(self.dex(),'assets/classes.dex')
 
 if __name__=='__main__':unittest.main()
