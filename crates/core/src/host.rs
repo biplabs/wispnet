@@ -91,6 +91,8 @@ pub enum ServiceKind {
     Tcp,
     /// Built-in PTY service; no TCP backend listener.
     Shell,
+    /// Built-in resumable binary file service; no TCP backend listener.
+    Files,
 }
 impl Catalog {
     /// Only complete, canonical owner-filtered snapshots can advance a baseline.
@@ -100,7 +102,7 @@ impl Catalog {
             && self.host == expected
             && crate::enrollment::valid_code(&self.generation)
             && self.revision <= i64::MAX as u64
-            && self.services.len() <= 129
+            && self.services.len() <= 130
             && usize::from(self.service_count) == self.services.len()
             && self.services.windows(2).all(|pair| pair[0].id < pair[1].id)
             && self.services.iter().all(|s| {

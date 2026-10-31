@@ -12,9 +12,12 @@ fn custom_snapshot(
     host: wispnet_core::identity::EndpointId,
 ) -> Result<host::Snapshot, control::ControlError> {
     let mut snapshot = store.host_snapshot(host)?;
-    snapshot
-        .services
-        .retain(|s| s.kind != wispnet_core::host::ServiceKind::Shell);
+    snapshot.services.retain(|s| {
+        !matches!(
+            s.kind,
+            wispnet_core::host::ServiceKind::Shell | wispnet_core::host::ServiceKind::Files
+        )
+    });
     Ok(snapshot)
 }
 fn directory() -> tempfile::TempDir {
@@ -430,12 +433,12 @@ fn service_incarnation_persists_on_edit_and_restart_but_not_recreation() {
     // Simulate the real schema-6 table, preserving the authority and grants.
     drop(store);
     let db = rusqlite::Connection::open(dir.path().join("host.sqlite3")).unwrap();
-    db.execute_batch("DELETE FROM host_services WHERE id='shell'; DROP TABLE host_pairing_blocks; DROP TABLE host_legacy_pins; DROP TABLE host_pairing_offers; DROP TABLE host_pairings; ALTER TABLE host_services DROP COLUMN incarnation; ALTER TABLE host_services DROP COLUMN kind; PRAGMA user_version=6;")
+    db.execute_batch("DELETE FROM host_services WHERE id IN ('shell','files'); DROP TABLE host_pairing_blocks; DROP TABLE host_legacy_pins; DROP TABLE host_pairing_offers; DROP TABLE host_pairings; ALTER TABLE host_services DROP COLUMN incarnation; ALTER TABLE host_services DROP COLUMN kind; PRAGMA user_version=6;")
         .unwrap();
     drop(db);
     let (mut store, _) = host::owner_store(dir.path(), id).unwrap();
     let migrated = custom_snapshot(&mut store, id).unwrap();
-    assert_eq!(migrated.revision, 7);
+    assert_eq!(migrated.revision, 8);
     assert_eq!(migrated.host, id);
     assert!(wispnet_core::enrollment::valid_code(
         &migrated.services[0].incarnation

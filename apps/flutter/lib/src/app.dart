@@ -319,8 +319,61 @@ class _WispHomeState extends State<WispHome>
     if (mounted) setState(() {});
   }
 
+  Future<void> showFiles(Machine machine) async {
+    final upload =
+        'wispnet files put ${machine.id} WORKSPACE /local/file relative/path';
+    final download =
+        'wispnet files get ${machine.id} WORKSPACE /local/file relative/path';
+    await showWispSheet<void>(
+      context,
+      title: 'Files on ${machine.name}',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Transfer files using the Wispnet command line on a paired computer. Uploads and downloads resume after disconnects.',
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'Replace WORKSPACE with an exported folder name, /local/file with your local file path, and relative/path with the path inside the exported folder.',
+          ),
+          const SizedBox(height: 16),
+          const Text('Upload'),
+          const SizedBox(height: 8),
+          SelectableText(upload),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: upload));
+              notice('Upload command copied');
+            },
+            icon: const Icon(Icons.copy),
+            label: const Text('Copy upload command'),
+          ),
+          const SizedBox(height: 16),
+          const Text('Download'),
+          const SizedBox(height: 8),
+          SelectableText(download),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: download));
+              notice('Download command copied');
+            },
+            icon: const Icon(Icons.copy),
+            label: const Text('Copy download command'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> open(Machine machine, Map<String, dynamic> service) async {
     if (busy || !online) return;
+    if (service['kind'] == 'files') {
+      await showFiles(machine);
+      return;
+    }
     if (service['kind'] == 'shell' && snapshot['desktop'] == true) {
       await showDesktopShell(
         host: machine.id,

@@ -718,9 +718,11 @@ mod tests {
             .unwrap()
             .services()
             .await
-            .unwrap()[0]
-            .incarnation
-            .clone();
+            .unwrap()
+            .into_iter()
+            .find(|s| s.id == "llama")
+            .unwrap()
+            .incarnation;
         let request = json!({"op":"configure_public","service":"llama","incarnation":incarnation,"enabled":true,"name":"J desktop"});
         let mut remote = request.clone();
         remote["host"] = json!(SecretKey::generate().public());
@@ -795,7 +797,10 @@ mod tests {
                 .unwrap()
                 .services()
                 .await
-                .unwrap()[0]
+                .unwrap()
+                .into_iter()
+                .find(|s| s.id == "llama")
+                .unwrap()
                 .allow
                 .is_empty()
         );

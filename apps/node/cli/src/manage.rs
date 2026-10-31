@@ -8,6 +8,7 @@ pub const HELP: &str = "Management (uses the running node; --config is optional)
   wispnet online | offline
   wispnet settings [--port 7842] [--device-id my-computer]
   wispnet shell-access [--allow PUBLIC_ID,PUBLIC_ID | --allow none]
+  wispnet files-access [--allow PUBLIC_ID,PUBLIC_ID|none] [--export NAME=/absolute/path ... | --clear-exports]
   wispnet service-links --host HOST_ID --service SERVICE_ID
   wispnet resolve-link --link wispnet://HOST_ID/SERVICE_ID
   wispnet node-request --request /absolute/path/request.json
@@ -27,29 +28,52 @@ pub fn handles(mode: &str) -> bool {
             | "resolve-link"
             | "node-request"
             | "shell-access"
+            | "files-access"
     )
 }
 pub fn run(args: &[OsString]) -> Result<Value, String> {
     let mode = args[0].to_str().ok_or("Invalid command")?;
     let mut options = BTreeMap::new();
-    if !(args.len() - 1).is_multiple_of(2) {
-        return Err(HELP.into());
-    }
-    for pair in args[1..].chunks_exact(2) {
-        let key = pair[0].to_str().ok_or("Invalid option")?;
-        let value = pair[1].to_str().ok_or("Invalid option value")?;
+    let mut exports = BTreeMap::<String, String>::new();
+    let mut clear_exports = false;
+    let mut pairs = args[1..].iter();
+    while let Some(arg) = pairs.next() {
+        let key = arg.to_str().ok_or("Invalid option")?;
+        if mode == "files-access" && key == "--clear-exports" && !clear_exports {
+            clear_exports = true;
+            continue;
+        }
+        let value = pairs.next().and_then(|v| v.to_str()).ok_or(HELP)?;
+        if mode == "files-access" && key == "--export" {
+            let (name, root) = value
+                .split_once('=')
+                .ok_or("Export must be NAME=/absolute/path")?;
+            if !wispnet_core::protocol::valid_service_id(name)
+                || !PathBuf::from(root).is_absolute()
+                || exports.insert(name.into(), root.into()).is_some()
+            {
+                return Err(
+                    "Export names must be unique lowercase identifiers and roots absolute paths"
+                        .into(),
+                );
+            }
+            continue;
+        }
         let valid = key == "--config"
             || match mode {
                 "settings" => matches!(key, "--port" | "--device-id"),
                 "service-links" => matches!(key, "--host" | "--service"),
                 "resolve-link" => key == "--link",
                 "node-request" => key == "--request",
-                "shell-access" => key == "--allow",
+                "shell-access" | "files-access" => key == "--allow",
                 _ => false,
             };
         if !valid || options.insert(key, value).is_some() {
             return Err(HELP.into());
         }
+    }
+    if clear_exports && !exports.is_empty() {
+        return Err("Use --export or --clear-exports".into());
     }
     let config = options
         .get("--config")
@@ -63,6 +87,40 @@ pub fn run(args: &[OsString]) -> Result<Value, String> {
             .ok_or_else(|| format!("Missing {key}\n{HELP}"))
     };
     match mode {
+        "files-access" => {
+            let status = api.request(json!({"op":"status"}))?;
+            let service = status["host"]["services"]
+                .as_array()
+                .and_then(|ss| {
+                    ss.iter()
+                        .find(|s| s["id"] == "files" && s["kind"] == "files")
+                })
+                .ok_or("Built-in Files unavailable; update and restart the node")?;
+            let current_exports = status["host"]["file_exports"].clone();
+            if !options.contains_key("--allow") && exports.is_empty() && !clear_exports {
+                return Ok(json!({"service":service,"exports":current_exports}));
+            }
+            let allow = match options.get("--allow") {
+                None => service["allow"].clone(),
+                Some(&"none") => json!([]),
+                Some(ids) => json!(
+                    ids.split(',')
+                        .map(|id| id
+                            .parse::<wispnet_core::identity::EndpointId>()
+                            .map_err(|_| "Invalid allowed device ID"))
+                        .collect::<Result<Vec<_>, _>>()?
+                ),
+            };
+            let exports = if clear_exports || !exports.is_empty() {
+                json!(exports)
+            } else {
+                current_exports
+            };
+            let result = api.request(json!({"op":"mutate","operation":{"op":"files","allow":allow,"exports":exports,"expected_revision":status["host"]["revision"]}}))?;
+            Ok(
+                json!({"service":"files","revision":result["revision"],"allow":allow,"exports":exports}),
+            )
+        }
         "shell-access" => {
             let status = api.request(json!({"op":"status"}))?;
             let service = status["host"]["services"]

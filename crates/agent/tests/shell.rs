@@ -91,7 +91,14 @@ async fn irohshell_grants_reconnect_revocation_and_incarnation_are_enforced() {
     };
     mutate(dir.path(), own, service(2, vec![allowed.endpoint_id()]));
     let authority = Authority::open(dir.path(), own).unwrap();
-    let incarnation = authority.services().await.unwrap()[0].incarnation.clone();
+    let incarnation = authority
+        .services()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|s| s.kind == wispnet_core::host::ServiceKind::Shell)
+        .unwrap()
+        .incarnation;
     let host = TunnelHost::bind_host(identity.secret_key(), &config(), authority.clone())
         .await
         .unwrap();

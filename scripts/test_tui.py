@@ -231,13 +231,13 @@ class TerminalManagement(unittest.TestCase):
         term.send(b' \x1b')
         self.assertEqual(bapi.request(op='status')['host']['clients'], [])
         self.assertTrue(all(not s['allow'] for s in bapi.request(op='status')['host']['services']))
-        term.send(b'\r\r\x1b[B \x1b[B\x1b[B\r')  # Skip the unchecked builtin Shell grant.
+        term.send(b'\r\r\x1b[B\x1b[B \x1b[B\x1b[B\r')  # Grant scan-only, leaving both built-ins unchecked.
         term.expect('Approve pairing and service access')
         term.send(b'\r')
         approved = self.changed(bapi, lambda s: len(s['host']['clients']) == 1)
         self.assertEqual(approved['host']['revision'], 3)
         self.assertEqual({s['id']:s['allow'] for s in approved['host']['services']},
-                         {'private':[], 'scan-only':[pa], 'shell':[]})
+                         {'files':[], 'private':[], 'scan-only':[pa], 'shell':[]})
         term.expect('1 devices')
 
         # The real form creates a loopback service with its explicitly selected device.
@@ -250,7 +250,7 @@ class TerminalManagement(unittest.TestCase):
         term.send(b'\r')
         state = self.changed(bapi, lambda s: any(service['id'] == 'dashboard' for service in s['host']['services']))
         self.assertEqual(next(s['allow'] for s in state['host']['services'] if s['id'] == 'dashboard'), [pa])
-        term.expect('4 services')
+        term.expect('5 services')
         term.send(b'\x1b[B\r\x1b[B\r')
         term.expect('Browser service')
         self.assertTrue(bapi.request(op='status')['access_enabled'])
@@ -270,7 +270,7 @@ class TerminalManagement(unittest.TestCase):
 
         # Remove a specific approved client, using the same confirmation as the desktop.
         term.send('1')
-        term.send(b'\x1b[B' * 5)  # This device, builtin Shell and three ordinary services precede remotes.
+        term.send(b'\x1b[B' * 6)  # This device, both built-ins and three ordinary services precede remotes.
         term.send(b'\r\x1b[B\r')
         term.expect('Remove this machine')
         self.assertIn(pa, term.text)
@@ -302,7 +302,7 @@ class TerminalManagement(unittest.TestCase):
         term.send('1')
         term.expect('fixture-phone')  # Wait for the refreshed pin, then select it.
         term.send('1')
-        term.send(b'\x1b[B' * 5)  # This device, builtin Shell and three ordinary services precede remotes.
+        term.send(b'\x1b[B' * 6)  # This device, both built-ins and three ordinary services precede remotes.
         term.send(b'\r\x1b[B\r')
         term.expect('Remove this machine')
         term.send(b'\r')
@@ -395,9 +395,9 @@ class TerminalManagement(unittest.TestCase):
         term.send(b'\r')
         term.expect('Operation not completed')
         services = api.request(op='status')['host']['services']
-        self.assertEqual([service['id'] for service in services], ['shell'])
-        self.assertEqual(services[0]['kind'], 'shell')
-        self.assertEqual(services[0]['allow'], [])
+        self.assertEqual([service['id'] for service in services], ['files', 'shell'])
+        self.assertEqual([service['kind'] for service in services], ['files', 'shell'])
+        self.assertTrue(all(service['allow'] == [] for service in services))
         self.assertEqual(api.request(op='status')['host']['revision'], 1)
         term.close()
 

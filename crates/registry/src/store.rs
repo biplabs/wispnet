@@ -83,7 +83,7 @@ impl Store {
                 CREATE TABLE services (id TEXT PRIMARY KEY, host TEXT NOT NULL REFERENCES devices(id));
                 CREATE TABLE grants (service TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE, device TEXT NOT NULL REFERENCES devices(id), PRIMARY KEY(service,device));
                 PRAGMA user_version=1;")?,
-            1..=12 => {},
+            1..=13 => {},
             _ => return Err(Error::UnsupportedSchema),
         }
         if version < 2 {
@@ -175,6 +175,13 @@ impl Store {
                 tx.execute("UPDATE revision SET value=value+1 WHERE id=1", [])?;
             }
             tx.pragma_update(None, "user_version", 12)?;
+        }
+        if version < 13 {
+            tx.execute_batch("CREATE TABLE IF NOT EXISTS host_file_exports(name TEXT PRIMARY KEY,root TEXT NOT NULL);")?;
+            if crate::host::ensure_builtin_files(&tx)? {
+                tx.execute("UPDATE revision SET value=value+1 WHERE id=1", [])?;
+            }
+            tx.pragma_update(None, "user_version", 13)?;
         }
         tx.commit()?;
         Ok(Self(db))

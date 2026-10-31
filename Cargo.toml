@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/shell", "crates/core", "crates/agent", "crates/registry", "apps/node/cli", "apps/relay", "apps/public-gateway", "apps/flutter/android/native", "crates/client", "apps/node/daemon"]
+members = ["crates/files", "crates/shell", "crates/core", "crates/agent", "crates/registry", "apps/node/cli", "apps/relay", "apps/public-gateway", "apps/flutter/android/native", "crates/client", "apps/node/daemon"]
 resolver = "3"
 exclude = ["vendor/iroh"]
 
@@ -11,6 +11,7 @@ rust-version = "1.95"
 publish = false
 
 [workspace.dependencies]
+wispnet-files = { path = "crates/files" }
 wispnet-shell = { path = "crates/shell" }
 wispnet-core = { path = "crates/core" }
 wispnet-agent = { path = "crates/agent" }

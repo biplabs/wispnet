@@ -315,6 +315,10 @@ impl Field {
 }
 #[derive(Clone)]
 enum FormKind {
+    Files {
+        revision: u64,
+        exports: Value,
+    },
     Shell {
         revision: u64,
     },
@@ -1074,6 +1078,19 @@ impl App {
             selected: 0,
         }
     }
+    fn files_form(&self, service: &Value) -> Form {
+        let mut form = self.shell_form(service);
+        form.title = "Files · permitted devices".into();
+        form.kind = FormKind::Files {
+            revision: self.revision(),
+            exports: self.host()["file_exports"]
+                .as_object()
+                .cloned()
+                .map(Value::Object)
+                .unwrap_or(json!({})),
+        };
+        form
+    }
     fn choice(&mut self, title: impl Into<String>, detail: Vec<String>, entries: Vec<Entry>) {
         self.modal = Some(Modal::Choice {
             title: title.into(),
@@ -1224,6 +1241,13 @@ impl App {
                 self.choice("Manage machine", detail, choices);
             }
             Action::Service(service) => {
+                if service["kind"] == "files" {
+                    self.choice("Built-in Files", vec![
+                        "Transfer files with wispnet files put|get DEVICE WORKSPACE LOCAL REMOTE.".into(),
+                        "Configure exported directories with wispnet files-access --export NAME=/absolute/path.".into(),
+                    ], vec![entry("grants", "Edit permitted devices", Action::Form(self.files_form(&service)))]);
+                    return;
+                }
                 if service["kind"] == "shell" {
                     self.choice("Built-in Shell",vec!["Shell is included with every desktop host. Choose which paired devices may open a terminal.".into()],vec![entry("open","Open shell",Action::Shell(text(&self.host(),"host").into(),service.clone())),entry("grants","Edit permitted devices",Action::Form(self.shell_form(&service)))]);
                     return;
@@ -1286,6 +1310,19 @@ impl App {
                     };
             }
             Action::Remote(host, service) => {
+                if service["kind"] == "files" {
+                    self.choice(
+                        "Files access",
+                        vec![
+                            format!("Host: {host}"),
+                            format!("Upload: wispnet files put {host} WORKSPACE LOCAL REMOTE"),
+                            format!("Download: wispnet files get {host} WORKSPACE LOCAL REMOTE"),
+                            "Transfers resume automatically after interruption.".into(),
+                        ],
+                        vec![],
+                    );
+                    return;
+                }
                 if service["kind"] == "shell" {
                     self.action(Action::Shell(host, service));
                     return;
@@ -1489,6 +1526,20 @@ impl App {
                 }
                 self.confirmation("Approve pairing and service access".into(), detail, self.mutate(json!({"op":"approve_invitation","invitation":invitation,"expected_revision":revision,"services":services})));
             }
+            FormKind::Files { revision, exports } => {
+                let allow = form
+                    .fields
+                    .iter()
+                    .filter(|f| matches!(f.kind, FieldKind::Check(true)))
+                    .map(|f| {
+                        serde_json::from_str::<Value>(&f.value)
+                            .map_err(|_| "Invalid selected device")
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.confirmation("Save Files access".into(),
+                    vec![format!("{} permitted devices", allow.len()), "These devices may read and write files inside the configured exports.".into()],
+                    self.mutate(json!({"op":"files","allow":allow,"exports":exports,"expected_revision":revision})));
+            }
             FormKind::Shell { revision } => {
                 let allow = form
                     .fields
@@ -1503,8 +1554,8 @@ impl App {
             }
             FormKind::Service { existing, revision } => {
                 let name = form.fields[0].value.trim();
-                if name == "shell" {
-                    return Err("shell is reserved for the built-in Shell service".into());
+                if matches!(name, "shell" | "files") {
+                    return Err("shell and files are reserved for built-in services".into());
                 }
                 if !wispnet_core::protocol::valid_service_id(name) {
                     return Err("Enter a valid service ID".into());

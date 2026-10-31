@@ -21,8 +21,8 @@ fn builtin_shell_is_permanent_reserved_and_remote_grants_are_explicit() {
     let (mut store, owner) = host::owner_store(dir.path(), host).unwrap();
     let snapshot = store.host_snapshot(host).unwrap();
     assert_eq!(snapshot.revision, 0);
-    assert_eq!(snapshot.services.len(), 1);
-    let builtin = &snapshot.services[0];
+    assert_eq!(snapshot.services.len(), 2);
+    let builtin = snapshot.services.iter().find(|s| s.id == "shell").unwrap();
     assert_eq!(builtin.id, "shell");
     assert_eq!(builtin.kind, ServiceKind::Shell);
     assert_eq!(builtin.backend.to_string(), "127.0.0.1:0");
@@ -72,7 +72,14 @@ fn builtin_shell_is_permanent_reserved_and_remote_grants_are_explicit() {
         )
         .unwrap();
     assert_eq!(
-        store.host_snapshot(host).unwrap().services[0].allow,
+        store
+            .host_snapshot(host)
+            .unwrap()
+            .services
+            .into_iter()
+            .find(|s| s.id == "shell")
+            .unwrap()
+            .allow,
         vec![peer]
     );
     store
@@ -89,8 +96,24 @@ fn builtin_shell_is_permanent_reserved_and_remote_grants_are_explicit() {
     let (mut store, _) = host::owner_store(dir.path(), host).unwrap();
     let after = store.host_snapshot(host).unwrap();
     assert_eq!(after.revision, 3);
-    assert_eq!(after.services[0].incarnation, incarnation);
-    assert!(after.services[0].allow.is_empty());
+    assert_eq!(
+        after
+            .services
+            .iter()
+            .find(|s| s.id == "shell")
+            .unwrap()
+            .incarnation,
+        incarnation
+    );
+    assert!(
+        after
+            .services
+            .iter()
+            .find(|s| s.id == "shell")
+            .unwrap()
+            .allow
+            .is_empty()
+    );
 }
 #[test]
 fn schema_twelve_preserves_legacy_shell_service_and_adds_builtin_once() {
@@ -121,7 +144,13 @@ fn schema_twelve_preserves_legacy_shell_service_and_adds_builtin_once() {
         )
         .unwrap();
     let old = store.host_snapshot(host).unwrap();
-    let old_inc = old.services[0].incarnation.clone();
+    let old_inc = old
+        .services
+        .iter()
+        .find(|s| s.id == "shell")
+        .unwrap()
+        .incarnation
+        .clone();
     drop(store);
     let db = rusqlite::Connection::open(dir.path().join("host.sqlite3")).unwrap();
     db.execute_batch("UPDATE host_services SET kind='http',backend='127.0.0.1:88' WHERE id='shell'; INSERT INTO host_services(id,backend,incarnation,kind) VALUES('shell-legacy','127.0.0.1:99',lower(hex(randomblob(32))),'tcp'); PRAGMA user_version=11;").unwrap();
@@ -129,7 +158,7 @@ fn schema_twelve_preserves_legacy_shell_service_and_adds_builtin_once() {
     let (mut store, _) = host::owner_store(dir.path(), host).unwrap();
     let migrated = store.host_snapshot(host).unwrap();
     assert_eq!(migrated.revision, old.revision + 1);
-    assert_eq!(migrated.services.len(), 3);
+    assert_eq!(migrated.services.len(), 4);
     let builtin = migrated.services.iter().find(|s| s.id == "shell").unwrap();
     assert_eq!(builtin.kind, ServiceKind::Shell);
     assert!(builtin.allow.is_empty());
@@ -160,7 +189,7 @@ fn schema_twelve_preserves_legacy_shell_service_and_adds_builtin_once() {
 }
 
 #[tokio::test]
-async fn builtin_reserves_its_own_slot_beside_128_custom_services() {
+async fn builtins_reserve_their_own_slots_beside_128_custom_services() {
     let dir = directory();
     let own = Identity::generate().endpoint_id();
     let peer = Identity::generate().endpoint_id();
@@ -203,9 +232,20 @@ async fn builtin_reserves_its_own_slot_beside_128_custom_services() {
             },
         )
         .unwrap();
+    store
+        .host_mutate(
+            own,
+            &owner,
+            Mutation::Files {
+                expected_revision: 130,
+                allow: vec![peer],
+                exports: std::collections::BTreeMap::new(),
+            },
+        )
+        .unwrap();
     drop(store);
     let authority = host::Authority::open(dir.path(), own).unwrap();
     let catalog = authority.catalog(peer).await.unwrap();
-    assert_eq!(catalog.services.len(), 129);
+    assert_eq!(catalog.services.len(), 130);
     assert!(catalog.valid(own));
 }

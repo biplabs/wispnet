@@ -1,6 +1,37 @@
 use super::*;
 use ratatui::{Terminal, backend::TestBackend};
 #[test]
+fn built_in_files_grants_preserve_exports_and_never_offer_http_actions() {
+    let (mut app, rx, _root) = fixture();
+    app.snapshot.as_mut().unwrap()["host"]["file_exports"] = json!({"jobs":"/srv/jobs"});
+    let service = json!({"id":"files","kind":"files","incarnation":"d".repeat(64),"allow":[]});
+    app.save_form(app.files_form(&service)).unwrap();
+    app.key(KeyCode::Enter.into());
+    let Work {
+        task: Task::Request(request),
+        ..
+    } = rx.try_recv().unwrap()
+    else {
+        panic!("Expected Files grant mutation")
+    };
+    assert_eq!(
+        request["operation"],
+        json!({"op":"files","allow":[],"exports":{"jobs":"/srv/jobs"},"expected_revision":7})
+    );
+    app.action(Action::Service(service.clone()));
+    let Some(Modal::Choice { entries, .. }) = &app.modal else {
+        panic!("Expected Files actions")
+    };
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].id, "grants");
+    app.action(Action::Remote("b".repeat(64), service));
+    let Some(Modal::Choice { entries, .. }) = &app.modal else {
+        panic!("Expected Files help")
+    };
+    assert!(entries.is_empty());
+    assert!(rx.try_recv().is_err());
+}
+#[test]
 fn built_in_shell_access_has_explicit_grants_and_reserved_identity() {
     let (mut app, rx, _root) = fixture();
     let service = json!({"id":"shell","kind":"shell","incarnation":"c".repeat(64),"allow":[]});

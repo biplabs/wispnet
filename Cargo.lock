@@ -4901,6 +4901,7 @@ dependencies = [
  "tokio",
  "tracing",
  "wispnet-core",
+ "wispnet-files",
  "wispnet-registry",
  "wispnet-shell",
  "zeroize",
@@ -4964,11 +4965,13 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1",
+ "sha2 0.11.1",
  "tempfile",
  "tokio",
  "url",
  "wispnet-agent",
  "wispnet-core",
+ "wispnet-files",
  "wispnet-registry",
  "wispnet-shell",
  "zeroize",
@@ -4984,6 +4987,18 @@ dependencies = [
  "toml",
  "url",
  "zeroize",
+]
+
+[[package]]
+name = "wispnet-files"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

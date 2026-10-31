@@ -5,20 +5,21 @@ from wispnet_desktop.catalog_cache import CatalogCache, MAX_BYTES
 
 
 class CacheChecks(unittest.TestCase):
-    def test_builtin_shell_preserves_capacity_for_128_custom_services(self):
+    def test_builtin_services_preserve_capacity_for_128_custom_services(self):
         with tempfile.TemporaryDirectory() as directory:
             peer = 'a' * 64
             cache = CatalogCache(directory)
             services = [dict(id=f'app-{i:03}', incarnation='c' * 64,
                              display_name=f'Application {i}', kind='http') for i in range(128)]
+            services.append(dict(id='files', incarnation='e' * 64, display_name='Files', kind='files'))
             services.append(dict(id='shell', incarnation='d' * 64, display_name='Shell', kind='shell'))
-            catalog = dict(host=peer, version=1, complete=True, service_count=129,
+            catalog = dict(host=peer, version=1, complete=True, service_count=130,
                            generation='b' * 64, revision=1, services=services)
             cache.save(peer, dict(catalog=catalog, fetched=1))
-            self.assertEqual(len(cache.load(peer)['catalog']['services']), 129)
+            self.assertEqual(len(cache.load(peer)['catalog']['services']), 130)
             catalog['services'].append(dict(id='too-many', incarnation='e' * 64,
                                             display_name='Beyond capacity', kind='http'))
-            catalog['service_count'] = 130
+            catalog['service_count'] = 131
             with self.assertRaises(ValueError):
                 cache.save(peer, dict(catalog=catalog, fetched=1))
 

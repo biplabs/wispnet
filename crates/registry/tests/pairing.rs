@@ -16,9 +16,12 @@ fn custom_snapshot(
     host: wispnet_core::identity::EndpointId,
 ) -> Result<wispnet_registry::host::Snapshot, wispnet_registry::control::ControlError> {
     let mut snapshot = store.host_snapshot(host)?;
-    snapshot
-        .services
-        .retain(|s| s.kind != wispnet_core::host::ServiceKind::Shell);
+    snapshot.services.retain(|s| {
+        !matches!(
+            s.kind,
+            wispnet_core::host::ServiceKind::Shell | wispnet_core::host::ServiceKind::Files
+        )
+    });
     Ok(snapshot)
 }
 #[test]

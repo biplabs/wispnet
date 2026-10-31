@@ -409,7 +409,7 @@ class NativeBridgeTest(unittest.TestCase):
                 with socket.socket() as available:
                     available.bind(('127.0.0.1', 0)); port = available.getsockname()[1]
                 bridge.dispatch('saveSettings', dict(host=None, name='fixture', port=port))
-                service = bridge.snapshot()['hosts'][own]['catalog']['services'][0]
+                service = next(s for s in bridge.snapshot()['hosts'][own]['catalog']['services'] if s['id'] == 'fixture')
                 handoff = bridge.dispatch('open', dict(host=own, service='fixture', incarnation=service['incarnation']))
                 self.assertEqual(set(handoff), {'url'})
                 url = urlsplit(handoff['url'])

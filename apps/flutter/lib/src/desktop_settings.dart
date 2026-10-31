@@ -219,6 +219,95 @@ class _DesktopSettingsState extends State<DesktopSettings> {
     );
   }
 
+  Future<void> editFiles(Map<String, dynamic> service) async {
+    final revision = status!['host']['revision'] as int;
+    final allowed = (service['allow'] as List? ?? []).cast<String>().toSet();
+    final devices = List<Map<String, dynamic>>.of(clients);
+    final currentExports = (status!['host']['file_exports'] as Map? ?? {});
+    final exports = TextEditingController(
+      text: currentExports.entries.map((e) => '${e.key}=${e.value}').join('\n'),
+    );
+    await showWispSheet<void>(
+      context,
+      title: 'Files access',
+      child: _ActionForm(
+        controllers: [exports],
+        builder: (context, submit, working, failure) => StatefulBuilder(
+          builder: (context, update) => Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'Files is built into Wispnet. Selected devices may upload and download files in the exported folders. Transfers can resume after disconnects.',
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: exports,
+                enabled: !working,
+                minLines: 2,
+                maxLines: 6,
+                decoration: const InputDecoration(
+                  labelText: 'Exported folders',
+                  hintText: 'training=/absolute/path/to/training',
+                  helperText: 'One name=/absolute/folder per line. Folders must already exist.',
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Select paired devices allowed to use these folders. Leave all unchecked for local access only.',
+              ),
+              for (final c in devices)
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(c['name'] as String),
+                  subtitle: Text(c['peer'] as String),
+                  value: allowed.contains(c['peer']),
+                  onChanged: working
+                      ? null
+                      : (value) => update(() {
+                          if (value!) {
+                            allowed.add(c['peer'] as String);
+                          } else {
+                            allowed.remove(c['peer']);
+                          }
+                        }),
+                ),
+              if (failure != null)
+                Text(failure, style: const TextStyle(color: WispColors.error)),
+              FilledButton(
+                onPressed: working
+                    ? null
+                    : () => submit(() async {
+                        final roots = <String, String>{};
+                        for (final raw in exports.text.split('\n')) {
+                          final line = raw.trim();
+                          if (line.isEmpty) continue;
+                          final split = line.indexOf('=');
+                          if (split < 1 ||
+                              split == line.length - 1 ||
+                              roots.containsKey(line.substring(0, split))) {
+                            throw Exception(
+                              'Use a unique name=/absolute/folder on each line.',
+                            );
+                          }
+                          roots[line.substring(0, split)] = line.substring(
+                            split + 1,
+                          );
+                        }
+                        await mutate({
+                          'op': 'files',
+                          'allow': allowed.toList(),
+                          'exports': roots,
+                        }, revision);
+                      }),
+                child: const Text('Save folders and access'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> editService([Map<String, dynamic>? service]) async {
     final current = status!;
     final originalId = service?['id'] as String?;
@@ -304,9 +393,9 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                     ? null
                     : () => submit(() async {
                         final serviceId = id.text.trim();
-                        if (serviceId == 'shell') {
+                        if (serviceId == 'shell' || serviceId == 'files') {
                           throw const FormatException(
-                            '“shell” is reserved for the built-in Shell service. Use Shell access to manage its permissions.',
+                            '“shell” and “files” are reserved for built-in services. Use their access settings to manage permissions.',
                           );
                         }
                         if (!RegExp(r'^[a-z0-9][a-z0-9._-]{0,63}$')
@@ -643,6 +732,10 @@ class _DesktopSettingsState extends State<DesktopSettings> {
             (s) => s['id'] == 'shell' && s['kind'] == 'shell',
           ))
             action('Shell access', () => run(() => editShell(s))),
+          for (final s in services.where(
+            (s) => s['id'] == 'files' && s['kind'] == 'files',
+          ))
+            action('Files access', () => run(() => editFiles(s))),
           if (widget.servicesOnly)
             action('Pair this machine', () => run(invite)),
         ] else if (!services.any((s) => s['id'] == widget.serviceId))
@@ -675,6 +768,13 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                     const Text('Built-in service · available on this computer'),
                     const SizedBox(height: 8),
                     action('Manage access', () => run(() => editShell(s))),
+                  ] else if (s['kind'] == 'files') ...[
+                    const Text('Built-in service · resumable file transfers'),
+                    const SizedBox(height: 8),
+                    action(
+                      'Manage folders and access',
+                      () => run(() => editFiles(s)),
+                    ),
                   ] else ...[
                     action('Edit', () => run(() => editService(s))),
                     action(

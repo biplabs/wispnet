@@ -428,7 +428,7 @@ class Bridge:
             return {}
         if method == 'saveOrder':
             group, ids = args['group'], args['ids']
-            if not (group == 'machines' or re.fullmatch(r'services/[0-9a-f]{64}', group)) or not isinstance(ids, list) or len(ids) > (128 if group == 'machines' else 129) or not all(isinstance(i, str) for i in ids):
+            if not (group == 'machines' or re.fullmatch(r'services/[0-9a-f]{64}', group)) or not isinstance(ids, list) or len(ids) > (128 if group == 'machines' else 130) or not all(isinstance(i, str) for i in ids):
                 raise ValueError('Invalid card order')
             with self.lock:
                 self.preferences['order'][group] = ids

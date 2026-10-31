@@ -867,12 +867,10 @@ async fn public_pairing_hello_is_bounded_strict_and_never_approves_a_client() {
     let snapshot = store.host_snapshot(key.endpoint_id()).unwrap();
     assert_eq!(snapshot.revision, 0);
     assert!(snapshot.clients.is_empty());
-    assert!(
-        snapshot
-            .services
-            .iter()
-            .all(|s| s.kind == wispnet_core::host::ServiceKind::Shell)
-    );
+    assert!(snapshot.services.iter().all(|s| matches!(
+        s.kind,
+        wispnet_core::host::ServiceKind::Shell | wispnet_core::host::ServiceKind::Files
+    )));
     client.close().await;
     let counts = host.counts();
     host.shutdown().await;
@@ -1194,7 +1192,15 @@ async fn authenticated_device_name_updates_only_own_label_and_preserves_access()
             .name,
         "client"
     );
-    assert_eq!(snapshot.services[0].allow, vec![device.endpoint_id()]);
+    assert_eq!(
+        snapshot
+            .services
+            .iter()
+            .find(|s| s.id == "llama")
+            .unwrap()
+            .allow,
+        vec![device.endpoint_id()]
+    );
     let after = control::catalog_on(&connection, key.endpoint_id())
         .await
         .unwrap();

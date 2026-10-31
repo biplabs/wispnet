@@ -1,5 +1,6 @@
 //! Shared peer browser client. One identity/endpoint shared by pairing, catalogs and gateway.
 pub mod access_settings;
+pub mod files;
 pub mod gateway;
 mod mcp;
 pub mod public_access;
@@ -31,6 +32,7 @@ fn runtime() -> &'static Runtime {
 }
 pub struct Client {
     shells: shell::Shells,
+    files: files::Files,
     pub endpoint: Endpoint,
     key: SecretKey,
     config: TransportConfig,
@@ -136,6 +138,7 @@ impl Client {
     ) -> Arc<Self> {
         Arc::new(Self {
             shells: shell::Shells::default(),
+            files: files::Files::default(),
             endpoint,
             key,
             state,
@@ -162,6 +165,7 @@ impl Client {
             .map_err(|e| e.to_string())?;
         Ok(Arc::new(Self {
             shells: shell::Shells::default(),
+            files: files::Files::default(),
             endpoint,
             key,
             config,
@@ -218,6 +222,7 @@ impl Client {
             .map_err(|e| e.to_string())?;
         Ok(Arc::new(Self {
             shells: shell::Shells::default(),
+            files: files::Files::default(),
             endpoint: host.endpoint().clone(),
             key,
             config,
@@ -370,6 +375,7 @@ impl Client {
         .map_err(|_| "Cannot apply remote removal")??;
         if removed {
             self.shells.close_host(host).await;
+            self.files.cancel_host(Some(host));
             self.gateway.forget(self, host).await?;
             return Err("Pairing removed by remote machine".into());
         }
@@ -377,6 +383,9 @@ impl Client {
     }
     pub async fn command(self: &Arc<Self>, value: &Value) -> Result<Value, String> {
         match argument(value, "op")? {
+            "file_put" | "file_get" | "file_status" | "file_cancel" => {
+                self.files_command(value).await
+            }
             "shell_open" => self.shell_open(value).await,
             "shell_input" | "shell_resize" | "shell_poll" | "shell_close" => {
                 self.shells.command(value).await
@@ -518,6 +527,7 @@ impl Client {
                     .map_err(|_| "Cannot remove pairing")??;
                 }
                 self.shells.close_host(host).await;
+                self.files.cancel_host(Some(host));
                 self.gateway.forget(self, host).await?;
                 wispnet_agent::peers::remove(&self.state, host).map_err(|e| e.to_string())?;
                 Ok(json!({"unpaired":host.to_string()}))
@@ -648,12 +658,14 @@ impl Client {
             }
             "stop" => {
                 self.shells.close_all().await;
+                self.files.cancel_host(None);
                 let _guard = self.gateway.settings_lock.lock().await;
                 self.gateway.stop().await;
                 Ok(json!({"enabled":false}))
             }
             "network" => {
                 self.shells.close_all().await;
+                self.files.cancel_host(None);
                 let _guard = self.gateway.settings_lock.lock().await;
                 let interrupted = self.gateway.interrupt().await;
                 self.endpoint.network_change().await;

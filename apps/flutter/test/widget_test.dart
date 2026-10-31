@@ -2313,6 +2313,84 @@ void main() {
       await close(tester);
     },
   );
+  testWidgets(
+    'files card shows native transfer commands without launching a browser',
+    (tester) async {
+      final backend = DesktopFake();
+      (backend.status['host']['services'] as List).add({
+        'id': 'files',
+        'display_name': 'Files',
+        'kind': 'files',
+        'backend': '127.0.0.1:0',
+        'incarnation': incarnation,
+        'allow': <String>[],
+      });
+      await mount(tester, backend, size: const Size(1000, 1000));
+      expect(find.byIcon(Icons.folder_outlined), findsOneWidget);
+      await tester.tap(find.text('files'));
+      await tester.pumpAndSettle();
+      expect(find.text('Files on hibreak'), findsOneWidget);
+      expect(
+        find.text(
+          'wispnet files put ${'d' * 64} WORKSPACE /local/file relative/path',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.text(
+          'wispnet files get ${'d' * 64} WORKSPACE /local/file relative/path',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        backend.calls.where((call) => call.$1 == 'open' || call.$1 == 'launch'),
+        isEmpty,
+      );
+      await close(tester);
+    },
+  );
+  testWidgets('built-in files manages exported folders and explicit grants', (
+    tester,
+  ) async {
+    final backend = DesktopFake();
+    (backend.status['host']['services'] as List).add({
+      'id': 'files',
+      'display_name': 'Files',
+      'kind': 'files',
+      'backend': '127.0.0.1:0',
+      'incarnation': incarnation,
+      'allow': <String>[],
+    });
+    backend.status['host']['file_exports'] = {'training': '/srv/training'};
+    await mount(tester, backend, size: const Size(1000, 1000));
+    await tester.tap(find.byTooltip('Settings for files on hibreak'));
+    await tester.pumpAndSettle();
+    expect(find.text('Remove service'), findsNothing);
+    expect(find.text('Edit'), findsNothing);
+    await tester.tap(find.text('Manage folders and access'));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(TextField, 'Port'), findsNothing);
+    final field = find.widgetWithText(TextField, 'Exported folders');
+    expect(
+      tester.widget<TextField>(field).controller!.text,
+      'training=/srv/training',
+    );
+    await tester.enterText(
+      field,
+      'training=/srv/training\noutputs=/srv/outputs',
+    );
+    await tester.tap(find.byType(CheckboxListTile));
+    await tester.ensureVisible(find.text('Save folders and access'));
+    await tester.tap(find.text('Save folders and access'));
+    await tester.pumpAndSettle();
+    expect(backend.ownerCalls.single['operation'], {
+      'op': 'files',
+      'allow': [peer],
+      'exports': {'training': '/srv/training', 'outputs': '/srv/outputs'},
+      'expected_revision': 7,
+    });
+    await close(tester);
+  });
   testWidgets('ordinary services reject the reserved shell ID', (tester) async {
     final backend = DesktopFake();
     await mount(tester, backend, size: const Size(1000, 850));
@@ -2334,7 +2412,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       find.text(
-        '“shell” is reserved for the built-in Shell service. Use Shell access to manage its permissions.',
+        '“shell” and “files” are reserved for built-in services. Use their access settings to manage permissions.',
       ),
       findsOneWidget,
     );

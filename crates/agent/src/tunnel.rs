@@ -202,13 +202,15 @@ impl Drop for CloseConnection {
     }
 }
 
+// A 1 Gbit/s path at 200 ms RTT needs 25 MB in flight. These bounded
+// windows leave room for bulk Files traffic and concurrent control streams.
 fn quic_config(streams: usize) -> QuicTransportConfig {
     QuicTransportConfig::builder()
         .max_concurrent_bidi_streams((streams as u32).into())
         .max_concurrent_uni_streams(0u32.into())
-        .stream_receive_window((64u32 * 1024).into())
-        .receive_window((1024u32 * 1024).into())
-        .send_window(1024 * 1024)
+        .stream_receive_window((64u32 * 1024 * 1024).into())
+        .receive_window((128u32 * 1024 * 1024).into())
+        .send_window(64 * 1024 * 1024)
         .build()
 }
 
@@ -221,9 +223,18 @@ struct ShellSessions;
 #[derive(Clone)]
 enum Services {
     Static(Arc<Vec<ServiceConfig>>),
-    Host(wispnet_registry::host::Authority, ShellSessions),
+    Host(
+        wispnet_registry::host::Authority,
+        ShellSessions,
+        wispnet_files::FileService,
+    ),
 }
 impl Services {
+    fn host(authority: wispnet_registry::host::Authority) -> Result<Self, TunnelError> {
+        let files = wispnet_files::FileService::new(authority.state_dir().join("files"))
+            .map_err(|_| TunnelError::Transport("cannot initialize file service"))?;
+        Ok(Self::Host(authority, ShellSessions::default(), files))
+    }
     async fn load(&self) -> Result<Vec<wispnet_registry::host::LocalService>, Status> {
         match self {
             Self::Static(services) => Ok(services
@@ -237,19 +248,19 @@ impl Services {
                     allow: s.allow.clone(),
                 })
                 .collect()),
-            Self::Host(host, _) => host.services().await.map_err(|_| Status::Denied),
+            Self::Host(host, _, _) => host.services().await.map_err(|_| Status::Denied),
         }
     }
     async fn pending(&self, peer: EndpointId) -> bool {
         match self {
             Self::Static(_) => false,
-            Self::Host(host, _) => host.pairing_pending(peer).await.unwrap_or(false),
+            Self::Host(host, _, _) => host.pairing_pending(peer).await.unwrap_or(false),
         }
     }
     async fn approved(&self, peer: EndpointId) -> bool {
         match self {
             Self::Static(services) => services.iter().any(|s| s.allow.contains(&peer)),
-            Self::Host(host, _) => host.approved(peer).await,
+            Self::Host(host, _, _) => host.approved(peer).await,
         }
     }
 }
@@ -289,12 +300,7 @@ impl TunnelHost {
         if authority.host() != secret.public() {
             return Err(TunnelError::Transport("host authority identity mismatch"));
         }
-        Self::bind_services(
-            secret,
-            config,
-            Services::Host(authority, ShellSessions::default()),
-        )
-        .await
+        Self::bind_services(secret, config, Services::host(authority)?).await
     }
     async fn bind_services(
         secret: &SecretKey,
@@ -309,7 +315,7 @@ impl TunnelHost {
         builder: iroh::endpoint::Builder,
     ) -> Result<Self, TunnelError> {
         let mut alpns = vec![protocol::ALPN.to_vec()];
-        if matches!(services, Services::Host(_, _)) {
+        if matches!(services, Services::Host(_, _, _)) {
             alpns.push(wispnet_core::host::ALPN.to_vec());
             alpns.push(wispnet_core::pairing::ALPN.to_vec());
         }
@@ -395,13 +401,29 @@ async fn serve(
     let streams = Arc::new(Semaphore::new(config.max_streams));
     let mut tasks = JoinSet::new();
     let mut shell_policy_tick = tokio::time::interval(Duration::from_secs(1));
+    let mut files_cleanup_tick = tokio::time::interval(Duration::from_secs(60));
+    files_cleanup_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let cleanup_slot = Arc::new(Semaphore::new(1));
     loop {
         tokio::select! {
             biased;
             _ = stop.changed() => break,
+            _ = files_cleanup_tick.tick() => {
+                if let Services::Host(_, _, files) = &services
+                    && let Ok(permit) = cleanup_slot.clone().try_acquire_owned()
+                {
+                    let files = files.clone();
+                    tasks.spawn(async move {
+                        let _permit = permit;
+                        if files.cleanup_expired().await.is_err() {
+                            tracing::warn!("Files retention cleanup could not complete");
+                        }
+                    });
+                }
+            },
             _ = shell_policy_tick.tick() => {
                 #[cfg(not(target_os = "android"))]
-                if let Services::Host(_, sessions) = &services {
+                if let Services::Host(_, sessions, _) = &services {
                     // Disconnected phones no longer have a stream monitor. The
                     // host still owns their PTYs and rechecks durable authority.
                     let allowed = timeout(HANDSHAKE_TIMEOUT, services.load()).await;
@@ -441,7 +463,7 @@ async fn serve(
                         let Ok(Ok((send, recv))) = timeout(HANDSHAKE_TIMEOUT, connection.accept_bi()).await else { return };
                         let Ok(_stream_permit) = streams.try_acquire_owned() else { return };
                         let _stream_guard = CountGuard::new(counts.streams.clone());
-                        if let Services::Host(authority, _) = services {
+                        if let Services::Host(authority, _, _) = services {
                             crate::pairing::serve_stream(send, recv, peer, authority).await;
                         }
                         return;
@@ -504,7 +526,7 @@ async fn serve_connection(
                     let _permit = permit;
                     let _guard = guard;
                     if connection_control {
-                        if let Services::Host(host, _)=services {crate::control::serve_stream(send,recv,peer,host,counts,diagnostics,observed_connection).await;}
+                        if let Services::Host(host, _, _)=services {crate::control::serve_stream(send,recv,peer,host,counts,diagnostics,observed_connection).await;}
                     } else {
                         serve_stream(send, recv, peer, &services, &counts).await;
                     }
@@ -574,6 +596,8 @@ async fn serve_stream(
             return Err(Status::BackendUnavailable);
             #[cfg(not(target_os = "android"))]
             None
+        } else if service.kind == wispnet_core::host::ServiceKind::Files {
+            None
         } else {
             Some(
                 timeout(BACKEND_TIMEOUT, TcpStream::connect(service.backend))
@@ -614,7 +638,7 @@ async fn serve_stream(
         return;
     }
     let mut tunnel = ServiceStream::new(send, recv);
-    // Every built-in shell stream has the same durable grant/incarnation guard
+    // Every built-in stream has the same durable grant/incarnation guard
     // as TCP services. Revocation cancels the attached stream, not the daemon.
     let policy = async {
         if matches!(services, Services::Static(_)) {
@@ -631,11 +655,30 @@ async fn serve_stream(
     };
     if kind == wispnet_core::host::ServiceKind::Shell {
         #[cfg(not(target_os = "android"))]
-        if let Services::Host(_, sessions) = services {
+        if let Services::Host(_, sessions, _) = services {
             let scope = format!("{incarnation}/{peer}");
             tokio::select! {
                 _ = timeout(MAX_SESSION, sessions.serve(tunnel, scope.clone())) => {},
                 _ = policy => { sessions.close_scope(&scope); },
+            }
+        }
+        counts.record_activity(peer);
+        return;
+    }
+    if kind == wispnet_core::host::ServiceKind::Files {
+        if let Services::Host(authority, _, files) = services {
+            let exports = match authority.file_exports().await {
+                Ok(exports) => exports,
+                Err(_) => return,
+            };
+            let (reader, writer) = tokio::io::split(tunnel);
+            let peer_id = peer.to_string();
+            // Long transfers are bounded by activity and permissions, not the
+            // interactive Shell session lifetime. A disconnect retains progress.
+            tokio::select! {
+                biased;
+                _ = policy => {},
+                _ = files.serve(&peer_id, &incarnation, exports, reader, writer) => {},
             }
         }
         counts.record_activity(peer);

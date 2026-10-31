@@ -207,6 +207,8 @@ class MachineCard extends StatelessWidget {
                           Icon(
                             service['kind'] == 'shell'
                                 ? Icons.terminal
+                                : service['kind'] == 'files'
+                                ? Icons.folder_outlined
                                 : Icons.north_east,
                             size: 16,
                             color: WispColors.cyan,

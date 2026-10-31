@@ -1,4 +1,5 @@
 use std::{env, path::PathBuf, process::ExitCode};
+mod files;
 mod manage;
 mod retry;
 mod shell;
@@ -28,6 +29,16 @@ Tunnel mode relays raw stdin/stdout. It is not a browser gateway. Independent ho
 
 fn main() -> ExitCode {
     let shell_args: Vec<_> = env::args_os().skip(1).collect();
+    if shell_args.first().is_some_and(|a| a == "files") {
+        return match files::run_args(&shell_args[1..]) {
+            Ok(code) => ExitCode::from(code.min(255) as u8),
+            Err(error) => {
+                println!("{}", files::error_result(&error));
+                eprintln!("wispnet: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     if shell_args.first().is_some_and(|a| a == "shell") {
         return match shell::run_args(&shell_args[1..]) {
             Ok(code) => ExitCode::from(code.min(255) as u8),
@@ -89,7 +100,12 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         ]);
     }
     if args.len() == 1 && (args[0] == "--help" || args[0] == "-h") {
-        println!("{USAGE}\n\n{}\n\n{}", manage::HELP, shell::HELP);
+        println!(
+            "{USAGE}\n\n{}\n\n{}\n\n{}",
+            manage::HELP,
+            shell::HELP,
+            files::HELP
+        );
         return Ok(());
     }
     if args

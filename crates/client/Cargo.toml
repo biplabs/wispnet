@@ -14,11 +14,14 @@ crate-type = ["rlib"]
 serde.workspace = true
 libc.workspace = true
 wispnet-core.workspace = true
+wispnet-files.workspace = true
+sha2 = "=0.11.1"
+tempfile.workspace = true
 wispnet-agent.workspace = true
 wispnet-registry.workspace = true
 iroh.workspace = true
 serde_json = "=1.0.150"
-tokio = { workspace = true, features = ["rt-multi-thread", "net", "sync", "io-util", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "sync", "io-util", "time", "fs"] }
 httparse = "=1.10.1"
 base64 = "=0.22.1"
 sha1 = "=0.11.0"
