@@ -816,17 +816,25 @@ class _DesktopSettingsState extends State<DesktopSettings> {
 
   Widget addressLink(String url, {String? publicService}) => Padding(
     padding: const EdgeInsets.only(bottom: 8),
-    child: Align(
-      alignment: Alignment.centerLeft,
-      child: WispLink(
-        text: url,
-        tooltip: publicService == null
-            ? 'Open local service'
-            : 'Open public service',
-        onTap: busy || openingAddress
-            ? null
-            : () => openAddress(url, publicService),
-      ),
+    child: Row(
+      children: [
+        Expanded(
+          child: WispLink(
+            text: url,
+            tooltip: publicService == null
+                ? 'Open local service'
+                : 'Open public service',
+            onTap: busy || openingAddress
+                ? null
+                : () => openAddress(url, publicService),
+          ),
+        ),
+        WispCopyButton(
+          text: url,
+          tooltip: 'Copy service URL',
+          message: 'Service URL copied',
+        ),
+      ],
     ),
   );
 
@@ -957,13 +965,6 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
                       ),
-                    ),
-                    Text(
-                      isInboxService(s)
-                          ? 'Receive files'
-                          : s['kind'] == 'file_share'
-                          ? 'Share files'
-                          : s['kind'].toString().toUpperCase(),
                     ),
                     const SizedBox(height: 8),
                     if (s['kind'] == 'shell') ...[

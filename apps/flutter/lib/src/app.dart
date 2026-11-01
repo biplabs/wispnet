@@ -778,9 +778,7 @@ class _WispHomeState extends State<WispHome>
     if (snapshot['desktop'] != true) {
       await showWispSheet<void>(
         context,
-        title: service['kind'] != 'files' && isFolderService(service)
-            ? '${service['id']} folder'
-            : 'File inbox',
+        title: isInboxService(service) ? 'Receive files' : 'Share files',
         child: service['kind'] != 'files' && isFolderService(service)
             ? AndroidFileShares(
                 backend: backend,
@@ -793,7 +791,13 @@ class _WispHomeState extends State<WispHome>
     }
     await showWispSheet<void>(
       context,
-      title: service['id'] as String,
+      title: isInboxService(service)
+          ? 'Receive files'
+          : service['kind'] == 'file_share'
+          ? 'Share files'
+          : service['kind'] == 'shell'
+          ? 'Shell'
+          : service['kind'].toString().toUpperCase(),
       child: DesktopSettings(
         backend: backend,
         servicesOnly: true,
