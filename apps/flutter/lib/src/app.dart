@@ -1239,10 +1239,10 @@ class _WispHomeState extends State<WispHome>
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   sectionHeading('LOCAL SERVICES', [
-                    OutlinedButton(
+                    WispCreateButton(
+                      label: 'Add folder',
+                      compact: true,
                       onPressed: busy ? null : addFolder,
-                      style: buttonStyle,
-                      child: const Text('Add folder'),
                     ),
                   ]),
                   const SizedBox(height: 12),

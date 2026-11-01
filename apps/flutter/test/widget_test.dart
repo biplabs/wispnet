@@ -1656,31 +1656,12 @@ void main() {
     await tester.tap(find.text('Local services'));
     await tester.pumpAndSettle();
     expect(find.text('Add a new service'), findsOneWidget);
-    expect(find.text('Pair this machine'), findsOneWidget);
+    expect(find.text('Pair this machine'), findsNothing);
     expect(find.text('Device and browser settings'), findsNothing);
     expect(find.text('Pair with this machine'), findsNothing);
     expect(find.text('Edit'), findsNothing);
     expect(find.text('Remove service'), findsNothing);
     expect(find.text('Enable public access'), findsNothing);
-    await tester.tap(find.text('Pair this machine'));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('pairing-qr')), findsOneWidget);
-    expect(find.text('Copy pairing code'), findsNothing);
-    await tester.tap(find.text('Pairing code'));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('pairing-code')), findsOneWidget);
-    expect(find.text('wispnet1:generated-code'), findsOneWidget);
-    expect(
-      backend.ownerCalls.where((call) => call['op'] == 'invite_qr'),
-      hasLength(1),
-    );
-    expect(find.text('Copy pairing code'), findsOneWidget);
-    await tester.tap(find.text('QR code'));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('pairing-qr')), findsOneWidget);
-    expect(find.text('Copy pairing code'), findsNothing);
-    await tester.tap(find.byTooltip('Close').last);
-    await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Close'));
     await tester.pumpAndSettle();
     await tester.tap(
@@ -1693,6 +1674,45 @@ void main() {
     expect(tester.takeException(), isNull);
     await close(tester);
   });
+  testWidgets(
+    'pairing remains available in Settings and opens its QR and code',
+    (tester) async {
+      final backend = DesktopFake();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: wispTheme(),
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: DesktopSettings(
+                backend: backend,
+                onAccess: () {},
+                onChanged: () {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Pair this machine'), findsOneWidget);
+      await tester.tap(find.text('Pair this machine'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('pairing-qr')), findsOneWidget);
+      expect(find.text('Copy pairing code'), findsNothing);
+      await tester.tap(find.text('Pairing code'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('pairing-code')), findsOneWidget);
+      expect(find.text('wispnet1:generated-code'), findsOneWidget);
+      expect(
+        backend.ownerCalls.where((call) => call['op'] == 'invite_qr'),
+        hasLength(1),
+      );
+      expect(find.text('Copy pairing code'), findsOneWidget);
+      await tester.tap(find.text('QR code'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('pairing-qr')), findsOneWidget);
+      await close(tester);
+    },
+  );
   testWidgets('service switches and Receive files module setting persist', (
     tester,
   ) async {
@@ -2669,7 +2689,7 @@ void main() {
     await tester.tap(find.text('Local services'));
     await tester.pumpAndSettle();
     expect(find.text('Enable Shell'), findsNothing);
-    await tester.tap(find.text('Shell access'));
+    await tester.tap(find.byTooltip('Shell access'));
     await tester.pumpAndSettle();
     expect(backend.ownerCalls, isEmpty);
     expect(find.widgetWithText(TextField, 'Port'), findsNothing);

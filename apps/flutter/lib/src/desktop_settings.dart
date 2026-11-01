@@ -845,6 +845,54 @@ class _DesktopSettingsState extends State<DesktopSettings> {
           child: Text(label),
         ),
       );
+
+  Widget serviceItem(Map<String, dynamic> service) => WispServiceItem(
+    key: ValueKey('local-service-${service['id']}'),
+    contentPadding: EdgeInsets.zero,
+    title: service['id'] as String,
+    kind: service['kind'] as String,
+    subtitle: Align(
+      alignment: Alignment.centerLeft,
+      child: WispBadge(
+        label: isInboxService(service)
+            ? 'Inbox'
+            : service['kind'] == 'file_share'
+            ? 'Shared folder'
+            : service['kind'] == 'shell'
+            ? 'Shell'
+            : service['kind'].toString().toUpperCase(),
+        color: WispColors.cyan,
+      ),
+    ),
+    enabled: service['enabled'] != false,
+    busy: busy,
+    toggleKey: ValueKey('local-service-toggle-${service['id']}'),
+    onToggle: (value) => run(() async {
+      await widget.backend.invoke('setServiceEnabled', {
+        'service': service['id'],
+        'incarnation': service['incarnation'],
+        'enabled': value,
+      });
+    }),
+    settingsTooltip: service['kind'] == 'shell'
+        ? 'Shell access'
+        : service['kind'] == 'files'
+        ? 'File inbox'
+        : isFolderService(service)
+        ? 'Folders and access for ${service['id']}'
+        : 'Settings for ${service['id']}',
+    onSettings: () => run(() async {
+      if (service['kind'] == 'shell') {
+        await editShell(service);
+      } else if (service['kind'] == 'files') {
+        await editFiles(service);
+      } else if (isFolderService(service)) {
+        await editShare(service);
+      } else {
+        await editService(service);
+      }
+    }),
+  );
   @override
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -876,66 +924,24 @@ class _DesktopSettingsState extends State<DesktopSettings> {
         const LinearProgressIndicator()
       else if (section == 'My services') ...[
         if (widget.serviceId == null) ...[
-          action('Add a new service', () => run(() => editService())),
-          action('Add folder', () => run(() => editShare())),
-          for (final s in services.where(
-            (s) => s['kind'] == 'file_share' || s['kind'] == 'file_inbox',
-          ))
-            WispServiceItem(
-              contentPadding: EdgeInsets.zero,
-              title: s['id'] as String,
-              kind: s['kind'] as String,
-              subtitle: Align(
-                alignment: Alignment.centerLeft,
-                child: WispBadge(
-                  label: s['kind'] == 'file_inbox' ? 'Inbox' : 'Shared folder',
-                  color: WispColors.cyan,
-                ),
-              ),
-              enabled: s['enabled'] != false,
-              busy: busy,
-              onToggle: (value) => run(() async {
-                await widget.backend.invoke('setServiceEnabled', {
-                  'service': s['id'],
-                  'incarnation': s['incarnation'],
-                  'enabled': value,
-                });
-              }),
-              onSettings: () => run(() => editShare(s)),
-              settingsTooltip: 'Folders and access for ${s['id']}',
-            ),
-          for (final s in services.where(
-            (s) => s['id'] == 'shell' && s['kind'] == 'shell',
-          ))
-            action('Shell access', () => run(() => editShell(s))),
           for (final s in services.where(
             (s) =>
-                s['id'] == 'files' &&
-                s['kind'] == 'files' &&
+                s['kind'] != 'files' ||
                 (status!['host']['file_exports'] as Map? ?? {}).isNotEmpty,
           ))
-            WispServiceItem(
-              contentPadding: EdgeInsets.zero,
-              title: s['id'] as String,
-              kind: 'files',
-              subtitle: const Align(
-                alignment: Alignment.centerLeft,
-                child: WispBadge(label: 'Inbox', color: WispColors.cyan),
-              ),
-              enabled: s['enabled'] != false,
-              busy: busy,
-              onToggle: (value) => run(() async {
-                await widget.backend.invoke('setServiceEnabled', {
-                  'service': s['id'],
-                  'incarnation': s['incarnation'],
-                  'enabled': value,
-                });
-              }),
-              settingsTooltip: 'File inbox',
-              onSettings: () => run(() => editFiles(s)),
-            ),
-          if (widget.servicesOnly)
-            action('Pair this machine', () => run(invite)),
+            serviceItem(s),
+          const SizedBox(height: 12),
+          const Divider(color: WispColors.border),
+          const SizedBox(height: 8),
+          WispCreateButton(
+            label: 'Add a new service',
+            onPressed: busy ? null : () => run(() => editService()),
+          ),
+          const SizedBox(height: 8),
+          WispCreateButton(
+            label: 'Add folder',
+            onPressed: busy ? null : () => run(() => editShare()),
+          ),
         ] else if (!services.any((s) => s['id'] == widget.serviceId))
           const Text('This service is no longer shared.'),
         for (final s in services.where((s) => s['id'] == widget.serviceId))

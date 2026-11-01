@@ -210,12 +210,6 @@ class _AndroidFileSharesState extends State<AndroidFileShares> {
             'Give each folder a name and choose whether devices may send files to it or browse and download from it.',
           ),
           const SizedBox(height: 8),
-          OutlinedButton.icon(
-            key: const ValueKey('add-android-share'),
-            onPressed: busy || status == null ? null : () => edit(),
-            icon: const Icon(Icons.create_new_folder_outlined),
-            label: const Text('Add folder'),
-          ),
         ],
         if (status == null && failure == null) const LinearProgressIndicator(),
         if (status != null && visible.isEmpty)
@@ -255,6 +249,16 @@ class _AndroidFileSharesState extends State<AndroidFileShares> {
           ),
         if (failure != null)
           Text(failure!, style: const TextStyle(color: WispColors.error)),
+        if (widget.serviceId == null) ...[
+          const SizedBox(height: 12),
+          const Divider(color: WispColors.border),
+          const SizedBox(height: 8),
+          WispCreateButton(
+            key: const ValueKey('add-android-share'),
+            label: 'Add folder',
+            onPressed: busy || status == null ? null : () => edit(),
+          ),
+        ],
       ],
     );
   }

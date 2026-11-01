@@ -4,6 +4,35 @@ import 'package:flutter/services.dart';
 import 'list_item.dart';
 import 'theme.dart';
 
+/// Creation actions use a separate accent from existing service controls.
+class WispCreateButton extends StatelessWidget {
+  const WispCreateButton({
+    super.key,
+    required this.label,
+    required this.onPressed,
+    this.compact = false,
+  });
+  final String label;
+  final VoidCallback? onPressed;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) => FilledButton.icon(
+    onPressed: onPressed,
+    style: FilledButton.styleFrom(
+      backgroundColor: const Color(0xff123d32),
+      foregroundColor: const Color(0xffb4efce),
+      side: const BorderSide(color: Color(0xff326c53)),
+      minimumSize: Size(0, compact ? 42 : 48),
+      shape: compact
+          ? const StadiumBorder()
+          : RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+    ).copyWith(backgroundColor: wispButtonBackground(const Color(0xff123d32))),
+    icon: const Icon(Icons.add, size: 20),
+    label: Text(label),
+  );
+}
+
 /// Shared status-light control for service state and binary settings.
 class WispToggle extends StatelessWidget {
   const WispToggle({super.key, required this.value, required this.onChanged});
