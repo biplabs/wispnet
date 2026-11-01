@@ -229,13 +229,15 @@ class _AndroidFileSharesState extends State<AndroidFileShares> {
             subtitle: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                WispBadge(
-                  label: isInboxService(share)
-                      ? 'Receive files'
-                      : 'Share files',
-                  color: WispColors.cyan,
-                ),
-                const SizedBox(height: 4),
+                if (widget.serviceId == null) ...[
+                  WispBadge(
+                    label: isInboxService(share)
+                        ? 'Receive files'
+                        : 'Share files',
+                    color: WispColors.cyan,
+                  ),
+                  const SizedBox(height: 4),
+                ],
                 Text(
                   share['available'] == false
                       ? 'Folder access expired or is unavailable. Choose the folder again.'
