@@ -22,8 +22,8 @@ final incarnation = 'c' * 64;
 class AndroidLocalFake extends DesktopFake {
   AndroidLocalFake() {
     (status['host']['services'] as List).add({
-      'id': 'files',
-      'kind': 'files',
+      'id': 'incoming',
+      'kind': 'file_inbox',
       'incarnation': incarnation,
       'enabled': true,
       'allow': [],
@@ -34,6 +34,23 @@ class AndroidLocalFake extends DesktopFake {
     String method, [
     Map<String, dynamic> arguments = const {},
   ]) async {
+    if (method == 'folderServicesStatus') {
+      return {
+        'revision': status['host']['revision'],
+        'clients': status['host']['clients'],
+        'shares': [],
+        'inboxes': [
+          for (final s in status['host']['services'])
+            if (s['kind'] == 'file_inbox')
+              {
+                ...s as Map<String, dynamic>,
+                'folder': 'opaque-incoming',
+                'label': 'Incoming folder',
+                'available': true,
+              },
+        ],
+      };
+    }
     final result = await super.invoke(method, arguments);
     return method == 'snapshot' ? {...result, 'desktop': false} : result;
   }
@@ -1573,29 +1590,19 @@ void main() {
     },
   );
   testWidgets(
-    'single local service fills its row with status beside settings',
+    'an empty local sector offers Add folder without an unconfigured inbox',
     (tester) async {
       await mount(tester, FakeBackend(), size: const Size(600, 850));
       final sector = find.byKey(const ValueKey('local-sector'));
-      final tile = find
-          .descendant(of: sector, matching: find.byType(ReorderTile))
-          .first;
-      final status = find.byKey(const ValueKey('service-toggle-files'));
-      final gear = find
-          .descendant(of: sector, matching: find.byType(IconButton))
-          .first;
       expect(
-        tester.getSize(tile).width,
-        closeTo(tester.getSize(sector).width, .01),
+        find.descendant(of: sector, matching: find.text('Add folder')),
+        findsOneWidget,
       );
       expect(
-        tester.getCenter(status).dy,
-        closeTo(tester.getCenter(gear).dy, .01),
+        find.descendant(of: sector, matching: find.byType(ReorderTile)),
+        findsNothing,
       );
-      expect(
-        tester.getRect(status).right,
-        lessThanOrEqualTo(tester.getRect(gear).left),
-      );
+      expect(find.byKey(const ValueKey('service-toggle-files')), findsNothing);
       expect(tester.takeException(), isNull);
       await close(tester);
     },
@@ -1703,7 +1710,12 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Local services'));
     await tester.pumpAndSettle();
-    final files = find.widgetWithText(WispServiceItem, 'Receive files');
+    final files = find.descendant(
+      of: find.byType(DesktopSettings),
+      matching: find.byWidgetPredicate(
+        (w) => w is WispServiceItem && w.title == 'files',
+      ),
+    );
     final folder = find.descendant(
       of: files,
       matching: find.byIcon(Icons.folder_outlined),
@@ -1718,7 +1730,11 @@ void main() {
     );
     expect(
       tester.getRect(folder).right,
-      lessThan(tester.getRect(find.text('Receive files')).left),
+      lessThan(
+        tester
+            .getRect(find.descendant(of: files, matching: find.text('files')))
+            .left,
+      ),
     );
     expect(
       tester.getRect(toggle).right,
@@ -1726,7 +1742,7 @@ void main() {
     );
     await screenshot(tester, 'desktop-local-services');
     expect(tester.widget<WispServiceItem>(files).enabled, isTrue);
-    await tester.tap(find.text('Receive files'));
+    await tester.tap(find.descendant(of: files, matching: find.text('files')));
     await tester.pumpAndSettle();
     expect(tester.widget<WispServiceItem>(files).enabled, isFalse);
     await tester.tap(find.byTooltip('Close'));
@@ -1744,7 +1760,12 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Local services'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Receive files'));
+    await tester.tap(
+      find.descendant(
+        of: find.byType(DesktopSettings),
+        matching: find.text('files'),
+      ),
+    );
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Close'));
     await tester.pumpAndSettle();
@@ -1765,7 +1786,12 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Local services'), findsOneWidget);
       expect(find.byType(AndroidReceivingSettings), findsNothing);
-      final files = find.widgetWithText(WispServiceItem, 'Receive files');
+      final files = find.descendant(
+        of: find.byType(AndroidLocalServices),
+        matching: find.byWidgetPredicate(
+          (w) => w is WispServiceItem && w.title == 'incoming',
+        ),
+      );
       final folder = find.descendant(
         of: files,
         matching: find.byIcon(Icons.folder_outlined),
@@ -1776,18 +1802,26 @@ void main() {
       );
       final gear = find.descendant(
         of: files,
-        matching: find.byTooltip('File inbox'),
+        matching: find.byTooltip('Folder and access for incoming'),
       );
       expect(
         tester.getRect(folder).right,
-        lessThan(tester.getRect(find.text('Receive files')).left),
+        lessThan(
+          tester
+              .getRect(
+                find.descendant(of: files, matching: find.text('incoming')),
+              )
+              .left,
+        ),
       );
       expect(
         tester.getRect(toggle).right,
         lessThanOrEqualTo(tester.getRect(gear).left),
       );
       await screenshot(tester, 'android-local-services');
-      await tester.tap(find.text('Receive files'));
+      await tester.tap(
+        find.descendant(of: files, matching: find.text('incoming')),
+      );
       await tester.pumpAndSettle();
       expect(tester.widget<WispServiceItem>(files).enabled, isFalse);
       await tester.tap(find.byTooltip('Close'));
@@ -1795,7 +1829,7 @@ void main() {
       expect(
         tester
             .widget<WispToggle>(
-              find.byKey(const ValueKey('service-toggle-files')),
+              find.byKey(const ValueKey('service-toggle-incoming')),
             )
             .value,
         isFalse,

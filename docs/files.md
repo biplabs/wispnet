@@ -1,52 +1,66 @@
-# Built-in Files service
+# Folder services
 
-Every Wispnet host includes the permanent `files` service alongside `shell`.
-Files uses binary frames on the authenticated native Iroh/QUIC service tunnel;
+Inboxes and shared folders are special local services. Each has a name, one
+folder, and its own list of permitted paired devices. Pairing, Shell access,
+and access to another folder never grant access to this folder.
+
+| Mode | Local badge | What permitted devices can do |
+| --- | --- | --- |
+| Receive files | Inbox | Upload files into this folder |
+| Share files | Shared folder | Browse and download files from this folder |
+
+On desktop or Android, open **Local services → Add folder**, choose **Receive
+files** or **Share files**, name the service, select a folder, and choose its
+allowed devices. Repeat to add more folders. Each folder has independent
+settings, enable/disable controls, and removal. Removing a service keeps its
+files. Editing permissions applies only to that service; changing its folder
+invalidates previous transfer bindings. The mode of an existing service is fixed.
+
+Folder services use binary frames over authenticated native Iroh/QUIC tunnels;
 file bytes never pass through MCP JSON, Shell output, or the HTTP gateway.
+Filesystem paths stay on the hosting device. Peers see service names and
+relative file names. Roots must be existing absolute directories without
+symlink components, outside Wispnet's private state. Android uses the system
+folder picker and persistent document-provider permissions instead of raw paths.
 
-The host owner chooses receiving folders and the complete list of paired
-clients that may send files into them. Pairing and Shell grants confer no Files
-access. Exports begin empty, and remote access begins disabled.
+## Configure an inbox
 
-Choose at least one folder before granting Files access. A grant is ongoing
-permission: that device can send files into every configured folder without
-asking you to confirm each transfer. This is a one-way receiving service: the
-grant does not let the sender read or download files from your computer.
-Transfers cannot overwrite existing files or escape the receiving folders.
-Revoke the device's Files grant to stop active access and prevent new transfers.
-
-## Configure a host
-
-Create a directory for the files, then configure it on the host:
+Create a receiving folder, then grant only the devices allowed to upload into it:
 
 ```sh
 mkdir -p /srv/training
-wispnet files-access --export training=/srv/training --allow FULL_CLIENT_PUBLIC_ID
+wispnet inbox training-inputs --path /srv/training --allow FULL_CLIENT_PUBLIC_ID
+wispnet inbox phone-downloads --path /srv/phone-downloads --allow OTHER_PUBLIC_ID
 ```
 
-Use `--config /absolute/path/host.toml` when managing a nondefault node.
-Desktop settings provide **Files access** with a native folder picker and device
-grants. Choose the receiving folder there; the path is shown only on that device.
-Use the gear beside the selected folder to change it. Removing the folder
-disables incoming transfers and revokes Files grants when saved.
-MCP agents can use the owner-only `wispnet_set_files_access` tool to set the
-receiving folder and its complete device allow list in one revision-checked
-operation; see [MCP configuration](service-registry.md).
-Export roots must be existing absolute directories without symlink components;
-they cannot overlap Wispnet's private state directory. The grant applies to all
-configured exports. Remote paths are relative to the selected export.
+`wispnet inbox` lists local inboxes; `wispnet inbox training-inputs` inspects one.
+`--allow` replaces only that inbox's device list, and `--allow none` revokes its
+senders. Omitted path and permission options preserve existing settings. Use
+`wispnet inbox training-inputs --remove` to remove the service without deleting
+its files. Management commands accept `--config /absolute/path/host.toml` for
+nondefault nodes.
 
-Repeated `--export` options replace the entire export map. Omitting exports
-preserves the map; omitting `--allow` preserves the grants. To revoke all remote
-Files access, run `wispnet files-access --allow none`. To remove all exports and
-revoke their grants, use `wispnet files-access --clear-exports`. Sharing is
-disabled until a folder is configured and devices are granted access again.
+Inbox access is ongoing permission to upload without confirming every transfer.
+It permits no reads or downloads. Transfers cannot overwrite existing files or
+escape the selected inbox. Revoking access stops active streams and prevents
+new transfers without affecting other inboxes or shared folders.
 
-Export changes rotate the service incarnation and invalidate previous resume
-bindings. Grant revocation closes active remote streams through the same
-current-policy checks used by Shell. Files cannot be renamed or removed as an
-ordinary HTTP/TCP service; an old custom service named `files` is migrated to an
-available `files-legacy` identifier with its existing grants preserved.
+## Existing inbox configurations
+
+Upgrading converts each previously configured receiving export into a named
+Inbox, preserving its folder, allowed devices, and enabled state. Names use the
+old export alias when available, or an available `inbox-` name if it conflicts
+with another service. The old global exports and grants are cleared, preventing
+a legacy grant from bypassing the new inbox permissions. Existing complete
+files are retained. Incomplete transfers using the old service binding must be
+started against the migrated inbox.
+
+The reserved legacy `files` service remains for old owner APIs and
+`files-access` commands, but its empty placeholder is hidden from service cards
+and remote catalogs. Explicitly configuring it through the legacy API still
+uses the original global export/grant model. New folder services use independent
+per-folder permissions. The owner-only `wispnet_set_files_access` MCP tool
+continues to manage that legacy configuration; see [MCP configuration](service-registry.md).
 
 ## Transfer a file
 
@@ -55,7 +69,7 @@ host ID always works. The sender chooses a local file and its destination path
 inside one of the receiving host's configured folders:
 
 ```sh
-wispnet files put GPU_HOST training ./dataset.npz jobs/run-1/dataset.npz
+wispnet files put GPU_HOST training-inputs ./dataset.npz jobs/run-1/dataset.npz
 ```
 
 Transfers resume by default. Repeat the same command after a disconnect, client
@@ -73,13 +87,13 @@ metadata only (`file_put`), then exposes `file_status` and
 recover durable resume state after a node restart.
 
 On desktop, drop one or more files into the Wispnet pop-up or onto a remote
-device's **Files** service, then select **Send files**. The receiving device
+device's named **Inbox** service, then select **Send files**. The receiving device
 chooses the destination; the sender neither selects nor sees its receiving
-folder. The app does not discover receiving folder names.
+folder path. The sender selects the named inbox service.
 The transfer panel shows progress, cancellation and resume actions. Hiding the
 pop-up or closing the panel keeps submitted transfers running. Files are queued
 one at a time and retain their original names; folders must first be archived.
-The recipient must already have granted Files access.
+The recipient must already have granted access to the selected inbox.
 
 Active uploads appear in a dock for each receiving computer, using the same
 controls as the shell dock. Expand a dock to view that computer's transfers;
@@ -89,7 +103,7 @@ sent/total bytes, and current upload speed; preparation and verification have
 their own status. Speed is measured from newly acknowledged bytes and falls to
 zero when progress stalls.
 
-On Android, tap a device's **Files** service and use **Choose files** to select
+On Android, tap a device's named **Inbox** service and use **Choose files** to select
 one or more documents in Android's system picker.
 Select **Send files** to queue the batch. Two files can run concurrently; each
 has its own progress, cancel and resume controls. The network service retains
@@ -97,14 +111,13 @@ the queue when the panel closes or the UI is recreated. Going offline cancels
 its active and queued transfers. After a network-process restart, select the
 original documents again to recover their durable resume state.
 
-To receive on Android, open **Settings → Receive files**, choose a folder with
-Android's system folder picker, check the paired devices allowed to send, and
-save. The gear changes the single receiving folder. Removing it revokes all
-Files grants when saved. Pairing alone never grants receiving permission, and
-senders never see the folder location. Android restricts selecting storage and
-Downloads roots; select or create a subfolder such as `Downloads/Wispnet` instead.
-Folder access uses a persisted Storage Access Framework grant, without broad
-storage permissions.
+To receive on Android, open **Settings → Local services → Add folder**, choose
+**Receive files**, pick a writable folder, and select the devices allowed to
+send into this inbox. Repeat for additional inboxes. The gear edits only that
+inbox's folder and permissions. Pairing never grants receiving permission.
+Android restricts selecting storage and Downloads roots; select or create a
+subfolder such as `Downloads/Wispnet` instead. Folder access uses a persisted
+Storage Access Framework grant without broad storage permissions.
 
 Receiving runs in the existing foreground network service, so it continues when
 the UI is in the background. Go online before receiving; going offline refuses
@@ -127,11 +140,11 @@ storage with bounded buffers and cancellation, then sent through the same native
 protocol. Temporary copies are removed when the transfer finishes or is cancelled.
 File contents never cross Flutter or the UI's Binder connection.
 
-App uploads use an empty workspace selector, which the receiving host resolves
-to its configured receiving folder without returning its name or filesystem
-path. Existing configurations with multiple exports use the first export in
-name order for these uploads. Explicit named exports remain available to the
-CLI and SDK; authenticated legacy folder discovery returns export aliases only.
+App uploads carry the selected inbox service identity and use an empty workspace
+selector. The receiver binds it only to that inbox's configured root; another
+inbox cannot be selected through the workspace field. CLI and SDK callers may
+also use the `incoming` workspace alias for named inboxes. Legacy Files callers
+retain explicit export selectors for a deliberately configured legacy service.
 
 The Rust SDK exposes `Client::put_file`, `FileTarget`,
 `TransferOptions`, progress callbacks, and `FileCancellation` in
@@ -173,10 +186,9 @@ roots overlapping Wispnet's private state are rejected. Other shares remain
 private unless independently granted. Removing, disabling, changing a share's
 root, or revoking its reader closes active access through current policy checks.
 
-On desktop, use **My services → Add read-only file share** to choose a folder,
-then select the paired devices allowed to read it. A share's
-settings edit only its own path and device list. **File inbox** continues to
-configure incoming uploads independently.
+On desktop or Android, use **Local services → Add folder → Share files**.
+The resulting **Shared folder** card has its own folder and reader permissions.
+Inbox services continue to authorize uploads independently.
 
 Open a remote shared-files service in the desktop or Android app to browse its
 folders and choose a file to download. The receiving device selects its local
@@ -189,7 +201,7 @@ copy, and success is reported only after it closes. The verified staging copy
 is removed after publication. Downloads and cancellation remain in the Android
 network process if the UI is recreated; after a network-process restart,
 select the same source and destination to recover durable transfer state.
-On Android, open **Settings → Local services → Add read-only folder share**. Choose a
+On Android, open **Settings → Local services → Add folder → Share files**. Choose a
 folder with Android's system picker, then select the paired devices allowed to
 browse and download that share. Each share has its own device list; receiving
 files through the inbox is configured independently. Wispnet persists only the

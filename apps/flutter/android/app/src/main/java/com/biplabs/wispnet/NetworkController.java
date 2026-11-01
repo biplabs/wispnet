@@ -25,18 +25,24 @@ final class NetworkController extends ContextWrapper {
     if (!(args.get("enabled") instanceof Boolean)) throw new Exception("Invalid local service");
     JSONObject status = Native.command("local_files_status");
     if (!"files".equals(id)) {
-     JSONObject shares = Native.command("local_shares_status"); boolean found = false;
-     JSONArray rows = shares.getJSONArray("shares");
-     for (int index=0;index<rows.length();index++) if (id.equals(rows.getJSONObject(index).getString("id"))) found = true;
-     if (!found) throw new Exception("Read-only share unavailable");
-     if (args.getBoolean("enabled")) new AndroidShares(this).requireAvailable(id);
-     status = shares;
+     JSONObject folders = folderServicesStatus(); JSONObject selected = null;
+     for (String collection : new String[]{"inboxes","shares"}) {
+      JSONArray rows = folders.getJSONArray(collection);
+      for (int index=0;index<rows.length();index++) if (id.equals(rows.getJSONObject(index).getString("id"))) selected = rows.getJSONObject(index);
+     }
+     if (selected == null) throw new Exception("Folder service unavailable");
+     if (args.getBoolean("enabled") && !selected.getBoolean("available"))
+      throw new Exception("Folder access expired. Choose the folder again.");
+     status = folders;
     }
     return Native.request(new JSONObject().put("op", "local_service_enabled")
      .put("id", id).put("incarnation", args.getString("incarnation"))
      .put("enabled", args.getBoolean("enabled")).put("expected_revision", status.getLong("revision")));
    }
    case "receivingStatus": return new AndroidReceiving(this).status();
+   case "folderServicesStatus": return folderServicesStatus();
+   case "saveInbox": return new AndroidReceiving(this).configureInbox(args);
+   case "removeInbox": return new AndroidReceiving(this).removeInbox(args);
    case "sharesStatus": return new AndroidShares(this).status();
    case "prepareShareFolder": return new AndroidShares(this).prepare(android.net.Uri.parse(args.getString("uri")));
    case "saveShare": return new AndroidShares(this).configure(args);
@@ -69,9 +75,11 @@ final class NetworkController extends ContextWrapper {
      if (entry.getValue() instanceof String) try { order.put(entry.getKey(), new JSONArray((String)entry.getValue())); } catch (JSONException ignored) {}
     JSONObject hosts = store.all();
     String own = Native.command("identity").getString("peer");
-    JSONObject receiving = Native.command("local_files_status");
-    JSONArray localServices = new JSONArray().put(receiving.getJSONObject("service"));
-    JSONArray sourceShares = new AndroidShares(this).status().getJSONArray("shares");
+    JSONObject folders = folderServicesStatus();
+    JSONArray localServices = new JSONArray();
+    JSONArray inboxes = folders.getJSONArray("inboxes");
+    for (int index=0;index<inboxes.length();index++) localServices.put(inboxes.getJSONObject(index));
+    JSONArray sourceShares = folders.getJSONArray("shares");
     for (int index=0;index<sourceShares.length();index++) localServices.put(sourceShares.getJSONObject(index));
     hosts.put(own, new JSONObject().put("name", DeviceProfile.name(this)).put("local", true)
      .put("state", "available").put("catalog", new JSONObject().put("services", localServices)));
@@ -168,6 +176,18 @@ final class NetworkController extends ContextWrapper {
    }
    default: throw new Exception("Unsupported UI operation: " + method);
   }
+ }
+ private JSONObject folderServicesStatus() throws Exception {
+  // Both adapters describe one revision before the UI can replace a policy.
+  for (int attempt=0;attempt<3;attempt++) {
+   JSONObject receiving=new AndroidReceiving(this).inboxesStatus();
+   JSONObject sharing=new AndroidShares(this).status();
+   if (receiving.getLong("revision")==sharing.getLong("revision"))
+    return new JSONObject().put("revision",receiving.getLong("revision"))
+        .put("clients",receiving.getJSONArray("clients")).put("inboxes",receiving.getJSONArray("inboxes"))
+        .put("shares",sharing.getJSONArray("shares"));
+  }
+  throw new Exception("Folder permissions changed. Refresh and try again.");
  }
  private String normalized(String raw) throws Exception {
   String code = raw.replaceAll("\\s+", "");

@@ -141,10 +141,10 @@ final class AndroidFiles implements AutoCloseable {
  void stop() { stopped = true; cancelAll(); }
 
  private JSONObject target(JSONObject args) throws Exception {
-  String host = args.getString("host"), incarnation = args.getString("incarnation");
-  if (!host.matches("[0-9a-f]{64}") || !incarnation.matches("[0-9a-f]{64}"))
+  String host = args.getString("host"), incarnation = args.getString("incarnation"), service = args.optString("service", "files");
+  if (!host.matches("[0-9a-f]{64}") || !incarnation.matches("[0-9a-f]{64}") || !service.matches("[a-z0-9][a-z0-9._-]{0,63}"))
    throw new Exception("Invalid Files target. Refresh this device.");
-  return new JSONObject().put("host", host).put("service", "files").put("incarnation", incarnation);
+  return new JSONObject().put("host", host).put("service", service).put("incarnation", incarnation);
  }
 
  private void authorize(JSONObject target, CancellationSignal cancellation) throws Exception {
@@ -169,7 +169,8 @@ final class AndroidFiles implements AutoCloseable {
   boolean allowed = false;
   for (int n = 0; n < services.length(); n++) {
    JSONObject service = services.getJSONObject(n);
-   if ("files".equals(service.optString("id")) && "files".equals(service.optString("kind"))
+   if (target.getString("service").equals(service.optString("id"))
+       && ("files".equals(service.optString("kind")) || "file_inbox".equals(service.optString("kind")))
        && incarnation.equals(service.optString("incarnation"))) allowed = true;
   }
   if (!allowed) throw new Exception("Files access changed or is not permitted. Refresh this device.");
@@ -312,7 +313,7 @@ final class AndroidFiles implements AutoCloseable {
  private static JSONObject snapshot(Job job) throws Exception {
   synchronized (job) {
    JSONObject result = new JSONObject(job.status.toString());
-   for (String key : new String[]{"host", "incarnation", "workspace", "remote_path"})
+   for (String key : new String[]{"host", "service", "incarnation", "workspace", "remote_path"})
     result.put(key, job.request.get(key));
    return result.put("local_path", job.source).put("name", job.request.getString("remote_path"))
        .put("duration_ms", (job.finishedAt == 0 ? SystemClock.elapsedRealtime() : job.finishedAt) - job.startedAt);

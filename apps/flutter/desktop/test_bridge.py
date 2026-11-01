@@ -149,6 +149,26 @@ class BridgeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'access unavailable'):
                 self.bridge.dispatch('shareList', target)
 
+    def test_named_inbox_upload_uses_only_the_selected_service(self):
+        source = self.root / 'dataset.bin'
+        source.write_bytes(b'upload contents')
+        self.status['host']['services'] = [dict(id='training-inputs', kind='file_inbox', incarnation=INCARNATION)]
+        target = dict(host=OWN, service='training-inputs', incarnation=INCARNATION)
+        self.bridge.dispatch('fileSend', dict(target, local_path=str(source), remote_path='dataset.bin'))
+        self.assertEqual(self.calls[-1], dict(op='file_put', **target, workspace='',
+                                            local_path=str(source), remote_path='dataset.bin', resume=True))
+        with self.assertRaisesRegex(ValueError, 'access unavailable'):
+            self.bridge.dispatch('fileSend', dict(target, service='other-inbox', local_path=str(source), remote_path='dataset.bin'))
+        self.status['host']['services'][0]['kind'] = 'file_share'
+        with self.assertRaisesRegex(ValueError, 'access unavailable'):
+            self.bridge.dispatch('fileSend', dict(target, local_path=str(source), remote_path='dataset.bin'))
+
+    def test_empty_legacy_inbox_is_hidden_from_local_service_cards(self):
+        self.status['host']['services'] = [dict(id='files', kind='files', incarnation=INCARNATION),
+                                          dict(id='training-inputs', kind='file_inbox', incarnation=INCARNATION)]
+        own = self.bridge.snapshot()['hosts'][OWN]
+        self.assertEqual([s['id'] for s in own['catalog']['services']], ['training-inputs'])
+
     def test_share_download_rejects_changed_grants_unsafe_paths_and_remote_destinations(self):
         target = dict(host=OWN, service='checkpoints', incarnation=INCARNATION)
         self.status['host']['services'] = [dict(id='checkpoints', kind='file_share', incarnation=INCARNATION)]

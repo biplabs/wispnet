@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-pub const HELP: &str = "Files: wispnet files put DEVICE WORKSPACE LOCAL_PATH REMOTE_PATH [--config PATH] [--no-resume]\n       wispnet files ls DEVICE SHARE [REMOTE_PATH] [--config PATH]\n       wispnet files get DEVICE SHARE REMOTE_PATH LOCAL_PATH [--config PATH] [--no-resume]\n       wispnet files status TRANSFER [--config PATH]\n       wispnet files cancel TRANSFER [--config PATH]\nRead-only shares have separate permissions from the receiving inbox.\nTransfers resume by default. Ctrl+C pauses the transfer and retains resumable data.\nProgress is JSON on stderr; completion or a typed transfer error is JSON on stdout.";
+pub const HELP: &str = "Files: wispnet files put DEVICE INBOX LOCAL_PATH REMOTE_PATH [--config PATH] [--no-resume]\n       wispnet files ls DEVICE SHARE [REMOTE_PATH] [--config PATH]\n       wispnet files get DEVICE SHARE REMOTE_PATH LOCAL_PATH [--config PATH] [--no-resume]\n       wispnet files status TRANSFER [--config PATH]\n       wispnet files cancel TRANSFER [--config PATH]\nRead-only shares have separate permissions from the receiving inbox.\nTransfers resume by default. Ctrl+C pauses the transfer and retains resumable data.\nProgress is JSON on stderr; completion or a typed transfer error is JSON on stdout.";
 
 pub fn error_result(error: &str) -> Value {
     let (code, message) = error
@@ -89,22 +89,9 @@ pub fn run_args(args: &[OsString]) -> Result<u32, String> {
         api.request(json!({"op":"catalog","host":host}))?
     };
     let downloading = options.action != "put";
-    let service_id = if downloading {
-        options.positional[1].as_str()
-    } else {
-        "files"
-    };
-    let service_kind = if downloading { "file_share" } else { "files" };
-    let service = catalog["services"]
-        .as_array()
-        .and_then(|services| {
-            services.iter().find(|s| {
-                s["id"] == service_id && s["kind"] == service_kind && s["enabled"] != false
-            })
-        })
-        .ok_or(
-            "PERMISSION_DENIED: Requested inbox or read-only share unavailable or not granted",
-        )?;
+    let selector = options.positional[1].as_str();
+    let service = transfer_service(&catalog, selector, downloading)?;
+    let service_id = service["id"].as_str().ok_or("Invalid file service")?;
     if options.action == "ls" {
         let path = options.positional.get(2).map(String::as_str).unwrap_or("");
         let mut cursor = Value::Null;
@@ -129,7 +116,12 @@ pub fn run_args(args: &[OsString]) -> Result<u32, String> {
         json!({"op":"file_get","host":host,"service":service_id,"incarnation":service["incarnation"],"path":options.positional[2],"local_path":path,"resume":options.resume})
     } else {
         let path = absolute_path(Path::new(&options.positional[2]))?;
-        json!({"op":"file_put","host":host,"service":"files","incarnation":service["incarnation"],"workspace":options.positional[1],"local_path":path,"remote_path":options.positional[3],"resume":options.resume})
+        let workspace = if service["kind"] == "files" && selector != "files" {
+            selector
+        } else {
+            ""
+        };
+        json!({"op":"file_put","host":host,"service":service_id,"incarnation":service["incarnation"],"workspace":workspace,"local_path":path,"remote_path":options.positional[3],"resume":options.resume})
     };
     let started = api.request(request)?;
     let transfer = started["transfer"]
@@ -197,6 +189,40 @@ pub fn run_args(args: &[OsString]) -> Result<u32, String> {
         std::thread::sleep(Duration::from_millis(250));
     }
 }
+fn transfer_service<'a>(
+    catalog: &'a Value,
+    selector: &str,
+    downloading: bool,
+) -> Result<&'a Value, String> {
+    let services = catalog["services"]
+        .as_array()
+        .ok_or("Invalid service catalog")?;
+    let kind = if downloading {
+        "file_share"
+    } else {
+        "file_inbox"
+    };
+    services
+        .iter()
+        .find(|service| {
+            service["id"] == selector && service["kind"] == kind && service["enabled"] != false
+        })
+        .or_else(|| {
+            (!downloading)
+                .then(|| {
+                    services.iter().find(|service| {
+                        service["id"] == "files"
+                            && service["kind"] == "files"
+                            && service["enabled"] != false
+                    })
+                })
+                .flatten()
+        })
+        .ok_or_else(|| {
+            "PERMISSION_DENIED: Requested inbox or read-only share unavailable or not granted"
+                .into()
+        })
+}
 fn absolute_path(path: &Path) -> Result<PathBuf, String> {
     let path = if path.is_absolute() {
         path.to_owned()
@@ -253,6 +279,31 @@ mod tests {
     use super::*;
     fn args(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
+    }
+    #[test]
+    fn uploads_choose_the_requested_inbox_before_legacy_workspace_fallback() {
+        let catalog = json!({"services":[{"id":"files","kind":"files"},{"id":"datasets","kind":"file_inbox"},{"id":"checkpoints","kind":"file_share"}]});
+        assert_eq!(
+            transfer_service(&catalog, "datasets", false).unwrap()["id"],
+            "datasets"
+        );
+        assert_eq!(
+            transfer_service(&catalog, "training.v1", false).unwrap()["id"],
+            "files"
+        );
+        assert_eq!(
+            transfer_service(&catalog, "checkpoints", true).unwrap()["id"],
+            "checkpoints"
+        );
+        assert!(
+            transfer_service(
+                &json!({"services":[{"id":"checkpoints","kind":"file_share"}]}),
+                "checkpoints",
+                false
+            )
+            .is_err()
+        );
+        assert!(transfer_service(&catalog, "datasets", true).is_err());
     }
     #[test]
     fn command_order_and_resume_default_are_explicit() {

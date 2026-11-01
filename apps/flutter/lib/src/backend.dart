@@ -65,6 +65,7 @@ class Machine {
         'http',
         'shell',
         'files',
+        'file_inbox',
         'file_share',
       ].contains(service['kind']) &&
       RegExp(r'^[0-9a-f]{64}$')
@@ -76,6 +77,12 @@ class Machine {
         'unverified',
       ].contains(state);
 }
+
+bool isInboxService(Map<String, dynamic> service) =>
+    const ['files', 'file_inbox'].contains(service['kind']);
+
+bool isFolderService(Map<String, dynamic> service) =>
+    isInboxService(service) || service['kind'] == 'file_share';
 
 List<String> orderedIds(Iterable<String> ids, List<dynamic>? saved) {
   final available = ids.toSet();

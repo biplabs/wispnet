@@ -476,6 +476,10 @@ class FileShareEditor extends StatefulWidget {
     this.folderLabel = '',
     this.folderAvailable = true,
     this.onRemove,
+    this.folderService = false,
+    this.chooseMode = false,
+    this.mode = 'share',
+    this.onSaveFolder,
   });
   final WispnetBackend backend;
   final List<Map<String, dynamic>> clients;
@@ -486,6 +490,15 @@ class FileShareEditor extends StatefulWidget {
   final bool android, folderAvailable;
   final String folderLabel;
   final Future<bool> Function()? onRemove;
+  final bool folderService, chooseMode;
+  final String mode;
+  final Future<void> Function(
+    String mode,
+    String id,
+    String root,
+    List<String> allow,
+  )?
+  onSaveFolder;
   @override
   State<FileShareEditor> createState() => _FileShareEditorState();
 }
@@ -496,6 +509,8 @@ class _FileShareEditorState extends State<FileShareEditor> {
   late final allowed = widget.allow.toSet();
   late String folderLabel = widget.folderLabel;
   late bool folderAvailable = widget.folderAvailable;
+  late String mode = widget.mode;
+  bool get inbox => mode == 'inbox';
   bool busy = false;
   String? failure;
 
@@ -513,8 +528,16 @@ class _FileShareEditorState extends State<FileShareEditor> {
     });
     try {
       final result = await widget.backend.invoke(
-        widget.android ? 'pickShareFolder' : 'pickFolder',
-        {'title': 'Choose a read-only shared folder'},
+        widget.android
+            ? inbox
+                  ? 'pickReceivingFolder'
+                  : 'pickShareFolder'
+            : 'pickFolder',
+        {
+          'title': inbox
+              ? 'Choose a receiving folder'
+              : 'Choose a shared folder',
+        },
       );
       final selection = result[widget.android ? 'folder' : 'path'];
       if (mounted && selection is String && selection.isNotEmpty) {
@@ -539,19 +562,27 @@ class _FileShareEditorState extends State<FileShareEditor> {
     try {
       final name = id.text.trim();
       if (!RegExp(r'^[a-z0-9][a-z0-9._-]{0,63}$').hasMatch(name) ||
-          const ['files', 'shell'].contains(name)) {
+          const ['files', 'shell'].contains(name) &&
+              !(name == 'files' && widget.id == 'files' && inbox)) {
         throw const FormatException(
-          'Enter a share name using lowercase letters, numbers, dots, hyphens or underscores. “files” and “shell” are reserved.',
+          'Enter a folder name using lowercase letters, numbers, dots, hyphens or underscores. “files” and “shell” are reserved.',
         );
       }
       if (widget.android
           ? root.text.isEmpty || !folderAvailable
           : !root.text.trim().startsWith('/')) {
-        throw const FormatException(
-          'Choose an existing shared folder before saving.',
-        );
+        throw const FormatException('Choose an existing folder before saving.');
       }
-      await widget.onSave(name, root.text.trim(), allowed.toList());
+      if (widget.onSaveFolder != null) {
+        await widget.onSaveFolder!(
+          mode,
+          name,
+          root.text.trim(),
+          allowed.toList(),
+        );
+      } else {
+        await widget.onSave(name, root.text.trim(), allowed.toList());
+      }
       if (mounted) Navigator.pop(context);
     } catch (error) {
       if (mounted) setState(() => failure = _shareFailure(error));
@@ -578,17 +609,49 @@ class _FileShareEditorState extends State<FileShareEditor> {
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      const Text(
-        'Selected devices may browse and download this share. Each share has its own permissions. This does not grant inbox or Shell access.',
+      if (widget.chooseMode)
+        DropdownButtonFormField<String>(
+          key: const ValueKey('folder-mode'),
+          initialValue: mode,
+          decoration: const InputDecoration(labelText: 'Use this folder to'),
+          items: const [
+            DropdownMenuItem(value: 'inbox', child: Text('Receive files')),
+            DropdownMenuItem(value: 'share', child: Text('Share files')),
+          ],
+          onChanged: busy
+              ? null
+              : (value) => setState(() {
+                  mode = value!;
+                  allowed.clear();
+                  if (widget.android) {
+                    root.clear();
+                    folderLabel = '';
+                    folderAvailable = false;
+                  }
+                }),
+        )
+      else if (widget.folderService)
+        Align(
+          alignment: Alignment.centerLeft,
+          child: WispBadge(
+            label: inbox ? 'Inbox' : 'Shared folder',
+            color: WispColors.cyan,
+          ),
+        ),
+      if (widget.folderService) const SizedBox(height: 12),
+      Text(
+        inbox
+            ? 'Selected devices may send files into this folder without confirming each transfer. They cannot browse or download its contents.'
+            : 'Selected devices may browse and download this folder. Each folder has its own permissions. This does not grant permission to send files into it.',
       ),
       const SizedBox(height: 12),
       TextField(
         key: const ValueKey('share-name'),
         controller: id,
         enabled: !busy && widget.id.isEmpty,
-        decoration: const InputDecoration(
-          labelText: 'Share name',
-          hintText: 'checkpoints',
+        decoration: InputDecoration(
+          labelText: widget.folderService ? 'Folder name' : 'Share name',
+          hintText: inbox ? 'incoming-datasets' : 'checkpoints',
         ),
       ),
       const SizedBox(height: 12),
@@ -619,19 +682,29 @@ class _FileShareEditorState extends State<FileShareEditor> {
                   'Folder access expired or is unavailable. Choose the folder again.',
                   style: TextStyle(color: WispColors.error),
                 )
-              : const Text('Only this folder and its contents are shared.'),
+              : Text(
+                  inbox
+                      ? 'Incoming files are saved in this folder.'
+                      : 'Only this folder and its contents are shared.',
+                ),
         ),
       const SizedBox(height: 8),
       OutlinedButton.icon(
         onPressed: busy ? null : pick,
         icon: const Icon(Icons.folder_open),
-        label: const Text('Choose shared folder'),
+        label: Text(
+          widget.folderService ? 'Choose folder' : 'Choose shared folder',
+        ),
       ),
-      const Text(
-        'Sharing a folder also exposes future files added inside it. The local path stays private to this computer.',
+      Text(
+        inbox
+            ? 'This computer chooses the receiving folder. Existing files cannot be overwritten. The local path stays private.'
+            : 'Sharing a folder also exposes future files added inside it. The local path stays private to this computer.',
       ),
       const SizedBox(height: 12),
-      const Text('Devices allowed to download'),
+      Text(
+        inbox ? 'Devices allowed to send files' : 'Devices allowed to download',
+      ),
       if (widget.clients.isEmpty)
         const Text(
           'Pair a device to grant access. You can save a share with no remote access.',
@@ -662,14 +735,16 @@ class _FileShareEditorState extends State<FileShareEditor> {
             busy || widget.android && (root.text.isEmpty || !folderAvailable)
             ? null
             : save,
-        child: const Text('Save read-only share'),
+        child: Text(
+          widget.folderService ? 'Save folder' : 'Save read-only share',
+        ),
       ),
       if (widget.onRemove != null) ...[
         const SizedBox(height: 12),
         OutlinedButton(
           onPressed: busy ? null : remove,
           style: wispDangerButtonStyle(),
-          child: const Text('Remove share'),
+          child: Text(widget.folderService ? 'Remove folder' : 'Remove share'),
         ),
       ],
     ],

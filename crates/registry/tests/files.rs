@@ -401,7 +401,7 @@ fn folder_is_required_for_every_grant_path_and_clearing_it_revokes_access() {
 }
 
 #[test]
-fn upgrade_revokes_only_legacy_files_grants_without_a_folder() {
+fn upgrade_revokes_unconfigured_grants_and_migrates_configured_inbox_grants() {
     for configured in [false, true] {
         let state = directory();
         let workspace = directory();
@@ -452,19 +452,32 @@ fn upgrade_revokes_only_legacy_files_grants_without_a_folder() {
         drop(db);
         let (mut store, _) = host::owner_store(state.path(), host).unwrap();
         let after = store.host_snapshot(host).unwrap();
-        assert_eq!(after.revision, before.revision + u64::from(!configured));
+        assert_eq!(after.revision, before.revision + 1);
         let files = after.services.iter().find(|s| s.id == "files").unwrap();
-        assert_eq!(files.allow, if configured { vec![peer] } else { vec![] });
-        assert_eq!(after.file_exports, before.file_exports);
-        assert_eq!(
-            files.incarnation,
-            before
-                .services
-                .iter()
-                .find(|s| s.id == "files")
-                .unwrap()
-                .incarnation
-        );
+        assert!(files.allow.is_empty());
+        assert!(after.file_exports.is_empty());
+        let old_incarnation = &before
+            .services
+            .iter()
+            .find(|s| s.id == "files")
+            .unwrap()
+            .incarnation;
+        if configured {
+            assert_ne!(&files.incarnation, old_incarnation);
+            assert_eq!(after.file_inboxes["shared"], before.file_exports["shared"]);
+            assert_eq!(
+                after
+                    .services
+                    .iter()
+                    .find(|s| s.id == "shared")
+                    .unwrap()
+                    .allow,
+                vec![peer]
+            );
+        } else {
+            assert_eq!(&files.incarnation, old_incarnation);
+            assert!(after.file_inboxes.is_empty());
+        }
         let revision = after.revision;
         drop(store);
         let (mut store, _) = host::owner_store(state.path(), host).unwrap();

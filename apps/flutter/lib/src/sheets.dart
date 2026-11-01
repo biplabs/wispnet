@@ -1196,77 +1196,7 @@ class AndroidLocalServices extends StatefulWidget {
 }
 
 class _AndroidLocalServicesState extends State<AndroidLocalServices> {
-  Map<String, dynamic>? service;
-  bool busy = false;
-  String? error;
   @override
-  void initState() {
-    super.initState();
-    load();
-  }
-
-  Future<void> load() async {
-    try {
-      final result = await widget.backend.invoke('snapshot');
-      final host = (result['hosts'] as Map).values.cast<Map>().firstWhere(
-        (h) => h['local'] == true,
-      );
-      if (mounted) {
-        setState(
-          () => service = Map<String, dynamic>.from(
-            (host['catalog']['services'] as List).cast<Map>().firstWhere(
-              (s) => s['kind'] == 'files',
-            ),
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) setState(() => error = failureMessage(e));
-    }
-  }
-
-  Future<void> toggle(bool enabled) async {
-    setState(() {
-      busy = true;
-      error = null;
-    });
-    try {
-      await widget.backend.invoke('setServiceEnabled', {
-        'service': service!['id'],
-        'incarnation': service!['incarnation'],
-        'enabled': enabled,
-      });
-      widget.onChanged();
-      await load();
-    } catch (e) {
-      if (mounted) setState(() => error = failureMessage(e));
-    } finally {
-      if (mounted) setState(() => busy = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => Column(
-    children: [
-      if (service == null && error == null) const LinearProgressIndicator(),
-      if (service != null)
-        WispServiceItem(
-          contentPadding: EdgeInsets.zero,
-          title: 'Receive files',
-          kind: 'files',
-          enabled: service!['enabled'] != false,
-          busy: busy,
-          onToggle: toggle,
-          settingsTooltip: 'File inbox',
-          onSettings: () => showWispSheet<void>(
-            context,
-            title: 'File inbox',
-            child: AndroidReceivingSettings(backend: widget.backend),
-          ),
-        ),
-      if (error != null)
-        Text(error!, style: const TextStyle(color: WispColors.error)),
-      AndroidFileShares(backend: widget.backend, onChanged: widget.onChanged),
-    ],
-  );
+  Widget build(BuildContext context) =>
+      AndroidFileShares(backend: widget.backend, onChanged: widget.onChanged);
 }

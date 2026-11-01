@@ -286,7 +286,11 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Add read-only file share'));
+      await tester.tap(find.text('Add folder'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('folder-mode')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Share files').last);
       await tester.pumpAndSettle();
       await tester.enterText(
         find.byKey(const ValueKey('share-name')),
@@ -298,8 +302,8 @@ void main() {
       );
       await tester.ensureVisible(find.text('Training host'));
       await tester.tap(find.text('Training host'));
-      await tester.ensureVisible(find.text('Save read-only share'));
-      await tester.tap(find.text('Save read-only share'));
+      await tester.ensureVisible(find.text('Save folder'));
+      await tester.tap(find.text('Save folder'));
       await tester.pumpAndSettle();
       final operation = backend.calls
           .where((c) => c.$1 == 'desktopRequest')

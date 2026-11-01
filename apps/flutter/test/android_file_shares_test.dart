@@ -52,9 +52,10 @@ class AndroidSharesBackend implements WispnetBackend {
   ]) async {
     calls.add((method, Map.of(arguments)));
     switch (method) {
-      case 'sharesStatus':
+      case 'folderServicesStatus':
         return {
           'revision': revision,
+          'inboxes': [],
           'clients': [
             {'peer': laptop, 'name': 'My laptop'},
             {'peer': other, 'name': 'Other device'},
@@ -125,6 +126,7 @@ class AndroidSharesBackend implements WispnetBackend {
         return {'transfers': []};
       case 'takeLink':
       case 'takeInvitation':
+      case 'takeShare':
       case 'refreshHost':
         return {};
       default:
@@ -189,6 +191,10 @@ void main() {
       );
       await tester.tap(find.byKey(const ValueKey('add-android-share')));
       await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('folder-mode')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Share files').last);
+      await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('share-root')), findsNothing);
       await tester.enterText(
         find.byKey(const ValueKey('share-name')),
@@ -197,20 +203,20 @@ void main() {
       expect(
         tester
             .widget<FilledButton>(
-              find.widgetWithText(FilledButton, 'Save read-only share'),
+              find.widgetWithText(FilledButton, 'Save folder'),
             )
             .onPressed,
         isNull,
       );
-      await tester.ensureVisible(find.text('Choose shared folder'));
-      await tester.tap(find.text('Choose shared folder'));
+      await tester.ensureVisible(find.text('Choose folder'));
+      await tester.tap(find.text('Choose folder'));
       await tester.pumpAndSettle();
       expect(find.text('Selected checkpoints'), findsOneWidget);
       expect(find.textContaining('opaque-selected-folder'), findsNothing);
       await tester.ensureVisible(find.text('My laptop'));
       await tester.tap(find.text('My laptop'));
-      await tester.ensureVisible(find.text('Save read-only share'));
-      await tester.tap(find.text('Save read-only share'));
+      await tester.ensureVisible(find.text('Save folder'));
+      await tester.tap(find.text('Save folder'));
       await tester.pumpAndSettle();
       expect(backend.calls.where((call) => call.$1 == 'saveShare').single.$2, {
         'expected_revision': 3,
@@ -252,8 +258,8 @@ void main() {
       await tester.tap(find.text('My laptop'));
       await tester.ensureVisible(find.text('Other device'));
       await tester.tap(find.text('Other device'));
-      await tester.ensureVisible(find.text('Save read-only share'));
-      await tester.tap(find.text('Save read-only share'));
+      await tester.ensureVisible(find.text('Save folder'));
+      await tester.tap(find.text('Save folder'));
       await tester.pumpAndSettle();
       expect(backend.calls.where((call) => call.$1 == 'saveShare').single.$2, {
         'expected_revision': 3,
@@ -289,19 +295,19 @@ void main() {
       expect(
         tester
             .widget<FilledButton>(
-              find.widgetWithText(FilledButton, 'Save read-only share'),
+              find.widgetWithText(FilledButton, 'Save folder'),
             )
             .onPressed,
         isNull,
       );
       backend.selection = {};
-      await tester.ensureVisible(find.text('Choose shared folder'));
-      await tester.tap(find.text('Choose shared folder'));
+      await tester.ensureVisible(find.text('Choose folder'));
+      await tester.tap(find.text('Choose folder'));
       await tester.pumpAndSettle();
       expect(
         tester
             .widget<FilledButton>(
-              find.widgetWithText(FilledButton, 'Save read-only share'),
+              find.widgetWithText(FilledButton, 'Save folder'),
             )
             .onPressed,
         isNull,
@@ -310,7 +316,7 @@ void main() {
         code: 'folder',
         message: 'Folder access expired. Select the folder again.',
       );
-      await tester.tap(find.text('Choose shared folder'));
+      await tester.tap(find.text('Choose folder'));
       await tester.pumpAndSettle();
       expect(
         find.text('Folder access expired. Select the folder again.'),
@@ -322,10 +328,10 @@ void main() {
         'folder': 'opaque-new-folder',
         'label': 'Reselected checkpoints',
       };
-      await tester.tap(find.text('Choose shared folder'));
+      await tester.tap(find.text('Choose folder'));
       await tester.pumpAndSettle();
-      await tester.ensureVisible(find.text('Save read-only share'));
-      await tester.tap(find.text('Save read-only share'));
+      await tester.ensureVisible(find.text('Save folder'));
+      await tester.tap(find.text('Save folder'));
       await tester.pumpAndSettle();
       expect(
         backend.shares.singleWhere(
@@ -347,14 +353,14 @@ void main() {
       );
       await tester.tap(find.byTooltip('Folder and access for checkpoints'));
       await tester.pumpAndSettle();
-      await tester.ensureVisible(find.text('Remove share'));
-      await tester.tap(find.text('Remove share'));
+      await tester.ensureVisible(find.text('Remove folder'));
+      await tester.tap(find.text('Remove folder'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Keep share'));
+      await tester.tap(find.text('Keep folder'));
       await tester.pumpAndSettle();
       expect(backend.calls.where((call) => call.$1 == 'removeShare'), isEmpty);
-      await tester.ensureVisible(find.text('Remove share'));
-      await tester.tap(find.text('Remove share'));
+      await tester.ensureVisible(find.text('Remove folder'));
+      await tester.tap(find.text('Remove folder'));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('confirm-remove-share')));
       await tester.pumpAndSettle();

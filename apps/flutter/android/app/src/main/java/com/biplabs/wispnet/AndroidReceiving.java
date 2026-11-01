@@ -91,6 +91,64 @@ final class AndroidReceiving {
       .put("allow", allow));
  }
 
+ /** Each named receiving folder has an independent native service grant. */
+ JSONObject inboxesStatus() throws Exception {
+  JSONObject status = Native.command("local_inboxes_status");
+  JSONArray rows = new JSONArray(), services = status.getJSONArray("inboxes");
+  JSONObject configured = status.getJSONObject("roots");
+  for (int index=0;index<services.length();index++) {
+   JSONObject service = services.getJSONObject(index);
+   rows.put(describeInbox(service, configured.getString(service.getString("id"))));
+  }
+  // Compatibility configuration created by older clients stays editable until
+  // removed. A never-configured placeholder is not a folder service in the app.
+  JSONObject legacy = status.getJSONObject("legacy_exports");
+  if (legacy.length()>0) {
+   String root = legacy.optString("incoming", "");
+   if (root.isEmpty()) root = legacy.getString(legacy.keys().next());
+   rows.put(describeInbox(status.getJSONObject("legacy_service"),root));
+  }
+  return new JSONObject().put("revision",status.getLong("revision"))
+      .put("clients",status.getJSONArray("clients")).put("inboxes",rows);
+ }
+ private JSONObject describeInbox(JSONObject service,String root) throws Exception {
+  JSONObject row = new JSONObject(service.toString());
+  JSONObject entry = new JSONObject(roots.getString(root,"{}"));
+  boolean available = false;
+  try { validateInboxRoot(root); available = true; } catch (Exception unavailable) { /* request reselection */ }
+  row.remove("backend");
+  return row.put("folder",root).put("label",entry.optString("label","Receiving folder")).put("available",available);
+ }
+ private void validateInboxRoot(String root) throws Exception {
+  if (!roots.contains(root)) throw new SecurityException("Choose a receiving folder first.");
+  prepare(Uri.parse(new JSONObject(roots.getString(root,"{}")).getString("uri")));
+ }
+ JSONObject configureInbox(JSONObject args) throws Exception {
+  if ("files".equals(args.getString("id"))) return configure(args);
+  String root=args.getString("folder");validateInboxRoot(root);
+  return Native.request(new JSONObject().put("op","local_inbox_configure")
+      .put("expected_revision",args.getLong("expected_revision")).put("id",args.getString("id"))
+      .put("root",root).put("allow",args.getJSONArray("allow")));
+ }
+ JSONObject removeInbox(JSONObject args) throws Exception {
+  String id=args.getString("id");
+  if ("files".equals(id)) return configure(new JSONObject().put("folder","").put("allow",new JSONArray())
+      .put("expected_revision",args.getLong("expected_revision")));
+  return Native.request(new JSONObject().put("op","local_inbox_remove").put("id",id)
+      .put("expected_revision",args.getLong("expected_revision")));
+ }
+ void requireInboxAvailable(String id) throws Exception {
+  JSONArray rows=inboxesStatus().getJSONArray("inboxes");
+  for (int index=0;index<rows.length();index++) {
+   JSONObject row=rows.getJSONObject(index);
+   if (id.equals(row.getString("id"))) {
+    if (!row.getBoolean("available")) throw new SecurityException("Folder access expired. Choose the receiving folder again.");
+    return;
+   }
+  }
+  throw new SecurityException("Receiving inbox unavailable.");
+ }
+
  String publish(JSONObject args, int descriptor) throws Exception {
   String id = args.getString("transfer");
   return publish(args, descriptor, () -> Native.publicationCancelled(id));

@@ -376,7 +376,7 @@ void main() {
           of: find.byKey(const ValueKey('local-sector')),
           matching: find.text('files'),
         ),
-        findsOneWidget,
+        findsNothing,
       );
       await tester.tap(
         find.descendant(

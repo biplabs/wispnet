@@ -629,7 +629,9 @@ async fn serve_stream(
             None
         } else if matches!(
             service.kind,
-            wispnet_core::host::ServiceKind::Files | wispnet_core::host::ServiceKind::FileShare
+            wispnet_core::host::ServiceKind::Files
+                | wispnet_core::host::ServiceKind::FileShare
+                | wispnet_core::host::ServiceKind::FileInbox
         ) {
             None
         } else {
@@ -726,6 +728,36 @@ async fn serve_stream(
                 biased;
                 _ = policy => {},
                 _ = files.serve_share(&peer_id, &incarnation, root, reader, writer) => {},
+            }
+        }
+        counts.record_activity(peer);
+        return;
+    }
+    if kind == wispnet_core::host::ServiceKind::FileInbox {
+        if let Services::Host(authority, _, files) = services {
+            let mut snapshot = match authority.snapshot().await {
+                Ok(snapshot) => snapshot,
+                _ => return,
+            };
+            if !snapshot.services.iter().any(|service| {
+                service.id == service_id
+                    && service.kind == kind
+                    && service.incarnation == incarnation
+                    && service.enabled
+                    && service.allow.contains(&peer)
+            }) {
+                return;
+            }
+            let Some(root) = snapshot.file_inboxes.remove(&service_id) else {
+                return;
+            };
+            let exports = std::collections::BTreeMap::from([("incoming".into(), root)]);
+            let (reader, writer) = tokio::io::split(tunnel);
+            let peer_id = peer.to_string();
+            tokio::select! {
+                biased;
+                _ = policy => {},
+                _ = files.serve(&peer_id,&incarnation,exports,reader,writer) => {},
             }
         }
         counts.record_activity(peer);

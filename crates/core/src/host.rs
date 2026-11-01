@@ -95,6 +95,8 @@ pub enum ServiceKind {
     Files,
     /// Owner-selected read-only file share with an independent grant list.
     FileShare,
+    /// Owner-selected upload-only folder with independent device grants.
+    FileInbox,
 }
 impl Catalog {
     /// Only complete, canonical owner-filtered snapshots can advance a baseline.
@@ -104,7 +106,7 @@ impl Catalog {
             && self.host == expected
             && crate::enrollment::valid_code(&self.generation)
             && self.revision <= i64::MAX as u64
-            && self.services.len() <= 130
+            && self.services.len() <= 162
             && usize::from(self.service_count) == self.services.len()
             && self.services.windows(2).all(|pair| pair[0].id < pair[1].id)
             && self.services.iter().all(|s| {

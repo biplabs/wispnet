@@ -580,3 +580,190 @@ async fn native_read_only_share_grants_are_separate_from_inbox_and_revoke_active
     endpoint.close().await;
     host.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn named_inbox_tunnels_confine_uploads_to_selected_folder_and_revoke_independently() {
+    use std::os::unix::fs::PermissionsExt;
+    let state = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    let identity = Identity::generate();
+    let own = identity.endpoint_id();
+    let alice = Identity::generate();
+    let bob = Identity::generate();
+    host::initialize(state.path(), own).unwrap();
+    for (revision, peer) in [alice.endpoint_id(), bob.endpoint_id()]
+        .into_iter()
+        .enumerate()
+    {
+        mutate(
+            state.path(),
+            own,
+            Mutation::Approve {
+                expected_revision: revision as u64,
+                peer,
+                name: "client".into(),
+            },
+        );
+    }
+    mutate(
+        state.path(),
+        own,
+        Mutation::FileInbox {
+            expected_revision: 2,
+            id: "datasets".into(),
+            root: first.path().canonicalize().unwrap(),
+            allow: vec![alice.endpoint_id()],
+        },
+    );
+    mutate(
+        state.path(),
+        own,
+        Mutation::FileInbox {
+            expected_revision: 3,
+            id: "checkpoints".into(),
+            root: second.path().canonicalize().unwrap(),
+            allow: vec![bob.endpoint_id()],
+        },
+    );
+    let authority = Authority::open(state.path(), own).unwrap();
+    let services = authority.services().await.unwrap();
+    let first_inc = services
+        .iter()
+        .find(|s| s.id == "datasets")
+        .unwrap()
+        .incarnation
+        .clone();
+    let second_inc = services
+        .iter()
+        .find(|s| s.id == "checkpoints")
+        .unwrap()
+        .incarnation
+        .clone();
+    let host = TunnelHost::bind_host(identity.secret_key(), &config(), authority.clone())
+        .await
+        .unwrap();
+    let endpoint = tunnel::bind_client(alice.secret_key()).await.unwrap();
+    let connection = tunnel::connect(&endpoint, own, host.endpoint().bound_sockets()[0])
+        .await
+        .unwrap();
+    let other = tunnel::bind_client(bob.secret_key()).await.unwrap();
+    let other_connection = tunnel::connect(&other, own, host.endpoint().bound_sockets()[0])
+        .await
+        .unwrap();
+    assert!(matches!(
+        tunnel::open_service_bound(&connection, "checkpoints", &second_inc).await,
+        Err(tunnel::TunnelError::Status(Status::Denied))
+    ));
+    assert!(matches!(
+        tunnel::open_service_bound(&other_connection, "datasets", &first_inc).await,
+        Err(tunnel::TunnelError::Status(Status::Denied))
+    ));
+    let mut stream = tunnel::open_service_bound(&connection, "datasets", &first_inc)
+        .await
+        .unwrap();
+    let bytes = b"dataset";
+    assert!(matches!(
+        rpc(
+            &mut stream,
+            Request::UploadBegin {
+                workspace: "checkpoints".into(),
+                path: "wrong".into(),
+                size_bytes: bytes.len() as u64,
+                sha256: wispnet_files::sha256(bytes),
+                idempotency_key: "wrong-root".into()
+            }
+        )
+        .await,
+        Response::Error {
+            code: ErrorCode::PathDenied,
+            ..
+        }
+    ));
+    for (index, workspace) in ["", "incoming"].into_iter().enumerate() {
+        let name = format!("data-{index}");
+        let Response::Upload { transfer_id, .. } = rpc(
+            &mut stream,
+            Request::UploadBegin {
+                workspace: workspace.into(),
+                path: name.clone(),
+                size_bytes: bytes.len() as u64,
+                sha256: wispnet_files::sha256(bytes),
+                idempotency_key: name.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("begin required")
+        };
+        assert!(matches!(
+            rpc(
+                &mut stream,
+                Request::UploadWrite {
+                    transfer_id: transfer_id.clone(),
+                    offset: 0,
+                    chunk_sha256: wispnet_files::sha256(bytes),
+                    data: bytes.to_vec()
+                }
+            )
+            .await,
+            Response::Written { .. }
+        ));
+        assert!(matches!(
+            rpc(&mut stream, Request::UploadCommit { transfer_id }).await,
+            Response::File { .. }
+        ));
+        assert_eq!(std::fs::read(first.path().join(&name)).unwrap(), bytes);
+        assert!(!second.path().join(&name).exists());
+    }
+    assert!(matches!(
+        rpc(
+            &mut stream,
+            Request::ShareStat {
+                path: "data-0".into()
+            }
+        )
+        .await,
+        Response::Error {
+            code: ErrorCode::PermissionDenied,
+            ..
+        }
+    ));
+    let mut unaffected = tunnel::open_service_bound(&other_connection, "checkpoints", &second_inc)
+        .await
+        .unwrap();
+    mutate(
+        state.path(),
+        own,
+        Mutation::RevokeService {
+            expected_revision: 4,
+            service: "datasets".into(),
+            peer: alice.endpoint_id(),
+        },
+    );
+    tokio::time::timeout(Duration::from_secs(4), async {
+        while matches!(read_response(&mut stream).await, Ok(Some(_))) {}
+    })
+    .await
+    .unwrap();
+    assert!(
+        matches!(rpc(&mut unaffected,Request::Workspaces).await,Response::Workspaces{workspaces} if workspaces==vec!["incoming"])
+    );
+    assert!(
+        tunnel::open_service_bound(&connection, "datasets", &first_inc)
+            .await
+            .is_err()
+    );
+    assert!(
+        authority
+            .catalog(alice.endpoint_id())
+            .await
+            .unwrap()
+            .services
+            .is_empty()
+    );
+    other.close().await;
+    endpoint.close().await;
+    host.shutdown().await;
+}

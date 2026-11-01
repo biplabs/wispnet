@@ -132,14 +132,13 @@ to selected paired devices, then open Shell from desktop/Android or run
 `wispnet shell DEVICE_ID`. See [shell access](docs/shell.md) for terminal modes,
 session persistence and CLI grant management.
 
-Every host also includes the reserved `files` inbox. Configure receiving folders
-and sender grants with `wispnet files-access`, then upload with `wispnet files put`.
-Read-only file shares have independent permissions for each share: publish one
-with `wispnet share checkpoints --path /workspace/checkpoints --allow CLIENT_ID`,
-then browse and download from the permitted device with `wispnet files ls|get`.
-Desktop settings manage shares; desktop and Android can browse and download.
-See [file transfers](docs/files.md)
-for resumable CLI/SDK use and the 1 Gbit/s throughput target.
+Inboxes and shared folders are named folder services with independent permissions.
+On desktop or Android, use **Local services → Add folder** and choose **Receive
+files** (Inbox) or **Share files** (Shared folder). Create multiple folders and
+grant each one to selected devices. The CLI provides `wispnet inbox` and
+`wispnet share` for setup, `files put` for inbox uploads, and `files ls|get` for
+browsing and downloading shares. See [file transfers](docs/files.md) for
+migration details, resumable CLI/SDK use, and throughput targets.
 
 Run `wispnet` for interactive QR pairing, pending approvals, machine removal,
 local service grants and owner operations. Use `ssh -t desktop.home wispnet`

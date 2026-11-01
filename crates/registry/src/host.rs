@@ -60,6 +60,13 @@ pub enum Mutation {
         root: PathBuf,
         allow: Vec<EndpointId>,
     },
+    /// A receiving folder has its own service identity and device grants.
+    FileInbox {
+        expected_revision: u64,
+        id: String,
+        root: PathBuf,
+        allow: Vec<EndpointId>,
+    },
     /// Add one approved peer's access without changing the service or other grants.
     GrantService {
         expected_revision: u64,
@@ -131,6 +138,9 @@ impl Mutation {
             | Self::FileShare {
                 expected_revision, ..
             }
+            | Self::FileInbox {
+                expected_revision, ..
+            }
             | Self::GrantService {
                 expected_revision, ..
             }
@@ -162,6 +172,7 @@ pub struct Snapshot {
     /// Owner-local configuration; never included in remote catalogs.
     pub file_exports: BTreeMap<String, PathBuf>,
     pub file_shares: BTreeMap<String, PathBuf>,
+    pub file_inboxes: BTreeMap<String, PathBuf>,
 }
 #[derive(Serialize)]
 pub struct Client {
@@ -189,7 +200,7 @@ fn validate_local_service(
 ) -> Result<(), ControlError> {
     let backend = if matches!(
         kind,
-        ServiceKind::Shell | ServiceKind::Files | ServiceKind::FileShare
+        ServiceKind::Shell | ServiceKind::Files | ServiceKind::FileShare | ServiceKind::FileInbox
     ) {
         if backend != std::net::SocketAddr::from(([127, 0, 0, 1], 0)) {
             return Err(ControlError::Invalid);
@@ -321,6 +332,57 @@ pub(crate) fn ensure_builtin_files(tx: &rusqlite::Transaction<'_>) -> rusqlite::
 
 /// Export roots must be existing absolute directories with no symlink component.
 /// Descriptor-relative confinement is also enforced by the Files engine at use time.
+/// Convert legacy global Inbox permission to independently revocable folders.
+/// Existing artifacts stay in place; only service bindings/resume identities move.
+pub(crate) fn migrate_file_inboxes(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<bool> {
+    let exports = file_exports(tx).map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let grants: i64 = tx.query_row(
+        "SELECT count(*) FROM host_grants WHERE service='files'",
+        [],
+        |r| r.get(0),
+    )?;
+    if exports.is_empty() && grants == 0 {
+        return Ok(false);
+    }
+    let enabled: bool = tx.query_row(
+        "SELECT enabled FROM host_services WHERE id='files' AND kind='files'",
+        [],
+        |r| r.get(0),
+    )?;
+    for (alias, root) in exports {
+        let mut id = alias.clone();
+        let base = format!("inbox-{}", &alias[..alias.len().min(48)]);
+        let mut suffix = 0usize;
+        while matches!(id.as_str(), "shell" | "files")
+            || tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM host_services WHERE id=?1)",
+                [&id],
+                |r| r.get::<_, bool>(0),
+            )?
+        {
+            id = if suffix == 0 {
+                base.clone()
+            } else {
+                format!("{base}-{suffix}")
+            };
+            suffix += 1;
+        }
+        tx.execute("INSERT INTO host_services(id,backend,incarnation,kind,enabled) VALUES(?1,'127.0.0.1:0',lower(hex(randomblob(32))),'file_inbox',?2)", params![id,enabled])?;
+        tx.execute(
+            "INSERT INTO host_file_inboxes(service,root) VALUES(?1,?2)",
+            params![id, root.to_str().ok_or(rusqlite::Error::InvalidQuery)?],
+        )?;
+        tx.execute("INSERT INTO host_grants(service,client) SELECT ?1,client FROM host_grants WHERE service='files'", [&id])?;
+    }
+    tx.execute("DELETE FROM host_grants WHERE service='files'", [])?;
+    tx.execute("DELETE FROM host_file_exports", [])?;
+    tx.execute(
+        "UPDATE host_services SET incarnation=lower(hex(randomblob(32))) WHERE id='files'",
+        [],
+    )?;
+    Ok(true)
+}
+
 fn validate_file_exports(
     tx: &rusqlite::Transaction<'_>,
     exports: &BTreeMap<String, PathBuf>,
@@ -401,6 +463,20 @@ fn validate_share_root(tx: &rusqlite::Transaction<'_>, root: &Path) -> Result<()
 }
 fn file_shares(tx: &rusqlite::Transaction<'_>) -> Result<BTreeMap<String, PathBuf>, ControlError> {
     let mut statement = tx.prepare("SELECT service,root FROM host_file_shares ORDER BY service")?;
+    statement
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                PathBuf::from(r.get::<_, String>(1)?),
+            ))
+        })?
+        .map(|r| r.map_err(ControlError::from))
+        .collect()
+}
+
+fn file_inboxes(tx: &rusqlite::Transaction<'_>) -> Result<BTreeMap<String, PathBuf>, ControlError> {
+    let mut statement =
+        tx.prepare("SELECT service,root FROM host_file_inboxes ORDER BY service")?;
     statement
         .query_map([], |r| {
             Ok((
@@ -523,6 +599,7 @@ impl Store {
                     "shell" => ServiceKind::Shell,
                     "files" => ServiceKind::Files,
                     "file_share" => ServiceKind::FileShare,
+                    "file_inbox" => ServiceKind::FileInbox,
                     _ => return Err(ControlError::Storage),
                 };
                 if !wispnet_core::enrollment::valid_code(&incarnation) {
@@ -559,8 +636,11 @@ impl Store {
         }
         let file_exports = file_exports(&tx)?;
         let file_shares = file_shares(&tx)?;
+        let file_inboxes = file_inboxes(&tx)?;
         if services.iter().any(|service| {
             (service.kind == ServiceKind::FileShare) != file_shares.contains_key(&service.id)
+                || (service.kind == ServiceKind::FileInbox)
+                    != file_inboxes.contains_key(&service.id)
         }) {
             return Err(ControlError::Storage);
         }
@@ -573,6 +653,7 @@ impl Store {
             services,
             file_exports,
             file_shares,
+            file_inboxes,
         })
     }
     pub fn host_mutate(
@@ -612,7 +693,7 @@ pub(crate) fn apply_mutation(
             ..
         } => {
             let unique: std::collections::BTreeSet<_> = services.iter().collect();
-            if services.len() > 130 || unique.len() != services.len() {
+            if services.len() > 162 || unique.len() != services.len() {
                 return Err(ControlError::Invalid);
             }
             for service in &services {
@@ -675,7 +756,12 @@ pub(crate) fn apply_mutation(
                 || matches!(new_id.as_str(), "shell" | "files")
                 || matches!(
                     kind,
-                    Some(ServiceKind::Shell | ServiceKind::Files | ServiceKind::FileShare)
+                    Some(
+                        ServiceKind::Shell
+                            | ServiceKind::Files
+                            | ServiceKind::FileShare
+                            | ServiceKind::FileInbox
+                    )
                 )
                 || !valid_service_id(&id)
                 || !valid_service_id(&new_id)
@@ -683,7 +769,7 @@ pub(crate) fn apply_mutation(
                 return Err(ControlError::Invalid);
             }
             if tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM host_file_shares WHERE service=?1)",
+                "SELECT EXISTS(SELECT 1 FROM host_file_shares WHERE service=?1 UNION ALL SELECT 1 FROM host_file_inboxes WHERE service=?1)",
                 [&id],
                 |r| r.get::<_, bool>(0),
             )? {
@@ -870,49 +956,10 @@ pub(crate) fn apply_mutation(
         }
         Mutation::FileShare {
             id, root, allow, ..
-        } => {
-            if !valid_service_id(&id) || matches!(id.as_str(), "shell" | "files") {
-                return Err(ControlError::Invalid);
-            }
-            validate_share_root(tx, &root)?;
-            let backend = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
-            validate_local_service(&id, backend, &allow, ServiceKind::FileShare)?;
-            let previous = tx
-                .query_row("SELECT kind FROM host_services WHERE id=?1", [&id], |r| {
-                    r.get::<_, String>(0)
-                })
-                .optional()?;
-            if previous.as_deref().is_some_and(|kind| kind != "file_share") {
-                return Err(ControlError::Conflict);
-            }
-            let count: i64 = tx.query_row(
-                "SELECT count(*) FROM host_services WHERE id!=?1 AND id NOT IN ('shell','files')",
-                [&id],
-                |r| r.get(0),
-            )?;
-            if count >= 128 {
-                return Err(ControlError::Invalid);
-            }
-            for peer in &allow {
-                if !tx.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM host_clients WHERE id=?1)",
-                    [peer.to_string()],
-                    |r| r.get::<_, bool>(0),
-                )? {
-                    return Err(ControlError::Forbidden);
-                }
-            }
-            let changed = file_shares(tx)?.get(&id) != Some(&root);
-            tx.execute("INSERT INTO host_services(id,backend,incarnation,kind) VALUES(?1,'127.0.0.1:0',lower(hex(randomblob(32))),'file_share') ON CONFLICT(id) DO UPDATE SET incarnation=CASE WHEN ?2 THEN lower(hex(randomblob(32))) ELSE host_services.incarnation END", params![id,changed])?;
-            tx.execute("INSERT INTO host_file_shares(service,root) VALUES(?1,?2) ON CONFLICT(service) DO UPDATE SET root=excluded.root", params![id,root.to_str().ok_or(ControlError::Invalid)?])?;
-            tx.execute("DELETE FROM host_grants WHERE service=?1", [&id])?;
-            for peer in allow {
-                tx.execute(
-                    "INSERT INTO host_grants VALUES(?1,?2)",
-                    params![id, peer.to_string()],
-                )?;
-            }
-        }
+        } => apply_folder_service(tx, id, root, allow, ServiceKind::FileShare)?,
+        Mutation::FileInbox {
+            id, root, allow, ..
+        } => apply_folder_service(tx, id, root, allow, ServiceKind::FileInbox)?,
         Mutation::Service {
             id,
             backend,
@@ -924,13 +971,18 @@ pub(crate) fn apply_mutation(
             if matches!(id.as_str(), "shell" | "files")
                 || matches!(
                     kind,
-                    Some(ServiceKind::Shell | ServiceKind::Files | ServiceKind::FileShare)
+                    Some(
+                        ServiceKind::Shell
+                            | ServiceKind::Files
+                            | ServiceKind::FileShare
+                            | ServiceKind::FileInbox
+                    )
                 )
             {
                 return Err(ControlError::Invalid);
             }
             if tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM host_file_shares WHERE service=?1)",
+                "SELECT EXISTS(SELECT 1 FROM host_file_shares WHERE service=?1 UNION ALL SELECT 1 FROM host_file_inboxes WHERE service=?1)",
                 [&id],
                 |r| r.get::<_, bool>(0),
             )? {
@@ -957,7 +1009,13 @@ pub(crate) fn apply_mutation(
                 [&id],
                 |r| r.get(0),
             )?;
-            if count >= 128 {
+            if count >= 128
+                && !tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM host_services WHERE id=?1)",
+                    [&id],
+                    |r| r.get::<_, bool>(0),
+                )?
+            {
                 return Err(ControlError::Invalid);
             }
             for peer in &allow {
@@ -982,6 +1040,7 @@ pub(crate) fn apply_mutation(
                 ServiceKind::Shell => "shell",
                 ServiceKind::Files => "files",
                 ServiceKind::FileShare => "file_share",
+                ServiceKind::FileInbox => "file_inbox",
             });
             // Accept bounded legacy input, but never persist another name.
             tx.execute("INSERT INTO host_services(id,backend,incarnation,kind)
@@ -1026,6 +1085,70 @@ pub(crate) fn apply_mutation(
     }
     Ok(())
 }
+fn apply_folder_service(
+    tx: &rusqlite::Transaction<'_>,
+    id: String,
+    root: PathBuf,
+    allow: Vec<EndpointId>,
+    kind: ServiceKind,
+) -> Result<(), ControlError> {
+    let (table, spelling) = match kind {
+        ServiceKind::FileShare => ("host_file_shares", "file_share"),
+        ServiceKind::FileInbox => ("host_file_inboxes", "file_inbox"),
+        _ => return Err(ControlError::Invalid),
+    };
+    if !valid_service_id(&id) || matches!(id.as_str(), "shell" | "files") {
+        return Err(ControlError::Invalid);
+    }
+    validate_share_root(tx, &root)?;
+    let backend = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
+    validate_local_service(&id, backend, &allow, kind)?;
+    let previous = tx
+        .query_row("SELECT kind FROM host_services WHERE id=?1", [&id], |r| {
+            r.get::<_, String>(0)
+        })
+        .optional()?;
+    if previous
+        .as_deref()
+        .is_some_and(|previous| previous != spelling)
+    {
+        return Err(ControlError::Conflict);
+    }
+    let count: i64 = tx.query_row(
+        "SELECT count(*) FROM host_services WHERE id!=?1 AND id NOT IN ('shell','files')",
+        [&id],
+        |r| r.get(0),
+    )?;
+    if count >= 128 && previous.is_none() {
+        return Err(ControlError::Invalid);
+    }
+    for peer in &allow {
+        if !tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM host_clients WHERE id=?1)",
+            [peer.to_string()],
+            |r| r.get::<_, bool>(0),
+        )? {
+            return Err(ControlError::Forbidden);
+        }
+    }
+    let roots = if kind == ServiceKind::FileShare {
+        file_shares(tx)?
+    } else {
+        file_inboxes(tx)?
+    };
+    let changed = roots.get(&id) != Some(&root);
+    tx.execute("INSERT INTO host_services(id,backend,incarnation,kind) VALUES(?1,'127.0.0.1:0',lower(hex(randomblob(32))),?3) ON CONFLICT(id) DO UPDATE SET incarnation=CASE WHEN ?2 THEN lower(hex(randomblob(32))) ELSE host_services.incarnation END", params![id,changed,spelling])?;
+    tx.execute(&format!("INSERT INTO {table}(service,root) VALUES(?1,?2) ON CONFLICT(service) DO UPDATE SET root=excluded.root"), params![id,root.to_str().ok_or(ControlError::Invalid)?])?;
+    tx.execute("DELETE FROM host_grants WHERE service=?1", [&id])?;
+    for peer in allow {
+        tx.execute(
+            "INSERT INTO host_grants VALUES(?1,?2)",
+            params![id, peer.to_string()],
+        )?;
+    }
+    Ok(())
+}
+
 /// Files grants are standing access to configured folders. They cannot be
 /// assigned before the owner has chosen at least one folder to share.
 fn require_file_export_for_grant(
@@ -1206,12 +1329,12 @@ impl Authority {
     }
     /// Serving paths use only enabled bindings; owner snapshots retain paused services.
     pub async fn services(&self) -> Result<Vec<LocalService>, ControlError> {
-        Ok(self
-            .snapshot()
-            .await?
+        let snapshot = self.snapshot().await?;
+        let legacy_files_configured = !snapshot.file_exports.is_empty();
+        Ok(snapshot
             .services
             .into_iter()
-            .filter(|s| s.enabled)
+            .filter(|s| s.enabled && (s.kind != ServiceKind::Files || legacy_files_configured))
             .collect())
     }
     pub async fn catalog(&self, peer: EndpointId) -> Result<Catalog, ControlError> {
@@ -1219,10 +1342,15 @@ impl Authority {
         if !snapshot.clients.iter().any(|c| c.peer == peer) {
             return Err(ControlError::Forbidden);
         }
+        let legacy_files_configured = !snapshot.file_exports.is_empty();
         let services: Vec<Service> = snapshot
             .services
             .into_iter()
-            .filter(|s| s.enabled && s.allow.contains(&peer))
+            .filter(|s| {
+                s.enabled
+                    && s.allow.contains(&peer)
+                    && (s.kind != ServiceKind::Files || legacy_files_configured)
+            })
             .map(|s| Service {
                 id: s.id,
                 incarnation: s.incarnation,

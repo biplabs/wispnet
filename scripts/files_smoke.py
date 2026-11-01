@@ -22,6 +22,61 @@ class FilesSmoke(unittest.TestCase):
     cli = shell_smoke.ShellSmoke.cli
     mutate = shell_smoke.ShellSmoke.mutate
 
+    def test_named_inboxes_keep_roots_and_device_permissions_independent(self):
+        client, api, client_id, _ = self.host("inbox-sender")
+        target, target_api, target_id, target_port = self.host("inbox-receiver")
+        first, second = self.root.resolve() / "first-inbox", self.root.resolve() / "second-inbox"
+        first.mkdir(mode=0o700)
+        second.mkdir(mode=0o700)
+        invitation_path = self.root / "inbox-invitation.json"
+        subprocess.run([shell_smoke.BINARY, "host-invite", "--config", target,
+                        "--output", invitation_path], capture_output=True, check=True,
+                       env=self.environment, timeout=15)
+        invitation = json.loads(invitation_path.read_text())
+        invitation["direct_hint"] = f"127.0.0.1:{target_port}"
+        api.request(op="pair", host=target_id, invitation=json.dumps(invitation))
+        self.mutate(target_api, op="approve_invitation", invitation=invitation["invitation"])
+        self.cli(target, "inbox", "first-inbox", "--path", first, "--allow", client_id)
+        self.cli(target, "inbox", "second-inbox", "--path", second, "--allow", "none")
+        catalog = api.request(op="catalog", host=target_id)
+        self.assertEqual([(s["id"], s["kind"]) for s in catalog["services"]],
+                         [("first-inbox", "file_inbox")])
+        self.assertNotIn(str(first), json.dumps(catalog))
+        source = self.root / "named-source.bin"
+        content = os.urandom(1024 * 1024 + 23)
+        source.write_bytes(content)
+        uploaded = self.cli(client, "files", "put", target_id, "first-inbox", source, "same-name.bin")
+        self.completed(uploaded, hashlib.sha256(content).hexdigest(), len(content))
+        self.assertEqual((first / "same-name.bin").read_bytes(), content)
+        self.assertFalse((second / "same-name.bin").exists())
+        denied = self.cli(client, "files", "put", target_id, "second-inbox", source, "same-name.bin", success=False)
+        self.assertEqual(json.loads(denied.stdout)["error"]["code"], "PERMISSION_DENIED")
+        target_service = catalog["services"][0]
+        job = api.request(op="file_put", host=target_id, service="first-inbox",
+                          incarnation=target_service["incarnation"], workspace="second-inbox",
+                          local_path=str(source), remote_path="cross-inbox.bin", resume=True)
+        import time
+        deadline = time.monotonic() + 15
+        while job["state"] == "running" and time.monotonic() < deadline:
+            time.sleep(.05)
+            job = api.request(op="file_status", transfer=job["transfer"])
+        self.assertEqual(job["state"], "failed", job)
+        self.assertFalse((first / "cross-inbox.bin").exists())
+        self.assertFalse((second / "cross-inbox.bin").exists())
+        self.cli(target, "inbox", "second-inbox", "--allow", client_id)
+        self.cli(client, "files", "put", target_id, "second-inbox", source, "same-name.bin")
+        self.assertEqual((second / "same-name.bin").read_bytes(), content)
+        self.cli(target, "inbox", "first-inbox", "--allow", "none")
+        self.cli(client, "files", "put", target_id, "first-inbox", source, "revoked.bin", success=False)
+        self.cli(client, "files", "put", target_id, "second-inbox", source, "still-allowed.bin")
+        self.assertFalse((first / "revoked.bin").exists())
+        self.assertEqual((second / "still-allowed.bin").read_bytes(), content)
+        self.cli(client, "files", "get", target_id, "second-inbox", "same-name.bin",
+                 self.root / "unauthorized-read.bin", success=False)
+        self.assertFalse((self.root / "unauthorized-read.bin").exists())
+        self.cli(target, "inbox", "first-inbox", "--remove")
+        self.assertEqual((first / "same-name.bin").read_bytes(), content)
+
     def test_read_only_shares_have_independent_grants_and_cli_browse_download(self):
         client, api, client_id, _ = self.host("share-reader")
         target, target_api, target_id, target_port = self.host("share-provider")

@@ -624,13 +624,21 @@ impl Client {
                 .local_authority
                 .as_ref()
                 .ok_or_else(|| TransferError::new("UNAVAILABLE", "Local host unavailable"))?;
-            let service = authority
-                .services()
+            let snapshot = authority
+                .snapshot()
                 .await
-                .map_err(|_| TransferError::new("UNAVAILABLE", "Local service unavailable"))?
-                .into_iter()
+                .map_err(|_| TransferError::new("UNAVAILABLE", "Local service unavailable"))?;
+            let service = snapshot
+                .services
+                .iter()
                 .find(|s| {
-                    s.id == target.service && s.kind == wispnet_core::host::ServiceKind::Files
+                    s.id == target.service
+                        && s.enabled
+                        && matches!(
+                            s.kind,
+                            wispnet_core::host::ServiceKind::Files
+                                | wispnet_core::host::ServiceKind::FileInbox
+                        )
                 })
                 .ok_or_else(|| {
                     TransferError::new("PERMISSION_DENIED", "Files service unavailable")
@@ -641,10 +649,18 @@ impl Client {
                     "Files service changed; refresh its catalog",
                 ));
             }
-            let exports = authority
-                .file_exports()
-                .await
-                .map_err(|_| TransferError::new("UNAVAILABLE", "File exports unavailable"))?;
+            let exports = if service.kind == wispnet_core::host::ServiceKind::FileInbox {
+                let root = snapshot
+                    .file_inboxes
+                    .get(&target.service)
+                    .cloned()
+                    .ok_or_else(|| {
+                        TransferError::new("PERMISSION_DENIED", "Inbox folder unavailable")
+                    })?;
+                BTreeMap::from([("incoming".into(), root)])
+            } else {
+                snapshot.file_exports
+            };
             if self.files.local.get().is_none() {
                 let manager = FileService::new(authority.state_dir().join("files"))
                     .map_err(TransferError::io)?;
@@ -654,6 +670,8 @@ impl Client {
             let (stream, server) = tokio::io::duplex(MAX_CHUNK * 2);
             let own = self.endpoint.id().to_string();
             let incarnation = target.incarnation.clone();
+            let service_id = target.service.clone();
+            let kind = service.kind;
             let authority = authority.clone();
             resources.local = Some(tokio::spawn(async move {
                 let (reader, writer) = tokio::io::split(server);
@@ -662,9 +680,7 @@ impl Client {
                         tokio::time::sleep(Duration::from_millis(500)).await;
                         if !authority.services().await.is_ok_and(|services| {
                             services.iter().any(|s| {
-                                s.id == "files"
-                                    && s.kind == wispnet_core::host::ServiceKind::Files
-                                    && s.incarnation == incarnation
+                                s.id == service_id && s.kind == kind && s.incarnation == incarnation
                             })
                         }) {
                             break;
@@ -693,9 +709,11 @@ impl Client {
         let selected = catalog["services"]
             .as_array()
             .and_then(|services| {
-                services
-                    .iter()
-                    .find(|s| s["id"] == target.service && s["kind"] == "files")
+                services.iter().find(|s| {
+                    s["id"] == target.service
+                        && matches!(s["kind"].as_str(), Some("files" | "file_inbox"))
+                        && s["enabled"] != false
+                })
             })
             .ok_or_else(|| {
                 TransferError::new(
@@ -979,10 +997,12 @@ impl Client {
 }
 
 fn validate_target(target: &FileTarget) -> Result<()> {
-    if target.service != "files" || !wispnet_core::enrollment::valid_code(&target.incarnation) {
+    if !wispnet_core::protocol::valid_service_id(&target.service)
+        || !wispnet_core::enrollment::valid_code(&target.incarnation)
+    {
         return Err(TransferError::new(
             "INVALID_ARGUMENT",
-            "Use the built-in Files service and its current incarnation",
+            "Select an inbox and its current incarnation",
         ));
     }
     Ok(())

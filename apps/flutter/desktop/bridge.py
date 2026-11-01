@@ -224,6 +224,8 @@ class Bridge:
             publications = {p['service']: p for p in status.get('public_access', {}).get('services', [])}
             owned_services = []
             for service in status['host']['services']:
+                if service.get('kind') == 'files' and not status['host'].get('file_exports'):
+                    continue
                 item = dict(service)
                 publication = publications.get(service['id'])
                 if publication and publication.get('incarnation') == service.get('incarnation'):
@@ -329,17 +331,20 @@ class Bridge:
 
     def file_target(self, args):
         host, incarnation = (args.get(key) for key in ('host', 'incarnation'))
+        selected = args.get('service', 'files')
         if (not isinstance(host, str) or not re.fullmatch(r'[0-9a-f]{64}', host)
-            or not isinstance(incarnation, str) or not re.fullmatch(r'[0-9a-f]{64}', incarnation)):
+            or not isinstance(incarnation, str) or not re.fullmatch(r'[0-9a-f]{64}', incarnation)
+            or not isinstance(selected, str) or not re.fullmatch(r'[a-z0-9][a-z0-9._-]{0,63}', selected)):
             raise ValueError('Invalid Files target; refresh this machine')
         status = self.api.request(op='status')
         catalog = status['host'] if status['host']['host'] == host else self.api.request(op='catalog', host=host)
         if (catalog.get('host') != host or not any(
-                service.get('id') == 'files' and service.get('kind') == 'files'
+                service.get('id') == selected and service.get('kind') in ('files', 'file_inbox')
                 and service.get('incarnation') == incarnation
+                and service.get('enabled') is not False
                 for service in catalog.get('services', []))):
             raise ValueError('Files access unavailable or changed; refresh this machine')
-        return dict(host=host, service='files', incarnation=incarnation)
+        return dict(host=host, service=selected, incarnation=incarnation)
 
     def send_file(self, args):
         workspace = args.get('workspace', '')
@@ -518,7 +523,7 @@ class Bridge:
             return {}
         if method == 'saveOrder':
             group, ids = args['group'], args['ids']
-            if not (group == 'machines' or re.fullmatch(r'services/[0-9a-f]{64}', group)) or not isinstance(ids, list) or len(ids) > (128 if group == 'machines' else 130) or not all(isinstance(i, str) for i in ids):
+            if not (group == 'machines' or re.fullmatch(r'services/[0-9a-f]{64}', group)) or not isinstance(ids, list) or len(ids) > (128 if group == 'machines' else 162) or not all(isinstance(i, str) for i in ids):
                 raise ValueError('Invalid card order')
             with self.lock:
                 self.preferences['order'][group] = ids

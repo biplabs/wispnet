@@ -439,14 +439,36 @@ impl Client {
                     "roots": snapshot.file_shares}),
                 )
             }
+            "local_inboxes_status" => {
+                let snapshot = self
+                    .local_authority
+                    .as_ref()
+                    .ok_or("Local host unavailable")?
+                    .snapshot()
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok(
+                    json!({"revision":snapshot.revision,"clients":snapshot.clients,
+                    "inboxes":snapshot.services.iter().filter(|service| service.kind == wispnet_core::host::ServiceKind::FileInbox).collect::<Vec<_>>(),
+                    "roots":snapshot.file_inboxes,"legacy_exports":snapshot.file_exports,
+                    "legacy_service":snapshot.services.iter().find(|service|service.id=="files")}),
+                )
+            }
             "local_files_configure"
             | "local_service_enabled"
             | "local_share_configure"
-            | "local_share_remove" => {
+            | "local_share_remove"
+            | "local_inbox_configure"
+            | "local_inbox_remove" => {
                 let directory = self.state.clone();
                 let own = self.endpoint.id();
-                let remove_share = (value["op"] == "local_share_remove")
-                    .then(|| argument(value, "id").map(str::to_owned))
+                let removing_kind = match value["op"].as_str() {
+                    Some("local_share_remove") => Some(wispnet_core::host::ServiceKind::FileShare),
+                    Some("local_inbox_remove") => Some(wispnet_core::host::ServiceKind::FileInbox),
+                    _ => None,
+                };
+                let removing_id = removing_kind
+                    .map(|_| argument(value, "id").map(str::to_owned))
                     .transpose()?;
                 let operation = if value["op"] == "local_service_enabled" {
                     json!({"op":"set_service_enabled", "expected_revision":value["expected_revision"],
@@ -456,6 +478,11 @@ impl Client {
                         "id":value["id"],"root":value["root"],"allow":value["allow"]})
                 } else if value["op"] == "local_share_remove" {
                     json!({"op":"remove", "expected_revision":value["expected_revision"], "id":value["id"]})
+                } else if value["op"] == "local_inbox_configure" {
+                    json!({"op":"file_inbox", "expected_revision":value["expected_revision"],
+                        "id":value["id"],"root":value["root"],"allow":value["allow"]})
+                } else if value["op"] == "local_inbox_remove" {
+                    json!({"op":"remove", "expected_revision":value["expected_revision"], "id":value["id"]})
                 } else {
                     json!({"op":"files","expected_revision":value["expected_revision"],"exports":value["exports"],"allow":value["allow"]})
                 };
@@ -464,16 +491,13 @@ impl Client {
                 let revision = tokio::task::spawn_blocking(move || {
                     let (mut store, owner) = wispnet_registry::host::owner_store(&directory, own)
                         .map_err(|e| e.to_string())?;
-                    if let Some(id) = remove_share
+                    if let Some(id) = removing_id
                         && !store
                             .host_snapshot(own)
                             .map_err(|e| e.to_string())?
                             .services
                             .iter()
-                            .any(|service| {
-                                service.id == id
-                                    && service.kind == wispnet_core::host::ServiceKind::FileShare
-                            })
+                            .any(|service| service.id == id && Some(service.kind) == removing_kind)
                     {
                         return Err("Read-only share unavailable".into());
                     }

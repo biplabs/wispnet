@@ -9,6 +9,7 @@ pub const HELP: &str = "Management (uses the running node; --config is optional)
   wispnet settings [--port 7842] [--device-id my-computer]
   wispnet shell-access [--allow PUBLIC_ID,PUBLIC_ID | --allow none]
   wispnet files-access [--allow PUBLIC_ID,PUBLIC_ID|none] [--export NAME=/absolute/path ... | --clear-exports]
+  wispnet inbox [NAME] [--path /absolute/folder] [--allow PUBLIC_ID,PUBLIC_ID|none] [--remove]
   wispnet share [NAME] [--path /absolute/folder] [--allow PUBLIC_ID,PUBLIC_ID|none] [--remove]
   wispnet service-links --host HOST_ID --service SERVICE_ID
   wispnet resolve-link --link wispnet://HOST_ID/SERVICE_ID
@@ -33,12 +34,16 @@ pub fn handles(mode: &str) -> bool {
             | "shell-access"
             | "files-access"
             | "share"
+            | "inbox"
     )
 }
 pub fn run(args: &[OsString]) -> Result<Value, String> {
     let mode = args[0].to_str().ok_or("Invalid command")?;
     if mode == "share" {
         return share_command(&args[1..]);
+    }
+    if mode == "inbox" {
+        return folder_command(&args[1..], true);
     }
     let mut options = BTreeMap::new();
     let mut exports = BTreeMap::<String, String>::new();
@@ -259,6 +264,13 @@ fn files_grants(
 
 /// Each named read-only folder share has independent grants and revocation.
 fn share_command(args: &[OsString]) -> Result<Value, String> {
+    folder_command(args, false)
+}
+
+fn folder_command(args: &[OsString], inbox: bool) -> Result<Value, String> {
+    let kind = if inbox { "file_inbox" } else { "file_share" };
+    let collection = if inbox { "inboxes" } else { "shares" };
+    let roots_key = if inbox { "file_inboxes" } else { "file_shares" };
     let mut name = None;
     let mut root = None;
     let mut allow = None;
@@ -292,14 +304,16 @@ fn share_command(args: &[OsString]) -> Result<Value, String> {
         .as_array()
         .ok_or("Missing host services")?
         .iter()
-        .filter(|s| s["kind"] == "file_share")
+        .filter(|s| s["kind"] == kind)
         .cloned()
         .collect::<Vec<_>>();
     let Some(name) = name else {
         if root.is_some() || allow.is_some() || remove {
             return Err("A share name is required".into());
         }
-        return Ok(json!({"shares":shares,"roots":status["host"]["file_shares"]}));
+        let mut result = json!({"roots":status["host"][roots_key]});
+        result[collection] = json!(shares);
+        return Ok(result);
     };
     if !wispnet_core::protocol::valid_service_id(&name)
         || matches!(name.as_str(), "shell" | "files")
@@ -309,22 +323,18 @@ fn share_command(args: &[OsString]) -> Result<Value, String> {
     let existing = shares.iter().find(|s| s["id"] == name);
     if remove {
         if existing.is_none() {
-            return Err("Read-only share unavailable".into());
+            return Err("Folder service unavailable".into());
         }
         return api.request(json!({"op":"mutate","operation":{"op":"remove","id":name,"expected_revision":status["host"]["revision"]}}));
     }
     if root.is_none() && allow.is_none() {
         return existing
             .cloned()
-            .map(|service| json!({"service":service,"root":status["host"]["file_shares"][&name]}))
-            .ok_or_else(|| "Read-only share unavailable; set --path to create it".into());
+            .map(|service| json!({"service":service,"root":status["host"][roots_key][&name]}))
+            .ok_or_else(|| "Folder service unavailable; set --path to create it".into());
     }
     let root = root
-        .or_else(|| {
-            status["host"]["file_shares"][&name]
-                .as_str()
-                .map(str::to_owned)
-        })
+        .or_else(|| status["host"][roots_key][&name].as_str().map(str::to_owned))
         .ok_or("Set --path to create the share")?;
     if !PathBuf::from(&root).is_absolute() {
         return Err("Share folder path must be absolute".into());
@@ -342,10 +352,8 @@ fn share_command(args: &[OsString]) -> Result<Value, String> {
                 .collect::<Result<Vec<_>, _>>()?
         ),
     };
-    let result=api.request(json!({"op":"mutate","operation":{"op":"file_share","id":name,"root":root,"allow":allow,"expected_revision":status["host"]["revision"]}}))?;
-    Ok(
-        json!({"service":name,"kind":"file_share","root":root,"allow":allow,"revision":result["revision"]}),
-    )
+    let result=api.request(json!({"op":"mutate","operation":{"op":kind,"id":name,"root":root,"allow":allow,"expected_revision":status["host"]["revision"]}}))?;
+    Ok(json!({"service":name,"kind":kind,"root":root,"allow":allow,"revision":result["revision"]}))
 }
 
 #[cfg(test)]

@@ -18,10 +18,12 @@ class DesktopSettings extends StatefulWidget {
     this.initialSection = 'My services',
     this.servicesOnly = false,
     this.serviceId,
+    this.addFolder = false,
   });
   final String initialSection;
   final bool servicesOnly;
   final String? serviceId;
+  final bool addFolder;
   final WispnetBackend backend;
   final VoidCallback onAccess, onChanged;
   @override
@@ -35,6 +37,7 @@ class _DesktopSettingsState extends State<DesktopSettings> {
   String? error;
   String localUrl = '';
   bool busy = false, openingAddress = false;
+  bool openedFolder = false;
   Timer? timer;
   List<Map<String, dynamic>> get services =>
       (status?['host']['services'] as List? ?? []).cast<Map<String, dynamic>>();
@@ -98,6 +101,12 @@ class _DesktopSettingsState extends State<DesktopSettings> {
           operations = journal['value'] as List;
           error = addressError;
         });
+        if (widget.addFolder && !openedFolder) {
+          openedFolder = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) unawaited(run(() => editShare()));
+          });
+        }
       }
     } catch (e) {
       if (mounted) setState(() => error = failureMessage(e));
@@ -372,29 +381,75 @@ class _DesktopSettingsState extends State<DesktopSettings> {
   Future<void> editShare([Map<String, dynamic>? service]) async {
     final revision = status!['host']['revision'] as int;
     final name = service?['id'] as String? ?? '';
-    final roots = status!['host']['file_shares'] as Map? ?? {};
+    final mode = service == null || service['kind'] == 'file_inbox'
+        ? 'inbox'
+        : 'share';
+    final roots =
+        status!['host'][mode == 'inbox' ? 'file_inboxes' : 'file_shares']
+            as Map? ??
+        {};
+    Future<void> save(
+      String selectedMode,
+      String id,
+      String root,
+      List<String> allow,
+    ) async {
+      if (services.any((s) => s['id'] == id && s['id'] != name)) {
+        throw const FormatException(
+          'This service name already exists. Choose a different folder name.',
+        );
+      }
+      await mutate({
+        'op': selectedMode == 'inbox' ? 'file_inbox' : 'file_share',
+        'id': id,
+        'root': root,
+        'allow': allow,
+      }, revision);
+    }
+
     await showWispSheet<void>(
       context,
-      title: name.isEmpty ? 'Add read-only file share' : 'Edit $name share',
+      title: name.isEmpty ? 'Add folder' : 'Edit $name folder',
       child: FileShareEditor(
         backend: widget.backend,
         clients: List<Map<String, dynamic>>.of(clients),
         id: name,
         root: roots[name] as String? ?? '',
         allow: (service?['allow'] as List? ?? []).cast<String>(),
-        onSave: (id, root, allow) async {
-          if (services.any((s) => s['id'] == id && s['id'] != name)) {
-            throw const FormatException(
-              'This service name already exists. Choose a different share name.',
-            );
-          }
-          await mutate({
-            'op': 'file_share',
-            'id': id,
-            'root': root,
-            'allow': allow,
-          }, revision);
-        },
+        folderService: true,
+        chooseMode: service == null,
+        mode: mode,
+        onSave: (id, root, allow) => save(mode, id, root, allow),
+        onSaveFolder: save,
+        onRemove: service == null
+            ? null
+            : () async {
+                final confirmed = await showWispSheet<bool>(
+                  context,
+                  title: 'Remove folder?',
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'Remove “$name” from Wispnet? Files on this computer will be kept.',
+                      ),
+                      const SizedBox(height: 16),
+                      FilledButton(
+                        onPressed: () => Navigator.pop(context, true),
+                        style: dangerStyle,
+                        child: const Text('Remove folder'),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        child: const Text('Keep folder'),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirmed != true) return false;
+                await mutate({'op': 'remove', 'id': name}, revision);
+                return true;
+              },
       ),
     );
   }
@@ -822,13 +877,21 @@ class _DesktopSettingsState extends State<DesktopSettings> {
       else if (section == 'My services') ...[
         if (widget.serviceId == null) ...[
           action('Add a new service', () => run(() => editService())),
-          action('Add read-only file share', () => run(() => editShare())),
-          for (final s in services.where((s) => s['kind'] == 'file_share'))
+          action('Add folder', () => run(() => editShare())),
+          for (final s in services.where(
+            (s) => s['kind'] == 'file_share' || s['kind'] == 'file_inbox',
+          ))
             WispServiceItem(
               contentPadding: EdgeInsets.zero,
               title: s['id'] as String,
-              kind: 'file_share',
-              subtitle: const Text('Read-only file share'),
+              kind: s['kind'] as String,
+              subtitle: Align(
+                alignment: Alignment.centerLeft,
+                child: WispBadge(
+                  label: s['kind'] == 'file_inbox' ? 'Inbox' : 'Shared folder',
+                  color: WispColors.cyan,
+                ),
+              ),
               enabled: s['enabled'] != false,
               busy: busy,
               onToggle: (value) => run(() async {
@@ -846,12 +909,19 @@ class _DesktopSettingsState extends State<DesktopSettings> {
           ))
             action('Shell access', () => run(() => editShell(s))),
           for (final s in services.where(
-            (s) => s['id'] == 'files' && s['kind'] == 'files',
+            (s) =>
+                s['id'] == 'files' &&
+                s['kind'] == 'files' &&
+                (status!['host']['file_exports'] as Map? ?? {}).isNotEmpty,
           ))
             WispServiceItem(
               contentPadding: EdgeInsets.zero,
-              title: 'Receive files',
+              title: s['id'] as String,
               kind: 'files',
+              subtitle: const Align(
+                alignment: Alignment.centerLeft,
+                child: WispBadge(label: 'Inbox', color: WispColors.cyan),
+              ),
               enabled: s['enabled'] != false,
               busy: busy,
               onToggle: (value) => run(() async {
@@ -882,7 +952,13 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                       fontWeight: FontWeight.bold,
                     ),
                   ),
-                  Text(s['kind'].toString().toUpperCase()),
+                  Text(
+                    isInboxService(s)
+                        ? 'Inbox'
+                        : s['kind'] == 'file_share'
+                        ? 'Shared folder'
+                        : s['kind'].toString().toUpperCase(),
+                  ),
                   const SizedBox(height: 8),
                   if (localUrl.isNotEmpty) addressLink(localUrl),
                   if (publication(s)?['enabled'] == true &&
@@ -903,27 +979,30 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                       'Manage folders and access',
                       () => run(() => editFiles(s)),
                     ),
-                  ] else if (s['kind'] == 'file_share') ...[
-                    const Text(
-                      'Read-only file share · separate from file inbox access',
+                  ] else if (s['kind'] == 'file_share' ||
+                      s['kind'] == 'file_inbox') ...[
+                    Text(
+                      s['kind'] == 'file_inbox'
+                          ? 'Inbox · devices may send files here'
+                          : 'Shared folder · devices may browse and download',
                     ),
                     const SizedBox(height: 8),
                     action(
-                      'Manage share and access',
+                      'Manage folder and access',
                       () => run(() => editShare(s)),
                     ),
                     action(
-                      'Remove share',
+                      'Remove folder',
                       () => run(
                         () => confirm(
-                          'Remove share?',
-                          'Stop sharing “${s['id']}” with all devices? Files on this computer will be kept.',
+                          'Remove folder?',
+                          'Remove “${s['id']}” from Wispnet? Files on this computer will be kept.',
                           () => mutate({
                             'op': 'remove',
                             'id': s['id'],
                           }, status!['host']['revision'] as int),
                           danger: true,
-                          confirmLabel: 'Remove share',
+                          confirmLabel: 'Remove folder',
                         ),
                       ),
                       danger: true,

@@ -158,7 +158,7 @@ class MachineCard extends StatelessWidget {
                       onDrop: (moved) =>
                           onReorder('services/${machine.id}', ids, moved, id),
                       child:
-                          services[id]!['kind'] == 'files' &&
+                          isInboxService(services[id]!) &&
                               onFilesDropped != null
                           ? FileDropArea(
                               enabled:
@@ -214,7 +214,9 @@ class MachineCard extends StatelessWidget {
         .toSet()
         .length;
     final subtitle = service['kind'] == 'file_share'
-        ? 'READ-ONLY FILE SHARE'
+        ? 'Shared folder'
+        : isInboxService(service)
+        ? 'Inbox'
         : (service['kind'] as String).toUpperCase();
     return WispServiceItem(
       title: service['id'] as String,
@@ -231,6 +233,16 @@ class MachineCard extends StatelessWidget {
       onSettings: onSettings == null ? null : () => onSettings!(service),
       settingsTooltip: 'Settings for ${service['id']} on ${machine.name}',
       actions: [
+        if (!local && isInboxService(service))
+          IconButton(
+            tooltip: 'Send files to ${service['id']}',
+            onPressed: busy || !allowed ? null : () => onOpen(service),
+            icon: const Icon(
+              Icons.upload_file,
+              size: 20,
+              color: WispColors.cyan,
+            ),
+          ),
         if (service['kind'] == 'http')
           IconButton(
             tooltip: 'Show links for ${service['id']}',
@@ -243,7 +255,10 @@ class MachineCard extends StatelessWidget {
         runSpacing: 4,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
-          Text(subtitle),
+          if (isFolderService(service))
+            WispBadge(label: subtitle, color: WispColors.cyan)
+          else
+            Text(subtitle),
           if (!enabled) const Text('Off', style: TextStyle(fontSize: 11)),
           if (publicEnabled)
             Tooltip(

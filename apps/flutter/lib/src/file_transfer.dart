@@ -25,6 +25,7 @@ class DesktopFileTransfer {
     required this.incarnation,
     required this.workspace,
     required this.path,
+    this.service = 'files',
     this.displayName,
     this.sourceSizeBytes = 0,
     this.resume = true,
@@ -33,7 +34,7 @@ class DesktopFileTransfer {
     sizeBytes = sourceSizeBytes;
   }
   final Machine machine;
-  final String incarnation, workspace, path;
+  final String incarnation, workspace, path, service;
   final bool resume;
   final String? displayName;
   final int sourceSizeBytes;
@@ -178,6 +179,7 @@ class DesktopFileTransfers extends ChangeNotifier {
   List<DesktopFileTransfer> enqueue({
     required Machine machine,
     required String incarnation,
+    String service = 'files',
     String workspace = '',
     required List<String> paths,
     Map<String, String> names = const {},
@@ -189,6 +191,7 @@ class DesktopFileTransfers extends ChangeNotifier {
           (path) => DesktopFileTransfer(
             machine: machine,
             incarnation: incarnation,
+            service: service,
             workspace: workspace,
             path: path,
             displayName: names[path],
@@ -236,6 +239,7 @@ class DesktopFileTransfers extends ChangeNotifier {
               machines[host] ??
               Machine(host, {'name': status['host_name'] ?? 'Device'}),
           incarnation: incarnation,
+          service: status['service'] as String? ?? 'files',
           workspace: workspace,
           path: path,
           displayName: name,
@@ -274,6 +278,7 @@ class DesktopFileTransfers extends ChangeNotifier {
             job.update(
               await backend.invoke('fileSend', {
                 'host': job.machine.id,
+                if (job.service != 'files') 'service': job.service,
                 'incarnation': job.incarnation,
                 'workspace': job.workspace,
                 'local_path': job.path,
@@ -370,6 +375,7 @@ class DesktopFileTransfers extends ChangeNotifier {
       (other) =>
           !other.finished &&
           other.machine.id == job.machine.id &&
+          other.service == job.service &&
           other.workspace == job.workspace &&
           other.path == job.path,
     )) {
@@ -378,6 +384,7 @@ class DesktopFileTransfers extends ChangeNotifier {
     enqueue(
       machine: job.machine,
       incarnation: job.incarnation,
+      service: job.service,
       workspace: job.workspace,
       paths: [job.path],
       names: {job.path: job.name},
@@ -502,6 +509,7 @@ class FileSendSheet extends StatefulWidget {
     required this.machine,
     required this.incarnation,
     required this.transfers,
+    this.service = 'files',
     this.initialPaths = const [],
     this.initialFiles = const [],
     this.onQueued,
@@ -509,7 +517,7 @@ class FileSendSheet extends StatefulWidget {
   });
   final WispnetBackend backend;
   final Machine machine;
-  final String incarnation;
+  final String incarnation, service;
   final DesktopFileTransfers transfers;
   final List<String> initialPaths;
   final List<Map<String, dynamic>> initialFiles;
@@ -604,6 +612,7 @@ class _FileSendSheetState extends State<FileSendSheet> {
     final jobs = widget.transfers.enqueue(
       machine: widget.machine,
       incarnation: widget.incarnation,
+      service: widget.service,
       paths: pending.map((file) => file.path).toList(),
       names: {for (final file in pending) file.path: file.name},
       sizes: {for (final file in pending) file.path: file.sizeBytes},
@@ -630,6 +639,11 @@ class _FileSendSheetState extends State<FileSendSheet> {
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
+      if (widget.service != 'files')
+        Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Text('Inbox: ${widget.service}'),
+        ),
       if (widget.desktop)
         FileDropArea(
           key: const ValueKey('file-drop-zone'),
@@ -775,7 +789,9 @@ class FileTransferList extends StatelessWidget {
                             overflow: TextOverflow.ellipsis,
                           ),
                           Text(
-                            job.hostName,
+                            job.service == 'files'
+                                ? job.hostName
+                                : '${job.hostName} / ${job.service}',
                             style: const TextStyle(
                               color: WispColors.muted,
                               fontSize: 12,

@@ -34,12 +34,12 @@ def valid_catalog(peer, value):
         and type(value["revision"]) is int
         and 0 <= value["revision"] < 2**63
         and isinstance(value["services"], list)
-        and len(value["services"]) <= 130
+        and len(value["services"]) <= 162
         and value["service_count"] == len(value["services"])
         and all(
             isinstance(s, dict)
             and set(s) == {"id", "incarnation", "display_name", "kind"}
-            and s["kind"] in ("http", "tcp", "shell", "files", "file_share")
+            and s["kind"] in ("http", "tcp", "shell", "files", "file_share", "file_inbox")
             and isinstance(s["display_name"], str)
             and bool(s["display_name"].strip())
             and len(s["display_name"].encode("utf-8", errors="surrogatepass")) <= 128

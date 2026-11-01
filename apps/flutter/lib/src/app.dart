@@ -365,11 +365,14 @@ class _WispHomeState extends State<WispHome>
       final submitted = <DesktopFileTransfer>[];
       await showWispSheet<void>(
         context,
-        title: 'Send files to ${machine.name}',
+        title: service['id'] == 'files'
+            ? 'Send files to ${machine.name}'
+            : 'Send files to ${machine.name} / ${service['id']}',
         child: FileSendSheet(
           backend: backend,
           machine: machine,
           incarnation: service['incarnation'] as String,
+          service: service['id'] as String,
           transfers: fileTransfers,
           initialPaths: paths,
           initialFiles: files,
@@ -382,7 +385,8 @@ class _WispHomeState extends State<WispHome>
       await Future.wait(submitted.map((job) => job.done));
       return;
     }
-    final send = "wispnet files put ${machine.id} '' /local/file filename";
+    final send =
+        "wispnet files put ${machine.id} ${service['id'] == 'files' ? "''" : service['id']} /local/file filename";
     await showWispSheet<void>(
       context,
       title: 'Send files to ${machine.name}',
@@ -430,7 +434,7 @@ class _WispHomeState extends State<WispHome>
       );
       return;
     }
-    if (service['kind'] == 'files') {
+    if (isInboxService(service)) {
       await showFiles(machine, service);
       return;
     }
@@ -759,6 +763,24 @@ class _WispHomeState extends State<WispHome>
     );
   }
 
+  Future<void> addFolder() => showWispSheet<void>(
+    context,
+    title: 'Local services',
+    child: snapshot['desktop'] == true
+        ? DesktopSettings(
+            backend: backend,
+            servicesOnly: true,
+            addFolder: true,
+            onAccess: settings,
+            onChanged: () => unawaited(poll()),
+          )
+        : AndroidFileShares(
+            backend: backend,
+            addFolder: true,
+            onChanged: () => unawaited(poll()),
+          ),
+  );
+
   Future<void> setServiceEnabled(
     Map<String, dynamic> service,
     bool enabled,
@@ -785,10 +807,10 @@ class _WispHomeState extends State<WispHome>
     if (snapshot['desktop'] != true) {
       await showWispSheet<void>(
         context,
-        title: service['kind'] == 'file_share'
-            ? '${service['id']} share'
+        title: service['kind'] != 'files' && isFolderService(service)
+            ? '${service['id']} folder'
             : 'File inbox',
-        child: service['kind'] == 'file_share'
+        child: service['kind'] != 'files' && isFolderService(service)
             ? AndroidFileShares(
                 backend: backend,
                 serviceId: service['id'] as String,
@@ -918,7 +940,7 @@ class _WispHomeState extends State<WispHome>
                 machine.online &&
                 machine.services.any(
                   (service) =>
-                      service['kind'] == 'files' && machine.canOpen(service),
+                      isInboxService(service) && machine.canOpen(service),
                 ),
           )
           .toList();
@@ -953,9 +975,8 @@ class _WispHomeState extends State<WispHome>
         ),
       );
       if (receiver == null || !mounted) return;
-      final service = receiver.services.firstWhere(
-        (service) => service['kind'] == 'files' && receiver.canOpen(service),
-      );
+      final service = await chooseInbox(receiver);
+      if (service == null || !mounted) return;
       await showFiles(receiver, service, files: files);
     } catch (error) {
       if (mounted) notice('Cannot share files: ${message(error)}');
@@ -972,7 +993,7 @@ class _WispHomeState extends State<WispHome>
               machine.online &&
               machine.services.any(
                 (service) =>
-                    service['kind'] == 'files' && machine.canOpen(service),
+                    isInboxService(service) && machine.canOpen(service),
               ),
         )
         .toList();
@@ -1000,10 +1021,36 @@ class _WispHomeState extends State<WispHome>
             ),
           );
     if (receiver == null || !mounted) return;
-    final service = receiver.services.firstWhere(
-      (service) => service['kind'] == 'files',
-    );
+    final service = await chooseInbox(receiver);
+    if (service == null || !mounted) return;
     await showFiles(receiver, service, paths: paths);
+  }
+
+  Future<Map<String, dynamic>?> chooseInbox(Machine machine) async {
+    final inboxes = machine.services
+        .where((service) => isInboxService(service) && machine.canOpen(service))
+        .toList();
+    if (inboxes.length == 1) return inboxes.single;
+    if (inboxes.isEmpty) return null;
+    return showWispSheet<Map<String, dynamic>>(
+      context,
+      title: 'Choose inbox on ${machine.name}',
+      child: Column(
+        children: [
+          for (final service in inboxes)
+            WispListItem(
+              key: ValueKey('choose-inbox-${service['id']}'),
+              leading: const Icon(
+                Icons.folder_outlined,
+                color: WispColors.cyan,
+              ),
+              title: Text(service['id'] as String),
+              subtitle: const Text('Inbox'),
+              onTap: () => Navigator.pop(context, service),
+            ),
+        ],
+      ),
+    );
   }
 
   Future<void> showTransfers({String? host, String? hostName}) =>
@@ -1166,11 +1213,7 @@ class _WispHomeState extends State<WispHome>
           'name': snapshot['name'] ?? 'This device',
           'local': true,
           'state': 'available',
-          'catalog': {
-            'services': [
-              {'id': 'files', 'kind': 'files'},
-            ],
-          },
+          'catalog': {'services': <Map<String, dynamic>>[]},
         }),
       );
     }
@@ -1195,7 +1238,13 @@ class _WispHomeState extends State<WispHome>
                 key: const ValueKey('local-sector'),
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  sectionHeading('LOCAL SERVICES', []),
+                  sectionHeading('LOCAL SERVICES', [
+                    OutlinedButton(
+                      onPressed: busy ? null : addFolder,
+                      style: buttonStyle,
+                      child: const Text('Add folder'),
+                    ),
+                  ]),
                   const SizedBox(height: 12),
                   for (final machine in local)
                     directoryCard(machine, local: true),
