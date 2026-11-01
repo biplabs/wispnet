@@ -5,7 +5,7 @@ import 'package:flutter/services.dart';
 
 import 'backend.dart';
 import 'sheets.dart';
-import 'theme.dart';
+import '../ui.dart';
 
 /// Owner workflows share the same sheets as Android; no permanent navigation rail.
 class DesktopSettings extends StatefulWidget {
@@ -276,7 +276,7 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                 ),
                 const SizedBox(height: 12),
                 if (folder != null)
-                  ListTile(
+                  WispListItem(
                     key: const ValueKey('receiving-folder'),
                     contentPadding: EdgeInsets.zero,
                     leading: const Icon(
@@ -285,26 +285,22 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                     ),
                     title: const Text('Receiving folder'),
                     subtitle: Text(folder),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton(
-                          tooltip: 'Change receiving folder',
-                          onPressed: working || picking ? null : chooseFolder,
-                          icon: const Icon(Icons.settings_outlined),
-                        ),
-                        IconButton(
-                          tooltip: 'Remove receiving folder',
-                          onPressed: working || picking
-                              ? null
-                              : () => update(() {
-                                  exports.clear();
-                                  pickerFailure = null;
-                                }),
-                          icon: const Icon(Icons.close),
-                        ),
-                      ],
-                    ),
+                    actions: [
+                      IconButton(
+                        tooltip: 'Remove receiving folder',
+                        onPressed: working || picking
+                            ? null
+                            : () => update(() {
+                                exports.clear();
+                                pickerFailure = null;
+                              }),
+                        icon: const Icon(Icons.delete_outline),
+                      ),
+                      WispSettingsButton(
+                        tooltip: 'Change receiving folder',
+                        onPressed: working || picking ? null : chooseFolder,
+                      ),
+                    ],
                   )
                 else
                   OutlinedButton.icon(
@@ -740,34 +736,19 @@ class _DesktopSettingsState extends State<DesktopSettings> {
     padding: const EdgeInsets.only(bottom: 8),
     child: Align(
       alignment: Alignment.centerLeft,
-      child: Semantics(
-        link: true,
-        child: Tooltip(
-          message: publicService == null
-              ? 'Open local service'
-              : 'Open public service',
-          child: WispInkWell(
-            onTap: busy || openingAddress
-                ? null
-                : () => openAddress(url, publicService),
-            child: Text(
-              url,
-              style: const TextStyle(
-                color: WispColors.cyan,
-                decoration: TextDecoration.underline,
-                decorationColor: WispColors.cyan,
-              ),
-            ),
-          ),
-        ),
+      child: WispLink(
+        text: url,
+        tooltip: publicService == null
+            ? 'Open local service'
+            : 'Open public service',
+        onTap: busy || openingAddress
+            ? null
+            : () => openAddress(url, publicService),
       ),
     ),
   );
 
-  ButtonStyle get dangerStyle => OutlinedButton.styleFrom(
-    foregroundColor: WispColors.error,
-    side: const BorderSide(color: WispColors.error),
-  ).copyWith(backgroundColor: wispButtonBackground(const Color(0xff401e2a)));
+  ButtonStyle get dangerStyle => wispDangerButtonStyle();
 
   Widget action(String label, VoidCallback callback, {bool danger = false}) =>
       Padding(
@@ -817,27 +798,21 @@ class _DesktopSettingsState extends State<DesktopSettings> {
           for (final s in services.where(
             (s) => s['id'] == 'files' && s['kind'] == 'files',
           ))
-            Material(
-              type: MaterialType.transparency,
-              child: WispToggleListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Receive files'),
-                value: s['enabled'] != false,
-                onChanged: busy
-                    ? null
-                    : (value) => run(() async {
-                        await widget.backend.invoke('setServiceEnabled', {
-                          'service': s['id'],
-                          'incarnation': s['incarnation'],
-                          'enabled': value!,
-                        });
-                      }),
-                secondary: IconButton(
-                  tooltip: 'File inbox',
-                  onPressed: busy ? null : () => run(() => editFiles(s)),
-                  icon: const Icon(Icons.settings_outlined),
-                ),
-              ),
+            WispServiceItem(
+              contentPadding: EdgeInsets.zero,
+              title: 'Receive files',
+              kind: 'files',
+              enabled: s['enabled'] != false,
+              busy: busy,
+              onToggle: (value) => run(() async {
+                await widget.backend.invoke('setServiceEnabled', {
+                  'service': s['id'],
+                  'incarnation': s['incarnation'],
+                  'enabled': value,
+                });
+              }),
+              settingsTooltip: 'File inbox',
+              onSettings: () => run(() => editFiles(s)),
             ),
           if (widget.servicesOnly)
             action('Pair this machine', () => run(invite)),

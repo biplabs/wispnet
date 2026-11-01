@@ -2,7 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'backend.dart';
-import 'theme.dart';
+import '../ui.dart';
 import 'file_transfer.dart';
 
 class MachineCard extends StatelessWidget {
@@ -214,182 +214,63 @@ class MachineCard extends StatelessWidget {
         .toSet()
         .length;
     final subtitle = (service['kind'] as String).toUpperCase();
-    return Container(
-      constraints: const BoxConstraints(minHeight: 64),
-      decoration: BoxDecoration(
-        color: WispColors.tile,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: allowed ? const Color(0xff32518a) : const Color(0xff1d2842),
-        ),
-      ),
-      child: WispInkWell(
-        onTap: !busy && allowed ? () => onOpen(service) : null,
-        borderRadius: BorderRadius.circular(16),
-        child: Builder(
-          builder: (context) {
-            final content = Expanded(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 8, 0, 8),
-                child: Opacity(
-                  opacity: enabled && (allowed || (local && onToggle != null))
-                      ? 1
-                      : .45,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(
-                            service['kind'] == 'shell'
-                                ? Icons.terminal
-                                : service['kind'] == 'files'
-                                ? Icons.folder_outlined
-                                : Icons.north_east,
-                            size: 16,
-                            color: WispColors.cyan,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              service['id'] as String,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontSize: 17,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 2),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 4,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          Text(
-                            subtitle,
-                            style: const TextStyle(
-                              fontSize: 13,
-                              color: WispColors.muted,
-                            ),
-                          ),
-                          if (!enabled)
-                            const Text(
-                              'Off',
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: WispColors.muted,
-                              ),
-                            ),
-                          if (publicEnabled)
-                            Tooltip(
-                              message: publicCached
-                                  ? 'Last known public link; refresh this machine to verify its status'
-                                  : publicOnline
-                                  ? 'Public access enabled and online'
-                                  : 'Public access enabled but offline',
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 6,
-                                  vertical: 2,
-                                ),
-                                decoration: BoxDecoration(
-                                  color:
-                                      (publicCached
-                                              ? WispColors.muted
-                                              : publicOnline
-                                              ? WispColors.green
-                                              : WispColors.error)
-                                          .withValues(alpha: .12),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Text(
-                                  local
-                                      ? 'Public'
-                                      : publicCached
-                                      ? 'Public · Cached'
-                                      : publicOnline
-                                      ? 'Public · Online'
-                                      : 'Public · Offline',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.bold,
-                                    color: publicCached
-                                        ? WispColors.muted
-                                        : publicOnline
-                                        ? WispColors.green
-                                        : WispColors.error,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          if (local && !publicEnabled)
-                            Text(
-                              '$deviceCount ${deviceCount == 1 ? 'device' : 'devices'}',
-                              style: const TextStyle(
-                                fontSize: 11,
-                                color: WispColors.muted,
-                              ),
-                            ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
+    return WispServiceItem(
+      title: service['id'] as String,
+      kind: service['kind'] as String,
+      enabled: enabled,
+      available: allowed,
+      busy: busy,
+      card: true,
+      onOpen: () => onOpen(service),
+      onToggle: local && onToggle != null
+          ? (value) => onToggle!(service, value)
+          : null,
+      toggleKey: ValueKey('service-toggle-${service['id']}'),
+      onSettings: onSettings == null ? null : () => onSettings!(service),
+      settingsTooltip: 'Settings for ${service['id']} on ${machine.name}',
+      actions: [
+        if (service['kind'] == 'http')
+          IconButton(
+            tooltip: 'Show links for ${service['id']}',
+            onPressed: busy ? null : () => onLinks(service),
+            icon: const Icon(Icons.link, size: 20, color: WispColors.cyan),
+          ),
+      ],
+      subtitle: Wrap(
+        spacing: 8,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Text(subtitle),
+          if (!enabled) const Text('Off', style: TextStyle(fontSize: 11)),
+          if (publicEnabled)
+            Tooltip(
+              message: publicCached
+                  ? 'Last known public link; refresh this machine to verify its status'
+                  : publicOnline
+                  ? 'Public access enabled and online'
+                  : 'Public access enabled but offline',
+              child: WispBadge(
+                label: local
+                    ? 'Public'
+                    : publicCached
+                    ? 'Public · Cached'
+                    : publicOnline
+                    ? 'Public · Online'
+                    : 'Public · Offline',
+                color: publicCached
+                    ? WispColors.muted
+                    : publicOnline
+                    ? WispColors.green
+                    : WispColors.error,
               ),
-            );
-            final controls = <Widget>[
-              if (local && onToggle != null)
-                Tooltip(
-                  message:
-                      '${enabled ? 'Turn off' : 'Turn on'} ${service['id']}',
-                  child: WispToggle(
-                    key: ValueKey('service-toggle-${service['id']}'),
-                    value: enabled,
-                    onChanged: busy
-                        ? null
-                        : (value) => onToggle!(service, value),
-                  ),
-                ),
-              if (service['kind'] == 'http')
-                Tooltip(
-                  message: 'Show links for ${service['id']}',
-                  child: IconButton(
-                    onPressed: busy ? null : () => onLinks(service),
-                    icon: const Icon(
-                      Icons.link,
-                      size: 20,
-                      color: WispColors.cyan,
-                    ),
-                  ),
-                ),
-              if (onSettings != null)
-                IconButton(
-                  tooltip: 'Settings for ${service['id']} on ${machine.name}',
-                  onPressed: busy ? null : () => onSettings!(service),
-                  icon: const Icon(
-                    Icons.settings,
-                    size: 24,
-                    color: WispColors.muted,
-                  ),
-                ),
-            ];
-            return Row(
-              children: [
-                content,
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 4,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: controls,
-                ),
-              ],
-            );
-          },
-        ),
+            ),
+          if (local && !publicEnabled)
+            Text(
+              '$deviceCount ${deviceCount == 1 ? 'device' : 'devices'}',
+              style: const TextStyle(fontSize: 11),
+            ),
+        ],
       ),
     );
   }

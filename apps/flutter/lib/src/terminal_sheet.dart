@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'backend.dart';
-import 'theme.dart';
+import '../ui.dart';
 
 enum DesktopInputMode {
   auto('Auto'),

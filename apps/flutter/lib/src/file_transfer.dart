@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 
 import 'backend.dart';
 import 'sheets.dart';
-import 'theme.dart';
+import '../ui.dart';
 
 String _fileName(String path) => path.split(Platform.pathSeparator).last;
 
@@ -672,18 +672,20 @@ class _FileSendSheetState extends State<FileSendSheet> {
           ),
         ),
       for (final file in selected)
-        ListTile(
+        WispListItem(
           contentPadding: EdgeInsets.zero,
           leading: const Icon(Icons.insert_drive_file_outlined),
           title: Text(file.name, maxLines: 2, overflow: TextOverflow.ellipsis),
-          trailing: IconButton(
-            tooltip: 'Remove ${file.name}',
-            onPressed: () => setState(() {
-              selected.remove(file);
-              file.release();
-            }),
-            icon: const Icon(Icons.close),
-          ),
+          actions: [
+            IconButton(
+              tooltip: 'Remove ${file.name}',
+              onPressed: () => setState(() {
+                selected.remove(file);
+                file.release();
+              }),
+              icon: const Icon(Icons.close),
+            ),
+          ],
         ),
       if (feedback != null) ...[
         const SizedBox(height: 12),

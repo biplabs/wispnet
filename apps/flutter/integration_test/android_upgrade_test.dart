@@ -7,7 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:wispnet/src/app.dart';
 import 'package:wispnet/src/backend.dart';
-import 'package:wispnet/src/header.dart';
+import 'package:wispnet/ui.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();

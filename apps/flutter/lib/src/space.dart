@@ -2,7 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-import 'theme.dart';
+import '../ui.dart';
 
 /// The Android starfield, rendered by Flutter on every target.
 class WispSpace extends StatefulWidget {

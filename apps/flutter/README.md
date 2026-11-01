@@ -39,7 +39,15 @@ identity, upload signing variables and release checks. Artifacts live under
 ## Boundaries and upgrade compatibility
 
 - `lib/src/backend.dart`: UI-facing platform interface, without Android imports.
-- `lib/src/theme.dart`, `header.dart`, `cards.dart`, `space.dart`, `sheets.dart`: shared visual components.
+- `lib/ui.dart`: shared UI library, implemented in `lib/src/ui/`. Screens import
+  this library for the theme, panels/sheets, headers, status badges, links, copy
+  buttons, toggles, and destructive button styles.
+- `WispListItem` keeps identity on the left and independent controls on the right,
+  moving controls below the label on narrow layouts. `WispServiceItem` adds a
+  service icon and orders its controls as toggle, extra actions, then settings.
+  Feature screens own backend calls, permissions, and busy state.
+- `lib/src/cards.dart`, `space.dart`, `sheets.dart`: directory cards, background,
+  and feature-specific sheet content built from the shared UI library.
 - `lib/src/app.dart`: responsive directory and orchestration.
 - `android/.../FlutterMainActivity.java`: Android platform adapter. Reuses the
   existing `Native`, `HostStore`, `DeviceProfile`, `AccessService`, and bounded QR

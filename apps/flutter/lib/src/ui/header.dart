@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'feedback.dart';
 import 'theme.dart';
 
 /// Shared device header and browser-access toggle geometry.
@@ -181,4 +182,46 @@ class _OfflinePill extends CustomPainter {
 
   @override
   bool shouldRepaint(_OfflinePill oldDelegate) => false;
+}
+
+/// Section titles and adjacent actions share the directory's spacing and type.
+class WispSectionHeading extends StatelessWidget {
+  const WispSectionHeading({
+    super.key,
+    required this.title,
+    this.actions = const [],
+    this.trailing,
+  });
+  final String title;
+  final List<Widget> actions;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    final heading = Row(
+      children: [
+        Flexible(
+          child: Text(
+            title,
+            style: const TextStyle(
+              fontSize: 16,
+              color: WispColors.muted,
+              letterSpacing: 1.4,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        ...actions,
+      ],
+    );
+    return trailing == null
+        ? heading
+        : Row(
+            children: [
+              Expanded(child: heading),
+              trailing!,
+            ],
+          );
+  }
 }

@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'backend.dart';
-import 'theme.dart';
+import '../ui.dart';
 
 String failureMessage(Object error) {
   final message = error is FormatException
@@ -320,10 +320,7 @@ class _MachineSettingsState extends State<MachineSettings> {
     }
   }
 
-  ButtonStyle get dangerStyle => OutlinedButton.styleFrom(
-    foregroundColor: WispColors.error,
-    side: const BorderSide(color: WispColors.error),
-  ).copyWith(backgroundColor: wispButtonBackground(const Color(0xff401e2a)));
+  ButtonStyle get dangerStyle => wispDangerButtonStyle();
 
   Future<void> confirmRemove() async {
     final confirmed = await showWispSheet<bool>(
@@ -748,17 +745,7 @@ class _ServiceLinksState extends State<ServiceLinks> {
               ],
             ),
           ),
-          IconButton(
-            tooltip: tooltip,
-            onPressed: () async {
-              await Clipboard.setData(ClipboardData(text: url));
-              if (mounted) {
-                ScaffoldMessenger.of(context)
-                    .showSnackBar(const SnackBar(content: Text('Link copied')));
-              }
-            },
-            icon: const Icon(Icons.copy, color: WispColors.cyan),
-          ),
+          WispCopyButton(text: url, tooltip: tooltip, message: 'Link copied'),
         ],
       ),
     ),
@@ -992,23 +979,11 @@ class _SettingsFormState extends State<SettingsForm> {
         const SizedBox(height: 8),
         Align(
           alignment: Alignment.centerLeft,
-          child: Semantics(
-            link: true,
-            child: Tooltip(
-              message: 'Open registry JSON in browser',
-              child: WispInkWell(
-                key: const ValueKey('settings-address'),
-                onTap: opening || saving ? null : openAddress,
-                child: Text(
-                  browserAddress,
-                  style: const TextStyle(
-                    color: WispColors.cyan,
-                    decoration: TextDecoration.underline,
-                    decorationColor: WispColors.cyan,
-                  ),
-                ),
-              ),
-            ),
+          child: WispLink(
+            key: const ValueKey('settings-address'),
+            text: browserAddress,
+            tooltip: 'Open registry JSON in browser',
+            onTap: opening || saving ? null : openAddress,
           ),
         ),
         const SizedBox(height: 16),
@@ -1022,12 +997,11 @@ class _SettingsFormState extends State<SettingsForm> {
         Row(
           children: [
             Expanded(child: SelectableText(mcpAddress)),
-            IconButton(
+            WispCopyButton(
               key: const ValueKey('settings-mcp-copy'),
+              text: mcpAddress,
               tooltip: 'Copy MCP URL',
-              onPressed: () =>
-                  Clipboard.setData(ClipboardData(text: mcpAddress)),
-              icon: const Icon(Icons.copy, color: WispColors.cyan),
+              message: 'MCP URL copied',
             ),
           ],
         ),
@@ -1140,7 +1114,7 @@ class _AndroidReceivingSettingsState extends State<AndroidReceivingSettings> {
           'Choose a folder on this device. Selected devices can send files without confirming each transfer. Your receiving location stays private.',
         ),
         const SizedBox(height: 12),
-        ListTile(
+        WispListItem(
           contentPadding: EdgeInsets.zero,
           leading: const Icon(Icons.folder_outlined, color: WispColors.cyan),
           title: Text(label.isEmpty ? 'Choose receiving folder' : label),
@@ -1148,34 +1122,30 @@ class _AndroidReceivingSettingsState extends State<AndroidReceivingSettings> {
               ? const Text('Folder access needs to be renewed')
               : null,
           onTap: busy ? null : pick,
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (folder.isNotEmpty)
-                IconButton(
-                  key: const ValueKey('receiving-folder-remove'),
-                  tooltip: 'Remove receiving folder',
-                  onPressed: busy || revision == null
-                      ? null
-                      : () async {
-                          setState(() {
-                            folder = '';
-                            label = '';
-                            available = false;
-                            allow.clear();
-                          });
-                          await save();
-                        },
-                  icon: const Icon(Icons.delete_outline),
-                ),
+          actions: [
+            if (folder.isNotEmpty)
               IconButton(
-                key: const ValueKey('receiving-folder-picker'),
-                tooltip: 'Change receiving folder',
-                onPressed: busy ? null : pick,
-                icon: const Icon(Icons.settings_outlined),
+                key: const ValueKey('receiving-folder-remove'),
+                tooltip: 'Remove receiving folder',
+                onPressed: busy || revision == null
+                    ? null
+                    : () async {
+                        setState(() {
+                          folder = '';
+                          label = '';
+                          available = false;
+                          allow.clear();
+                        });
+                        await save();
+                      },
+                icon: const Icon(Icons.delete_outline),
               ),
-            ],
-          ),
+            WispSettingsButton(
+              key: const ValueKey('receiving-folder-picker'),
+              tooltip: 'Change receiving folder',
+              onPressed: busy ? null : pick,
+            ),
+          ],
         ),
         if (!online)
           const Text(
@@ -1279,24 +1249,18 @@ class _AndroidLocalServicesState extends State<AndroidLocalServices> {
     children: [
       if (service == null && error == null) const LinearProgressIndicator(),
       if (service != null)
-        Material(
-          type: MaterialType.transparency,
-          child: WispToggleListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Receive files'),
-            value: service!['enabled'] != false,
-            onChanged: busy ? null : (value) => toggle(value!),
-            secondary: IconButton(
-              tooltip: 'File inbox',
-              icon: const Icon(Icons.settings_outlined),
-              onPressed: busy
-                  ? null
-                  : () => showWispSheet<void>(
-                      context,
-                      title: 'File inbox',
-                      child: AndroidReceivingSettings(backend: widget.backend),
-                    ),
-            ),
+        WispServiceItem(
+          contentPadding: EdgeInsets.zero,
+          title: 'Receive files',
+          kind: 'files',
+          enabled: service!['enabled'] != false,
+          busy: busy,
+          onToggle: toggle,
+          settingsTooltip: 'File inbox',
+          onSettings: () => showWispSheet<void>(
+            context,
+            title: 'File inbox',
+            child: AndroidReceivingSettings(backend: widget.backend),
           ),
         ),
       if (error != null)

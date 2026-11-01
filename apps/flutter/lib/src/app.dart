@@ -5,10 +5,9 @@ import 'package:flutter/services.dart';
 
 import 'backend.dart';
 import 'space.dart';
-import 'theme.dart';
+import '../ui.dart';
 import 'sheets.dart';
 import 'cards.dart';
-import 'header.dart';
 import 'desktop_settings.dart';
 import 'terminal_sheet.dart';
 import 'file_transfer.dart';
@@ -519,15 +518,7 @@ class _WispHomeState extends State<WispHome>
           FilledButton(
             key: const ValueKey('confirm-close-shell'),
             onPressed: () => Navigator.pop(context, true),
-            style:
-                OutlinedButton.styleFrom(
-                  foregroundColor: WispColors.error,
-                  side: const BorderSide(color: WispColors.error),
-                ).copyWith(
-                  backgroundColor: wispButtonBackground(
-                    const Color(0xff401e2a),
-                  ),
-                ),
+            style: wispDangerButtonStyle(),
             child: const Text('Close sessions'),
           ),
           const SizedBox(height: 8),
@@ -627,6 +618,11 @@ class _WispHomeState extends State<WispHome>
       await pair();
       return;
     }
+    void edit(Machine machine) {
+      Navigator.pop(context);
+      machineSettings(machine);
+    }
+
     await showWispSheet<void>(
       context,
       title: 'Paired machines',
@@ -647,42 +643,23 @@ class _WispHomeState extends State<WispHome>
           for (final machine in remotes)
             Padding(
               padding: const EdgeInsets.only(bottom: 10),
-              child: OutlinedButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  machineSettings(machine);
-                },
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              '${machine.name} · ${shortId(machine.id)}',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            Text(
-                              machine.status,
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: stateColor(machine),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const Icon(
-                        Icons.settings,
-                        size: 24,
-                        color: WispColors.muted,
-                      ),
-                    ],
+              child: WispPanel(
+                padding: EdgeInsets.zero,
+                child: WispListItem(
+                  leading: const Icon(Icons.computer, color: WispColors.cyan),
+                  title: Text('${machine.name} · ${shortId(machine.id)}'),
+                  titleStyle: const TextStyle(fontWeight: FontWeight.bold),
+                  subtitle: Text(
+                    machine.status,
+                    style: TextStyle(color: stateColor(machine)),
                   ),
+                  onTap: () => edit(machine),
+                  actions: [
+                    WispSettingsButton(
+                      tooltip: 'Settings for ${machine.name}',
+                      onPressed: () => edit(machine),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -874,33 +851,7 @@ class _WispHomeState extends State<WispHome>
     String title,
     List<Widget> actions, {
     Widget? trailing,
-  }) {
-    final heading = Row(
-      children: [
-        Flexible(
-          child: Text(
-            title,
-            style: const TextStyle(
-              fontSize: 16,
-              color: WispColors.muted,
-              letterSpacing: 1.4,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ),
-        const SizedBox(width: 12),
-        ...actions,
-      ],
-    );
-    return trailing == null
-        ? heading
-        : Row(
-            children: [
-              Expanded(child: heading),
-              trailing,
-            ],
-          );
-  }
+  }) => WispSectionHeading(title: title, actions: actions, trailing: trailing);
 
   Widget directoryCard(Machine machine, {bool local = false}) => MachineCard(
     machine: machine,
@@ -951,7 +902,7 @@ class _WispHomeState extends State<WispHome>
             mainAxisSize: MainAxisSize.min,
             children: [
               for (final file in files)
-                ListTile(
+                WispListItem(
                   leading: const Icon(Icons.insert_drive_file_outlined),
                   title: Text(file['name'] as String),
                 ),
@@ -961,7 +912,7 @@ class _WispHomeState extends State<WispHome>
                   'No devices are ready to receive files. Go online on a paired device and enable its File inbox.',
                 ),
               for (final machine in receivers)
-                ListTile(
+                WispListItem(
                   key: ValueKey('share-receiver-${machine.id}'),
                   leading: const Icon(Icons.computer, color: WispColors.cyan),
                   title: Text(machine.name),
@@ -1010,7 +961,7 @@ class _WispHomeState extends State<WispHome>
               mainAxisSize: MainAxisSize.min,
               children: [
                 for (final machine in receivers)
-                  ListTile(
+                  WispListItem(
                     leading: const Icon(Icons.computer, color: WispColors.cyan),
                     title: Text(machine.name),
                     onTap: () => Navigator.pop(context, machine),

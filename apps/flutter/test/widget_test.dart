@@ -10,12 +10,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:wispnet/src/app.dart';
 import 'package:wispnet/src/backend.dart';
 import 'package:wispnet/src/cards.dart';
-import 'package:wispnet/src/header.dart';
 import 'package:wispnet/src/space.dart';
 import 'package:wispnet/src/desktop_settings.dart';
 import 'package:wispnet/src/sheets.dart';
 import 'package:wispnet/src/terminal_sheet.dart';
-import 'package:wispnet/src/theme.dart';
+import 'package:wispnet/ui.dart';
 
 final peer = 'a' * 64;
 final incarnation = 'c' * 64;
@@ -1704,11 +1703,32 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Local services'));
     await tester.pumpAndSettle();
-    final files = find.widgetWithText(WispToggleListTile, 'Receive files');
-    expect(tester.widget<WispToggleListTile>(files).value, isTrue);
-    await tester.tap(files);
+    final files = find.widgetWithText(WispServiceItem, 'Receive files');
+    final folder = find.descendant(
+      of: files,
+      matching: find.byIcon(Icons.folder_outlined),
+    );
+    final toggle = find.descendant(
+      of: files,
+      matching: find.byType(WispToggle),
+    );
+    final gear = find.descendant(
+      of: files,
+      matching: find.byTooltip('File inbox'),
+    );
+    expect(
+      tester.getRect(folder).right,
+      lessThan(tester.getRect(find.text('Receive files')).left),
+    );
+    expect(
+      tester.getRect(toggle).right,
+      lessThanOrEqualTo(tester.getRect(gear).left),
+    );
+    await screenshot(tester, 'desktop-local-services');
+    expect(tester.widget<WispServiceItem>(files).enabled, isTrue);
+    await tester.tap(find.text('Receive files'));
     await tester.pumpAndSettle();
-    expect(tester.widget<WispToggleListTile>(files).value, isFalse);
+    expect(tester.widget<WispServiceItem>(files).enabled, isFalse);
     await tester.tap(find.byTooltip('Close'));
     await tester.pumpAndSettle();
     expect(
@@ -1724,7 +1744,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Local services'));
     await tester.pumpAndSettle();
-    await tester.tap(files);
+    await tester.tap(find.text('Receive files'));
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Close'));
     await tester.pumpAndSettle();
@@ -1745,10 +1765,31 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Local services'), findsOneWidget);
       expect(find.byType(AndroidReceivingSettings), findsNothing);
-      final files = find.widgetWithText(WispToggleListTile, 'Receive files');
-      await tester.tap(files);
+      final files = find.widgetWithText(WispServiceItem, 'Receive files');
+      final folder = find.descendant(
+        of: files,
+        matching: find.byIcon(Icons.folder_outlined),
+      );
+      final toggle = find.descendant(
+        of: files,
+        matching: find.byType(WispToggle),
+      );
+      final gear = find.descendant(
+        of: files,
+        matching: find.byTooltip('File inbox'),
+      );
+      expect(
+        tester.getRect(folder).right,
+        lessThan(tester.getRect(find.text('Receive files')).left),
+      );
+      expect(
+        tester.getRect(toggle).right,
+        lessThanOrEqualTo(tester.getRect(gear).left),
+      );
+      await screenshot(tester, 'android-local-services');
+      await tester.tap(find.text('Receive files'));
       await tester.pumpAndSettle();
-      expect(tester.widget<WispToggleListTile>(files).value, isFalse);
+      expect(tester.widget<WispServiceItem>(files).enabled, isFalse);
       await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       expect(
@@ -1951,11 +1992,12 @@ void main() {
       expect(find.text('Public URL'), findsNothing);
       expect(find.text('Public · Online'), findsOneWidget);
       expect(find.byTooltip('Copy public URL for website'), findsNothing);
-      final links = find.byTooltip('Show links for website');
-      expect(
-        find.descendant(of: links, matching: find.byType(IconButton)),
-        findsOneWidget,
+      final links = find.byWidgetPredicate(
+        (widget) =>
+            widget is IconButton && widget.tooltip == 'Show links for website',
       );
+      expect(links, findsOneWidget);
+      expect(tester.widget<IconButton>(links).onPressed, isNotNull);
       expect(
         find.descendant(of: links, matching: find.byIcon(Icons.link)),
         findsOneWidget,

@@ -13,7 +13,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:wispnet/src/app.dart';
 import 'package:wispnet/src/backend.dart';
 import 'package:wispnet/src/file_transfer.dart';
-import 'package:wispnet/src/theme.dart';
+import 'package:wispnet/ui.dart';
 
 final _host = 'a' * 64;
 final _incarnation = 'b' * 64;

@@ -10,8 +10,7 @@ import 'package:wispnet/src/app.dart';
 import 'package:wispnet/src/backend.dart';
 import 'package:wispnet/src/cards.dart';
 import 'package:wispnet/src/desktop_backend.dart';
-import 'package:wispnet/src/header.dart';
-import 'package:wispnet/src/theme.dart';
+import 'package:wispnet/ui.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
