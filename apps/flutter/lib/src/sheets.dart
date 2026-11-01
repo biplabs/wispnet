@@ -940,14 +940,6 @@ class _SettingsFormState extends State<SettingsForm> {
           hintText: '7842',
         ),
       ),
-      if (widget.onLocalServices != null) ...[
-        const SizedBox(height: 12),
-        OutlinedButton.icon(
-          onPressed: saving ? null : widget.onLocalServices,
-          icon: const Icon(Icons.dns_outlined),
-          label: const Text('Local services'),
-        ),
-      ],
       if (error != null)
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 12),
@@ -964,6 +956,14 @@ class _SettingsFormState extends State<SettingsForm> {
               : 'Save',
         ),
       ),
+      if (widget.onLocalServices != null) ...[
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: saving ? null : widget.onLocalServices,
+          icon: const Icon(Icons.dns_outlined),
+          label: const Text('Local services'),
+        ),
+      ],
       if (Theme.of(context).platform == TargetPlatform.android) ...[
         const SizedBox(height: 12),
         OutlinedButton(
