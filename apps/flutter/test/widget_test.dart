@@ -1631,6 +1631,26 @@ void main() {
     expect(tester.takeException(), isNull);
     await close(tester);
   });
+  testWidgets('local service device counts follow access changes', (
+    tester,
+  ) async {
+    final backend = DesktopFake();
+    await mount(tester, backend, size: const Size(360, 844));
+    expect(find.text('1 device'), findsOneWidget);
+    expect(find.text('0 devices'), findsOneWidget);
+    backend.status['host']['services'][0]['allow'] = [
+      peer,
+      peer,
+      'e' * 64,
+      'd' * 64,
+    ];
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pumpAndSettle();
+    expect(find.text('2 devices'), findsOneWidget);
+    expect(find.text('1 device'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await close(tester);
+  });
   testWidgets(
     'public service links, status and copy action reflect publication state',
     (tester) async {
@@ -1660,7 +1680,8 @@ void main() {
         ),
       );
       await mount(tester, backend, size: const Size(1000, 850));
-      expect(find.text('Public · Online'), findsOneWidget);
+      expect(find.text('Public'), findsOneWidget);
+      expect(find.text('1 device'), findsNothing);
       expect(find.text('Public URL'), findsNothing);
       expect(find.byTooltip('Copy public URL for web'), findsNothing);
       final links = find.byTooltip('Show links for web');
@@ -1681,7 +1702,7 @@ void main() {
       publication['state'] = 'offline';
       await tester.pump(const Duration(seconds: 2));
       await tester.pumpAndSettle();
-      expect(find.text('Public · Offline'), findsOneWidget);
+      expect(find.text('Public'), findsOneWidget);
       await tester.tap(gear);
       await tester.pumpAndSettle();
       final local = find.text('http://shared-web.localhost:18000/');
@@ -1720,8 +1741,8 @@ void main() {
       backend.status['public_access']['services'] = [];
       await tester.pump(const Duration(seconds: 2));
       await tester.pumpAndSettle();
-      expect(find.text('Public · Online'), findsNothing);
-      expect(find.text('Public · Offline'), findsNothing);
+      expect(find.text('Public'), findsNothing);
+      expect(find.text('1 device'), findsOneWidget);
       expect(find.byTooltip('Copy public URL for web'), findsNothing);
       await close(tester);
     },
@@ -1740,7 +1761,7 @@ void main() {
       },
     ];
     await mount(tester, backend, size: const Size(360, 844));
-    expect(find.text('Public · Online'), findsOneWidget);
+    expect(find.text('Public'), findsOneWidget);
     expect(find.byTooltip('Copy public URL for web'), findsNothing);
     expect(find.byTooltip('Show links for web'), findsOneWidget);
     expect(tester.takeException(), isNull);

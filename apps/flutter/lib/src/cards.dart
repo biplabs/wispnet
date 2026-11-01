@@ -201,6 +201,12 @@ class MachineCard extends StatelessWidget {
     final publicCached = machine.data['local'] != true && !machine.online;
     final publicOnline = !publicCached && publication?['state'] == 'online';
 
+    final local = machine.data['local'] == true;
+    final deviceCount = (service['allow'] as List? ?? [])
+        .whereType<String>()
+        .where((peer) => peer != machine.id)
+        .toSet()
+        .length;
     final subtitle = (service['kind'] as String).toUpperCase();
     return Container(
       constraints: const BoxConstraints(minHeight: 64),
@@ -285,7 +291,9 @@ class MachineCard extends StatelessWidget {
                                   borderRadius: BorderRadius.circular(8),
                                 ),
                                 child: Text(
-                                  publicCached
+                                  local
+                                      ? 'Public'
+                                      : publicCached
                                       ? 'Public · Cached'
                                       : publicOnline
                                       ? 'Public · Online'
@@ -300,6 +308,14 @@ class MachineCard extends StatelessWidget {
                                         : WispColors.error,
                                   ),
                                 ),
+                              ),
+                            ),
+                          if (local && !publicEnabled)
+                            Text(
+                              '$deviceCount ${deviceCount == 1 ? 'device' : 'devices'}',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: WispColors.muted,
                               ),
                             ),
                         ],
