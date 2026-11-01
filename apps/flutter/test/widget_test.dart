@@ -1711,7 +1711,13 @@ void main() {
     expect(tester.widget<CheckboxListTile>(files).value, isFalse);
     await tester.tap(find.byTooltip('Close'));
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('service-toggle-files')), findsNothing);
+    expect(
+      tester
+          .widget<Switch>(find.byKey(const ValueKey('service-toggle-files')))
+          .value,
+      isFalse,
+    );
+    expect(find.text('Off'), findsWidgets);
     await tester.tap(find.byTooltip('Settings'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Local services'));
@@ -1743,7 +1749,13 @@ void main() {
       expect(tester.widget<CheckboxListTile>(files).value, isFalse);
       await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
-      expect(find.byKey(const ValueKey('service-toggle-files')), findsNothing);
+      expect(
+        tester
+            .widget<Switch>(find.byKey(const ValueKey('service-toggle-files')))
+            .value,
+        isFalse,
+      );
+      expect(find.text('Off'), findsWidgets);
       await close(tester);
     },
   );

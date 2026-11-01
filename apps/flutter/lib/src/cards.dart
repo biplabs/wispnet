@@ -43,15 +43,7 @@ class MachineCard extends StatelessWidget {
   onReorder;
   @override
   Widget build(BuildContext context) {
-    final services = {
-      for (final s in machine.services.where(
-        (s) =>
-            machine.data['local'] != true ||
-            s['kind'] != 'files' ||
-            s['enabled'] != false,
-      ))
-        s['id'] as String: s,
-    };
+    final services = {for (final s in machine.services) s['id'] as String: s};
     final ids = orderedIds(
       services.keys,
       order['services/${machine.id}'] as List?,
@@ -240,7 +232,9 @@ class MachineCard extends StatelessWidget {
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(12, 8, 0, 8),
                 child: Opacity(
-                  opacity: allowed || (local && onToggle != null) ? 1 : .45,
+                  opacity: enabled && (allowed || (local && onToggle != null))
+                      ? 1
+                      : .45,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
