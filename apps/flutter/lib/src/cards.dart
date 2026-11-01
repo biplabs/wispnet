@@ -43,7 +43,15 @@ class MachineCard extends StatelessWidget {
   onReorder;
   @override
   Widget build(BuildContext context) {
-    final services = {for (final s in machine.services) s['id'] as String: s};
+    final services = {
+      for (final s in machine.services.where(
+        (s) =>
+            machine.data['local'] != true ||
+            s['kind'] != 'files' ||
+            s['enabled'] != false,
+      ))
+        s['id'] as String: s,
+    };
     final ids = orderedIds(
       services.keys,
       order['services/${machine.id}'] as List?,
@@ -344,15 +352,12 @@ class MachineCard extends StatelessWidget {
                 Tooltip(
                   message:
                       '${enabled ? 'Turn off' : 'Turn on'} ${service['id']}',
-                  child: OutlinedButton.icon(
+                  child: Switch(
                     key: ValueKey('service-toggle-${service['id']}'),
-                    onPressed: busy ? null : () => onToggle!(service, !enabled),
-                    icon: Icon(
-                      Icons.circle,
-                      size: 10,
-                      color: enabled ? WispColors.green : WispColors.muted,
-                    ),
-                    label: Text(enabled ? 'Online' : 'Offline'),
+                    value: enabled,
+                    onChanged: busy
+                        ? null
+                        : (value) => onToggle!(service, value),
                   ),
                 ),
               if (service['kind'] == 'http')

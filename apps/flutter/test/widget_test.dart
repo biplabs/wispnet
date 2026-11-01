@@ -13,11 +13,32 @@ import 'package:wispnet/src/cards.dart';
 import 'package:wispnet/src/header.dart';
 import 'package:wispnet/src/space.dart';
 import 'package:wispnet/src/desktop_settings.dart';
+import 'package:wispnet/src/sheets.dart';
 import 'package:wispnet/src/terminal_sheet.dart';
 import 'package:wispnet/src/theme.dart';
 
 final peer = 'a' * 64;
 final incarnation = 'c' * 64;
+
+class AndroidLocalFake extends DesktopFake {
+  AndroidLocalFake() {
+    (status['host']['services'] as List).add({
+      'id': 'files',
+      'kind': 'files',
+      'incarnation': incarnation,
+      'enabled': true,
+      'allow': [],
+    });
+  }
+  @override
+  Future<Map<String, dynamic>> invoke(
+    String method, [
+    Map<String, dynamic> arguments = const {},
+  ]) async {
+    final result = await super.invoke(method, arguments);
+    return method == 'snapshot' ? {...result, 'desktop': false} : result;
+  }
+}
 
 class FakeBackend implements WispnetBackend {
   FakeBackend({
@@ -1596,7 +1617,7 @@ void main() {
       findsNothing,
     );
     expect(
-      find.descendant(of: local, matching: find.textContaining('Online')),
+      find.descendant(of: local, matching: find.byType(Switch)),
       findsWidgets,
     );
     expect(
@@ -1666,64 +1687,63 @@ void main() {
     expect(tester.takeException(), isNull);
     await close(tester);
   });
+  testWidgets('service switches and Receive files module setting persist', (
+    tester,
+  ) async {
+    final backend = filesBackend(
+      exports: {'incoming': '/srv/receiving'},
+      allow: [peer],
+    );
+    await mount(tester, backend, size: const Size(1000, 850));
+    final web = find.byKey(const ValueKey('service-toggle-web'));
+    expect(tester.widget<Switch>(web).value, isTrue);
+    await tester.tap(web);
+    await tester.pumpAndSettle();
+    expect(tester.widget<Switch>(web).value, isFalse);
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Local services'));
+    await tester.pumpAndSettle();
+    final files = find.widgetWithText(CheckboxListTile, 'Receive files');
+    expect(tester.widget<CheckboxListTile>(files).value, isTrue);
+    await tester.tap(files);
+    await tester.pumpAndSettle();
+    expect(tester.widget<CheckboxListTile>(files).value, isFalse);
+    await tester.tap(find.byTooltip('Close'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('service-toggle-files')), findsNothing);
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Local services'));
+    await tester.pumpAndSettle();
+    await tester.tap(files);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Close'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('service-toggle-files')), findsOneWidget);
+    expect(backend.status['host']['file_exports'], {
+      'incoming': '/srv/receiving',
+    });
+    await close(tester);
+  });
   testWidgets(
-    'overview status buttons stop local services and retain access settings',
+    'Android Local services opens the module list and can restore Files',
     (tester) async {
-      final backend = filesBackend(
-        exports: {'incoming': '/srv/receiving'},
-        allow: [peer],
-      );
-      await mount(tester, backend, size: const Size(360, 844));
-      for (final id in ['web', 'shell', 'files']) {
-        final toggle = find.byKey(ValueKey('service-toggle-$id'));
-        await tester.ensureVisible(toggle);
-        expect(
-          find.descendant(of: toggle, matching: find.text('Online')),
-          findsOneWidget,
-        );
-        await tester.tap(toggle);
-        await tester.pumpAndSettle();
-        expect(
-          find.descendant(of: toggle, matching: find.text('Offline')),
-          findsOneWidget,
-        );
-        final service = (backend.status['host']['services'] as List)
-            .singleWhere((s) => s['id'] == id);
-        expect(service['allow'], id == 'shell' ? isEmpty : [peer]);
-        final tile = find.ancestor(
-          of: toggle,
-          matching: find.byType(ReorderTile),
-        );
-        expect(
-          find.descendant(of: tile, matching: find.text('Off')),
-          findsOneWidget,
-        );
-        expect(
-          tester
-              .widget<WispInkWell>(
-                find
-                    .descendant(of: tile, matching: find.byType(WispInkWell))
-                    .first,
-              )
-              .onTap,
-          isNull,
-        );
-        await tester.tap(toggle);
-        await tester.pumpAndSettle();
-        expect(
-          find.descendant(of: toggle, matching: find.text('Online')),
-          findsOneWidget,
-        );
-      }
-      expect(
-        backend.calls.where((call) => call.$1 == 'setServiceEnabled'),
-        hasLength(6),
-      );
-      expect(backend.status['host']['file_exports'], {
-        'incoming': '/srv/receiving',
-      });
-      expect(tester.takeException(), isNull);
-      await screenshot(tester, 'service-toggles-narrow');
+      final backend = AndroidLocalFake();
+      await mount(tester, backend, size: const Size(600, 850));
+      await tester.tap(find.byTooltip('Settings'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Local services'));
+      await tester.pumpAndSettle();
+      expect(find.text('Local services'), findsOneWidget);
+      expect(find.byType(AndroidReceivingSettings), findsNothing);
+      final files = find.widgetWithText(CheckboxListTile, 'Receive files');
+      await tester.tap(files);
+      await tester.pumpAndSettle();
+      expect(tester.widget<CheckboxListTile>(files).value, isFalse);
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('service-toggle-files')), findsNothing);
       await close(tester);
     },
   );

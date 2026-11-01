@@ -966,19 +966,6 @@ class _SettingsFormState extends State<SettingsForm> {
       ),
       if (Theme.of(context).platform == TargetPlatform.android) ...[
         const SizedBox(height: 12),
-        OutlinedButton.icon(
-          key: const ValueKey('receiving-settings'),
-          onPressed: saving
-              ? null
-              : () => showWispSheet<void>(
-                  context,
-                  title: 'File inbox',
-                  child: AndroidReceivingSettings(backend: widget.backend),
-                ),
-          icon: const Icon(Icons.folder_outlined),
-          label: const Text('Receive files'),
-        ),
-        const SizedBox(height: 12),
         OutlinedButton(
           onPressed: saving
               ? null
@@ -1221,5 +1208,99 @@ class _AndroidReceivingSettingsState extends State<AndroidReceivingSettings> {
         if (busy) const LinearProgressIndicator(),
       ],
     ),
+  );
+}
+
+/// Lists built-in modules separately from their folder and access settings.
+class AndroidLocalServices extends StatefulWidget {
+  const AndroidLocalServices({
+    super.key,
+    required this.backend,
+    required this.onChanged,
+  });
+  final WispnetBackend backend;
+  final VoidCallback onChanged;
+  @override
+  State<AndroidLocalServices> createState() => _AndroidLocalServicesState();
+}
+
+class _AndroidLocalServicesState extends State<AndroidLocalServices> {
+  Map<String, dynamic>? service;
+  bool busy = false;
+  String? error;
+  @override
+  void initState() {
+    super.initState();
+    load();
+  }
+
+  Future<void> load() async {
+    try {
+      final result = await widget.backend.invoke('snapshot');
+      final host = (result['hosts'] as Map).values.cast<Map>().firstWhere(
+        (h) => h['local'] == true,
+      );
+      if (mounted) {
+        setState(
+          () => service = Map<String, dynamic>.from(
+            (host['catalog']['services'] as List).cast<Map>().firstWhere(
+              (s) => s['kind'] == 'files',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) setState(() => error = failureMessage(e));
+    }
+  }
+
+  Future<void> toggle(bool enabled) async {
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    try {
+      await widget.backend.invoke('setServiceEnabled', {
+        'service': service!['id'],
+        'incarnation': service!['incarnation'],
+        'enabled': enabled,
+      });
+      widget.onChanged();
+      await load();
+    } catch (e) {
+      if (mounted) setState(() => error = failureMessage(e));
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Column(
+    children: [
+      if (service == null && error == null) const LinearProgressIndicator(),
+      if (service != null)
+        Material(
+          type: MaterialType.transparency,
+          child: CheckboxListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Receive files'),
+            value: service!['enabled'] != false,
+            onChanged: busy ? null : (value) => toggle(value!),
+            secondary: IconButton(
+              tooltip: 'File inbox',
+              icon: const Icon(Icons.settings_outlined),
+              onPressed: busy
+                  ? null
+                  : () => showWispSheet<void>(
+                      context,
+                      title: 'File inbox',
+                      child: AndroidReceivingSettings(backend: widget.backend),
+                    ),
+            ),
+          ),
+        ),
+      if (error != null)
+        Text(error!, style: const TextStyle(color: WispColors.error)),
+    ],
   );
 }

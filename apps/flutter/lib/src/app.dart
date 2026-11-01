@@ -728,7 +728,17 @@ class _WispHomeState extends State<WispHome>
   }) async {
     if (snapshot['desktop'] != true) {
       if (servicesOnly) {
-        await localServiceSettings({'id': 'files', 'kind': 'files'});
+        await showWispSheet<void>(
+          context,
+          title: 'Local services',
+          child: AndroidLocalServices(
+            backend: backend,
+            onChanged: () {
+              unawaited(poll());
+            },
+          ),
+        );
+        await poll();
       } else {
         await settings();
       }

@@ -817,7 +817,28 @@ class _DesktopSettingsState extends State<DesktopSettings> {
           for (final s in services.where(
             (s) => s['id'] == 'files' && s['kind'] == 'files',
           ))
-            action('File inbox', () => run(() => editFiles(s))),
+            Material(
+              type: MaterialType.transparency,
+              child: CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Receive files'),
+                value: s['enabled'] != false,
+                onChanged: busy
+                    ? null
+                    : (value) => run(() async {
+                        await widget.backend.invoke('setServiceEnabled', {
+                          'service': s['id'],
+                          'incarnation': s['incarnation'],
+                          'enabled': value!,
+                        });
+                      }),
+                secondary: IconButton(
+                  tooltip: 'File inbox',
+                  onPressed: busy ? null : () => run(() => editFiles(s)),
+                  icon: const Icon(Icons.settings_outlined),
+                ),
+              ),
+            ),
           if (widget.servicesOnly)
             action('Pair this machine', () => run(invite)),
         ] else if (!services.any((s) => s['id'] == widget.serviceId))
