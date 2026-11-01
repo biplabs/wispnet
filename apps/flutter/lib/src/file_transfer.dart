@@ -503,6 +503,7 @@ class FileSendSheet extends StatefulWidget {
     required this.incarnation,
     required this.transfers,
     this.initialPaths = const [],
+    this.initialFiles = const [],
     this.onQueued,
     this.desktop = true,
   });
@@ -511,6 +512,7 @@ class FileSendSheet extends StatefulWidget {
   final String incarnation;
   final DesktopFileTransfers transfers;
   final List<String> initialPaths;
+  final List<Map<String, dynamic>> initialFiles;
   final ValueChanged<List<DesktopFileTransfer>>? onQueued;
   final bool desktop;
   @override
@@ -526,6 +528,7 @@ class _FileSendSheetState extends State<FileSendSheet> {
   void initState() {
     super.initState();
     selected.addAll(widget.initialPaths.map(_SelectedFile.new));
+    addSelection(widget.initialFiles);
   }
 
   Future<void> addFiles(List<String> paths) async {
@@ -538,47 +541,49 @@ class _FileSendSheetState extends State<FileSendSheet> {
     await Future.wait(added.map((file) => file.completion.future));
   }
 
+  void addSelection(List<dynamic> entries) {
+    final existing = selected.map((file) => file.path).toSet();
+    final added = <_SelectedFile>[];
+    for (final entry in entries) {
+      if (entry is! Map) {
+        throw const FormatException('Could not read the selected files.');
+      }
+      final path = entry['path'] as String?;
+      final name = entry['name'] as String?;
+      if (path == null ||
+          Uri.tryParse(path)?.scheme != 'content' ||
+          name == null ||
+          name.isEmpty ||
+          name == '.' ||
+          name == '..' ||
+          name.contains('/') ||
+          name.contains('\\') ||
+          name.contains('\u0000')) {
+        throw const FormatException(
+          'Could not read a selected file name. Choose another file.',
+        );
+      }
+      if (existing.add(path)) {
+        added.add(
+          _SelectedFile(
+            path,
+            name: name,
+            sizeBytes: (entry['size_bytes'] as num?)?.toInt() ?? 0,
+          ),
+        );
+      }
+    }
+    selected.addAll(added);
+    if (added.isNotEmpty) feedback = null;
+  }
+
   Future<void> pickFiles() async {
     if (picking) return;
     setState(() => picking = true);
     try {
       final response = await widget.backend.invoke('pickFiles');
       if (!mounted) return;
-      final existing = selected.map((file) => file.path).toSet();
-      final added = <_SelectedFile>[];
-      for (final entry in response['files'] as List? ?? const []) {
-        if (entry is! Map) {
-          throw const FormatException('Could not read the selected files.');
-        }
-        final path = entry['path'] as String?;
-        final name = entry['name'] as String?;
-        if (path == null ||
-            Uri.tryParse(path)?.scheme != 'content' ||
-            name == null ||
-            name.isEmpty ||
-            name == '.' ||
-            name == '..' ||
-            name.contains('/') ||
-            name.contains('\\') ||
-            name.contains('\u0000')) {
-          throw const FormatException(
-            'Could not read a selected file name. Choose another file.',
-          );
-        }
-        if (existing.add(path)) {
-          added.add(
-            _SelectedFile(
-              path,
-              name: name,
-              sizeBytes: (entry['size_bytes'] as num?)?.toInt() ?? 0,
-            ),
-          );
-        }
-      }
-      setState(() {
-        selected.addAll(added);
-        if (added.isNotEmpty) feedback = null;
-      });
+      setState(() => addSelection(response['files'] as List? ?? const []));
     } catch (error) {
       if (mounted) setState(() => feedback = failureMessage(error));
     } finally {

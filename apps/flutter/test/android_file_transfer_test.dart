@@ -36,6 +36,7 @@ class _AndroidFilesBackend implements WispnetBackend {
   bool enabled = true;
   Object? pickerError;
   int nextId = 0;
+  List<Map<String, Object>> shared = [];
 
   List<Map<String, dynamic>> get sends => calls
       .where((call) => call.$1 == 'fileSend')
@@ -73,6 +74,13 @@ class _AndroidFilesBackend implements WispnetBackend {
             },
           },
         };
+      case 'takeShare':
+        final pending = shared;
+        shared = [];
+        return {'files': pending};
+      case 'setAccess':
+        enabled = arguments['enabled'] == true;
+        return {};
       case 'pickFiles':
         if (pickerError != null) throw pickerError!;
         return {'files': picked};
@@ -132,6 +140,53 @@ Widget _sheet(_AndroidFilesBackend backend, DesktopFileTransfers transfers) =>
     );
 
 void main() {
+  testWidgets(
+    'shared attachments open a device picker and require send confirmation',
+    (tester) async {
+      final backend = _AndroidFilesBackend()
+        ..shared = _sources
+        ..enabled = false;
+      await tester.pumpWidget(WispnetApp(backend: backend));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('Send 3 files to…'), findsOneWidget);
+      expect(find.text('配置.json'), findsOneWidget);
+      expect(backend.sends, isEmpty);
+      expect(backend.enabled, isTrue);
+      await tester.tap(find.byKey(ValueKey('share-receiver-$_host')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('model weights.bin'), findsOneWidget);
+      expect(backend.calls.where((call) => call.$1 == 'pickFiles'), isEmpty);
+      expect(backend.sends, isEmpty);
+      await tester.tap(find.text('Send 3 files'));
+      await tester.pump();
+      expect(backend.sends.map((send) => send['remote_path']), [
+        'model weights.bin',
+        '配置.json',
+        'training.csv',
+      ]);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump();
+    },
+  );
+  testWidgets('canceling the shared-file device picker sends nothing', (
+    tester,
+  ) async {
+    final backend = _AndroidFilesBackend()..shared = [_sources.first];
+    await tester.pumpWidget(WispnetApp(backend: backend));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tap(find.byTooltip('Close'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(backend.sends, isEmpty);
+    await tester.pump(const Duration(seconds: 2));
+    expect(find.text('Send file to…'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+  });
+
   testWidgets(
     'Android chooses multiple documents with their real names and cancels one transfer',
     (tester) async {

@@ -26,10 +26,15 @@ public final class FlutterMainActivity extends FlutterActivity {
  private MethodChannel.Result folderResult;
  private CancellationSignal fileCancellation;
  private String invitation, invitationError, serviceLink;
+ private final java.util.ArrayDeque<Intent> sharedFiles = new java.util.ArrayDeque<>();
 
  @Override public void onCreate(Bundle state) {
   super.onCreate(state);
   network = new NetworkBridge(this);
+  if (state != null) {
+   java.util.ArrayList<Intent> pending = state.getParcelableArrayList("wispnet.shares", Intent.class);
+   if (pending != null) sharedFiles.addAll(pending);
+  }
   receiveInvitation(getIntent());
   if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
    requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 101);
@@ -40,6 +45,20 @@ public final class FlutterMainActivity extends FlutterActivity {
    final JSONObject arguments;
    try { arguments = new JSONObject(call.arguments == null ? "{}" : (String)call.arguments); }
    catch (Exception invalid) { result.error("invalid_request", "Invalid UI request", null); return; }
+   if ("takeShare".equals(call.method)) {
+    Intent shared = sharedFiles.pollFirst();
+    if (shared == null) { result.success("{}"); return; }
+    work.execute(() -> {
+     try {
+      JSONObject reply = AndroidFilePicker.selection(this, shared, new CancellationSignal());
+      if (reply.getJSONArray("files").length() == 0) throw new Exception("No readable files were shared.");
+      runOnUiThread(() -> result.success(reply.toString()));
+     } catch (Exception failure) {
+      runOnUiThread(() -> result.error("share_invalid", "Cannot read shared files. Share them again: " + failure.getMessage(), null));
+     }
+    });
+    return;
+   }
    if ("takeLink".equals(call.method)) {
     JSONObject reply = new JSONObject();
     try { if (serviceLink != null) reply.put("link", serviceLink); serviceLink = null; result.success(reply.toString()); }
@@ -200,6 +219,13 @@ public final class FlutterMainActivity extends FlutterActivity {
   if (Intent.ACTION_VIEW.equals(intent.getAction()) && intent.getData() != null) {
    serviceLink = intent.getDataString(); intent.setData(null); return;
   }
+  if ((Intent.ACTION_SEND.equals(intent.getAction()) || Intent.ACTION_SEND_MULTIPLE.equals(intent.getAction()))
+      && (intent.hasExtra(Intent.EXTRA_STREAM) || intent.getClipData() != null)) {
+   if (sharedFiles.size() < 8) sharedFiles.addLast(new Intent(intent));
+   else invitationError = "Finish the current shares before sharing more files.";
+   intent.removeExtra(Intent.EXTRA_STREAM); intent.setClipData(null); intent.setAction(null);
+   return;
+  }
   if (!Intent.ACTION_SEND.equals(intent.getAction())) return;
   invitation = null; invitationError = null;
   if (intent.hasExtra(Intent.EXTRA_STREAM) || intent.getStringExtra(Intent.EXTRA_TEXT) == null) invitationError = "Share or paste a pairing code instead.";
@@ -209,6 +235,10 @@ public final class FlutterMainActivity extends FlutterActivity {
    else invitation = text;
   }
   intent.removeExtra(Intent.EXTRA_TEXT); intent.removeExtra(Intent.EXTRA_STREAM);
+ }
+ @Override protected void onSaveInstanceState(@NonNull Bundle state) {
+  state.putParcelableArrayList("wispnet.shares", new java.util.ArrayList<>(sharedFiles));
+  super.onSaveInstanceState(state);
  }
  @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); receiveInvitation(intent); }
  @Override protected void onDestroy() {

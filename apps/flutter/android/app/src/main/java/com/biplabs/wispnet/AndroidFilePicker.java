@@ -24,6 +24,16 @@ final class AndroidFilePicker {
 
  static JSONObject selection(Context context, Intent data, CancellationSignal cancellation) throws Exception {
   LinkedHashSet<Uri> sources = new LinkedHashSet<>();
+  if (Intent.ACTION_SEND.equals(data.getAction())) {
+   Uri stream = data.getParcelableExtra(Intent.EXTRA_STREAM, Uri.class);
+   if (stream != null) sources.add(stream);
+  } else if (Intent.ACTION_SEND_MULTIPLE.equals(data.getAction())) {
+   java.util.ArrayList<Uri> streams = data.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri.class);
+   if (streams != null) {
+    if (streams.size() > FileTransferRules.MAX_SELECTION) throw new Exception("Choose up to 64 files at a time.");
+    sources.addAll(streams);
+   }
+  }
   if (data.getData() != null) sources.add(data.getData());
   ClipData clip = data.getClipData();
   if (clip != null) {
@@ -38,6 +48,7 @@ final class AndroidFilePicker {
   JSONArray files = new JSONArray();
   for (Uri uri : sources) {
    cancellation.throwIfCanceled();
+   if (uri == null) throw new Exception("Cannot read a shared file.");
    FileTransferRules.document(uri.toString());
    if (context.checkUriPermission(uri, android.os.Process.myPid(), android.os.Process.myUid(),
        Intent.FLAG_GRANT_READ_URI_PERMISSION) != PackageManager.PERMISSION_GRANTED)

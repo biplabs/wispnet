@@ -2,6 +2,7 @@
  <permission android:name="app.wispnet.android.test.READ_FIXTURE"
      android:protectionLevel="signature"/>
  <application>
+  <activity android:name="com.biplabs.wispnet.ShareTestActivity" android:exported="true"/>
   <!-- This provider exists only in the test APK and serves generated fixtures. -->
   <provider android:name="com.biplabs.wispnet.FilesTestProvider"
       android:authorities="app.wispnet.android.test.files"

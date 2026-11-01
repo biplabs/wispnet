@@ -42,7 +42,8 @@ class _WispHomeState extends State<WispHome>
       busy = false,
       foreground = true,
       pairingSheet = false,
-      entering = false;
+      entering = false,
+      sharing = false;
   int ticks = 0, launchGeneration = 0;
   String lastNetwork = '';
   Timer? timer;
@@ -213,6 +214,20 @@ class _WispHomeState extends State<WispHome>
           notice(message(error));
         }
       }
+      if (snapshot['desktop'] != true && !sharing) {
+        try {
+          final share = await backend.invoke('takeShare');
+          final files = (share['files'] as List? ?? const [])
+              .cast<Map<String, dynamic>>();
+          if (files.isNotEmpty && mounted) {
+            sharing = true;
+            unawaited(receiveSharedFiles(files));
+            return;
+          }
+        } catch (error) {
+          if (error is! MissingPluginException) notice(message(error));
+        }
+      }
       final invitation = await backend.invoke('takeInvitation');
       final invitationError = invitation['error'] as String?;
       if (invitationError != null) notice(invitationError);
@@ -337,6 +352,7 @@ class _WispHomeState extends State<WispHome>
     Machine machine,
     Map<String, dynamic> service, {
     List<String> paths = const [],
+    List<Map<String, dynamic>> files = const [],
   }) async {
     if (machine.data['local'] != true) {
       final submitted = <DesktopFileTransfer>[];
@@ -349,6 +365,7 @@ class _WispHomeState extends State<WispHome>
           incarnation: service['incarnation'] as String,
           transfers: fileTransfers,
           initialPaths: paths,
+          initialFiles: files,
           onQueued: submitted.addAll,
           desktop: snapshot['desktop'] == true,
         ),
@@ -894,6 +911,67 @@ class _WispHomeState extends State<WispHome>
         ? (service, paths) => showFiles(machine, service, paths: paths)
         : null,
   );
+
+  Future<void> receiveSharedFiles(List<Map<String, dynamic>> files) async {
+    try {
+      if (!online) {
+        await backend.invoke('setAccess', {'enabled': true});
+      }
+      await refresh();
+      await poll();
+      if (!mounted) return;
+      final receivers = machines
+          .where(
+            (machine) =>
+                machine.data['local'] != true &&
+                machine.online &&
+                machine.services.any(
+                  (service) =>
+                      service['kind'] == 'files' && machine.canOpen(service),
+                ),
+          )
+          .toList();
+      final receiver = await showWispSheet<Machine>(
+        context,
+        title:
+            'Send ${files.length == 1 ? 'file' : '${files.length} files'} to…',
+        child: Material(
+          type: MaterialType.transparency,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final file in files)
+                ListTile(
+                  leading: const Icon(Icons.insert_drive_file_outlined),
+                  title: Text(file['name'] as String),
+                ),
+              const Divider(),
+              if (receivers.isEmpty)
+                const Text(
+                  'No devices are ready to receive files. Go online on a paired device and enable its File inbox.',
+                ),
+              for (final machine in receivers)
+                ListTile(
+                  key: ValueKey('share-receiver-${machine.id}'),
+                  leading: const Icon(Icons.computer, color: WispColors.cyan),
+                  title: Text(machine.name),
+                  onTap: () => Navigator.pop(context, machine),
+                ),
+            ],
+          ),
+        ),
+      );
+      if (receiver == null || !mounted) return;
+      final service = receiver.services.firstWhere(
+        (service) => service['kind'] == 'files' && receiver.canOpen(service),
+      );
+      await showFiles(receiver, service, files: files);
+    } catch (error) {
+      if (mounted) notice('Cannot share files: ${message(error)}');
+    } finally {
+      sharing = false;
+    }
+  }
 
   Future<void> dropFiles(List<String> paths) async {
     final receivers = machines

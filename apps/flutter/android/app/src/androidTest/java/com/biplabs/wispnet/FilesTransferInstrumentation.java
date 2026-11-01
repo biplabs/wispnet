@@ -22,7 +22,38 @@ public final class FilesTransferInstrumentation extends Instrumentation {
  private String workspace;
 
  @Override public void onCreate(Bundle arguments) { this.arguments = arguments == null ? Bundle.EMPTY : new Bundle(arguments); start(); }
+ private void shareSetup() {
+  Bundle result = new Bundle();
+  try {
+   Context context = getTargetContext();
+   bridge = new NetworkBridge(context);
+   String host = arguments.getString("host");
+   if ("true".equals(arguments.getString("cleanup"))) {
+    request("removeHost", new JSONObject().put("host", host));
+   } else {
+    context.startForegroundService(new Intent(context, AccessService.class));
+    request("setAccess", new JSONObject().put("enabled", true));
+    request("pair", new JSONObject().put("code", arguments.getString("invitation")));
+    boolean ready = false;
+    for (int attempt = 0; attempt < 60 && !ready; attempt++) {
+     request("refreshHost", new JSONObject().put("host", host));
+     JSONObject record = request("snapshot", new JSONObject()).getJSONObject("hosts").getJSONObject(host);
+     JSONObject catalog = record.optJSONObject("catalog");
+     if (catalog != null) {
+      JSONArray services = catalog.getJSONArray("services");
+      for (int n = 0; n < services.length(); n++) if ("files".equals(services.getJSONObject(n).optString("kind"))) ready = true;
+     }
+     if (!ready) SystemClock.sleep(500);
+    }
+    require(ready, "Share fixture did not become ready");
+   }
+   result.putString("share", "ready"); finish(Activity.RESULT_OK, result);
+  } catch (Exception failure) {
+   result.putString("error", failure.toString()); finish(Activity.RESULT_CANCELED, result);
+  } finally { if (bridge != null) bridge.close(); }
+ }
  @Override public void onStart() {
+  if ("true".equals(arguments.getString("shareSetup"))) { shareSetup(); return; }
   if ("true".equals(arguments.getString("receiving"))) { new AndroidReceivingChecks(this, arguments).run(); return; }
   Bundle result = new Bundle(); JSONObject report = new JSONObject();
   try {
