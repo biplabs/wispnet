@@ -39,7 +39,7 @@ def valid_catalog(peer, value):
         and all(
             isinstance(s, dict)
             and set(s) == {"id", "incarnation", "display_name", "kind"}
-            and s["kind"] in ("http", "tcp", "shell", "files")
+            and s["kind"] in ("http", "tcp", "shell", "files", "file_share")
             and isinstance(s["display_name"], str)
             and bool(s["display_name"].strip())
             and len(s["display_name"].encode("utf-8", errors="surrogatepass")) <= 128

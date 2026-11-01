@@ -132,9 +132,13 @@ to selected paired devices, then open Shell from desktop/Android or run
 `wispnet shell DEVICE_ID`. See [shell access](docs/shell.md) for terminal modes,
 session persistence and CLI grant management.
 
-Every host also includes the reserved `files` service. Configure exported folders
-and separate device grants with `wispnet files-access`, then transfer datasets
-and checkpoints with `wispnet files put|get`. See [file transfers](docs/files.md)
+Every host also includes the reserved `files` inbox. Configure receiving folders
+and sender grants with `wispnet files-access`, then upload with `wispnet files put`.
+Read-only file shares have independent permissions for each share: publish one
+with `wispnet share checkpoints --path /workspace/checkpoints --allow CLIENT_ID`,
+then browse and download from the permitted device with `wispnet files ls|get`.
+Desktop settings manage shares; desktop and Android can browse and download.
+See [file transfers](docs/files.md)
 for resumable CLI/SDK use and the 1 Gbit/s throughput target.
 
 Run `wispnet` for interactive QR pairing, pending approvals, machine removal,

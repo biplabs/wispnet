@@ -5,6 +5,19 @@ from wispnet_desktop.catalog_cache import CatalogCache, MAX_BYTES
 
 
 class CacheChecks(unittest.TestCase):
+    def test_read_only_share_catalog_preserves_independent_service_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            peer = 'a' * 64
+            cache = CatalogCache(directory)
+            catalog = dict(host=peer, version=1, complete=True, service_count=2,
+                           generation='b' * 64, revision=1,
+                           services=[dict(id='checkpoints', incarnation='c' * 64,
+                                          display_name='checkpoints', kind='file_share'),
+                                     dict(id='files', incarnation='d' * 64,
+                                          display_name='files', kind='files')])
+            cache.save(peer, dict(catalog=catalog, fetched=1))
+            self.assertEqual(cache.load(peer)['catalog'], catalog)
+
     def test_builtin_services_preserve_capacity_for_128_custom_services(self):
         with tempfile.TemporaryDirectory() as directory:
             peer = 'a' * 64

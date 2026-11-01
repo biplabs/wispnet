@@ -321,9 +321,9 @@ async fn owner_jobs_report_only_metadata_and_transfer_binary_without_shell_outpu
     let (client, target) = create(state.path(), export.path(), SecretKey::generate()).await;
     let destination = local.path().join("must-not-download.bin");
     assert_eq!(
-        client.command(&json!({"op":"file_get","host":target.host,"incarnation":target.incarnation,"workspace":"training","remote_path":"private.bin","local_path":destination}))
+        client.command(&json!({"op":"file_get","host":target.host,"service":"files","incarnation":target.incarnation,"path":"private.bin","local_path":destination}))
             .await.unwrap_err(),
-        "Unknown app operation"
+        "PERMISSION_DENIED: Inbox access does not permit reading files"
     );
     assert!(!destination.exists());
     let job = client.command(&json!({"op":"file_put","host":target.host,"incarnation":target.incarnation,"workspace":"training","local_path":source,"remote_path":"binary"})).await.unwrap();

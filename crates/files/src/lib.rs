@@ -4,6 +4,7 @@
 //! revocation are enforced by Wispnet before and during `FileService::serve`.
 mod protocol;
 mod server;
+mod share;
 pub use protocol::*;
 pub use server::{FileService, Limits, Publication, Publisher};
 

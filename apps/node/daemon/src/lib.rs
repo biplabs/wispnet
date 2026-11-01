@@ -197,6 +197,8 @@ impl State {
             | "shell_poll"
             | "shell_close"
             | "file_put"
+            | "file_list"
+            | "file_get"
             | "file_workspaces"
             | "file_status"
             | "file_cancel"

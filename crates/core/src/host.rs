@@ -93,6 +93,8 @@ pub enum ServiceKind {
     Shell,
     /// Built-in resumable binary file service; no TCP backend listener.
     Files,
+    /// Owner-selected read-only file share with an independent grant list.
+    FileShare,
 }
 impl Catalog {
     /// Only complete, canonical owner-filtered snapshots can advance a baseline.

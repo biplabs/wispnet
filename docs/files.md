@@ -137,9 +137,79 @@ The Rust SDK exposes `Client::put_file`, `FileTarget`,
 `TransferOptions`, progress callbacks, and `FileCancellation` in
 `wispnet_client::files`.
 
-There is no `files get` command or `file_get` API. To send files in the other
-direction, the other computer's owner must configure a receiving folder and
-grant the first computer permission to send there.
+## Read-only shares
+
+Read-only shares are separate services with a device allow list for each share.
+Inbox permission still only permits uploads; it never permits listing or reading
+files. A share grant permits browsing and downloading only that share, without
+granting uploads, Shell access, or access to other shares. Pairing alone grants
+neither capability. Existing inbox settings and grants are preserved.
+
+For example, a rented training computer can expose its checkpoints to your
+laptop. Your laptop grants the rented computer no inbox permission:
+
+```sh
+# On the training computer, after pairing with your laptop:
+wispnet share checkpoints --path /workspace/checkpoints --allow FULL_LAPTOP_PUBLIC_ID
+
+# On your laptop:
+wispnet files ls GPU_HOST checkpoints
+wispnet files ls GPU_HOST checkpoints run-1
+wispnet files get GPU_HOST checkpoints run-1/model.safetensors ./model.safetensors
+```
+
+Use `wispnet share` to list local shares and `wispnet share checkpoints` to
+inspect one. `--allow` replaces that share's device list; `--allow none` revokes
+all readers. Existing shares preserve omitted path and permission options.
+Creating a share without readers exposes it to no remote devices. To remove
+the share, use `wispnet share checkpoints --remove`; source files are retained.
+These commands accept `--config /absolute/path/host.toml` for nondefault nodes.
+
+Each share has a unique service name and points to an existing absolute folder.
+Source paths stay private to the host; peers see share names and relative entries.
+Sharing a folder exposes its current and future contents to its
+allowed devices. Traversal, symlinks, special files, reserved partial names, and
+roots overlapping Wispnet's private state are rejected. Other shares remain
+private unless independently granted. Removing, disabling, changing a share's
+root, or revoking its reader closes active access through current policy checks.
+
+On desktop, use **My services → Add read-only file share** to choose a folder,
+then select the paired devices allowed to read it. A share's
+settings edit only its own path and device list. **File inbox** continues to
+configure incoming uploads independently.
+
+Open a remote shared-files service in the desktop or Android app to browse its
+folders and choose a file to download. The receiving device selects its local
+destination. Downloads show progress, cancellation, and resume controls and
+continue when the browser closes. On Android, choose a writable destination
+with the system folder picker; no inbox configuration or grant is needed.
+Android downloads are verified in private storage before copying into the
+selected document provider. The provider may show a file during this final
+copy, and success is reported only after it closes. The verified staging copy
+is removed after publication. Downloads and cancellation remain in the Android
+network process if the UI is recreated; after a network-process restart,
+select the same source and destination to recover durable transfer state.
+Creating source shares in the app is currently a desktop owner workflow.
+
+The CLI downloads one regular file per `files get`. It resumes by default;
+repeat the command after interruption or use the app's **Resume download**.
+`files ls` emits one JSON object per page, with up to 32 entries per page.
+Resume binds the source host, share incarnation, relative path, file version,
+checksum, and local destination. A changed source returns `STALE_VERSION`;
+restart deliberately with `--no-resume` or the app's **Restart download** after confirming the checkpoint is
+complete. Downloads verify the SHA-256 before publication and never overwrite
+an existing destination. A matching completed destination can recover success
+with resume enabled. Source changes invalidate partial data rather than mixing
+versions. Publish training checkpoints only after they are complete, and keep
+all shards of a checkpoint together; downloads do not create a transactional
+snapshot across multiple files.
+
+Owner-local `file_list` returns one bounded page of entries with an optional
+`next_cursor`. `file_get` starts a download job; `file_status` and `file_cancel`
+use the same bounded job lifecycle as uploads. Only paths, metadata, and job
+handles cross the owner API; file bytes use the native binary tunnel. The Rust
+SDK exposes `Client::list_shared_files` and `Client::get_file` with the existing
+`FileTarget`, `TransferOptions`, and cancellation/progress callbacks.
 
 ## Reliability and limits
 

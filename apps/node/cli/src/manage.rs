@@ -9,6 +9,7 @@ pub const HELP: &str = "Management (uses the running node; --config is optional)
   wispnet settings [--port 7842] [--device-id my-computer]
   wispnet shell-access [--allow PUBLIC_ID,PUBLIC_ID | --allow none]
   wispnet files-access [--allow PUBLIC_ID,PUBLIC_ID|none] [--export NAME=/absolute/path ... | --clear-exports]
+  wispnet share [NAME] [--path /absolute/folder] [--allow PUBLIC_ID,PUBLIC_ID|none] [--remove]
   wispnet service-links --host HOST_ID --service SERVICE_ID
   wispnet resolve-link --link wispnet://HOST_ID/SERVICE_ID
   wispnet node-request --request /absolute/path/request.json
@@ -31,10 +32,14 @@ pub fn handles(mode: &str) -> bool {
             | "node-request"
             | "shell-access"
             | "files-access"
+            | "share"
     )
 }
 pub fn run(args: &[OsString]) -> Result<Value, String> {
     let mode = args[0].to_str().ok_or("Invalid command")?;
+    if mode == "share" {
+        return share_command(&args[1..]);
+    }
     let mut options = BTreeMap::new();
     let mut exports = BTreeMap::<String, String>::new();
     let mut clear_exports = false;
@@ -250,6 +255,97 @@ fn files_grants(
         );
     }
     Ok(allow)
+}
+
+/// Each named read-only folder share has independent grants and revocation.
+fn share_command(args: &[OsString]) -> Result<Value, String> {
+    let mut name = None;
+    let mut root = None;
+    let mut allow = None;
+    let mut config = None;
+    let mut remove = false;
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.to_str().ok_or("Invalid share argument")? {
+            "--remove" if !remove => remove = true,
+            "--path" if root.is_none() => {
+                root = Some(args.next().and_then(|v| v.to_str()).ok_or(HELP)?.to_owned())
+            }
+            "--allow" if allow.is_none() => {
+                allow = Some(args.next().and_then(|v| v.to_str()).ok_or(HELP)?.to_owned())
+            }
+            "--config" if config.is_none() => {
+                config = Some(PathBuf::from(args.next().ok_or(HELP)?))
+            }
+            value if !value.starts_with('-') && name.is_none() => name = Some(value.to_owned()),
+            _ => return Err(HELP.into()),
+        }
+    }
+    if remove && (root.is_some() || allow.is_some()) {
+        return Err("Use --remove without --path or --allow".into());
+    }
+    let api = Api::new(
+        config.unwrap_or(crate::tui::api::home()?.join(".config/wispnet-node/host.toml")),
+    )?;
+    let status = api.request(json!({"op":"status"}))?;
+    let shares = status["host"]["services"]
+        .as_array()
+        .ok_or("Missing host services")?
+        .iter()
+        .filter(|s| s["kind"] == "file_share")
+        .cloned()
+        .collect::<Vec<_>>();
+    let Some(name) = name else {
+        if root.is_some() || allow.is_some() || remove {
+            return Err("A share name is required".into());
+        }
+        return Ok(json!({"shares":shares,"roots":status["host"]["file_shares"]}));
+    };
+    if !wispnet_core::protocol::valid_service_id(&name)
+        || matches!(name.as_str(), "shell" | "files")
+    {
+        return Err("Use a lowercase share identifier other than shell or files".into());
+    }
+    let existing = shares.iter().find(|s| s["id"] == name);
+    if remove {
+        if existing.is_none() {
+            return Err("Read-only share unavailable".into());
+        }
+        return api.request(json!({"op":"mutate","operation":{"op":"remove","id":name,"expected_revision":status["host"]["revision"]}}));
+    }
+    if root.is_none() && allow.is_none() {
+        return existing
+            .cloned()
+            .map(|service| json!({"service":service,"root":status["host"]["file_shares"][&name]}))
+            .ok_or_else(|| "Read-only share unavailable; set --path to create it".into());
+    }
+    let root = root
+        .or_else(|| {
+            status["host"]["file_shares"][&name]
+                .as_str()
+                .map(str::to_owned)
+        })
+        .ok_or("Set --path to create the share")?;
+    if !PathBuf::from(&root).is_absolute() {
+        return Err("Share folder path must be absolute".into());
+    }
+    let allow = match allow.as_deref() {
+        None => existing
+            .map(|s| s["allow"].clone())
+            .unwrap_or_else(|| json!([])),
+        Some("none") => json!([]),
+        Some(ids) => json!(
+            ids.split(',')
+                .map(|id| id
+                    .parse::<wispnet_core::identity::EndpointId>()
+                    .map_err(|_| "Invalid allowed device ID"))
+                .collect::<Result<Vec<_>, _>>()?
+        ),
+    };
+    let result=api.request(json!({"op":"mutate","operation":{"op":"file_share","id":name,"root":root,"allow":allow,"expected_revision":status["host"]["revision"]}}))?;
+    Ok(
+        json!({"service":name,"kind":"file_share","root":root,"allow":allow,"revision":result["revision"]}),
+    )
 }
 
 #[cfg(test)]

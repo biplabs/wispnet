@@ -1,10 +1,13 @@
 //! Native binary Files helpers. Only job metadata crosses the owner-local API.
 //! Resume journals are private, durable, and bound to both endpoints and content.
+#[path = "shares.rs"]
+mod shares;
 use crate::Client;
 use iroh::endpoint::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+pub use shares::SharePage;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{File, OpenOptions},
@@ -434,6 +437,7 @@ impl Client {
         value: &Value,
     ) -> std::result::Result<Value, String> {
         match value["op"].as_str().unwrap_or("") {
+            "file_list" | "file_get" => self.shares_command(value).await,
             "file_workspaces" => {
                 let target = FileTarget {
                     host: crate::peer(value)?,

@@ -8,6 +8,7 @@ import 'theme.dart';
 IconData wispServiceIcon(String kind) => switch (kind) {
   'shell' => Icons.terminal,
   'files' => Icons.folder_outlined,
+  'file_share' => Icons.folder_shared_outlined,
   _ => Icons.north_east,
 };
 

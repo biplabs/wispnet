@@ -244,6 +244,30 @@ impl FileService {
     pub fn set_enabled(&self, enabled: bool) {
         self.0.enabled.store(enabled, Ordering::Release);
     }
+    /// Read-only shares have independent service grants, enforced by the tunnel.
+    pub async fn serve_share(
+        &self,
+        _peer: &str,
+        _incarnation: &str,
+        root: PathBuf,
+        reader: impl AsyncRead + Unpin,
+        writer: impl AsyncWrite + Unpin,
+    ) -> io::Result<()> {
+        if !self.0.enabled.load(Ordering::Acquire) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Files disabled",
+            ));
+        }
+        let canonical = root.canonicalize()?;
+        if canonical.starts_with(&self.0.state) || self.0.state.starts_with(&canonical) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Private Files state cannot be shared",
+            ));
+        }
+        crate::share::serve(root, reader, writer, self.0.bulk.clone()).await
+    }
     /// Called by the node's maintenance timer, including while no peers connect.
     pub async fn cleanup_expired(&self) -> io::Result<()> {
         let this = self.clone();
@@ -1222,9 +1246,11 @@ impl FileService {
             }
             // Every Files caller, including legacy clients, has an incoming-only
             // grant. Reject reads before touching any export or revealing metadata.
-            Request::FileStat { .. } | Request::FileReadRange { .. } => {
-                Err(fail(ErrorCode::PermissionDenied))
-            }
+            Request::FileStat { .. }
+            | Request::FileReadRange { .. }
+            | Request::ShareList { .. }
+            | Request::ShareStat { .. }
+            | Request::ShareReadRange { .. } => Err(fail(ErrorCode::PermissionDenied)),
         }
     }
 }
@@ -1266,7 +1292,7 @@ async fn queue_requests(
     }
 }
 
-fn fingerprint(metadata: &Metadata) -> String {
+pub(super) fn fingerprint(metadata: &Metadata) -> String {
     sha256(
         format!(
             "{}:{}:{}:{}:{}:{}:{}",
@@ -1315,7 +1341,7 @@ fn cstring(value: &str) -> io::Result<CString> {
     CString::new(value)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid Files path"))
 }
-fn open_directory(path: &Path) -> io::Result<File> {
+pub(super) fn open_directory(path: &Path) -> io::Result<File> {
     use std::path::Component;
     if !path.is_absolute() {
         return Err(io::Error::new(
@@ -2110,6 +2136,21 @@ mod tests {
             panic!("upload commit failed");
         };
         for path in ["private", "uploaded", "missing", "../outside/secret"] {
+            for request in [
+                Request::ShareList {
+                    path: path.into(),
+                    cursor: None,
+                },
+                Request::ShareStat { path: path.into() },
+                Request::ShareReadRange {
+                    path: path.into(),
+                    expected_version: file.file_version.clone(),
+                    offset: 0,
+                    max_bytes: 1,
+                },
+            ] {
+                error(f.call(request).await, ErrorCode::PermissionDenied);
+            }
             error(
                 f.call(Request::FileStat {
                     workspace: "training.v1".into(),

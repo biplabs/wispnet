@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import 'backend.dart';
 import 'sheets.dart';
+import 'file_shares.dart';
 import '../ui.dart';
 
 /// Owner workflows share the same sheets as Android; no permanent navigation rail.
@@ -364,6 +365,36 @@ class _DesktopSettingsState extends State<DesktopSettings> {
             );
           },
         ),
+      ),
+    );
+  }
+
+  Future<void> editShare([Map<String, dynamic>? service]) async {
+    final revision = status!['host']['revision'] as int;
+    final name = service?['id'] as String? ?? '';
+    final roots = status!['host']['file_shares'] as Map? ?? {};
+    await showWispSheet<void>(
+      context,
+      title: name.isEmpty ? 'Add read-only file share' : 'Edit $name share',
+      child: FileShareEditor(
+        backend: widget.backend,
+        clients: List<Map<String, dynamic>>.of(clients),
+        id: name,
+        root: roots[name] as String? ?? '',
+        allow: (service?['allow'] as List? ?? []).cast<String>(),
+        onSave: (id, root, allow) async {
+          if (services.any((s) => s['id'] == id && s['id'] != name)) {
+            throw const FormatException(
+              'This service name already exists. Choose a different share name.',
+            );
+          }
+          await mutate({
+            'op': 'file_share',
+            'id': id,
+            'root': root,
+            'allow': allow,
+          }, revision);
+        },
       ),
     );
   }
@@ -791,6 +822,25 @@ class _DesktopSettingsState extends State<DesktopSettings> {
       else if (section == 'My services') ...[
         if (widget.serviceId == null) ...[
           action('Add a new service', () => run(() => editService())),
+          action('Add read-only file share', () => run(() => editShare())),
+          for (final s in services.where((s) => s['kind'] == 'file_share'))
+            WispServiceItem(
+              contentPadding: EdgeInsets.zero,
+              title: s['id'] as String,
+              kind: 'file_share',
+              subtitle: const Text('Read-only file share'),
+              enabled: s['enabled'] != false,
+              busy: busy,
+              onToggle: (value) => run(() async {
+                await widget.backend.invoke('setServiceEnabled', {
+                  'service': s['id'],
+                  'incarnation': s['incarnation'],
+                  'enabled': value,
+                });
+              }),
+              onSettings: () => run(() => editShare(s)),
+              settingsTooltip: 'Folders and access for ${s['id']}',
+            ),
           for (final s in services.where(
             (s) => s['id'] == 'shell' && s['kind'] == 'shell',
           ))
@@ -852,6 +902,31 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                     action(
                       'Manage folders and access',
                       () => run(() => editFiles(s)),
+                    ),
+                  ] else if (s['kind'] == 'file_share') ...[
+                    const Text(
+                      'Read-only file share · separate from file inbox access',
+                    ),
+                    const SizedBox(height: 8),
+                    action(
+                      'Manage share and access',
+                      () => run(() => editShare(s)),
+                    ),
+                    action(
+                      'Remove share',
+                      () => run(
+                        () => confirm(
+                          'Remove share?',
+                          'Stop sharing “${s['id']}” with all devices? Files on this computer will be kept.',
+                          () => mutate({
+                            'op': 'remove',
+                            'id': s['id'],
+                          }, status!['host']['revision'] as int),
+                          danger: true,
+                          confirmLabel: 'Remove share',
+                        ),
+                      ),
+                      danger: true,
                     ),
                   ] else ...[
                     action('Edit', () => run(() => editService(s))),

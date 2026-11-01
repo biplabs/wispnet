@@ -92,6 +92,11 @@ final class AndroidReceiving {
  }
 
  String publish(JSONObject args, int descriptor) throws Exception {
+  String id = args.getString("transfer");
+  return publish(args, descriptor, () -> Native.publicationCancelled(id));
+ }
+
+ String publish(JSONObject args, int descriptor, java.util.function.BooleanSupplier cancelled) throws Exception {
   synchronized (PUBLISH_LOCK) {
    String id = args.getString("transfer"), root = args.getString("root"), path = args.getString("path");
    if (!id.matches("[0-9a-f]{64}") || !roots.contains(root)) throw new SecurityException("Unknown receiving folder");
@@ -114,7 +119,7 @@ final class AndroidReceiving {
     // A lost native commit response must never create a second provider file.
     if (record.optBoolean("complete")) return "ok";
    }
-   check(id);
+   check(id, cancelled);
    Uri output = record == null ? null : Uri.parse(record.getString("uri"));
    try {
     if (output == null) {
@@ -143,14 +148,14 @@ final class AndroidReceiving {
      if (target == null) throw new IOException("Cannot open receiving folder");
      try (FileOutputStream stream = new ParcelFileDescriptor.AutoCloseOutputStream(target)) {
       byte[] buffer = new byte[256 * 1024]; long written = 0; int count;
-      while ((count = input.read(buffer)) != -1) { check(id); stream.write(buffer, 0, count); written += count; }
-      check(id);
+      while ((count = input.read(buffer)) != -1) { check(id, cancelled); stream.write(buffer, 0, count); written += count; }
+      check(id, cancelled);
       if (written != args.getLong("size_bytes")) throw new IOException("Incomplete received file");
       stream.flush();
       if (OsConstants.S_ISREG(Os.fstat(target.getFileDescriptor()).st_mode)) stream.getFD().sync();
      }
     }
-    check(id);
+    check(id, cancelled);
     save(journal, record.put("complete", true));
     return "ok";
    } catch (Exception failure) {
@@ -182,8 +187,8 @@ final class AndroidReceiving {
    }
   }
  }
- private void check(String id) throws IOException {
-  if (!Native.receivingOnline || Native.publicationCancelled(id)) throw new IOException("Receiving interrupted. Retry when online.");
+ private void check(String id, java.util.function.BooleanSupplier cancelled) throws IOException {
+  if (cancelled.getAsBoolean() || !Native.receivingOnline) throw new IOException("Receiving interrupted. Retry when online.");
  }
  private static void save(AtomicFile file, JSONObject value) throws IOException {
   FileOutputStream output = file.startWrite();

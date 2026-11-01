@@ -213,7 +213,9 @@ class MachineCard extends StatelessWidget {
         .where((peer) => peer != machine.id)
         .toSet()
         .length;
-    final subtitle = (service['kind'] as String).toUpperCase();
+    final subtitle = service['kind'] == 'file_share'
+        ? 'READ-ONLY FILE SHARE'
+        : (service['kind'] as String).toUpperCase();
     return WispServiceItem(
       title: service['id'] as String,
       kind: service['kind'] as String,

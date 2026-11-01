@@ -444,3 +444,139 @@ async fn native_files_bulk() {
     endpoint.close().await;
     host.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn native_read_only_share_grants_are_separate_from_inbox_and_revoke_active_reads() {
+    use std::os::unix::fs::PermissionsExt;
+    let state = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let shared = tempfile::tempdir().unwrap();
+    let inbox = tempfile::tempdir().unwrap();
+    std::fs::write(shared.path().join("step-42.pt"), b"checkpoint").unwrap();
+    let identity = Identity::generate();
+    let own = identity.endpoint_id();
+    let laptop = Identity::generate();
+    let sender = Identity::generate();
+    host::initialize(state.path(), own).unwrap();
+    for (revision, peer) in [laptop.endpoint_id(), sender.endpoint_id()]
+        .into_iter()
+        .enumerate()
+    {
+        mutate(
+            state.path(),
+            own,
+            Mutation::Approve {
+                expected_revision: revision as u64,
+                peer,
+                name: "client".into(),
+            },
+        );
+    }
+    mutate(
+        state.path(),
+        own,
+        Mutation::Files {
+            expected_revision: 2,
+            exports: BTreeMap::from([("incoming".into(), inbox.path().canonicalize().unwrap())]),
+            allow: vec![sender.endpoint_id()],
+        },
+    );
+    mutate(
+        state.path(),
+        own,
+        Mutation::FileShare {
+            expected_revision: 3,
+            id: "checkpoints".into(),
+            root: shared.path().canonicalize().unwrap(),
+            allow: vec![laptop.endpoint_id()],
+        },
+    );
+    let authority = Authority::open(state.path(), own).unwrap();
+    let share_inc = authority
+        .services()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|s| s.id == "checkpoints")
+        .unwrap()
+        .incarnation;
+    let files_inc = incarnation(&authority).await;
+    let host = TunnelHost::bind_host(identity.secret_key(), &config(), authority.clone())
+        .await
+        .unwrap();
+    let endpoint = tunnel::bind_client(laptop.secret_key()).await.unwrap();
+    let connection = tunnel::connect(&endpoint, own, host.endpoint().bound_sockets()[0])
+        .await
+        .unwrap();
+    let sender_endpoint = tunnel::bind_client(sender.secret_key()).await.unwrap();
+    let sender_connection =
+        tunnel::connect(&sender_endpoint, own, host.endpoint().bound_sockets()[0])
+            .await
+            .unwrap();
+    assert!(matches!(
+        tunnel::open_service_bound(&connection, "files", &files_inc).await,
+        Err(tunnel::TunnelError::Status(Status::Denied))
+    ));
+    assert!(matches!(
+        tunnel::open_service_bound(&sender_connection, "checkpoints", &share_inc).await,
+        Err(tunnel::TunnelError::Status(Status::Denied))
+    ));
+    let mut stream = tunnel::open_service_bound(&connection, "checkpoints", &share_inc)
+        .await
+        .unwrap();
+    assert!(
+        matches!(rpc(&mut stream, Request::ShareList { path: "".into(), cursor: None }).await, Response::Entries { entries, .. } if entries.len()==1 && entries[0].path=="step-42.pt")
+    );
+    let Response::File { file } = rpc(
+        &mut stream,
+        Request::ShareStat {
+            path: "step-42.pt".into(),
+        },
+    )
+    .await
+    else {
+        panic!("file required");
+    };
+    assert!(
+        matches!(rpc(&mut stream, Request::ShareReadRange { path: "step-42.pt".into(), expected_version: file.file_version, offset: 0, max_bytes: 100 }).await, Response::Data { offset: 0, data } if data==b"checkpoint")
+    );
+    assert!(matches!(
+        rpc(
+            &mut stream,
+            Request::UploadBegin {
+                workspace: "".into(),
+                path: "injected".into(),
+                size_bytes: 3,
+                sha256: wispnet_files::sha256(b"bad"),
+                idempotency_key: "bad".into()
+            }
+        )
+        .await,
+        Response::Error {
+            code: ErrorCode::PermissionDenied,
+            ..
+        }
+    ));
+    assert!(!shared.path().join("injected").exists());
+    mutate(
+        state.path(),
+        own,
+        Mutation::RevokeService {
+            expected_revision: 4,
+            service: "checkpoints".into(),
+            peer: laptop.endpoint_id(),
+        },
+    );
+    tokio::time::timeout(Duration::from_secs(4), async {
+        while matches!(read_response(&mut stream).await, Ok(Some(_))) {}
+    })
+    .await
+    .unwrap();
+    assert!(matches!(
+        tunnel::open_service_bound(&connection, "checkpoints", &share_inc).await,
+        Err(tunnel::TunnelError::Status(Status::Denied))
+    ));
+    sender_endpoint.close().await;
+    endpoint.close().await;
+    host.shutdown().await;
+}

@@ -11,6 +11,7 @@ import 'cards.dart';
 import 'desktop_settings.dart';
 import 'terminal_sheet.dart';
 import 'file_transfer.dart';
+import 'file_shares.dart';
 
 class WispnetApp extends StatelessWidget {
   const WispnetApp({super.key, required this.backend});
@@ -55,6 +56,10 @@ class _WispHomeState extends State<WispHome>
         if (mounted) setState(() {});
       });
   bool get online => snapshot['enabled'] == true;
+  late final SharedFileDownloads sharedDownloads =
+      SharedFileDownloads(widget.backend)..addListener(() {
+        if (mounted) setState(() {});
+      });
   List<Map<String, dynamic>> get minimizedShells {
     if (!online) return const [];
     if (snapshot['desktop'] == true) {
@@ -135,6 +140,7 @@ class _WispHomeState extends State<WispHome>
     desktopShells.closeAll(terminate: false, notify: false);
     desktopShells.dispose();
     fileTransfers.dispose();
+    sharedDownloads.dispose();
     WidgetsBinding.instance.removeObserver(this);
     warp.dispose();
     super.dispose();
@@ -185,6 +191,7 @@ class _WispHomeState extends State<WispHome>
         initializationError = null;
       });
       fileTransfers.nativeQueue = next['desktop'] != true;
+      sharedDownloads.restore(next['share_downloads'] as List? ?? []);
       if (next['desktop'] != true && next['enabled'] == true) {
         unawaited(
           fileTransfers.restore({
@@ -408,6 +415,20 @@ class _WispHomeState extends State<WispHome>
 
   Future<void> open(Machine machine, Map<String, dynamic> service) async {
     if (busy || !online) return;
+    if (service['kind'] == 'file_share') {
+      await showWispSheet<void>(
+        context,
+        title: '${service['id']} on ${machine.name}',
+        child: SharedFilesBrowser(
+          backend: backend,
+          machine: machine,
+          service: service,
+          downloads: sharedDownloads,
+          desktop: snapshot['desktop'] == true,
+        ),
+      );
+      return;
+    }
     if (service['kind'] == 'files') {
       await showFiles(machine, service);
       return;
@@ -1042,6 +1063,64 @@ class _WispHomeState extends State<WispHome>
     );
   }
 
+  Future<void> closeDownloads() async {
+    final active = sharedDownloads.jobs.where((job) => !job.finished).toList();
+    if (active.isNotEmpty) {
+      final confirmed = await showWispSheet<bool>(
+        context,
+        title: 'Cancel downloads?',
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'Completed files are kept. Cancelled downloads can be resumed from their share.',
+            ),
+            const SizedBox(height: 16),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Cancel downloads'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Keep downloading'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+      await Future.wait(active.map(sharedDownloads.cancel));
+    } else {
+      sharedDownloads.clearFinished();
+    }
+  }
+
+  Widget downloadDock() {
+    if (sharedDownloads.jobs.isEmpty) return const SizedBox.shrink();
+    final active = sharedDownloads.jobs.where((job) => !job.finished).length;
+    return Padding(
+      padding: const EdgeInsets.only(top: 4, bottom: 8),
+      child: WispDockBar(
+        key: const ValueKey('share-downloads-dock'),
+        title: active > 0
+            ? 'Downloads · $active active'
+            : 'Downloads · ${sharedDownloads.jobs.length} finished',
+        statusColor: active > 0 ? WispColors.green : WispColors.cyan,
+        expandKey: const ValueKey('share-downloads-expand'),
+        closeKey: const ValueKey('share-downloads-close'),
+        expandLabel: 'View downloads',
+        closeLabel: active > 0
+            ? 'Cancel downloads'
+            : 'Dismiss finished downloads',
+        onExpand: () => showWispSheet<void>(
+          context,
+          title: 'Downloads',
+          child: SharedDownloadsList(downloads: sharedDownloads),
+        ),
+        onClose: closeDownloads,
+      ),
+    );
+  }
+
   Widget _buildUploadDock(
     String host,
     List<DesktopFileTransfer> jobs, {
@@ -1343,8 +1422,10 @@ class _WispHomeState extends State<WispHome>
                         ),
                         shellDock(),
                         uploadDocks(),
+                        downloadDock(),
                         if (minimizedShells.isNotEmpty ||
-                            fileTransfers.jobs.any((job) => !job.finished))
+                            fileTransfers.jobs.any((job) => !job.finished) ||
+                            sharedDownloads.jobs.isNotEmpty)
                           SizedBox(
                             height: MediaQuery.viewPaddingOf(context).bottom,
                           ),

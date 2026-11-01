@@ -627,7 +627,10 @@ async fn serve_stream(
             return Err(Status::BackendUnavailable);
             #[cfg(not(target_os = "android"))]
             None
-        } else if service.kind == wispnet_core::host::ServiceKind::Files {
+        } else if matches!(
+            service.kind,
+            wispnet_core::host::ServiceKind::Files | wispnet_core::host::ServiceKind::FileShare
+        ) {
             None
         } else {
             Some(
@@ -691,6 +694,38 @@ async fn serve_stream(
             tokio::select! {
                 _ = timeout(MAX_SESSION, sessions.serve(tunnel, scope.clone())) => {},
                 _ = policy => { sessions.close_scope(&scope); },
+            }
+        }
+        counts.record_activity(peer);
+        return;
+    }
+    if kind == wispnet_core::host::ServiceKind::FileShare {
+        if let Services::Host(authority, _, files) = services {
+            // Read the selected root and its grant from one current snapshot.
+            // A concurrent root/grant edit must not bind the old handshake to
+            // new contents before the periodic active-stream guard runs.
+            let mut snapshot = match authority.snapshot().await {
+                Ok(snapshot) => snapshot,
+                _ => return,
+            };
+            if !snapshot.services.iter().any(|service| {
+                service.id == service_id
+                    && service.kind == kind
+                    && service.incarnation == incarnation
+                    && service.enabled
+                    && service.allow.contains(&peer)
+            }) {
+                return;
+            }
+            let Some(root) = snapshot.file_shares.remove(&service_id) else {
+                return;
+            };
+            let (reader, writer) = tokio::io::split(tunnel);
+            let peer_id = peer.to_string();
+            tokio::select! {
+                biased;
+                _ = policy => {},
+                _ = files.serve_share(&peer_id, &incarnation, root, reader, writer) => {},
             }
         }
         counts.record_activity(peer);

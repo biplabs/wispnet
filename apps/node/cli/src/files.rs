@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-pub const HELP: &str = "Files: wispnet files put DEVICE WORKSPACE LOCAL_PATH REMOTE_PATH [--config PATH] [--no-resume]\n       wispnet files status TRANSFER [--config PATH]\n       wispnet files cancel TRANSFER [--config PATH]\nTransfers resume by default. Ctrl+C pauses the transfer and retains resumable data.\nProgress is JSON on stderr; completion or a typed transfer error is JSON on stdout.";
+pub const HELP: &str = "Files: wispnet files put DEVICE WORKSPACE LOCAL_PATH REMOTE_PATH [--config PATH] [--no-resume]\n       wispnet files ls DEVICE SHARE [REMOTE_PATH] [--config PATH]\n       wispnet files get DEVICE SHARE REMOTE_PATH LOCAL_PATH [--config PATH] [--no-resume]\n       wispnet files status TRANSFER [--config PATH]\n       wispnet files cancel TRANSFER [--config PATH]\nRead-only shares have separate permissions from the receiving inbox.\nTransfers resume by default. Ctrl+C pauses the transfer and retains resumable data.\nProgress is JSON on stderr; completion or a typed transfer error is JSON on stdout.";
 
 pub fn error_result(error: &str) -> Value {
     let (code, message) = error
@@ -48,11 +48,9 @@ fn options(args: &[OsString]) -> Result<Option<Options>, String> {
     }
     let action = positional.first().cloned().ok_or(HELP)?;
     positional.remove(0);
-    if action == "get" {
-        return Err("Files is one way: use put to send a file to a device that has granted you Files access".into());
-    }
     if !match action.as_str() {
-        "put" => positional.len() == 4,
+        "put" | "get" => positional.len() == 4,
+        "ls" => matches!(positional.len(), 2 | 3),
         "status" | "cancel" => positional.len() == 1,
         _ => false,
     } {
@@ -90,16 +88,50 @@ pub fn run_args(args: &[OsString]) -> Result<u32, String> {
     } else {
         api.request(json!({"op":"catalog","host":host}))?
     };
+    let downloading = options.action != "put";
+    let service_id = if downloading {
+        options.positional[1].as_str()
+    } else {
+        "files"
+    };
+    let service_kind = if downloading { "file_share" } else { "files" };
     let service = catalog["services"]
         .as_array()
         .and_then(|services| {
-            services
-                .iter()
-                .find(|s| s["id"] == "files" && s["kind"] == "files")
+            services.iter().find(|s| {
+                s["id"] == service_id && s["kind"] == service_kind && s["enabled"] != false
+            })
         })
-        .ok_or("PERMISSION_DENIED: Files service unavailable or not granted; configure files-access on the target")?;
-    let path = absolute_path(Path::new(&options.positional[2]))?;
-    let started = api.request(json!({"op":format!("file_{}", options.action),"host":host,"service":"files","incarnation":service["incarnation"],"workspace":options.positional[1],"local_path":path,"remote_path":options.positional[3],"resume":options.resume}))?;
+        .ok_or(
+            "PERMISSION_DENIED: Requested inbox or read-only share unavailable or not granted",
+        )?;
+    if options.action == "ls" {
+        let path = options.positional.get(2).map(String::as_str).unwrap_or("");
+        let mut cursor = Value::Null;
+        loop {
+            let page = api.request(json!({"op":"file_list","host":host,"service":service_id,"incarnation":service["incarnation"],"path":path,"cursor":cursor}))?;
+            println!(
+                "{}",
+                serde_json::to_string(&page).map_err(|_| "Invalid share listing")?
+            );
+            let next = page["next_cursor"].clone();
+            if next.is_null() {
+                return Ok(0);
+            }
+            if next == cursor {
+                return Err("INVALID_ARGUMENT: Share listing cursor did not advance".into());
+            }
+            cursor = next;
+        }
+    }
+    let request = if downloading {
+        let path = absolute_path(Path::new(&options.positional[3]))?;
+        json!({"op":"file_get","host":host,"service":service_id,"incarnation":service["incarnation"],"path":options.positional[2],"local_path":path,"resume":options.resume})
+    } else {
+        let path = absolute_path(Path::new(&options.positional[2]))?;
+        json!({"op":"file_put","host":host,"service":"files","incarnation":service["incarnation"],"workspace":options.positional[1],"local_path":path,"remote_path":options.positional[3],"resume":options.resume})
+    };
+    let started = api.request(request)?;
     let transfer = started["transfer"]
         .as_str()
         .ok_or("Missing Files transfer handle")?
@@ -262,7 +294,7 @@ mod tests {
             ]))
             .is_err()
         );
-        let rejected = options(&args(&[
+        let download = options(&args(&[
             "get",
             "device",
             "training",
@@ -271,7 +303,12 @@ mod tests {
             "--config",
             "/tmp/config",
         ]));
-        assert!(matches!(rejected, Err(error) if error.contains("Files is one way")));
-        assert!(!HELP.contains("get"));
+        assert_eq!(download.unwrap().unwrap().action, "get");
+        let list = options(&args(&["ls", "device", "checkpoints"]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(list.action, "ls");
+        assert_eq!(list.positional.len(), 2);
+        assert!(options(&args(&["get", "device", "checkpoints", "checkpoint.bin"])).is_err());
     }
 }

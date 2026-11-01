@@ -22,6 +22,56 @@ class FilesSmoke(unittest.TestCase):
     cli = shell_smoke.ShellSmoke.cli
     mutate = shell_smoke.ShellSmoke.mutate
 
+    def test_read_only_shares_have_independent_grants_and_cli_browse_download(self):
+        client, api, client_id, _ = self.host("share-reader")
+        target, target_api, target_id, target_port = self.host("share-provider")
+        source = self.root.resolve() / "checkpoints"
+        source.mkdir(mode=0o700)
+        (source / "run-1").mkdir()
+        content = os.urandom(5 * 1024 * 1024 + 19)
+        (source / "run-1" / "model.bin").write_bytes(content)
+        invitation_path = self.root / "share-invitation.json"
+        subprocess.run(
+            [shell_smoke.BINARY, "host-invite", "--config", target,
+             "--output", invitation_path],
+            capture_output=True, check=True, env=self.environment, timeout=15,
+        )
+        invitation = json.loads(invitation_path.read_text())
+        invitation["direct_hint"] = f"127.0.0.1:{target_port}"
+        api.request(op="pair", host=target_id, invitation=json.dumps(invitation))
+        self.mutate(target_api, op="approve_invitation", invitation=invitation["invitation"])
+        inbox_before = json.loads(self.cli(target, "files-access").stdout)
+        receiver_before = json.loads(self.cli(client, "files-access").stdout)
+        created = json.loads(self.cli(target, "share", "checkpoints", "--path", str(source),
+                                      "--allow", client_id).stdout)
+        self.assertEqual(created["allow"], [client_id])
+        self.cli(target, "share", "private", "--path", str(source), "--allow", "none")
+        catalog = api.request(op="catalog", host=target_id)
+        self.assertEqual([(s["id"], s["kind"]) for s in catalog["services"]],
+                         [("checkpoints", "file_share")])
+        self.assertNotIn(str(source), json.dumps(catalog))
+        listed = json.loads(self.cli(client, "files", "ls", target_id, "checkpoints").stdout)
+        self.assertEqual([(e["name"], e["is_dir"]) for e in listed["entries"]], [("run-1", True)])
+        listed = json.loads(self.cli(client, "files", "ls", target_id, "checkpoints", "run-1").stdout)
+        self.assertEqual(listed["entries"][0]["path"], "run-1/model.bin")
+        destination = self.root / "chosen-local-name.bin"
+        downloaded = self.cli(client, "files", "get", target_id, "checkpoints", "run-1/model.bin", str(destination))
+        self.completed(downloaded, hashlib.sha256(content).hexdigest(), len(content))
+        self.assertEqual(destination.read_bytes(), content)
+        self.assertEqual(json.loads(self.cli(target, "files-access").stdout), inbox_before)
+        self.assertEqual(json.loads(self.cli(client, "files-access").stdout), receiver_before)
+        denied = self.cli(client, "files", "ls", target_id, "private", success=False)
+        self.assertNotEqual(denied.returncode, 0)
+        uploaded = self.cli(client, "files", "put", target_id, "", str(destination), "unsolicited.bin", success=False)
+        self.assertEqual(json.loads(uploaded.stdout)["error"]["code"], "PERMISSION_DENIED")
+        self.cli(target, "share", "checkpoints", "--allow", "none")
+        self.assertEqual(api.request(op="catalog", host=target_id)["services"], [])
+        self.cli(client, "files", "get", target_id, "checkpoints", "run-1/model.bin",
+                 str(self.root / "revoked.bin"), success=False)
+        self.assertFalse((self.root / "revoked.bin").exists())
+        self.cli(target, "share", "checkpoints", "--remove")
+        self.assertEqual((source / "run-1" / "model.bin").read_bytes(), content)
+
     def completed(self, result, expected_hash, size):
         completion = json.loads(result.stdout)
         self.assertEqual(completion["state"], "complete", completion)
@@ -120,10 +170,10 @@ class FilesSmoke(unittest.TestCase):
 
         # Receiving permission never lets the sender retrieve the host's files.
         downloaded = self.root / "downloaded.bin"
-        get = self.cli(client, "files", "get", target_id, "training.v1",
-                       str(downloaded), "jobs/a/input.bin", success=False)
+        get = self.cli(client, "files", "get", target_id, "files",
+                       "jobs/a/input.bin", str(downloaded), success=False)
         self.assertFalse(downloaded.exists())
-        self.assertIn("send", get.stderr.lower())
+        self.assertIn("share", get.stderr.lower())
 
         # Identical existing content is not this sender's completed transfer.
         existing = export / "existing.bin"

@@ -367,6 +367,44 @@ class Bridge:
         return self.api.request(op='file_put', **target, workspace=workspace,
                                 local_path=str(source), remote_path=remote_path, resume=resume)
 
+    def share_target(self, args):
+        host, service, incarnation = (args.get(key) for key in ('host', 'service', 'incarnation'))
+        if (not isinstance(host, str) or not re.fullmatch(r'[0-9a-f]{64}', host)
+            or not isinstance(incarnation, str) or not re.fullmatch(r'[0-9a-f]{64}', incarnation)
+            or not isinstance(service, str) or not re.fullmatch(r'[a-z0-9][a-z0-9._-]{0,63}', service)):
+            raise ValueError('Invalid shared files target; refresh this machine')
+        status = self.api.request(op='status')
+        catalog = status['host'] if status['host']['host'] == host else self.api.request(op='catalog', host=host)
+        if catalog.get('host') != host or not any(
+                entry.get('id') == service and entry.get('kind') == 'file_share'
+                and entry.get('incarnation') == incarnation and entry.get('enabled') is not False
+                for entry in catalog.get('services', [])):
+            raise ValueError('Shared files access unavailable or changed; refresh this machine')
+        return dict(host=host, service=service, incarnation=incarnation)
+
+    def shared_files(self, method, args):
+        path = args.get('path', '')
+        if (not isinstance(path, str) or '\0' in path or '\\' in path
+            or len(path.encode('utf-8')) > 4096 or path and any(
+                not part or part in ('.', '..') or part.startswith('.wispnet-')
+                or len(part.encode('utf-8')) > 255 for part in path.split('/'))):
+            raise ValueError('Choose a relative path inside the share')
+        target = self.share_target(args)
+        if method == 'shareList':
+            cursor = args.get('cursor')
+            if cursor is not None and (not isinstance(cursor, str) or len(cursor.encode('utf-8')) > 4096):
+                raise ValueError('Invalid directory cursor')
+            return self.api.request(op='file_list', **target, path=path, cursor=cursor)
+        destination = args.get('local_path')
+        if (not isinstance(destination, str) or '\0' in destination
+            or not Path(destination).is_absolute() or not Path(destination).name):
+            raise ValueError('Choose an absolute download destination')
+        resume = args.get('resume', True)
+        if type(resume) is not bool:
+            raise ValueError('Resume must be true or false')
+        return self.api.request(op='file_get', **target, path=path,
+                                local_path=destination, resume=resume)
+
     def dispatch(self, method, args):
         if method == 'startDesktop':
             self.lifecycle(True)
@@ -411,6 +449,8 @@ class Bridge:
             return self.api.request(op='file_workspaces', **self.file_target(args))
         if method == 'fileSend':
             return self.send_file(args)
+        if method in ('shareList', 'shareGet'):
+            return self.shared_files(method, args)
         if method in ('fileStatus', 'fileCancel'):
             transfer = args.get('transfer')
             if not isinstance(transfer, str) or not re.fullmatch(r'[0-9a-f]{64}', transfer):

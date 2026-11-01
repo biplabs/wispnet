@@ -133,6 +133,38 @@ class BridgeTests(unittest.TestCase):
                 self.assertEqual(self.bridge.dispatch('fileSend', receiver_default), job)
                 self.assertEqual(self.calls[-1]['workspace'], '')
             self.assertNotIn('file_workspaces', [call['op'] for call in self.calls])
+
+    def test_shares_browse_and_download_require_the_selected_read_only_service(self):
+        target = dict(host=OWN, service='checkpoints', incarnation=INCARNATION)
+        self.status['host']['services'] = [dict(id='checkpoints', kind='file_share', incarnation=INCARNATION)]
+        self.bridge.dispatch('shareList', dict(target, path='run-1', cursor='weights-1.bin'))
+        self.assertEqual(self.calls[-1], dict(op='file_list', **target, path='run-1', cursor='weights-1.bin'))
+        destination = str(self.root / 'chosen-name.bin')
+        self.bridge.dispatch('shareGet', dict(target, path='run-1/weights.bin', local_path=destination))
+        self.assertEqual(self.calls[-1], dict(op='file_get', **target, path='run-1/weights.bin',
+                                            local_path=destination, resume=True))
+        self.assertNotIn('file_put', [call['op'] for call in self.calls])
+        for kind in ('files', 'shell', 'http'):
+            self.status['host']['services'][0]['kind'] = kind
+            with self.assertRaisesRegex(ValueError, 'access unavailable'):
+                self.bridge.dispatch('shareList', target)
+
+    def test_share_download_rejects_changed_grants_unsafe_paths_and_remote_destinations(self):
+        target = dict(host=OWN, service='checkpoints', incarnation=INCARNATION)
+        self.status['host']['services'] = [dict(id='checkpoints', kind='file_share', incarnation=INCARNATION)]
+        for path in ('../private', '/etc/passwd', 'run//weights', 'run/../weights', '.wispnet-state', 'bad\0path'):
+            with self.assertRaises(ValueError):
+                self.bridge.dispatch('shareList', dict(target, path=path))
+        for destination in ('relative/file', '', '/tmp/bad\0path'):
+            with self.assertRaises(ValueError):
+                self.bridge.dispatch('shareGet', dict(target, path='weights', local_path=destination))
+        with self.assertRaises(ValueError):
+            self.bridge.dispatch('shareGet', dict(target, path='weights', local_path=str(self.root / 'model'), resume='yes'))
+        with self.assertRaises(ValueError):
+            self.bridge.dispatch('shareList', dict(target, incarnation='d' * 64))
+        self.status['host']['services'] = []
+        with self.assertRaises(ValueError):
+            self.bridge.dispatch('shareList', target)
             process.assert_not_called()
 
     def test_files_reject_changed_access_unsafe_sources_and_destination_traversal(self):

@@ -83,7 +83,7 @@ impl Store {
                 CREATE TABLE services (id TEXT PRIMARY KEY, host TEXT NOT NULL REFERENCES devices(id));
                 CREATE TABLE grants (service TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE, device TEXT NOT NULL REFERENCES devices(id), PRIMARY KEY(service,device));
                 PRAGMA user_version=1;")?,
-            1..=15 => {},
+            1..=16 => {},
             _ => return Err(Error::UnsupportedSchema),
         }
         if version < 2 {
@@ -198,6 +198,9 @@ impl Store {
         }
         if version < 15 {
             tx.execute_batch("ALTER TABLE host_services ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)); PRAGMA user_version=15;")?;
+        }
+        if version < 16 {
+            tx.execute_batch("CREATE TABLE IF NOT EXISTS host_file_shares(service TEXT PRIMARY KEY REFERENCES host_services(id) ON DELETE CASCADE, root TEXT NOT NULL); PRAGMA user_version=16;")?;
         }
         tx.commit()?;
         Ok(Self(db))

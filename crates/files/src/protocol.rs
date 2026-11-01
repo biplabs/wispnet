@@ -13,6 +13,14 @@ pub struct FileInfo {
     pub file_version: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShareEntry {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+    pub size_bytes: u64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TransferState {
@@ -71,6 +79,20 @@ pub enum Request {
     UploadAbort {
         transfer_id: String,
     },
+    ShareList {
+        path: String,
+        #[serde(default)]
+        cursor: Option<String>,
+    },
+    ShareStat {
+        path: String,
+    },
+    ShareReadRange {
+        path: String,
+        expected_version: String,
+        offset: u64,
+        max_bytes: u64,
+    },
     // Recognize legacy read requests only to reject them with PermissionDenied.
     // A Files grant permits sending to this host, never reading from it.
     FileStat {
@@ -107,6 +129,15 @@ pub enum Response {
     },
     File {
         file: FileInfo,
+    },
+    Entries {
+        entries: Vec<ShareEntry>,
+        next_cursor: Option<String>,
+    },
+    Data {
+        offset: u64,
+        #[serde(skip)]
+        data: Vec<u8>,
     },
     Aborted,
     Error {
@@ -189,8 +220,10 @@ pub async fn read_response(reader: &mut (impl AsyncRead + Unpin)) -> io::Result<
     let Some((metadata, data)) = read_frame(reader).await? else {
         return Ok(None);
     };
-    let response = serde_json::from_slice(&metadata).map_err(|_| invalid())?;
-    if !data.is_empty() {
+    let mut response = serde_json::from_slice(&metadata).map_err(|_| invalid())?;
+    if let Response::Data { data: target, .. } = &mut response {
+        *target = data;
+    } else if !data.is_empty() {
         return Err(invalid());
     }
     Ok(Some(response))
@@ -203,7 +236,10 @@ pub async fn write_response(
     write_frame(
         writer,
         serde_json::to_vec(response).map_err(|_| invalid())?,
-        &[],
+        match response {
+            Response::Data { data, .. } => data.as_slice(),
+            _ => &[],
+        },
     )
     .await
 }

@@ -10,12 +10,13 @@ import org.json.*;
 final class NetworkController extends ContextWrapper {
  private final AccessService service;
  private final AndroidFiles files;
+ private final AndroidDownloads downloads;
  final ExecutorService work = Executors.newFixedThreadPool(4);
  private static final AtomicBoolean pairing = new AtomicBoolean();
- NetworkController(AccessService service) { super(service); this.service = service; this.files = new AndroidFiles(service); }
- void close() { files.close(); work.shutdown(); }
- void cancelFiles() { files.stop(); }
- void filesOnline() { files.online(); }
+ NetworkController(AccessService service) { super(service); this.service = service; this.files = new AndroidFiles(service); this.downloads = new AndroidDownloads(service); }
+ void close() { files.close(); downloads.close(); work.shutdown(); }
+ void cancelFiles() { files.stop(); downloads.stop(); }
+ void filesOnline() { files.online(); downloads.online(); }
  JSONObject dispatch(String method, JSONObject args) throws Exception {
   HostStore store = new HostStore(this);
   switch (method) {
@@ -28,14 +29,17 @@ final class NetworkController extends ContextWrapper {
    }
    case "receivingStatus": return new AndroidReceiving(this).status();
    case "prepareReceivingFolder": return new AndroidReceiving(this).prepare(android.net.Uri.parse(args.getString("uri")));
+   case "prepareDownloadFolder": return downloads.prepare(android.net.Uri.parse(args.getString("uri")));
+   case "shareList": return downloads.list(args);
+   case "shareGet": return downloads.get(args);
    case "saveReceiving": return new AndroidReceiving(this).configure(args);
    case "fileWorkspaces":
    case "fileSend": {
     if (!service.enabled) throw new Exception("Go online before sending files");
     return "fileSend".equals(method) ? files.send(args) : files.workspaces(args);
    }
-   case "fileStatus": return files.status(args.getString("transfer"));
-   case "fileCancel": return files.cancel(args.getString("transfer"));
+   case "fileStatus": return downloads.contains(args.getString("transfer")) ? downloads.status(args.getString("transfer")) : files.status(args.getString("transfer"));
+   case "fileCancel": return downloads.contains(args.getString("transfer")) ? downloads.cancel(args.getString("transfer")) : files.cancel(args.getString("transfer"));
    case "fileList": return files.list();
    case "shell_open":
    case "shell_input":
@@ -56,6 +60,7 @@ final class NetworkController extends ContextWrapper {
     hosts.put(own, new JSONObject().put("name", DeviceProfile.name(this)).put("local", true)
      .put("state", "available").put("catalog", new JSONObject().put("services", new JSONArray().put(receiving.getJSONObject("service")))));
     return new JSONObject().put("hosts", hosts).put("name", DeviceProfile.name(this))
+     .put("share_downloads", downloads.snapshots())
      .put("network_pid", android.os.Process.myPid()).put("peer", Native.command("identity").getString("peer")).put("enabled", service.enabled)
      .put("network", service.networkStatus).put("relay", Native.command("relay_status").getString("relay"))
      .put("telemetry", Native.command("telemetry")).put("order", order)
@@ -86,6 +91,7 @@ final class NetworkController extends ContextWrapper {
    }
    case "removeHost": {
     files.cancelHost(args.getString("host"));
+    downloads.cancelHost(args.getString("host"));
     store.remove(args.getString("host"));
     if (store.all().length() == 0) service.stopAccess();
     return new JSONObject();
