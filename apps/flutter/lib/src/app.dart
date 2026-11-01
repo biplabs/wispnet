@@ -710,7 +710,11 @@ class _WispHomeState extends State<WispHome>
     bool servicesOnly = false,
   }) async {
     if (snapshot['desktop'] != true) {
-      await settings();
+      if (servicesOnly) {
+        await localServiceSettings({'id': 'files', 'kind': 'files'});
+      } else {
+        await settings();
+      }
       return;
     }
     await showWispSheet<void>(
@@ -730,6 +734,14 @@ class _WispHomeState extends State<WispHome>
   }
 
   Future<void> localServiceSettings(Map<String, dynamic> service) async {
+    if (snapshot['desktop'] != true) {
+      await showWispSheet<void>(
+        context,
+        title: 'Files access',
+        child: AndroidReceivingSettings(backend: backend),
+      );
+      return;
+    }
     await showWispSheet<void>(
       context,
       title: service['id'] as String,
@@ -845,11 +857,11 @@ class _WispHomeState extends State<WispHome>
     stateColor: stateColor(machine),
     busy: busy,
     onManage: () => machineSettings(machine),
-    onOpen: (service) => open(machine, service),
+    onOpen: (service) => local && snapshot['desktop'] != true
+        ? localServiceSettings(service)
+        : open(machine, service),
     onLinks: (service) => serviceLinks(machine, service),
-    onSettings: local && snapshot['desktop'] == true
-        ? localServiceSettings
-        : null,
+    onSettings: local ? localServiceSettings : null,
     onReorder: reorder,
     onFilesDropped: snapshot['desktop'] == true && !local && online
         ? (service, paths) => showFiles(machine, service, paths: paths)
@@ -994,6 +1006,20 @@ class _WispHomeState extends State<WispHome>
 
   Widget directory() {
     final local = machines.where((m) => m.data['local'] == true).toList();
+    if (snapshot['desktop'] != true && local.isEmpty) {
+      local.add(
+        Machine(snapshot['peer'] as String? ?? '', {
+          'name': snapshot['name'] ?? 'This device',
+          'local': true,
+          'state': 'available',
+          'catalog': {
+            'services': [
+              {'id': 'files', 'kind': 'files'},
+            ],
+          },
+        }),
+      );
+    }
     final remote = machines.where((m) => m.data['local'] != true).toList();
     final buttonStyle = OutlinedButton.styleFrom(
       minimumSize: const Size(0, 42),
@@ -1008,29 +1034,6 @@ class _WispHomeState extends State<WispHome>
         ),
         physics: const AlwaysScrollableScrollPhysics(),
         children: [
-          if (snapshot['desktop'] != true)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  sectionHeading('LOCAL SERVICES', []),
-                  const SizedBox(height: 12),
-                  OutlinedButton.icon(
-                    key: const ValueKey('local-receive-files'),
-                    onPressed: busy
-                        ? null
-                        : () => showWispSheet<void>(
-                            context,
-                            title: 'Files access',
-                            child: AndroidReceivingSettings(backend: backend),
-                          ),
-                    icon: const Icon(Icons.folder_outlined),
-                    label: const Text('Receive files'),
-                  ),
-                ],
-              ),
-            ),
           if (local.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(bottom: 24),

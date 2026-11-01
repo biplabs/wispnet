@@ -193,7 +193,9 @@ class MachineCard extends StatelessWidget {
     Machine machine,
     Map<String, dynamic> service,
   ) {
-    final allowed = machine.canOpen(service);
+    final allowed =
+        (machine.data['local'] == true && onSettings != null) ||
+        machine.canOpen(service);
     final publication = service['public_access'] as Map?;
     final publicEnabled = publication?['enabled'] == true;
     final publicCached = machine.data['local'] != true && !machine.online;

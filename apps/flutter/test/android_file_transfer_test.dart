@@ -316,7 +316,19 @@ void main() {
       await tester.pumpWidget(WispnetApp(backend: backend));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
-      await tester.tap(find.text('files'));
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('local-sector')),
+          matching: find.text('files'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.descendant(
+          of: find.byKey(const ValueKey('remote-sector')),
+          matching: find.text('files'),
+        ),
+      );
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.byKey(const ValueKey('file-pick')), findsOneWidget);
