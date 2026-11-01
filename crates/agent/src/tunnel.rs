@@ -246,6 +246,7 @@ impl Services {
                     kind: wispnet_core::host::ServiceKind::Tcp,
                     backend: s.backend,
                     allow: s.allow.clone(),
+                    enabled: true,
                 })
                 .collect()),
             Self::Host(host, _, _) => host.services().await.map_err(|_| Status::Denied),

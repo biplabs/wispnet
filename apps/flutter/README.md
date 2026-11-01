@@ -3,6 +3,10 @@
 Android and Linux desktop use the same Flutter home screen, fonts, machine/service
 cards, launch animation, pairing, and settings sheets. Desktop uses the wider
 service-card grid already shared with Android; there is no persistent sidebar.
+Local service switches pause Wispnet serving, including public links, Shell, and
+Files. Pausing closes active connections and keeps device grants and folder
+settings for re-enabling. The switch state survives a node restart.
+
 Local services appear in their own section, without a repeated machine name or
 status badge. Its Manage button opens service sharing and removal. The Remote
 sector has its own pairing management and refresh controls. The device-name gear

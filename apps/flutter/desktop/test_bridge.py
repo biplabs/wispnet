@@ -44,6 +44,14 @@ class BridgeTests(unittest.TestCase):
         self.addCleanup(patch.stopall)
         self.bridge = module.Bridge(self.config)
 
+    def test_service_toggle_uses_owner_revision_and_bound_incarnation(self):
+        for service in ('web', 'shell', 'files'):
+            self.bridge.dispatch('setServiceEnabled', dict(service=service, incarnation=INCARNATION, enabled=False))
+            self.assertEqual(self.calls[-1], dict(op='mutate', operation=dict(
+                op='set_service_enabled', expected_revision=7, id=service, incarnation=INCARNATION, enabled=False)))
+        with self.assertRaises(ValueError):
+            self.bridge.dispatch('setServiceEnabled', dict(service='shell', incarnation=INCARNATION, enabled='false'))
+
     def test_desktop_start_and_exit_control_node_and_propagate_stop_failure(self):
         with patch.object(self.bridge, 'lifecycle') as lifecycle:
             self.bridge.dispatch('startDesktop', {})

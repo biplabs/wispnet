@@ -262,7 +262,12 @@ impl Publications {
             .local_authority
             .as_ref()
             .ok_or("Only a service owner can publish")?;
-        let services = authority.services().await.map_err(|e| e.to_string())?;
+        // Paused services keep their publication configuration for re-enabling.
+        let services = authority
+            .snapshot()
+            .await
+            .map_err(|e| e.to_string())?
+            .services;
         let removed: Vec<_> = saved
             .services
             .iter()
@@ -454,6 +459,15 @@ impl Drop for CloseConnection {
 async fn publish(client: Arc<Client>, gateway: GatewayConfig, publication: Publication) {
     let mut delay = 1;
     loop {
+        if !permitted(&client, &publication).await {
+            client
+                .publications
+                .set_state(&client, &publication.service, "offline")
+                .await;
+            delay = 1;
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            continue;
+        }
         client
             .publications
             .set_state(&client, &publication.service, "connecting")
@@ -835,6 +849,56 @@ mod tests {
         assert_eq!(links.services.len(), 1);
         assert_eq!(links.services[0].url, format!("https://{name}/"));
         assert_eq!(links.services[0].state, "online");
+        // Pausing the service must close public ingress without forgetting its URL.
+        let incarnation = links.services[0].incarnation.clone();
+        policy
+            .host_mutate(
+                own,
+                &secret,
+                Mutation::SetServiceEnabled {
+                    expected_revision: 4,
+                    id: "llama".into(),
+                    incarnation: incarnation.clone(),
+                    enabled: false,
+                },
+            )
+            .unwrap();
+        client.publications.reconcile(&client).await.unwrap();
+        assert_eq!(load(state.path(), own).unwrap().services.len(), 1);
+        assert!(
+            authority
+                .public_links(viewer)
+                .await
+                .unwrap()
+                .services
+                .is_empty()
+        );
+        for _ in 0..100 {
+            if !http(port, &name, "/").await.ends_with("public") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(!http(port, &name, "/").await.ends_with("public"));
+        policy
+            .host_mutate(
+                own,
+                &secret,
+                Mutation::SetServiceEnabled {
+                    expected_revision: 5,
+                    id: "llama".into(),
+                    incarnation,
+                    enabled: true,
+                },
+            )
+            .unwrap();
+        for _ in 0..100 {
+            if http(port, &name, "/").await.ends_with("public") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+        assert!(http(port, &name, "/").await.ends_with("public"));
         let mut websocket = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
         websocket.write_all(format!("GET /ws HTTP/1.1\r\nHost: {name}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n").as_bytes()).await.unwrap();
         let mut handshake = vec![];
@@ -899,7 +963,7 @@ mod tests {
                 own,
                 &secret,
                 Mutation::Service {
-                    expected_revision: 4,
+                    expected_revision: 6,
                     id: "llama".into(),
                     backend: "127.0.0.1:1".parse().unwrap(),
                     allow: vec![],

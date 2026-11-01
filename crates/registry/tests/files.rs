@@ -211,7 +211,7 @@ fn schema_thirteen_preserves_legacy_files_service_and_grants_once() {
         .clone();
     drop(store);
     let db = rusqlite::Connection::open(state.path().join("host.sqlite3")).unwrap();
-    db.execute_batch("UPDATE host_services SET kind='http',backend='127.0.0.1:88' WHERE id='files'; INSERT INTO host_services(id,backend,incarnation,kind) VALUES('files-legacy','127.0.0.1:99',lower(hex(randomblob(32))),'tcp'); DROP TABLE host_file_exports; PRAGMA user_version=12;").unwrap();
+    db.execute_batch("UPDATE host_services SET kind='http',backend='127.0.0.1:88' WHERE id='files'; INSERT INTO host_services(id,backend,incarnation,kind) VALUES('files-legacy','127.0.0.1:99',lower(hex(randomblob(32))),'tcp'); DROP TABLE host_file_exports; ALTER TABLE host_services DROP COLUMN enabled; PRAGMA user_version=12;").unwrap();
     drop(db);
     let (mut store, _) = host::owner_store(state.path(), host).unwrap();
     let after = store.host_snapshot(host).unwrap();
@@ -446,6 +446,8 @@ fn upgrade_revokes_only_legacy_files_grants_without_a_folder() {
             )
             .unwrap();
         }
+        db.execute_batch("ALTER TABLE host_services DROP COLUMN enabled;")
+            .unwrap();
         db.pragma_update(None, "user_version", 13).unwrap();
         drop(db);
         let (mut store, _) = host::owner_store(state.path(), host).unwrap();

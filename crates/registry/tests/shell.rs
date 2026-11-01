@@ -153,7 +153,7 @@ fn schema_twelve_preserves_legacy_shell_service_and_adds_builtin_once() {
         .clone();
     drop(store);
     let db = rusqlite::Connection::open(dir.path().join("host.sqlite3")).unwrap();
-    db.execute_batch("UPDATE host_services SET kind='http',backend='127.0.0.1:88' WHERE id='shell'; INSERT INTO host_services(id,backend,incarnation,kind) VALUES('shell-legacy','127.0.0.1:99',lower(hex(randomblob(32))),'tcp'); PRAGMA user_version=11;").unwrap();
+    db.execute_batch("UPDATE host_services SET kind='http',backend='127.0.0.1:88' WHERE id='shell'; INSERT INTO host_services(id,backend,incarnation,kind) VALUES('shell-legacy','127.0.0.1:99',lower(hex(randomblob(32))),'tcp'); ALTER TABLE host_services DROP COLUMN enabled; PRAGMA user_version=11;").unwrap();
     drop(db);
     let (mut store, _) = host::owner_store(dir.path(), host).unwrap();
     let migrated = store.host_snapshot(host).unwrap();

@@ -272,7 +272,7 @@ fn removing_display_names_preserves_identity_pairings_grants_and_incarnations() 
     drop(store);
     // Reconstruct a schema-10 installation with a separate presentation name.
     let db = rusqlite::Connection::open(dir.path().join("host.sqlite3")).unwrap();
-    db.execute_batch("ALTER TABLE host_services ADD COLUMN display_name TEXT NOT NULL DEFAULT 'Old website label'; PRAGMA user_version=10;").unwrap();
+    db.execute_batch("ALTER TABLE host_services ADD COLUMN display_name TEXT NOT NULL DEFAULT 'Old website label'; ALTER TABLE host_services DROP COLUMN enabled; PRAGMA user_version=10;").unwrap();
     drop(db);
     let (mut store, _) = host::owner_store(dir.path(), host).unwrap();
     let after = custom_snapshot(&mut store, host).unwrap();
@@ -433,7 +433,7 @@ fn service_incarnation_persists_on_edit_and_restart_but_not_recreation() {
     // Simulate the real schema-6 table, preserving the authority and grants.
     drop(store);
     let db = rusqlite::Connection::open(dir.path().join("host.sqlite3")).unwrap();
-    db.execute_batch("DELETE FROM host_services WHERE id IN ('shell','files'); DROP TABLE host_pairing_blocks; DROP TABLE host_legacy_pins; DROP TABLE host_pairing_offers; DROP TABLE host_pairings; ALTER TABLE host_services DROP COLUMN incarnation; ALTER TABLE host_services DROP COLUMN kind; PRAGMA user_version=6;")
+    db.execute_batch("DELETE FROM host_services WHERE id IN ('shell','files'); DROP TABLE host_pairing_blocks; DROP TABLE host_legacy_pins; DROP TABLE host_pairing_offers; DROP TABLE host_pairings; ALTER TABLE host_services DROP COLUMN incarnation; ALTER TABLE host_services DROP COLUMN kind; ALTER TABLE host_services DROP COLUMN enabled; PRAGMA user_version=6;")
         .unwrap();
     drop(db);
     let (mut store, _) = host::owner_store(dir.path(), id).unwrap();
@@ -583,7 +583,7 @@ fn schema_eight_adds_mutual_pairing_without_changing_identity_revision_or_grants
     drop(store);
     let db = rusqlite::Connection::open(dir.path().join("host.sqlite3")).unwrap();
     db.execute_batch(
-        "DROP TABLE host_pairing_blocks; DROP TABLE host_legacy_pins; DROP TABLE host_pairing_offers; DROP TABLE host_pairings; ALTER TABLE host_services ADD COLUMN display_name TEXT NOT NULL DEFAULT ''; UPDATE host_services SET display_name=id; PRAGMA user_version=8;",
+        "DROP TABLE host_pairing_blocks; DROP TABLE host_legacy_pins; DROP TABLE host_pairing_offers; DROP TABLE host_pairings; ALTER TABLE host_services ADD COLUMN display_name TEXT NOT NULL DEFAULT ''; UPDATE host_services SET display_name=id; ALTER TABLE host_services DROP COLUMN enabled; PRAGMA user_version=8;",
     )
     .unwrap();
     drop(db);
@@ -593,4 +593,128 @@ fn schema_eight_adds_mutual_pairing_without_changing_identity_revision_or_grants
         before
     );
     assert!(store.paired_hosts(host).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn service_toggle_is_owner_revision_and_incarnation_bound_and_survives_rename() {
+    let own = Identity::generate().endpoint_id();
+    let state = directory();
+    host::initialize(state.path(), own).unwrap();
+    let (mut store, owner) = host::owner_store(state.path(), own).unwrap();
+    store
+        .host_mutate(
+            own,
+            &owner,
+            Mutation::Service {
+                expected_revision: 0,
+                id: "web".into(),
+                backend: "127.0.0.1:8000".parse().unwrap(),
+                allow: vec![],
+                display_name: None,
+                kind: None,
+            },
+        )
+        .unwrap();
+    let before = store.host_snapshot(own).unwrap();
+    let inc = before
+        .services
+        .iter()
+        .find(|s| s.id == "web")
+        .unwrap()
+        .incarnation
+        .clone();
+    let toggle = |revision, incarnation: String, enabled| Mutation::SetServiceEnabled {
+        expected_revision: revision,
+        id: "web".into(),
+        incarnation,
+        enabled,
+    };
+    assert!(matches!(
+        store.host_mutate(own, "wrong-owner", toggle(1, inc.clone(), false)),
+        Err(control::ControlError::Forbidden)
+    ));
+    assert!(matches!(
+        store.host_mutate(own, &owner, toggle(0, inc.clone(), false)),
+        Err(control::ControlError::Conflict)
+    ));
+    assert!(matches!(
+        store.host_mutate(own, &owner, toggle(1, "0".repeat(64), false)),
+        Err(control::ControlError::Conflict)
+    ));
+    assert_eq!(store.host_snapshot(own).unwrap().revision, 1);
+    store
+        .host_mutate(own, &owner, toggle(1, inc.clone(), false))
+        .unwrap();
+    store
+        .host_mutate(
+            own,
+            &owner,
+            Mutation::EditService {
+                expected_revision: 2,
+                id: "web".into(),
+                new_id: "renamed".into(),
+                backend: "127.0.0.1:8001".parse().unwrap(),
+                allow: None,
+                kind: None,
+            },
+        )
+        .unwrap();
+    drop(store);
+    let (mut store, _) = host::owner_store(state.path(), own).unwrap();
+    let snapshot = store.host_snapshot(own).unwrap();
+    let service = snapshot
+        .services
+        .iter()
+        .find(|s| s.id == "renamed")
+        .unwrap();
+    assert!(!service.enabled);
+    assert_eq!(service.incarnation, inc);
+    let authority = host::Authority::open(state.path(), own).unwrap();
+    assert!(
+        !authority
+            .services()
+            .await
+            .unwrap()
+            .iter()
+            .any(|s| s.id == "renamed")
+    );
+    store
+        .host_mutate(
+            own,
+            &owner,
+            Mutation::SetServiceEnabled {
+                expected_revision: 3,
+                id: "renamed".into(),
+                incarnation: inc,
+                enabled: true,
+            },
+        )
+        .unwrap();
+    assert!(
+        authority
+            .services()
+            .await
+            .unwrap()
+            .iter()
+            .any(|s| s.id == "renamed")
+    );
+}
+
+#[test]
+fn schema_fifteen_keeps_existing_services_enabled_without_changing_catalog_revision() {
+    let own = Identity::generate().endpoint_id();
+    let state = directory();
+    host::initialize(state.path(), own).unwrap();
+    let (mut store, _) = host::owner_store(state.path(), own).unwrap();
+    let before = serde_json::to_value(store.host_snapshot(own).unwrap()).unwrap();
+    drop(store);
+    let db = rusqlite::Connection::open(state.path().join("host.sqlite3")).unwrap();
+    db.execute_batch("ALTER TABLE host_services DROP COLUMN enabled; PRAGMA user_version=14;")
+        .unwrap();
+    drop(db);
+    let (mut store, _) = host::owner_store(state.path(), own).unwrap();
+    assert_eq!(
+        before,
+        serde_json::to_value(store.host_snapshot(own).unwrap()).unwrap()
+    );
 }

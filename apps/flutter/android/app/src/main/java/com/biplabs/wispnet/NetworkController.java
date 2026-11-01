@@ -19,6 +19,13 @@ final class NetworkController extends ContextWrapper {
  JSONObject dispatch(String method, JSONObject args) throws Exception {
   HostStore store = new HostStore(this);
   switch (method) {
+   case "setServiceEnabled": {
+    if (!"files".equals(args.getString("service")) || !(args.get("enabled") instanceof Boolean)) throw new Exception("Invalid local service");
+    JSONObject status = Native.command("local_files_status");
+    return Native.request(new JSONObject().put("op", "local_service_enabled")
+     .put("id", "files").put("incarnation", args.getString("incarnation"))
+     .put("enabled", args.getBoolean("enabled")).put("expected_revision", status.getLong("revision")));
+   }
    case "receivingStatus": return new AndroidReceiving(this).status();
    case "prepareReceivingFolder": return new AndroidReceiving(this).prepare(android.net.Uri.parse(args.getString("uri")));
    case "saveReceiving": return new AndroidReceiving(this).configure(args);
@@ -43,7 +50,12 @@ final class NetworkController extends ContextWrapper {
     JSONObject order = new JSONObject();
     for (java.util.Map.Entry<String, ?> entry : getSharedPreferences("card-order", 0).getAll().entrySet())
      if (entry.getValue() instanceof String) try { order.put(entry.getKey(), new JSONArray((String)entry.getValue())); } catch (JSONException ignored) {}
-    return new JSONObject().put("hosts", store.all()).put("name", DeviceProfile.name(this))
+    JSONObject hosts = store.all();
+    String own = Native.command("identity").getString("peer");
+    JSONObject receiving = Native.command("local_files_status");
+    hosts.put(own, new JSONObject().put("name", DeviceProfile.name(this)).put("local", true)
+     .put("state", "available").put("catalog", new JSONObject().put("services", new JSONArray().put(receiving.getJSONObject("service")))));
+    return new JSONObject().put("hosts", hosts).put("name", DeviceProfile.name(this))
      .put("network_pid", android.os.Process.myPid()).put("peer", Native.command("identity").getString("peer")).put("enabled", service.enabled)
      .put("network", service.networkStatus).put("relay", Native.command("relay_status").getString("relay"))
      .put("telemetry", Native.command("telemetry")).put("order", order)

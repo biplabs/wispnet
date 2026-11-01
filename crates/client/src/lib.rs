@@ -421,15 +421,21 @@ impl Client {
                     .map_err(|e| e.to_string())?;
                 Ok(
                     json!({"revision":snapshot.revision,"clients":snapshot.clients,"exports":snapshot.file_exports,
-                    "allow":snapshot.services.iter().find(|s| s.id == "files").map(|s| &s.allow)}),
+                    "allow":snapshot.services.iter().find(|s| s.id == "files").map(|s| &s.allow),
+                    "service":snapshot.services.iter().find(|s| s.id == "files")}),
                 )
             }
-            "local_files_configure" => {
+            "local_files_configure" | "local_service_enabled" => {
                 let directory = self.state.clone();
                 let own = self.endpoint.id();
-                let operation: wispnet_registry::host::Mutation = serde_json::from_value(json!({
-                    "op":"files","expected_revision":value["expected_revision"],"exports":value["exports"],"allow":value["allow"]
-                })).map_err(|_| "Invalid Files settings")?;
+                let operation = if value["op"] == "local_service_enabled" {
+                    json!({"op":"set_service_enabled", "expected_revision":value["expected_revision"],
+                        "id":value["id"], "incarnation":value["incarnation"], "enabled":value["enabled"]})
+                } else {
+                    json!({"op":"files","expected_revision":value["expected_revision"],"exports":value["exports"],"allow":value["allow"]})
+                };
+                let operation: wispnet_registry::host::Mutation = serde_json::from_value(operation)
+                    .map_err(|_| "Invalid local service settings")?;
                 let revision = tokio::task::spawn_blocking(move || {
                     let (mut store, owner) = wispnet_registry::host::owner_store(&directory, own)
                         .map_err(|e| e.to_string())?;

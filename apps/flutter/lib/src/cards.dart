@@ -17,6 +17,7 @@ class MachineCard extends StatelessWidget {
     required this.onOpen,
     required this.onLinks,
     this.onSettings,
+    this.onToggle,
     required this.onReorder,
     this.showHeader = true,
     this.onFilesDropped,
@@ -32,6 +33,7 @@ class MachineCard extends StatelessWidget {
   final VoidCallback onManage;
   final ValueChanged<Map<String, dynamic>> onOpen, onLinks;
   final ValueChanged<Map<String, dynamic>>? onSettings;
+  final void Function(Map<String, dynamic>, bool)? onToggle;
   final void Function(
     String group,
     List<String> ids,
@@ -193,9 +195,11 @@ class MachineCard extends StatelessWidget {
     Machine machine,
     Map<String, dynamic> service,
   ) {
+    final enabled = service['enabled'] != false;
     final allowed =
-        (machine.data['local'] == true && onSettings != null) ||
-        machine.canOpen(service);
+        enabled &&
+        ((machine.data['local'] == true && onSettings != null) ||
+            machine.canOpen(service));
     final publication = service['public_access'] as Map?;
     final publicEnabled = publication?['enabled'] == true;
     final publicCached = machine.data['local'] != true && !machine.online;
@@ -226,7 +230,7 @@ class MachineCard extends StatelessWidget {
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(12, 8, 0, 8),
                 child: Opacity(
-                  opacity: allowed ? 1 : .45,
+                  opacity: allowed || (local && onToggle != null) ? 1 : .45,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -268,6 +272,14 @@ class MachineCard extends StatelessWidget {
                               color: WispColors.muted,
                             ),
                           ),
+                          if (!enabled)
+                            const Text(
+                              'Off',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: WispColors.muted,
+                              ),
+                            ),
                           if (publicEnabled)
                             Tooltip(
                               message: publicCached
@@ -316,6 +328,20 @@ class MachineCard extends StatelessWidget {
                               style: const TextStyle(
                                 fontSize: 11,
                                 color: WispColors.muted,
+                              ),
+                            ),
+                          if (local && onToggle != null)
+                            Tooltip(
+                              message:
+                                  '${enabled ? 'Turn off' : 'Turn on'} ${service['id']}',
+                              child: Switch(
+                                key: ValueKey(
+                                  'service-toggle-${service['id']}',
+                                ),
+                                value: enabled,
+                                onChanged: busy
+                                    ? null
+                                    : (value) => onToggle!(service, value),
                               ),
                             ),
                         ],

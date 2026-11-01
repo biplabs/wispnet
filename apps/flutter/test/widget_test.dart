@@ -338,6 +338,15 @@ class DesktopFake extends FakeBackend {
       calls.add((method, arguments));
       return {'port': '', 'url': 'http://shared-web.localhost:18000/'};
     }
+    if (method == 'setServiceEnabled') {
+      calls.add((method, arguments));
+      final service = (status['host']['services'] as List).singleWhere(
+        (s) => s['id'] == arguments['service'],
+      );
+      service['enabled'] = arguments['enabled'];
+      status['host']['revision']++;
+      return {};
+    }
     if (method == 'desktopStatus') return status;
     if (method == 'desktopData') {
       return {
@@ -1631,6 +1640,58 @@ void main() {
     expect(tester.takeException(), isNull);
     await close(tester);
   });
+  testWidgets(
+    'overview toggles stop local services and retain access settings',
+    (tester) async {
+      final backend = filesBackend(
+        exports: {'incoming': '/srv/receiving'},
+        allow: [peer],
+      );
+      await mount(tester, backend, size: const Size(360, 844));
+      for (final id in ['web', 'shell', 'files']) {
+        final toggle = find.byKey(ValueKey('service-toggle-$id'));
+        await tester.ensureVisible(toggle);
+        expect(tester.widget<Switch>(toggle).value, isTrue);
+        await tester.tap(toggle);
+        await tester.pumpAndSettle();
+        expect(tester.widget<Switch>(toggle).value, isFalse);
+        final service = (backend.status['host']['services'] as List)
+            .singleWhere((s) => s['id'] == id);
+        expect(service['allow'], id == 'shell' ? isEmpty : [peer]);
+        final tile = find.ancestor(
+          of: toggle,
+          matching: find.byType(ReorderTile),
+        );
+        expect(
+          find.descendant(of: tile, matching: find.text('Off')),
+          findsOneWidget,
+        );
+        expect(
+          tester
+              .widget<WispInkWell>(
+                find
+                    .descendant(of: tile, matching: find.byType(WispInkWell))
+                    .first,
+              )
+              .onTap,
+          isNull,
+        );
+        await tester.tap(toggle);
+        await tester.pumpAndSettle();
+        expect(tester.widget<Switch>(toggle).value, isTrue);
+      }
+      expect(
+        backend.calls.where((call) => call.$1 == 'setServiceEnabled'),
+        hasLength(6),
+      );
+      expect(backend.status['host']['file_exports'], {
+        'incoming': '/srv/receiving',
+      });
+      expect(tester.takeException(), isNull);
+      await screenshot(tester, 'service-toggles-narrow');
+      await close(tester);
+    },
+  );
   testWidgets('local service device counts follow access changes', (
     tester,
   ) async {

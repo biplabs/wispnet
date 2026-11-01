@@ -60,6 +60,7 @@ class Machine {
   }
 
   bool canOpen(Map<String, dynamic> service) =>
+      service['enabled'] != false &&
       const ['http', 'shell', 'files'].contains(service['kind']) &&
       RegExp(r'^[0-9a-f]{64}$')
           .hasMatch(service['incarnation'] as String? ?? '') &&

@@ -88,6 +88,13 @@ pub enum Mutation {
         #[serde(default)]
         kind: Option<ServiceKind>,
     },
+    /// Pause serving without removing the binding, folders, or remote grants.
+    SetServiceEnabled {
+        expected_revision: u64,
+        id: String,
+        incarnation: String,
+        enabled: bool,
+    },
     Remove {
         expected_revision: u64,
         id: String,
@@ -126,6 +133,9 @@ impl Mutation {
             | Self::EditService {
                 expected_revision, ..
             }
+            | Self::SetServiceEnabled {
+                expected_revision, ..
+            }
             | Self::Remove {
                 expected_revision, ..
             } => *expected_revision,
@@ -156,6 +166,7 @@ pub struct LocalService {
     pub kind: ServiceKind,
     pub backend: std::net::SocketAddr,
     pub allow: Vec<EndpointId>,
+    pub enabled: bool,
 }
 /// Shell has no loopback listener. The reserved address is durable metadata
 /// only; ordinary TCP/HTTP services still require a nonzero backend port.
@@ -432,17 +443,19 @@ impl Store {
                     name: wispnet_core::config::readable_device_id(&name),
                 });
             }
-            let mut stmt =
-                tx.prepare("SELECT id,backend,incarnation,kind FROM host_services ORDER BY id")?;
+            let mut stmt = tx.prepare(
+                "SELECT id,backend,incarnation,kind,enabled FROM host_services ORDER BY id",
+            )?;
             for row in stmt.query_map([], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
                     r.get::<_, String>(2)?,
                     r.get::<_, String>(3)?,
+                    r.get::<_, bool>(4)?,
                 ))
             })? {
-                let (id, backend, incarnation, kind) = row?;
+                let (id, backend, incarnation, kind, enabled) = row?;
                 let kind = match kind.as_str() {
                     "http" => ServiceKind::Http,
                     "tcp" => ServiceKind::Tcp,
@@ -478,6 +491,7 @@ impl Store {
                     kind,
                     backend,
                     allow,
+                    enabled,
                 });
             }
         }
@@ -616,8 +630,8 @@ pub(crate) fn apply_mutation(
                 // Both parent rows exist while grants move, so immediate foreign
                 // keys remain valid without changing the schema or dropping grants.
                 tx.execute(
-                    "INSERT INTO host_services(id,backend,incarnation,kind)
-                     SELECT ?2,backend,incarnation,kind FROM host_services WHERE id=?1",
+                    "INSERT INTO host_services(id,backend,incarnation,kind,enabled)
+                     SELECT ?2,backend,incarnation,kind,enabled FROM host_services WHERE id=?1",
                     params![id, new_id],
                 )?;
                 tx.execute(
@@ -849,6 +863,23 @@ pub(crate) fn apply_mutation(
                 )?;
             }
         }
+        Mutation::SetServiceEnabled {
+            id,
+            incarnation,
+            enabled,
+            ..
+        } => {
+            if !valid_service_id(&id) || !wispnet_core::enrollment::valid_code(&incarnation) {
+                return Err(ControlError::Invalid);
+            }
+            if tx.execute(
+                "UPDATE host_services SET enabled=?1 WHERE id=?2 AND incarnation=?3",
+                params![enabled, id, incarnation],
+            )? == 0
+            {
+                return Err(ControlError::Conflict);
+            }
+        }
         Mutation::Remove { id, .. } => {
             if matches!(id.as_str(), "shell" | "files")
                 || !valid_service_id(&id)
@@ -1035,8 +1066,15 @@ impl Authority {
     pub async fn file_exports(&self) -> Result<BTreeMap<String, PathBuf>, ControlError> {
         Ok(self.snapshot().await?.file_exports)
     }
+    /// Serving paths use only enabled bindings; owner snapshots retain paused services.
     pub async fn services(&self) -> Result<Vec<LocalService>, ControlError> {
-        Ok(self.snapshot().await?.services)
+        Ok(self
+            .snapshot()
+            .await?
+            .services
+            .into_iter()
+            .filter(|s| s.enabled)
+            .collect())
     }
     pub async fn catalog(&self, peer: EndpointId) -> Result<Catalog, ControlError> {
         let snapshot = self.snapshot().await?;
@@ -1046,7 +1084,7 @@ impl Authority {
         let services: Vec<Service> = snapshot
             .services
             .into_iter()
-            .filter(|s| s.allow.contains(&peer))
+            .filter(|s| s.enabled && s.allow.contains(&peer))
             .map(|s| Service {
                 id: s.id,
                 incarnation: s.incarnation,

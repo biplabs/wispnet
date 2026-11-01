@@ -506,6 +506,16 @@ class Bridge:
             if host is None and name != self.api.request(op='status')['host_name']:
                 self.rename_device(name)
             return {}
+        if method == 'setServiceEnabled':
+            if type(args.get('enabled')) is not bool:
+                raise ValueError('Invalid service state')
+            status = self.api.request(op='status')
+            return self.api.request(op='mutate', operation={
+                'op': 'set_service_enabled',
+                'expected_revision': status['host']['revision'],
+                'id': args['service'], 'incarnation': args['incarnation'],
+                'enabled': args['enabled'],
+            })
         if method == 'desktopStatus':
             return self.api.request(op='status', refresh_clients=True)
         if method == 'desktopRequest':

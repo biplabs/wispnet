@@ -733,6 +733,28 @@ class _WispHomeState extends State<WispHome>
     );
   }
 
+  Future<void> setServiceEnabled(
+    Map<String, dynamic> service,
+    bool enabled,
+  ) async {
+    if (busy) return;
+    setState(() => busy = true);
+    try {
+      await backend.invoke('setServiceEnabled', {
+        'service': service['id'],
+        'incarnation': service['incarnation'],
+        'enabled': enabled,
+      });
+    } catch (error) {
+      notice('Cannot change service: ${message(error)}');
+    } finally {
+      if (mounted) {
+        setState(() => busy = false);
+        await poll();
+      }
+    }
+  }
+
   Future<void> localServiceSettings(Map<String, dynamic> service) async {
     if (snapshot['desktop'] != true) {
       await showWispSheet<void>(
@@ -862,6 +884,7 @@ class _WispHomeState extends State<WispHome>
         : open(machine, service),
     onLinks: (service) => serviceLinks(machine, service),
     onSettings: local ? localServiceSettings : null,
+    onToggle: local ? setServiceEnabled : null,
     onReorder: reorder,
     onFilesDropped: snapshot['desktop'] == true && !local && online
         ? (service, paths) => showFiles(machine, service, paths: paths)

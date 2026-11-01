@@ -267,8 +267,22 @@ impl Client {
                 let manager = self.shells.local.clone();
                 let scope = format!("{}/{}", service.incarnation, host);
                 let (stream, server) = tokio::io::duplex(64 * 1024);
+                let authority = authority.clone();
                 resources.local = Some(tokio::spawn(async move {
-                    let _ = manager.serve(server, scope).await;
+                    let guard = async {
+                        loop {
+                            tokio::time::sleep(Duration::from_millis(500)).await;
+                            if !authority.services().await.is_ok_and(|services| {
+                                services.iter().any(|s| {
+                                    s.id == "shell" && s.incarnation == service.incarnation
+                                })
+                            }) {
+                                manager.close_scope(&scope);
+                                break;
+                            }
+                        }
+                    };
+                    tokio::select! { _ = guard => {}, _ = manager.serve(server, scope.clone()) => {} }
                 }));
                 return Ok(Box::new(stream));
             }
@@ -335,6 +349,73 @@ fn append_output(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn disabling_local_shell_cancels_commands_and_rejects_new_execution() {
+        use std::os::unix::fs::PermissionsExt;
+        let state = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let config = serde_json::from_value(json!({"bind_addr":"127.0.0.1:0"})).unwrap();
+        let client = Client::new_peer(
+            wispnet_core::identity::SecretKey::generate(),
+            state.path().into(),
+            config,
+        )
+        .await
+        .unwrap();
+        let own = client.endpoint.id();
+        let mut resources = Resources::default();
+        let mut stream = client.open_exec_stream(own, &mut resources).await.unwrap();
+        write_client(
+            &mut stream,
+            &ClientFrame::Exec {
+                command: "printf started; sleep 30".into(),
+                cwd: None,
+                timeout_ms: 30000,
+                max_output_bytes: 1024,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            read_server(&mut stream).await.unwrap(),
+            Some(ServerFrame::Stdout { .. })
+        ));
+        let authority = client.local_authority.as_ref().unwrap();
+        let snapshot = authority.snapshot().await.unwrap();
+        let shell = snapshot.services.iter().find(|s| s.id == "shell").unwrap();
+        client
+            .command(
+                &json!({"op":"local_service_enabled", "id":"shell", "incarnation":shell.incarnation,
+            "expected_revision":snapshot.revision, "enabled":false}),
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while matches!(read_server(&mut stream).await, Ok(Some(_))) {}
+        })
+        .await
+        .expect("disabled local command remained connected");
+        assert!(
+            client
+                .open_exec_stream(own, &mut Resources::default())
+                .await
+                .is_err()
+        );
+        assert!(
+            !authority
+                .snapshot()
+                .await
+                .unwrap()
+                .services
+                .iter()
+                .find(|s| s.id == "shell")
+                .unwrap()
+                .enabled
+        );
+        client.endpoint.close().await;
+    }
+
     #[test]
     fn names_are_unique_and_local_alias_cannot_hide_a_remote_name() {
         let own = wispnet_core::identity::SecretKey::generate().public();
