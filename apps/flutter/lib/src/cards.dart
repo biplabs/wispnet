@@ -346,12 +346,22 @@ class MachineCard extends StatelessWidget {
                 Tooltip(
                   message:
                       '${enabled ? 'Turn off' : 'Turn on'} ${service['id']}',
-                  child: Switch(
-                    key: ValueKey('service-toggle-${service['id']}'),
-                    value: enabled,
-                    onChanged: busy
-                        ? null
-                        : (value) => onToggle!(service, value),
+                  child: Theme(
+                    data: ThemeData(
+                      useMaterial3: false,
+                      colorScheme: Theme.of(context).colorScheme,
+                    ),
+                    child: Switch(
+                      key: ValueKey('service-toggle-${service['id']}'),
+                      value: enabled,
+                      activeThumbColor: Colors.white,
+                      inactiveThumbColor: WispColors.muted,
+                      activeTrackColor: WispColors.cyan,
+                      inactiveTrackColor: const Color(0xff29364a),
+                      onChanged: busy
+                          ? null
+                          : (value) => onToggle!(service, value),
+                    ),
                   ),
                 ),
               if (service['kind'] == 'http')
