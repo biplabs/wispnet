@@ -354,9 +354,9 @@ class MachineCard extends StatelessWidget {
                     child: Switch(
                       key: ValueKey('service-toggle-${service['id']}'),
                       value: enabled,
-                      activeThumbColor: Colors.white,
-                      inactiveThumbColor: WispColors.muted,
-                      activeTrackColor: WispColors.cyan,
+                      activeThumbColor: const Color(0xff4596ff),
+                      inactiveThumbColor: const Color(0xffff5252),
+                      activeTrackColor: const Color(0xff29364a),
                       inactiveTrackColor: const Color(0xff29364a),
                       onChanged: busy
                           ? null
