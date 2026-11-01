@@ -652,16 +652,8 @@ class _FileShareEditorState extends State<FileShareEditor> {
                     folderAvailable = false;
                   }
                 }),
-        )
-      else if (widget.folderService)
-        Align(
-          alignment: Alignment.centerLeft,
-          child: WispBadge(
-            label: inbox ? 'Receive files' : 'Share files',
-            color: WispColors.cyan,
-          ),
         ),
-      if (widget.folderService) const SizedBox(height: 12),
+      if (widget.chooseMode) const SizedBox(height: 12),
       Text(
         inbox
             ? 'Allow selected devices to send files anytime.'
