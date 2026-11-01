@@ -1443,7 +1443,7 @@ void main() {
     expect(tester.widget<TextField>(id).enabled, true);
     expect(tester.widget<TextField>(port).enabled, true);
     expect(
-      tester.widget<CheckboxListTile>(find.byType(CheckboxListTile)).value,
+      tester.widget<WispToggleListTile>(find.byType(WispToggleListTile)).value,
       true,
     );
     for (final invalid in ['UpperCase', 'taken']) {
@@ -1617,7 +1617,7 @@ void main() {
       findsNothing,
     );
     expect(
-      find.descendant(of: local, matching: find.byType(Switch)),
+      find.descendant(of: local, matching: find.byType(WispToggle)),
       findsWidgets,
     );
     expect(
@@ -1696,24 +1696,26 @@ void main() {
     );
     await mount(tester, backend, size: const Size(1000, 850));
     final web = find.byKey(const ValueKey('service-toggle-web'));
-    expect(tester.widget<Switch>(web).value, isTrue);
+    expect(tester.widget<WispToggle>(web).value, isTrue);
     await tester.tap(web);
     await tester.pumpAndSettle();
-    expect(tester.widget<Switch>(web).value, isFalse);
+    expect(tester.widget<WispToggle>(web).value, isFalse);
     await tester.tap(find.byTooltip('Settings'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Local services'));
     await tester.pumpAndSettle();
-    final files = find.widgetWithText(CheckboxListTile, 'Receive files');
-    expect(tester.widget<CheckboxListTile>(files).value, isTrue);
+    final files = find.widgetWithText(WispToggleListTile, 'Receive files');
+    expect(tester.widget<WispToggleListTile>(files).value, isTrue);
     await tester.tap(files);
     await tester.pumpAndSettle();
-    expect(tester.widget<CheckboxListTile>(files).value, isFalse);
+    expect(tester.widget<WispToggleListTile>(files).value, isFalse);
     await tester.tap(find.byTooltip('Close'));
     await tester.pumpAndSettle();
     expect(
       tester
-          .widget<Switch>(find.byKey(const ValueKey('service-toggle-files')))
+          .widget<WispToggle>(
+            find.byKey(const ValueKey('service-toggle-files')),
+          )
           .value,
       isFalse,
     );
@@ -1743,15 +1745,17 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Local services'), findsOneWidget);
       expect(find.byType(AndroidReceivingSettings), findsNothing);
-      final files = find.widgetWithText(CheckboxListTile, 'Receive files');
+      final files = find.widgetWithText(WispToggleListTile, 'Receive files');
       await tester.tap(files);
       await tester.pumpAndSettle();
-      expect(tester.widget<CheckboxListTile>(files).value, isFalse);
+      expect(tester.widget<WispToggleListTile>(files).value, isFalse);
       await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       expect(
         tester
-            .widget<Switch>(find.byKey(const ValueKey('service-toggle-files')))
+            .widget<WispToggle>(
+              find.byKey(const ValueKey('service-toggle-files')),
+            )
             .value,
         isFalse,
       );
@@ -2194,8 +2198,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Approve device'));
     await tester.pumpAndSettle();
-    final grant = tester.widget<CheckboxListTile>(
-      find.widgetWithText(CheckboxListTile, 'web'),
+    final grant = tester.widget<WispToggleListTile>(
+      find.widgetWithText(WispToggleListTile, 'web'),
     );
     expect(grant.value, true);
     expect(grant.onChanged, isNull);
@@ -2596,10 +2600,10 @@ void main() {
     expect(find.byType(TextField), findsNothing);
     expect(find.byType(DropdownButtonFormField<String>), findsNothing);
     expect(
-      tester.widget<CheckboxListTile>(find.byType(CheckboxListTile)).value,
+      tester.widget<WispToggleListTile>(find.byType(WispToggleListTile)).value,
       false,
     );
-    await tester.tap(find.byType(CheckboxListTile));
+    await tester.tap(find.byType(WispToggleListTile));
     await tester.ensureVisible(find.text('Save access'));
     await tester.tap(find.text('Save access'));
     await tester.pumpAndSettle();
@@ -2673,8 +2677,8 @@ void main() {
       await tester.tap(find.text('Manage folders and access'));
       await tester.pumpAndSettle();
       expect(find.byType(TextField), findsNothing);
-      final checkbox = find.byType(CheckboxListTile);
-      expect(tester.widget<CheckboxListTile>(checkbox).onChanged, isNull);
+      final checkbox = find.byType(WispToggleListTile);
+      expect(tester.widget<WispToggleListTile>(checkbox).onChanged, isNull);
       expect(
         find.text('Set a shared folder before granting Files access.'),
         findsOneWidget,
@@ -2690,7 +2694,7 @@ void main() {
         {},
       );
       expect(find.text('/srv/receiving'), findsOneWidget);
-      expect(tester.widget<CheckboxListTile>(checkbox).onChanged, isNotNull);
+      expect(tester.widget<WispToggleListTile>(checkbox).onChanged, isNotNull);
       await tester.tap(checkbox);
       await tester.ensureVisible(find.text('Save folders and access'));
       await tester.tap(find.text('Save folders and access'));
@@ -2717,13 +2721,15 @@ void main() {
       await tester.tap(find.text('Manage folders and access'));
       await tester.pumpAndSettle();
       expect(
-        tester.widget<CheckboxListTile>(find.byType(CheckboxListTile)).value,
+        tester
+            .widget<WispToggleListTile>(find.byType(WispToggleListTile))
+            .value,
         true,
       );
       await tester.tap(find.byTooltip('Remove receiving folder'));
       await tester.pump();
-      final checkbox = tester.widget<CheckboxListTile>(
-        find.byType(CheckboxListTile),
+      final checkbox = tester.widget<WispToggleListTile>(
+        find.byType(WispToggleListTile),
       );
       expect(checkbox.value, false);
       expect(checkbox.onChanged, isNull);
@@ -2760,13 +2766,13 @@ void main() {
         await tester.pumpAndSettle();
         await tester.tap(find.text('Approve device'));
         await tester.pumpAndSettle();
-        final grant = find.widgetWithText(CheckboxListTile, 'files');
-        expect(tester.widget<CheckboxListTile>(grant).value, false);
+        final grant = find.widgetWithText(WispToggleListTile, 'files');
+        expect(tester.widget<WispToggleListTile>(grant).value, false);
         if (configured) {
-          expect(tester.widget<CheckboxListTile>(grant).onChanged, isNotNull);
+          expect(tester.widget<WispToggleListTile>(grant).onChanged, isNotNull);
           await tester.tap(grant);
         } else {
-          expect(tester.widget<CheckboxListTile>(grant).onChanged, isNull);
+          expect(tester.widget<WispToggleListTile>(grant).onChanged, isNull);
           expect(
             find.text('Set a shared folder before granting Files access.'),
             findsOneWidget,
@@ -2814,7 +2820,7 @@ void main() {
     expect(find.text('/srv/outputs'), findsOneWidget);
     expect(find.text('/srv/training'), findsNothing);
     await screenshot(tester, 'desktop-files-receiving-folder');
-    await tester.tap(find.byType(CheckboxListTile));
+    await tester.tap(find.byType(WispToggleListTile));
     await tester.ensureVisible(find.text('Save folders and access'));
     await tester.tap(find.text('Save folders and access'));
     await tester.pumpAndSettle();
@@ -2842,7 +2848,9 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('/srv/incoming'), findsOneWidget);
       expect(
-        tester.widget<CheckboxListTile>(find.byType(CheckboxListTile)).value,
+        tester
+            .widget<WispToggleListTile>(find.byType(WispToggleListTile))
+            .value,
         true,
       );
       backend.folderPickerError = StateError('Folder picker unavailable');
@@ -2897,7 +2905,7 @@ void main() {
       find.textContaining('replaces the 2 receiving folders'),
       findsOneWidget,
     );
-    await tester.tap(find.byType(CheckboxListTile));
+    await tester.tap(find.byType(WispToggleListTile));
     await tester.tap(find.text('Save folders and access'));
     await tester.pumpAndSettle();
     expect(backend.ownerCalls.single['operation'], {

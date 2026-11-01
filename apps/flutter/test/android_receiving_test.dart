@@ -1,3 +1,4 @@
+import 'package:wispnet/src/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -73,7 +74,7 @@ void main() {
       await show(tester, backend);
       expect(
         tester
-            .widget<CheckboxListTile>(find.byType(CheckboxListTile))
+            .widget<WispToggleListTile>(find.byType(WispToggleListTile))
             .onChanged,
         isNull,
       );
@@ -81,7 +82,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Downloads'), findsOneWidget);
       expect(find.textContaining('/private/'), findsNothing);
-      await tester.tap(find.byType(CheckboxListTile));
+      await tester.tap(find.byType(WispToggleListTile));
       await tester.pump();
       await tester.pumpAndSettle();
       expect(backend.calls.where((c) => c.$1 == 'saveReceiving'), isNotEmpty);
@@ -106,7 +107,9 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Original'), findsOneWidget);
       expect(
-        tester.widget<CheckboxListTile>(find.byType(CheckboxListTile)).value,
+        tester
+            .widget<WispToggleListTile>(find.byType(WispToggleListTile))
+            .value,
         isTrue,
       );
       expect(
@@ -142,7 +145,7 @@ void main() {
       await show(tester, backend);
       expect(
         tester
-            .widget<CheckboxListTile>(find.byType(CheckboxListTile))
+            .widget<WispToggleListTile>(find.byType(WispToggleListTile))
             .onChanged,
         isNull,
       );

@@ -181,10 +181,10 @@ class _DesktopSettingsState extends State<DesktopSettings> {
               ),
               const SizedBox(height: 12),
               const Text(
-                'Leave all devices unchecked to allow access only from this computer.',
+                'Turn off access for all devices to allow access only from this computer.',
               ),
               for (final c in devices)
-                CheckboxListTile(
+                WispToggleListTile(
                   contentPadding: EdgeInsets.zero,
                   title: Text(c['name'] as String),
                   subtitle: Text(c['peer'] as String),
@@ -326,11 +326,11 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                 const SizedBox(height: 12),
                 Text(
                   hasFolders
-                      ? 'Select paired devices allowed to send files. Leave all unchecked to disable incoming transfers. Removing the folder revokes Files access.'
+                      ? 'Select paired devices allowed to send files. Turn off access for all devices to disable incoming transfers. Removing the folder revokes Files access.'
                       : 'Set a shared folder before granting Files access.',
                 ),
                 for (final c in devices)
-                  CheckboxListTile(
+                  WispToggleListTile(
                     contentPadding: EdgeInsets.zero,
                     title: Text(c['name'] as String),
                     subtitle: Text(c['peer'] as String),
@@ -435,7 +435,7 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                 'Only selected devices can access this service. Saving replaces the complete allowlist.',
               ),
               for (final c in devices)
-                CheckboxListTile(
+                WispToggleListTile(
                   contentPadding: EdgeInsets.zero,
                   title: Text(c['name'] as String),
                   subtitle: Text(c['peer'] as String),
@@ -541,7 +541,7 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                 'Compare the full device identity. Choose services to grant; existing grants are preserved. No selection pairs without adding access.',
               ),
               for (final s in available)
-                CheckboxListTile(
+                WispToggleListTile(
                   title: Text(s['id'] as String),
                   subtitle: s['kind'] == 'files'
                       ? Text(
@@ -633,7 +633,7 @@ class _DesktopSettingsState extends State<DesktopSettings> {
                   decoration: const InputDecoration(labelText: 'Device ID'),
                 ),
               for (final target in targets)
-                CheckboxListTile(
+                WispToggleListTile(
                   title: Text(
                     '${target['ssh'] ?? 'This host'} · ${target['host']}',
                   ),
@@ -819,7 +819,7 @@ class _DesktopSettingsState extends State<DesktopSettings> {
           ))
             Material(
               type: MaterialType.transparency,
-              child: CheckboxListTile(
+              child: WispToggleListTile(
                 contentPadding: EdgeInsets.zero,
                 title: const Text('Receive files'),
                 value: s['enabled'] != false,

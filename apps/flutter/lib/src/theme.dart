@@ -314,7 +314,9 @@ Future<T?> showWispSheet<T>(
               padding: showHeader
                   ? const EdgeInsets.fromLTRB(20, 12, 20, 24)
                   : const EdgeInsets.fromLTRB(12, 8, 12, 10),
-              child: scrollable ? SingleChildScrollView(child: content) : content,
+              child: scrollable
+                  ? SingleChildScrollView(child: content)
+                  : content,
             ),
           ),
         );
@@ -399,4 +401,61 @@ class _WispInkWellState extends State<WispInkWell> {
       ),
     );
   }
+}
+
+/// Shared status-light control for service state and binary settings.
+class WispToggle extends StatelessWidget {
+  const WispToggle({super.key, required this.value, required this.onChanged});
+  final bool value;
+  final ValueChanged<bool>? onChanged;
+
+  @override
+  Widget build(BuildContext context) => Theme(
+    data: ThemeData(
+      useMaterial3: false,
+      colorScheme: Theme.of(context).colorScheme,
+    ),
+    child: Switch(
+      value: value,
+      activeThumbColor: const Color(0xff4596ff),
+      inactiveThumbColor: const Color(0xffff5252),
+      activeTrackColor: const Color(0xff29364a),
+      inactiveTrackColor: const Color(0xff29364a),
+      onChanged: onChanged,
+    ),
+  );
+}
+
+/// A tappable settings row using the same toggle as overview service cards.
+class WispToggleListTile extends StatelessWidget {
+  const WispToggleListTile({
+    super.key,
+    required this.value,
+    required this.onChanged,
+    this.title,
+    this.subtitle,
+    this.secondary,
+    this.contentPadding,
+  });
+  final bool value;
+  final ValueChanged<bool?>? onChanged;
+  final Widget? title, subtitle, secondary;
+  final EdgeInsetsGeometry? contentPadding;
+
+  @override
+  Widget build(BuildContext context) => Material(
+    type: MaterialType.transparency,
+    child: ListTile(
+      contentPadding: contentPadding,
+      title: title,
+      subtitle: subtitle,
+      leading: secondary,
+      enabled: onChanged != null,
+      onTap: onChanged == null ? null : () => onChanged!(!value),
+      trailing: WispToggle(
+        value: value,
+        onChanged: onChanged == null ? null : (value) => onChanged!(value),
+      ),
+    ),
+  );
 }

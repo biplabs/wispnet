@@ -1184,7 +1184,7 @@ class _AndroidReceivingSettingsState extends State<AndroidReceivingSettings> {
         if (clients.isEmpty && !busy)
           const Text('Pair a device first to grant it Files access.'),
         for (final client in clients)
-          CheckboxListTile(
+          WispToggleListTile(
             key: ValueKey('receiving-allow-${client['peer']}'),
             contentPadding: EdgeInsets.zero,
             title: Text(client['name'] as String),
@@ -1281,7 +1281,7 @@ class _AndroidLocalServicesState extends State<AndroidLocalServices> {
       if (service != null)
         Material(
           type: MaterialType.transparency,
-          child: CheckboxListTile(
+          child: WispToggleListTile(
             contentPadding: EdgeInsets.zero,
             title: const Text('Receive files'),
             value: service!['enabled'] != false,
