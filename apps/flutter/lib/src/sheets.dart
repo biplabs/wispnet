@@ -817,10 +817,12 @@ class SettingsForm extends StatefulWidget {
     required this.backend,
     required this.deviceName,
     required this.onSaved,
+    this.onLocalServices,
   });
   final WispnetBackend backend;
   final String deviceName;
   final VoidCallback onSaved;
+  final VoidCallback? onLocalServices;
   @override
   State<SettingsForm> createState() => _SettingsFormState();
 }
@@ -938,6 +940,14 @@ class _SettingsFormState extends State<SettingsForm> {
           hintText: '7842',
         ),
       ),
+      if (widget.onLocalServices != null) ...[
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: saving ? null : widget.onLocalServices,
+          icon: const Icon(Icons.dns_outlined),
+          label: const Text('Local services'),
+        ),
+      ],
       if (error != null)
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 12),
@@ -962,7 +972,7 @@ class _SettingsFormState extends State<SettingsForm> {
               ? null
               : () => showWispSheet<void>(
                   context,
-                  title: 'Files access',
+                  title: 'File inbox',
                   child: AndroidReceivingSettings(backend: widget.backend),
                 ),
           icon: const Icon(Icons.folder_outlined),
@@ -1103,6 +1113,7 @@ class _AndroidReceivingSettingsState extends State<AndroidReceivingSettings> {
         label = result['label'] as String;
         available = true;
       });
+      await save();
     } catch (e) {
       if (mounted) setState(() => error = describe(e));
     } finally {
@@ -1121,10 +1132,11 @@ class _AndroidReceivingSettingsState extends State<AndroidReceivingSettings> {
         'folder': folder,
         'allow': allow.toList(),
       });
-      if (mounted) Navigator.pop(context);
+      if (mounted) await load();
     } catch (e) {
       if (mounted) {
-        setState(() => error = '${describe(e)} Refresh and try again.');
+        await load();
+        if (mounted) setState(() => error = describe(e));
       }
     } finally {
       if (mounted) setState(() => busy = false);
@@ -1149,26 +1161,35 @@ class _AndroidReceivingSettingsState extends State<AndroidReceivingSettings> {
               ? const Text('Folder access needs to be renewed')
               : null,
           onTap: busy ? null : pick,
-          trailing: IconButton(
-            key: const ValueKey('receiving-folder-picker'),
-            tooltip: 'Change receiving folder',
-            onPressed: busy ? null : pick,
-            icon: const Icon(Icons.settings_outlined),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (folder.isNotEmpty)
+                IconButton(
+                  key: const ValueKey('receiving-folder-remove'),
+                  tooltip: 'Remove receiving folder',
+                  onPressed: busy || revision == null
+                      ? null
+                      : () async {
+                          setState(() {
+                            folder = '';
+                            label = '';
+                            available = false;
+                            allow.clear();
+                          });
+                          await save();
+                        },
+                  icon: const Icon(Icons.delete_outline),
+                ),
+              IconButton(
+                key: const ValueKey('receiving-folder-picker'),
+                tooltip: 'Change receiving folder',
+                onPressed: busy ? null : pick,
+                icon: const Icon(Icons.settings_outlined),
+              ),
+            ],
           ),
         ),
-        if (folder.isNotEmpty)
-          TextButton(
-            key: const ValueKey('receiving-folder-remove'),
-            onPressed: busy
-                ? null
-                : () => setState(() {
-                    folder = '';
-                    label = '';
-                    available = false;
-                    allow.clear();
-                  }),
-            child: const Text('Remove receiving folder'),
-          ),
         if (!online)
           const Text(
             'Go online to receive files. Your folder and permissions will be saved.',
@@ -1182,27 +1203,22 @@ class _AndroidReceivingSettingsState extends State<AndroidReceivingSettings> {
             title: Text(client['name'] as String),
             subtitle: Text((client['peer'] as String).substring(0, 8)),
             value: allow.contains(client['peer']),
-            onChanged: busy || !available
+            onChanged: busy || revision == null || !available
                 ? null
-                : (checked) => setState(() {
-                    if (checked == true) {
-                      allow.add(client['peer'] as String);
-                    } else {
-                      allow.remove(client['peer']);
-                    }
-                  }),
+                : (checked) async {
+                    setState(() {
+                      if (checked == true) {
+                        allow.add(client['peer'] as String);
+                      } else {
+                        allow.remove(client['peer']);
+                      }
+                    });
+                    await save();
+                  },
           ),
         if (error != null)
           Text(error!, style: const TextStyle(color: WispColors.error)),
-        TextButton(onPressed: busy ? null : load, child: const Text('Refresh')),
-        FilledButton(
-          key: const ValueKey('receiving-save'),
-          onPressed:
-              busy || revision == null || (folder.isNotEmpty && !available)
-              ? null
-              : save,
-          child: Text(busy ? 'Please wait…' : 'Save folder and access'),
-        ),
+        if (busy) const LinearProgressIndicator(),
       ],
     ),
   );

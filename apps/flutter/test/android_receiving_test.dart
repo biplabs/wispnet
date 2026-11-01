@@ -7,6 +7,7 @@ import 'package:wispnet/src/sheets.dart';
 class ReceivingBackend implements WispnetBackend {
   String folder = '', label = '';
   bool available = false, cancelPicker = false, conflict = false;
+  int revision = 9;
   List<String> allow = [];
   final calls = <(String, Map<String, dynamic>)>[];
   @override
@@ -18,7 +19,7 @@ class ReceivingBackend implements WispnetBackend {
     switch (method) {
       case 'receivingStatus':
         return {
-          'revision': 9,
+          'revision': revision,
           'folder': folder,
           'label': label,
           'available': available,
@@ -39,6 +40,11 @@ class ReceivingBackend implements WispnetBackend {
             message: 'Settings changed',
           );
         }
+        folder = arguments['folder'] as String;
+        label = folder.isEmpty ? '' : 'Downloads';
+        available = folder.isNotEmpty;
+        allow = (arguments['allow'] as List).cast<String>();
+        revision++;
         return {};
       default:
         throw StateError(method);
@@ -77,11 +83,10 @@ void main() {
       expect(find.textContaining('/private/'), findsNothing);
       await tester.tap(find.byType(CheckboxListTile));
       await tester.pump();
-      await tester.tap(find.byKey(const ValueKey('receiving-save')));
       await tester.pumpAndSettle();
-      expect(backend.calls.last.$1, 'saveReceiving');
-      expect(backend.calls.last.$2, {
-        'expected_revision': 9,
+      expect(backend.calls.where((c) => c.$1 == 'saveReceiving'), isNotEmpty);
+      expect(backend.calls.lastWhere((c) => c.$1 == 'saveReceiving').$2, {
+        'expected_revision': 10,
         'folder': '/private/staging-id',
         'allow': ['a' * 64],
       });
@@ -119,10 +124,9 @@ void main() {
     await show(tester, backend);
     await tester.tap(find.byKey(const ValueKey('receiving-folder-remove')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('receiving-save')));
     await tester.pumpAndSettle();
-    expect(backend.calls.last.$1, 'saveReceiving');
-    expect(backend.calls.last.$2, {
+    expect(backend.calls.where((c) => c.$1 == 'saveReceiving'), isNotEmpty);
+    expect(backend.calls.lastWhere((c) => c.$1 == 'saveReceiving').$2, {
       'expected_revision': 9,
       'folder': '',
       'allow': <String>[],
@@ -138,16 +142,15 @@ void main() {
       await show(tester, backend);
       expect(
         tester
-            .widget<FilledButton>(find.byKey(const ValueKey('receiving-save')))
-            .onPressed,
+            .widget<CheckboxListTile>(find.byType(CheckboxListTile))
+            .onChanged,
         isNull,
       );
       await tester.tap(find.byKey(const ValueKey('receiving-folder-picker')));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('receiving-save')));
       await tester.pumpAndSettle();
       expect(find.textContaining('Settings changed'), findsOneWidget);
-      expect(find.text('Downloads'), findsOneWidget);
+      expect(find.text('Original'), findsOneWidget);
     },
   );
 }

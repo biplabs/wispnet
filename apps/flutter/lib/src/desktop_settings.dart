@@ -230,7 +230,7 @@ class _DesktopSettingsState extends State<DesktopSettings> {
     String? pickerFailure;
     await showWispSheet<void>(
       context,
-      title: 'Files access',
+      title: 'File inbox',
       child: _ActionForm(
         builder: (context, submit, working, failure) => StatefulBuilder(
           builder: (context, update) {
@@ -817,7 +817,7 @@ class _DesktopSettingsState extends State<DesktopSettings> {
           for (final s in services.where(
             (s) => s['id'] == 'files' && s['kind'] == 'files',
           ))
-            action('Files access', () => run(() => editFiles(s))),
+            action('File inbox', () => run(() => editFiles(s))),
           if (widget.servicesOnly)
             action('Pair this machine', () => run(invite)),
         ] else if (!services.any((s) => s['id'] == widget.serviceId))

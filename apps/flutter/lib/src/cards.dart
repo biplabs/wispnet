@@ -141,7 +141,9 @@ class MachineCard extends StatelessWidget {
           ),
         LayoutBuilder(
           builder: (context, constraints) {
-            final columns = constraints.maxWidth >= 520 ? 2 : 1;
+            final columns = constraints.maxWidth >= 520 && ids.length > 1
+                ? 2
+                : 1;
             final width = (constraints.maxWidth - (columns - 1) * 10) / columns;
             return Wrap(
               spacing: 10,
@@ -330,20 +332,6 @@ class MachineCard extends StatelessWidget {
                                 color: WispColors.muted,
                               ),
                             ),
-                          if (local && onToggle != null)
-                            Tooltip(
-                              message:
-                                  '${enabled ? 'Turn off' : 'Turn on'} ${service['id']}',
-                              child: Switch(
-                                key: ValueKey(
-                                  'service-toggle-${service['id']}',
-                                ),
-                                value: enabled,
-                                onChanged: busy
-                                    ? null
-                                    : (value) => onToggle!(service, value),
-                              ),
-                            ),
                         ],
                       ),
                     ],
@@ -352,6 +340,21 @@ class MachineCard extends StatelessWidget {
               ),
             );
             final controls = <Widget>[
+              if (local && onToggle != null)
+                Tooltip(
+                  message:
+                      '${enabled ? 'Turn off' : 'Turn on'} ${service['id']}',
+                  child: OutlinedButton.icon(
+                    key: ValueKey('service-toggle-${service['id']}'),
+                    onPressed: busy ? null : () => onToggle!(service, !enabled),
+                    icon: Icon(
+                      Icons.circle,
+                      size: 10,
+                      color: enabled ? WispColors.green : WispColors.muted,
+                    ),
+                    label: Text(enabled ? 'Online' : 'Offline'),
+                  ),
+                ),
               if (service['kind'] == 'http')
                 Tooltip(
                   message: 'Show links for ${service['id']}',

@@ -759,7 +759,7 @@ class _WispHomeState extends State<WispHome>
     if (snapshot['desktop'] != true) {
       await showWispSheet<void>(
         context,
-        title: 'Files access',
+        title: 'File inbox',
         child: AndroidReceivingSettings(backend: backend),
       );
       return;
@@ -787,6 +787,10 @@ class _WispHomeState extends State<WispHome>
       child: SettingsForm(
         backend: backend,
         deviceName: snapshot['name'] as String? ?? '',
+        onLocalServices: () {
+          Navigator.pop(context);
+          deviceSettings(servicesOnly: true);
+        },
         onSaved: () {
           Navigator.pop(context);
           notice('Settings saved');
@@ -1064,15 +1068,7 @@ class _WispHomeState extends State<WispHome>
                 key: const ValueKey('local-sector'),
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  sectionHeading('LOCAL SERVICES', [
-                    OutlinedButton(
-                      onPressed: busy
-                          ? null
-                          : () => deviceSettings(servicesOnly: true),
-                      style: buttonStyle,
-                      child: const Text('Manage'),
-                    ),
-                  ]),
+                  sectionHeading('LOCAL SERVICES', []),
                   const SizedBox(height: 12),
                   for (final machine in local)
                     directoryCard(machine, local: true),

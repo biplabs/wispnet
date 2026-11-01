@@ -1306,12 +1306,9 @@ void main() {
   ) async {
     final backend = DesktopFake();
     await mount(tester, backend, size: const Size(1000, 850));
-    await tester.tap(
-      find.descendant(
-        of: find.byKey(const ValueKey('local-sector')),
-        matching: find.widgetWithText(OutlinedButton, 'Manage'),
-      ),
-    );
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Local services'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Add a new service'));
     await tester.pumpAndSettle();
@@ -1498,14 +1495,9 @@ void main() {
   testWidgets('desktop sharing saves only the service ID', (tester) async {
     final backend = DesktopFake();
     await mount(tester, backend, size: const Size(1000, 850));
-    await tester.tap(
-      find
-          .descendant(
-            of: find.byKey(const ValueKey('local-sector')),
-            matching: find.byType(OutlinedButton),
-          )
-          .first,
-    );
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Local services'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Add a new service'));
     await tester.pumpAndSettle();
@@ -1522,11 +1514,11 @@ void main() {
     await close(tester);
   });
   testWidgets(
-    'section Manage buttons follow their titles at phone and desktop widths',
+    'remote Manage button follows its title at phone and desktop widths',
     (tester) async {
       for (final width in [390.0, 1000.0]) {
         await mount(tester, DesktopFake(), size: Size(width, 850));
-        for (final section in ['local', 'remote']) {
+        for (final section in ['remote']) {
           final container = find.byKey(ValueKey('$section-sector'));
           final title = find.descendant(
             of: container,
@@ -1560,6 +1552,34 @@ void main() {
       }
     },
   );
+  testWidgets(
+    'single local service fills its row with status beside settings',
+    (tester) async {
+      await mount(tester, FakeBackend(), size: const Size(600, 850));
+      final sector = find.byKey(const ValueKey('local-sector'));
+      final tile = find
+          .descendant(of: sector, matching: find.byType(ReorderTile))
+          .first;
+      final status = find.byKey(const ValueKey('service-toggle-files'));
+      final gear = find
+          .descendant(of: sector, matching: find.byType(IconButton))
+          .first;
+      expect(
+        tester.getSize(tile).width,
+        closeTo(tester.getSize(sector).width, .01),
+      );
+      expect(
+        tester.getCenter(status).dy,
+        closeTo(tester.getCenter(gear).dy, .01),
+      );
+      expect(
+        tester.getRect(status).right,
+        lessThanOrEqualTo(tester.getRect(gear).left),
+      );
+      expect(tester.takeException(), isNull);
+      await close(tester);
+    },
+  );
   testWidgets('local services and remote machines have separate controls', (
     tester,
   ) async {
@@ -1577,7 +1597,7 @@ void main() {
     );
     expect(
       find.descendant(of: local, matching: find.textContaining('Online')),
-      findsNothing,
+      findsWidgets,
     );
     expect(
       find.descendant(of: local, matching: find.byType(WispStatusDot)),
@@ -1600,7 +1620,13 @@ void main() {
           .every((c) => c.$2['host'] == peer),
       true,
     );
-    await tester.tap(find.descendant(of: local, matching: find.text('Manage')));
+    expect(
+      find.descendant(of: local, matching: find.text('Manage')),
+      findsNothing,
+    );
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Local services'));
     await tester.pumpAndSettle();
     expect(find.text('Add a new service'), findsOneWidget);
     expect(find.text('Pair this machine'), findsOneWidget);
@@ -1641,7 +1667,7 @@ void main() {
     await close(tester);
   });
   testWidgets(
-    'overview toggles stop local services and retain access settings',
+    'overview status buttons stop local services and retain access settings',
     (tester) async {
       final backend = filesBackend(
         exports: {'incoming': '/srv/receiving'},
@@ -1651,10 +1677,16 @@ void main() {
       for (final id in ['web', 'shell', 'files']) {
         final toggle = find.byKey(ValueKey('service-toggle-$id'));
         await tester.ensureVisible(toggle);
-        expect(tester.widget<Switch>(toggle).value, isTrue);
+        expect(
+          find.descendant(of: toggle, matching: find.text('Online')),
+          findsOneWidget,
+        );
         await tester.tap(toggle);
         await tester.pumpAndSettle();
-        expect(tester.widget<Switch>(toggle).value, isFalse);
+        expect(
+          find.descendant(of: toggle, matching: find.text('Offline')),
+          findsOneWidget,
+        );
         final service = (backend.status['host']['services'] as List)
             .singleWhere((s) => s['id'] == id);
         expect(service['allow'], id == 'shell' ? isEmpty : [peer]);
@@ -1678,7 +1710,10 @@ void main() {
         );
         await tester.tap(toggle);
         await tester.pumpAndSettle();
-        expect(tester.widget<Switch>(toggle).value, isTrue);
+        expect(
+          find.descendant(of: toggle, matching: find.text('Online')),
+          findsOneWidget,
+        );
       }
       expect(
         backend.calls.where((call) => call.$1 == 'setServiceEnabled'),
@@ -2229,7 +2264,7 @@ void main() {
       expect(find.text('Uploads to j-strix'), findsOneWidget);
       expect(find.text('weights.bin'), findsOneWidget);
       expect(find.text('config.json'), findsNothing);
-    await screenshot(tester, 'android-upload-progress');
+      await screenshot(tester, 'android-upload-progress');
       await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
 
@@ -2517,12 +2552,9 @@ void main() {
   ) async {
     final backend = DesktopFake();
     await mount(tester, backend, size: const Size(1000, 850));
-    await tester.tap(
-      find.descendant(
-        of: find.byKey(const ValueKey('local-sector')),
-        matching: find.widgetWithText(OutlinedButton, 'Manage'),
-      ),
-    );
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Local services'));
     await tester.pumpAndSettle();
     expect(find.text('Enable Shell'), findsNothing);
     await tester.tap(find.text('Shell access'));
@@ -2848,12 +2880,9 @@ void main() {
   testWidgets('ordinary services reject the reserved shell ID', (tester) async {
     final backend = DesktopFake();
     await mount(tester, backend, size: const Size(1000, 850));
-    await tester.tap(
-      find.descendant(
-        of: find.byKey(const ValueKey('local-sector')),
-        matching: find.widgetWithText(OutlinedButton, 'Manage'),
-      ),
-    );
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Local services'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Add a new service'));
     await tester.pumpAndSettle();
