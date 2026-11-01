@@ -4,7 +4,37 @@ import 'package:flutter/services.dart';
 import 'list_item.dart';
 import 'theme.dart';
 
-/// Creation actions use a separate accent from existing service controls.
+/// The identifier rules are the same for custom and folder services.
+class WispServiceIdField extends StatelessWidget {
+  const WispServiceIdField({
+    super.key,
+    required this.controller,
+    this.enabled = true,
+    this.fieldKey,
+    this.hintText,
+  });
+
+  final TextEditingController controller;
+  final bool enabled;
+  final Key? fieldKey;
+  final String? hintText;
+
+  @override
+  Widget build(BuildContext context) => TextField(
+    key: fieldKey,
+    controller: controller,
+    enabled: enabled,
+    decoration: InputDecoration(
+      labelText: 'Service ID',
+      hintText: hintText,
+      helperText:
+          '1–64 lowercase letters, numbers, dots, underscores or hyphens',
+      helperMaxLines: 3,
+    ),
+  );
+}
+
+/// Shared button for adding a local service.
 class WispCreateButton extends StatelessWidget {
   const WispCreateButton({
     super.key,
@@ -17,19 +47,69 @@ class WispCreateButton extends StatelessWidget {
   final bool compact;
 
   @override
-  Widget build(BuildContext context) => FilledButton.icon(
+  Widget build(BuildContext context) => OutlinedButton.icon(
     onPressed: onPressed,
-    style: FilledButton.styleFrom(
-      backgroundColor: const Color(0xff123d32),
-      foregroundColor: const Color(0xffb4efce),
-      side: const BorderSide(color: Color(0xff326c53)),
-      minimumSize: Size(0, compact ? 42 : 48),
-      shape: compact
-          ? const StadiumBorder()
-          : RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-    ).copyWith(backgroundColor: wispButtonBackground(const Color(0xff123d32))),
+    style: compact
+        ? OutlinedButton.styleFrom(minimumSize: const Size(0, 42))
+        : null,
     icon: const Icon(Icons.add, size: 20),
     label: Text(label),
+  );
+}
+
+/// Command examples remain selectable; copying can omit placeholder arguments.
+class WispCommandBlock extends StatelessWidget {
+  const WispCommandBlock({
+    super.key,
+    required this.command,
+    required this.copyText,
+  });
+  final String command, copyText;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    decoration: BoxDecoration(
+      color: WispColors.background,
+      border: Border.all(color: WispColors.border),
+      borderRadius: BorderRadius.circular(12),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 4, 0),
+          child: Row(
+            children: [
+              const Icon(Icons.terminal, size: 18, color: WispColors.muted),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'Command line',
+                  style: TextStyle(color: WispColors.muted),
+                ),
+              ),
+              WispCopyButton(
+                text: copyText,
+                tooltip: 'Copy send command',
+                message: 'Command prefix copied',
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+          child: SelectableText(
+            command,
+            style: const TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 14,
+              height: 1.5,
+              color: WispColors.cyan,
+            ),
+          ),
+        ),
+      ],
+    ),
   );
 }
 

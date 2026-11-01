@@ -660,3 +660,111 @@ fn migration_bounds_reserved_and_colliding_aliases_and_keeps_unavailable_folder_
         b"retained"
     );
 }
+
+#[tokio::test]
+async fn folder_rename_preserves_mode_grants_and_pause_and_rolls_back_invalid_edits() {
+    for inbox in [true, false] {
+        let state = directory();
+        let folder = directory();
+        let host = Identity::generate().endpoint_id();
+        let peer = Identity::generate().endpoint_id();
+        host::initialize(state.path(), host).unwrap();
+        let (mut store, owner) = host::owner_store(state.path(), host).unwrap();
+        store
+            .host_mutate(
+                host,
+                &owner,
+                Mutation::Approve {
+                    expected_revision: 0,
+                    peer,
+                    name: "client".into(),
+                },
+            )
+            .unwrap();
+        let root = folder.path().canonicalize().unwrap();
+        let create = if inbox {
+            Mutation::FileInbox {
+                expected_revision: 1,
+                id: "original".into(),
+                root: root.clone(),
+                allow: vec![peer],
+            }
+        } else {
+            Mutation::FileShare {
+                expected_revision: 1,
+                id: "original".into(),
+                root: root.clone(),
+                allow: vec![peer],
+            }
+        };
+        store.host_mutate(host, &owner, create).unwrap();
+        let before = store.host_snapshot(host).unwrap();
+        let original = before.services.iter().find(|s| s.id == "original").unwrap();
+        store
+            .host_mutate(
+                host,
+                &owner,
+                Mutation::SetServiceEnabled {
+                    expected_revision: 2,
+                    id: "original".into(),
+                    incarnation: original.incarnation.clone(),
+                    enabled: false,
+                },
+            )
+            .unwrap();
+        store
+            .host_mutate(
+                host,
+                &owner,
+                Mutation::EditFolder {
+                    expected_revision: 3,
+                    id: "original".into(),
+                    new_id: "renamed".into(),
+                    root: root.clone(),
+                    allow: vec![peer],
+                },
+            )
+            .unwrap();
+        let after = store.host_snapshot(host).unwrap();
+        let renamed = after.services.iter().find(|s| s.id == "renamed").unwrap();
+        assert_eq!(renamed.kind, original.kind);
+        assert_eq!(renamed.allow, vec![peer]);
+        assert!(!renamed.enabled);
+        assert_ne!(renamed.incarnation, original.incarnation);
+        assert!(!after.services.iter().any(|s| s.id == "original"));
+        let roots = if inbox {
+            &after.file_inboxes
+        } else {
+            &after.file_shares
+        };
+        assert_eq!(roots.get("renamed"), Some(&root));
+        assert!(!roots.contains_key("original"));
+        for (new_id, allow) in [
+            ("shell", vec![peer]),
+            ("invalid-edit", vec![Identity::generate().endpoint_id()]),
+        ] {
+            assert!(
+                store
+                    .host_mutate(
+                        host,
+                        &owner,
+                        Mutation::EditFolder {
+                            expected_revision: 4,
+                            id: "renamed".into(),
+                            new_id: new_id.into(),
+                            root: root.clone(),
+                            allow
+                        }
+                    )
+                    .is_err()
+            );
+            let unchanged = store.host_snapshot(host).unwrap();
+            assert_eq!(unchanged.revision, 4);
+            assert!(unchanged.services.iter().any(|s| s.id == "renamed"
+                && s.incarnation == renamed.incarnation
+                && !s.enabled
+                && s.allow == vec![peer]));
+            assert!(!unchanged.services.iter().any(|s| s.id == "invalid-edit"));
+        }
+    }
+}

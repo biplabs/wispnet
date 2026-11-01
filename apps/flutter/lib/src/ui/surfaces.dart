@@ -32,6 +32,31 @@ class WispPanel extends StatelessWidget {
   );
 }
 
+/// Keeps device grants visibly grouped across service configuration forms.
+class WispPermissionCard extends StatelessWidget {
+  const WispPermissionCard({super.key, required this.children});
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) => WispPanel(
+    radius: 16,
+    padding: const EdgeInsets.fromLTRB(16, 16, 12, 8),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text('Permission', style: TextStyle(fontWeight: FontWeight.w600)),
+        const SizedBox(height: 8),
+        if (children.isEmpty)
+          const Padding(
+            padding: EdgeInsets.only(bottom: 8),
+            child: Text('Pair a device to allow access.'),
+          ),
+        ...children,
+      ],
+    ),
+  );
+}
+
 class WispDockBar extends StatelessWidget {
   const WispDockBar({
     super.key,

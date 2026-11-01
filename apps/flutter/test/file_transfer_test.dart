@@ -776,4 +776,44 @@ void main() {
       await tester.pump();
     },
   );
+  testWidgets(
+    'CLI examples copy only the destination prefix without file placeholders',
+    (tester) async {
+      String? copied;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copied = call.arguments['text'] as String;
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
+      for (final service in ['files', 'checkpoints-incoming']) {
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: wispTheme(),
+            home: Scaffold(
+              body: FileSendCommand(host: _host, service: service),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final prefix =
+            "wispnet files put $_host ${service == 'files' ? "''" : service}";
+        expect(find.text('$prefix /local/file filename'), findsOneWidget);
+        await tester.tap(find.byTooltip('Copy send command'));
+        await tester.pumpAndSettle();
+        expect(copied, prefix);
+        expect(copied, isNot(contains('/local/file')));
+        await tester.pumpWidget(const SizedBox());
+      }
+    },
+  );
 }

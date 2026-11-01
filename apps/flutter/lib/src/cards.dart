@@ -48,6 +48,11 @@ class MachineCard extends StatelessWidget {
       services.keys,
       order['services/${machine.id}'] as List?,
     );
+    if (machine.data['local'] == true &&
+        services['shell']?['kind'] == 'shell') {
+      ids.remove('shell');
+      ids.insert(0, 'shell');
+    }
     final tel = telemetry;
     final badge = machine.online
         ? ['Online', if (tel.isNotEmpty) tel].join(' · ')
@@ -153,6 +158,9 @@ class MachineCard extends StatelessWidget {
                   SizedBox(
                     width: width,
                     child: ReorderTile(
+                      enabled:
+                          !(machine.data['local'] == true &&
+                              services[id]!['kind'] == 'shell'),
                       group: 'services/${machine.id}',
                       id: id,
                       onDrop: (moved) =>
@@ -214,9 +222,9 @@ class MachineCard extends StatelessWidget {
         .toSet()
         .length;
     final subtitle = service['kind'] == 'file_share'
-        ? 'Shared folder'
+        ? 'Share files'
         : isInboxService(service)
-        ? 'Inbox'
+        ? 'Receive files'
         : (service['kind'] as String).toUpperCase();
     return WispServiceItem(
       title: service['id'] as String,
@@ -297,47 +305,52 @@ class ReorderTile extends StatelessWidget {
   const ReorderTile({
     super.key,
     required this.group,
+    this.enabled = true,
     required this.id,
     required this.onDrop,
     required this.child,
   });
   final String group, id;
+  final bool enabled;
   final ValueChanged<String> onDrop;
   final Widget child;
   @override
-  Widget build(BuildContext context) => DragTarget<String>(
-    onWillAcceptWithDetails: (d) =>
-        d.data.startsWith('$group\n') && d.data != '$group\n$id',
-    onAcceptWithDetails: (d) => onDrop(d.data.substring(group.length + 1)),
-    builder: (context, candidates, rejected) {
-      final feedback = Material(
-        color: Colors.transparent,
-        child: WispPanel(child: Text(id)),
-      );
-      final content = AnimatedOpacity(
-        duration: const Duration(milliseconds: 120),
-        opacity: candidates.isEmpty ? 1 : .65,
-        child: child,
-      );
-      final touchPlatform =
-          defaultTargetPlatform == TargetPlatform.android ||
-          defaultTargetPlatform == TargetPlatform.iOS;
-      if (touchPlatform) {
-        return LongPressDraggable<String>(
-          data: '$group\n$id',
-          maxSimultaneousDrags: 1,
-          feedback: feedback,
-          childWhenDragging: Opacity(opacity: .4, child: child),
-          child: content,
+  Widget build(BuildContext context) => !enabled
+      ? child
+      : DragTarget<String>(
+          onWillAcceptWithDetails: (d) =>
+              d.data.startsWith('$group\n') && d.data != '$group\n$id',
+          onAcceptWithDetails: (d) =>
+              onDrop(d.data.substring(group.length + 1)),
+          builder: (context, candidates, rejected) {
+            final feedback = Material(
+              color: Colors.transparent,
+              child: WispPanel(child: Text(id)),
+            );
+            final content = AnimatedOpacity(
+              duration: const Duration(milliseconds: 120),
+              opacity: candidates.isEmpty ? 1 : .65,
+              child: child,
+            );
+            final touchPlatform =
+                defaultTargetPlatform == TargetPlatform.android ||
+                defaultTargetPlatform == TargetPlatform.iOS;
+            if (touchPlatform) {
+              return LongPressDraggable<String>(
+                data: '$group\n$id',
+                maxSimultaneousDrags: 1,
+                feedback: feedback,
+                childWhenDragging: Opacity(opacity: .4, child: child),
+                child: content,
+              );
+            }
+            return Draggable<String>(
+              data: '$group\n$id',
+              maxSimultaneousDrags: 1,
+              feedback: feedback,
+              childWhenDragging: Opacity(opacity: .4, child: child),
+              child: content,
+            );
+          },
         );
-      }
-      return Draggable<String>(
-        data: '$group\n$id',
-        maxSimultaneousDrags: 1,
-        feedback: feedback,
-        childWhenDragging: Opacity(opacity: .4, child: child),
-        child: content,
-      );
-    },
-  );
 }

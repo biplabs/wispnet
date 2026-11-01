@@ -385,8 +385,6 @@ class _WispHomeState extends State<WispHome>
       await Future.wait(submitted.map((job) => job.done));
       return;
     }
-    final send =
-        "wispnet files put ${machine.id} ${service['id'] == 'files' ? "''" : service['id']} /local/file filename";
     await showWispSheet<void>(
       context,
       title: 'Send files to ${machine.name}',
@@ -403,16 +401,7 @@ class _WispHomeState extends State<WispHome>
           const SizedBox(height: 16),
           const Text('Send a file'),
           const SizedBox(height: 8),
-          SelectableText(send),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: () async {
-              await Clipboard.setData(ClipboardData(text: send));
-              notice('Send command copied');
-            },
-            icon: const Icon(Icons.copy),
-            label: const Text('Copy send command'),
-          ),
+          FileSendCommand(host: machine.id, service: service['id'] as String),
         ],
       ),
     );
@@ -763,24 +752,6 @@ class _WispHomeState extends State<WispHome>
     );
   }
 
-  Future<void> addFolder() => showWispSheet<void>(
-    context,
-    title: 'Local services',
-    child: snapshot['desktop'] == true
-        ? DesktopSettings(
-            backend: backend,
-            servicesOnly: true,
-            addFolder: true,
-            onAccess: settings,
-            onChanged: () => unawaited(poll()),
-          )
-        : AndroidFileShares(
-            backend: backend,
-            addFolder: true,
-            onChanged: () => unawaited(poll()),
-          ),
-  );
-
   Future<void> setServiceEnabled(
     Map<String, dynamic> service,
     bool enabled,
@@ -834,6 +805,8 @@ class _WispHomeState extends State<WispHome>
         },
       ),
     );
+    await poll();
+    await refresh();
   }
 
   Future<void> settings() async {
@@ -1238,13 +1211,7 @@ class _WispHomeState extends State<WispHome>
                 key: const ValueKey('local-sector'),
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  sectionHeading('LOCAL SERVICES', [
-                    WispCreateButton(
-                      label: 'Add folder',
-                      compact: true,
-                      onPressed: busy ? null : addFolder,
-                    ),
-                  ]),
+                  sectionHeading('LOCAL SERVICES', const []),
                   const SizedBox(height: 12),
                   for (final machine in local)
                     directoryCard(machine, local: true),
@@ -1256,7 +1223,7 @@ class _WispHomeState extends State<WispHome>
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               sectionHeading(
-                'REMOTE SECTOR',
+                'REMOTE SERVICES',
                 [
                   OutlinedButton(
                     onPressed: busy ? null : manage,
@@ -1282,14 +1249,6 @@ class _WispHomeState extends State<WispHome>
                 ),
               ),
               const SizedBox(height: 12),
-              if (snapshot['desktop'] == true)
-                const Padding(
-                  padding: EdgeInsets.only(bottom: 12),
-                  child: Text(
-                    'Drop files here or onto a Files service to send.',
-                    style: TextStyle(color: WispColors.muted, fontSize: 12),
-                  ),
-                ),
               if (remote.isEmpty) const Text('Pair a machine to get started'),
               for (final machine in remote)
                 Padding(

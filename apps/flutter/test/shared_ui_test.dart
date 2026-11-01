@@ -156,11 +156,11 @@ void main() {
         expect(rect.right, lessThanOrEqualTo(width));
       }
       expect(
-        tester.getRect(toggle).right,
-        lessThanOrEqualTo(tester.getRect(link).left),
+        tester.getRect(link).right,
+        lessThanOrEqualTo(tester.getRect(toggle).left),
       );
       expect(
-        tester.getRect(link).right,
+        tester.getRect(toggle).right,
         lessThanOrEqualTo(tester.getRect(gear).left),
       );
       expect(tester.takeException(), isNull);

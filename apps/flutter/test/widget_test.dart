@@ -708,7 +708,7 @@ void main() {
     (tester) async {
       final backend = FakeBackend();
       await mount(tester, backend);
-      expect(find.text('REMOTE SECTOR'), findsOneWidget);
+      expect(find.text('REMOTE SERVICES'), findsOneWidget);
       expect(find.text('Online · Direct · 15ms'), findsOneWidget);
       await screenshot(tester, 'android-directory');
       await tester.tap(find.textContaining('website', findRichText: true));
@@ -780,7 +780,7 @@ void main() {
   ) async {
     for (final backend in [FakeBackend(), DesktopFake()]) {
       await mount(tester, backend, size: const Size(1000, 850));
-      expect(find.text('REMOTE SECTOR'), findsOneWidget);
+      expect(find.text('REMOTE SERVICES'), findsOneWidget);
       expect(find.text('PAIRED MACHINES'), findsNothing);
       expect(find.byTooltip('Online'), findsOneWidget);
       expect(find.byTooltip('Go offline'), findsNothing);
@@ -808,7 +808,7 @@ void main() {
     expect(opacity(), closeTo(.5, .01));
     await tester.pump(const Duration(milliseconds: 100));
     expect(opacity(), 1);
-    expect(find.text('REMOTE SECTOR'), findsOneWidget);
+    expect(find.text('REMOTE SERVICES'), findsOneWidget);
     await close(tester);
   });
   testWidgets('entry starts immediately while access is still starting', (
@@ -852,7 +852,7 @@ void main() {
       }
       await tester.pump(const Duration(milliseconds: 1));
       expect(warp.value, 0, reason: 'startup took $startupMs ms');
-      expect(find.text('REMOTE SECTOR'), findsOneWidget);
+      expect(find.text('REMOTE SERVICES'), findsOneWidget);
       expect(
         tester.widget<OnlineButton>(find.byType(OnlineButton)).onPressed,
         isNotNull,
@@ -879,7 +879,7 @@ void main() {
     await tester.tap(find.byTooltip('Enter wisp space'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 900));
-    expect(find.text('REMOTE SECTOR'), findsOneWidget);
+    expect(find.text('REMOTE SERVICES'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await close(tester);
   });
@@ -907,7 +907,7 @@ void main() {
       await tester.tap(entry);
       await tester.pumpAndSettle();
       expect(
-        paired ? find.text('REMOTE SECTOR') : find.text('Pair a machine'),
+        paired ? find.text('REMOTE SERVICES') : find.text('Pair a machine'),
         findsOneWidget,
       );
       await close(tester);
@@ -1314,13 +1314,29 @@ void main() {
     tester,
   ) async {
     final backend = DesktopFake();
+    String? copied;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copied = call.arguments['text'] as String;
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
     await mount(tester, backend, size: const Size(1000, 850));
     await tester.tap(find.byTooltip('Settings'));
     await tester.pumpAndSettle();
     expect(find.widgetWithText(TextField, 'Device ID'), findsOneWidget);
     expect(find.widgetWithText(TextField, 'Wispnet port'), findsOneWidget);
     expect(find.text('Device and browser settings'), findsNothing);
-    expect(find.text('Share a service'), findsNothing);
+    expect(find.byType(TabBar), findsNothing);
     expect(find.byType(DropdownButton<String>), findsNothing);
     expect(
       find.text('http://wispnet.localhost:18400/registry'),
@@ -1332,6 +1348,25 @@ void main() {
       backend.calls.where((call) => call.$1 == 'launch').single.$2['url'],
       'http://wispnet.localhost:18400/registry',
     );
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('settings-mcp-address')),
+    );
+    await tester.tap(find.byKey(const ValueKey('settings-mcp-address')));
+    await tester.pumpAndSettle();
+    expect(
+      backend.calls.where((call) => call.$1 == 'launch').last.$2['url'],
+      'http://wispnet.localhost:18400/mcp',
+    );
+    for (final (key, url) in [
+      ('settings-registry-copy', 'http://wispnet.localhost:18400/registry'),
+      ('settings-mcp-copy', 'http://wispnet.localhost:18400/mcp'),
+    ]) {
+      final button = find.byKey(ValueKey(key));
+      await tester.ensureVisible(button);
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+      expect(copied, url);
+    }
     expect(find.byTooltip('Close'), findsOneWidget);
     await tester.tap(find.byTooltip('Close'));
     await tester.pumpAndSettle();
@@ -1347,17 +1382,19 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Local services'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Add a new service'));
+    await tester.tap(find.byKey(const ValueKey('share-service')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Custom'));
     await tester.pumpAndSettle();
     final id = find.widgetWithText(TextField, 'Service ID');
     final port = find.widgetWithText(TextField, 'Port');
     expect(find.widgetWithText(TextField, 'Service name'), findsNothing);
-    expect(tester.getRect(id).top, lessThan(tester.getRect(port).top));
+    expect(tester.getRect(id).top, greaterThan(tester.getRect(port).bottom));
     expect(tester.widget<TextField>(port).controller!.text, '8080');
     for (final invalid in ['', 'UpperCase', 'has spaces', 'a' * 65]) {
       await tester.enterText(id, invalid);
-      await tester.ensureVisible(find.text('Save service'));
-      await tester.tap(find.text('Save service'));
+      await tester.ensureVisible(find.text('Save'));
+      await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
       expect(find.text('Enter a valid service ID.'), findsOneWidget);
       expect(backend.ownerCalls, isEmpty);
@@ -1365,8 +1402,8 @@ void main() {
     await tester.enterText(id, 'local_model_api');
     for (final invalid in ['0', '65536']) {
       await tester.enterText(port, invalid);
-      await tester.ensureVisible(find.text('Save service'));
-      await tester.tap(find.text('Save service'));
+      await tester.ensureVisible(find.text('Save'));
+      await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
       expect(find.text('Enter a port between 1 and 65535.'), findsOneWidget);
       expect(backend.ownerCalls, isEmpty);
@@ -1385,7 +1422,7 @@ void main() {
     await tester.tap(find.text('TCP').last);
     await tester.pumpAndSettle();
     await tester.enterText(port, '8201');
-    await tester.tap(find.text('Save service'));
+    await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
     final operation = backend.ownerCalls.single['operation'];
     expect(operation['id'], 'local_model_api');
@@ -1412,7 +1449,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Edit'), findsOneWidget);
     expect(find.text('Browser settings'), findsNothing);
-    expect(find.text('Add a new service'), findsNothing);
+    expect(find.byKey(const ValueKey('share-service')), findsNothing);
     await tester.tap(find.text('Edit'));
     await tester.pumpAndSettle();
     expect(
@@ -1428,8 +1465,8 @@ void main() {
           .enabled,
       true,
     );
-    await tester.ensureVisible(find.text('Save service'));
-    await tester.tap(find.text('Save service'));
+    await tester.ensureVisible(find.text('Save'));
+    await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
     expect(backend.ownerCalls.single['operation']['id'], 'other');
     expect(backend.ownerCalls.single['operation']['op'], 'edit_service');
@@ -1464,8 +1501,8 @@ void main() {
     );
     for (final invalid in ['UpperCase', 'taken']) {
       await tester.enterText(id, invalid);
-      await tester.ensureVisible(find.text('Save service'));
-      await tester.tap(find.text('Save service'));
+      await tester.ensureVisible(find.text('Save'));
+      await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
       expect(backend.ownerCalls, isEmpty);
       expect(
@@ -1479,8 +1516,8 @@ void main() {
     }
     await tester.enterText(id, 'renamed-web');
     await tester.enterText(port, '8310');
-    await tester.ensureVisible(find.text('Save service'));
-    await tester.tap(find.text('Save service'));
+    await tester.ensureVisible(find.text('Save'));
+    await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
     expect(backend.ownerCalls.single, {
       'op': 'mutate',
@@ -1511,14 +1548,14 @@ void main() {
     await tester.tap(find.byTooltip('Settings for web on hibreak'));
     await tester.pumpAndSettle();
     expect(find.text('Device and browser settings'), findsNothing);
-    expect(find.text('Add a new service'), findsNothing);
+    expect(find.byKey(const ValueKey('share-service')), findsNothing);
     expect(find.text('Pair this machine'), findsNothing);
     expect(find.text('Browser settings'), findsNothing);
     await tester.tap(find.text('Edit'));
     await tester.pumpAndSettle();
     expect(find.widgetWithText(TextField, 'Service name'), findsNothing);
-    await tester.ensureVisible(find.text('Save service'));
-    await tester.tap(find.text('Save service'));
+    await tester.ensureVisible(find.text('Save'));
+    await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
     final operation = backend.ownerCalls.single['operation'] as Map;
     expect(operation['expected_revision'], 7);
@@ -1536,14 +1573,16 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Local services'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Add a new service'));
+    await tester.tap(find.byKey(const ValueKey('share-service')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Custom'));
     await tester.pumpAndSettle();
     await tester.enterText(
       find.widgetWithText(TextField, 'Service ID'),
       'new-service',
     );
-    await tester.ensureVisible(find.text('Save service'));
-    await tester.tap(find.text('Save service'));
+    await tester.ensureVisible(find.text('Save'));
+    await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
     expect(backend.ownerCalls.single['operation']['id'], 'new-service');
     expect(backend.ownerCalls.single['operation']['allow'], isEmpty);
@@ -1560,7 +1599,7 @@ void main() {
           final title = find.descendant(
             of: container,
             matching: find.text(
-              section == 'local' ? 'LOCAL SERVICES' : 'REMOTE SECTOR',
+              section == 'local' ? 'LOCAL SERVICES' : 'REMOTE SERVICES',
             ),
           );
           final manage = find
@@ -1581,7 +1620,7 @@ void main() {
           closeTo(tester.getRect(remote).right, .01),
         );
         expect(
-          tester.widget<Text>(find.text('REMOTE SECTOR')).style!.fontSize,
+          tester.widget<Text>(find.text('REMOTE SERVICES')).style!.fontSize,
           16,
         );
         expect(tester.takeException(), isNull);
@@ -1590,13 +1629,13 @@ void main() {
     },
   );
   testWidgets(
-    'an empty local sector offers Add folder without an unconfigured inbox',
+    'an empty local sector has no creation shortcut or unconfigured inbox',
     (tester) async {
       await mount(tester, FakeBackend(), size: const Size(600, 850));
       final sector = find.byKey(const ValueKey('local-sector'));
       expect(
         find.descendant(of: sector, matching: find.text('Add folder')),
-        findsOneWidget,
+        findsNothing,
       );
       expect(
         find.descendant(of: sector, matching: find.byType(ReorderTile)),
@@ -1612,6 +1651,7 @@ void main() {
   ) async {
     final backend = DesktopFake();
     await mount(tester, backend, size: const Size(1000, 850));
+    expect(find.text('Share a service'), findsNothing);
     final local = find.byKey(const ValueKey('local-sector'));
     final remote = find.byKey(const ValueKey('remote-sector'));
     expect(
@@ -1655,7 +1695,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Local services'));
     await tester.pumpAndSettle();
-    expect(find.text('Add a new service'), findsOneWidget);
+    expect(find.byKey(const ValueKey('share-service')), findsOneWidget);
     expect(find.text('Pair this machine'), findsNothing);
     expect(find.text('Device and browser settings'), findsNothing);
     expect(find.text('Pair with this machine'), findsNothing);
@@ -2700,8 +2740,8 @@ void main() {
       false,
     );
     await tester.tap(find.byType(WispToggleListTile));
-    await tester.ensureVisible(find.text('Save access'));
-    await tester.tap(find.text('Save access'));
+    await tester.ensureVisible(find.text('Save'));
+    await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
     expect(backend.ownerCalls.single['operation'], {
       'op': 'shell',
@@ -2710,26 +2750,52 @@ void main() {
     });
     await close(tester);
   });
-  testWidgets(
-    'built-in shell cannot be removed, renamed or changed to a user service',
-    (tester) async {
-      final backend = DesktopFake();
-      await mount(tester, backend, size: const Size(1000, 850));
-      await tester.tap(find.byTooltip('Settings for shell on hibreak'));
-      await tester.pumpAndSettle();
-      expect(find.text('Manage access'), findsOneWidget);
-      expect(find.text('Remove service'), findsNothing);
-      expect(find.text('Edit'), findsNothing);
-      expect(
-        find.text('Built-in service · available on this computer'),
-        findsOneWidget,
-      );
-      await tester.tap(find.text('Manage access'));
-      await tester.pumpAndSettle();
-      expect(find.byType(TextField), findsNothing);
-      await close(tester);
-    },
-  );
+  testWidgets('built-in shell settings show usage and actions before editing', (
+    tester,
+  ) async {
+    final backend = DesktopFake();
+    await mount(tester, backend, size: const Size(1000, 850));
+    await tester.tap(find.byTooltip('Settings for shell on hibreak'));
+    await tester.pumpAndSettle();
+    expect(find.text('Manage access'), findsNothing);
+    expect(find.text('Save'), findsNothing);
+    expect(find.text('Remove service'), findsOneWidget);
+    expect(find.text('Public access'), findsNothing);
+    await tester.tap(find.text('Edit'));
+    await tester.pumpAndSettle();
+    expect(find.text('Save'), findsOneWidget);
+    // The overview stays mounted beneath the edit sheet.
+    expect(find.text('Remove service'), findsOneWidget);
+    expect(find.text('Edit'), findsOneWidget);
+    expect(
+      find.text('Built-in service · available on this computer'),
+      findsNothing,
+    );
+    expect(find.byType(TextField), findsNothing);
+    await close(tester);
+  });
+  testWidgets('removing built-in shell disables it after confirmation', (
+    tester,
+  ) async {
+    final backend = DesktopFake();
+    await mount(tester, backend, size: const Size(1000, 850));
+    await tester.tap(find.byTooltip('Settings for shell on hibreak'));
+    await tester.pumpAndSettle();
+    expect(find.text('wispnet shell ${'d' * 64}'), findsOneWidget);
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Remove service'));
+    await tester.pumpAndSettle();
+    expect(backend.ownerCalls, isEmpty);
+    await tester.tap(find.widgetWithText(FilledButton, 'Remove service'));
+    await tester.pumpAndSettle();
+    expect(backend.ownerCalls.single['operation'], {
+      'op': 'set_service_enabled',
+      'id': 'shell',
+      'incarnation': incarnation,
+      'enabled': false,
+      'expected_revision': 7,
+    });
+    await close(tester);
+  });
   testWidgets('files card shows a send command without launching a browser', (
     tester,
   ) async {
@@ -2770,15 +2836,15 @@ void main() {
       await mount(tester, backend, size: const Size(1000, 1000));
       await tester.tap(find.byTooltip('Settings for files on hibreak'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Manage folders and access'));
+      expect(find.text('Remove service'), findsOneWidget);
+      expect(find.text('Public access'), findsNothing);
+      await tester.ensureVisible(find.text('Edit'));
+      await tester.tap(find.text('Edit'));
       await tester.pumpAndSettle();
       expect(find.byType(TextField), findsNothing);
       final checkbox = find.byType(WispToggleListTile);
       expect(tester.widget<WispToggleListTile>(checkbox).onChanged, isNull);
-      expect(
-        find.text('Set a shared folder before granting Files access.'),
-        findsOneWidget,
-      );
+      expect(find.text('Permission'), findsOneWidget);
       expect(
         find.textContaining('without confirming each transfer'),
         findsOneWidget,
@@ -2792,8 +2858,8 @@ void main() {
       expect(find.text('/srv/receiving'), findsOneWidget);
       expect(tester.widget<WispToggleListTile>(checkbox).onChanged, isNotNull);
       await tester.tap(checkbox);
-      await tester.ensureVisible(find.text('Save folders and access'));
-      await tester.tap(find.text('Save folders and access'));
+      await tester.ensureVisible(find.text('Save'));
+      await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
       expect(backend.ownerCalls.single['operation'], {
         'op': 'files',
@@ -2814,7 +2880,10 @@ void main() {
       await mount(tester, backend, size: const Size(1000, 1000));
       await tester.tap(find.byTooltip('Settings for files on hibreak'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Manage folders and access'));
+      expect(find.text('Remove service'), findsOneWidget);
+      expect(find.text('Public access'), findsNothing);
+      await tester.ensureVisible(find.text('Edit'));
+      await tester.tap(find.text('Edit'));
       await tester.pumpAndSettle();
       expect(
         tester
@@ -2829,8 +2898,8 @@ void main() {
       );
       expect(checkbox.value, false);
       expect(checkbox.onChanged, isNull);
-      await tester.ensureVisible(find.text('Save folders and access'));
-      await tester.tap(find.text('Save folders and access'));
+      await tester.ensureVisible(find.text('Save'));
+      await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
       expect(backend.ownerCalls.single['operation'], {
         'op': 'files',
@@ -2900,10 +2969,14 @@ void main() {
     await mount(tester, backend, size: const Size(1000, 1000));
     await tester.tap(find.byTooltip('Settings for files on hibreak'));
     await tester.pumpAndSettle();
-    expect(find.text('Remove service'), findsNothing);
-    expect(find.text('Edit'), findsNothing);
-    await tester.tap(find.text('Manage folders and access'));
+    expect(find.text('Remove service'), findsOneWidget);
+    expect(find.text('Public access'), findsNothing);
+    await tester.ensureVisible(find.text('Edit'));
+    await tester.tap(find.text('Edit'));
     await tester.pumpAndSettle();
+    // The overview stays mounted beneath the edit sheet.
+    expect(find.text('Remove service'), findsOneWidget);
+    expect(find.text('Edit'), findsOneWidget);
     expect(find.byType(TextField), findsNothing);
     expect(find.text('/srv/training'), findsOneWidget);
     expect(find.text('training'), findsNothing);
@@ -2917,8 +2990,8 @@ void main() {
     expect(find.text('/srv/training'), findsNothing);
     await screenshot(tester, 'desktop-files-receiving-folder');
     await tester.tap(find.byType(WispToggleListTile));
-    await tester.ensureVisible(find.text('Save folders and access'));
-    await tester.tap(find.text('Save folders and access'));
+    await tester.ensureVisible(find.text('Save'));
+    await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
     expect(backend.ownerCalls.single['operation'], {
       'op': 'files',
@@ -2938,7 +3011,10 @@ void main() {
       await mount(tester, backend, size: const Size(1000, 1000));
       await tester.tap(find.byTooltip('Settings for files on hibreak'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Manage folders and access'));
+      expect(find.text('Remove service'), findsOneWidget);
+      expect(find.text('Public access'), findsNothing);
+      await tester.ensureVisible(find.text('Edit'));
+      await tester.tap(find.text('Edit'));
       await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('Change receiving folder'));
       await tester.pumpAndSettle();
@@ -2954,7 +3030,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.textContaining('Folder picker unavailable'), findsOneWidget);
       expect(find.text('/srv/incoming'), findsOneWidget);
-      await tester.tap(find.text('Save folders and access'));
+      await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
       expect(backend.ownerCalls.single['operation'], {
         'op': 'files',
@@ -2975,7 +3051,10 @@ void main() {
     await tester.ensureVisible(find.byTooltip('Settings for files on hibreak'));
     await tester.tap(find.byTooltip('Settings for files on hibreak'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Manage folders and access'));
+    expect(find.text('Remove service'), findsOneWidget);
+    expect(find.text('Public access'), findsNothing);
+    await tester.ensureVisible(find.text('Edit'));
+    await tester.tap(find.text('Edit'));
     await tester.pumpAndSettle();
     expect(find.text(path), findsOneWidget);
     expect(find.byType(TextField), findsNothing);
@@ -2995,14 +3074,17 @@ void main() {
     await mount(tester, backend, size: const Size(1000, 1000));
     await tester.tap(find.byTooltip('Settings for files on hibreak'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Manage folders and access'));
+    expect(find.text('Remove service'), findsOneWidget);
+    expect(find.text('Public access'), findsNothing);
+    await tester.ensureVisible(find.text('Edit'));
+    await tester.tap(find.text('Edit'));
     await tester.pumpAndSettle();
     expect(
       find.textContaining('replaces the 2 receiving folders'),
       findsOneWidget,
     );
     await tester.tap(find.byType(WispToggleListTile));
-    await tester.tap(find.text('Save folders and access'));
+    await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
     expect(backend.ownerCalls.single['operation'], {
       'op': 'files',
@@ -3020,14 +3102,16 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Local services'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Add a new service'));
+    await tester.tap(find.byKey(const ValueKey('share-service')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Custom'));
     await tester.pumpAndSettle();
     await tester.enterText(
       find.widgetWithText(TextField, 'Service ID'),
       'shell',
     );
-    await tester.ensureVisible(find.text('Save service'));
-    await tester.tap(find.text('Save service'));
+    await tester.ensureVisible(find.text('Save'));
+    await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
     expect(
       find.text(
@@ -3038,7 +3122,10 @@ void main() {
     expect(backend.ownerCalls, isEmpty);
     await tester.tap(find.byType(DropdownButtonFormField<String>));
     await tester.pumpAndSettle();
-    expect(find.text('Shell'), findsNothing);
+    expect(
+      find.widgetWithText(DropdownMenuItem<String>, 'Shell'),
+      findsNothing,
+    );
     await close(tester);
   });
   test('shell remains unavailable when owner approval is pending', () {

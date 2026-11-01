@@ -502,6 +502,21 @@ class _SelectedFile {
   }
 }
 
+class FileSendCommand extends StatelessWidget {
+  const FileSendCommand({super.key, required this.host, required this.service});
+  final String host, service;
+
+  @override
+  Widget build(BuildContext context) {
+    final prefix =
+        "wispnet files put $host ${service == 'files' ? "''" : service}";
+    return WispCommandBlock(
+      command: '$prefix /local/file filename',
+      copyText: prefix,
+    );
+  }
+}
+
 class FileSendSheet extends StatefulWidget {
   const FileSendSheet({
     super.key,
@@ -714,6 +729,8 @@ class _FileSendSheetState extends State<FileSendSheet> {
           selected.length > 1 ? 'Send ${selected.length} files' : 'Send files',
         ),
       ),
+      const SizedBox(height: 16),
+      FileSendCommand(host: widget.machine.id, service: widget.service),
       const SizedBox(height: 16),
       FileTransferList(transfers: widget.transfers, host: widget.machine.id),
     ],

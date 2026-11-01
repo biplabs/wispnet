@@ -202,9 +202,7 @@ void main() {
       );
       expect(
         tester
-            .widget<FilledButton>(
-              find.widgetWithText(FilledButton, 'Save folder'),
-            )
+            .widget<FilledButton>(find.widgetWithText(FilledButton, 'Save'))
             .onPressed,
         isNull,
       );
@@ -215,8 +213,8 @@ void main() {
       expect(find.textContaining('opaque-selected-folder'), findsNothing);
       await tester.ensureVisible(find.text('My laptop'));
       await tester.tap(find.text('My laptop'));
-      await tester.ensureVisible(find.text('Save folder'));
-      await tester.tap(find.text('Save folder'));
+      await tester.ensureVisible(find.text('Save'));
+      await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
       expect(backend.calls.where((call) => call.$1 == 'saveShare').single.$2, {
         'expected_revision': 3,
@@ -258,8 +256,8 @@ void main() {
       await tester.tap(find.text('My laptop'));
       await tester.ensureVisible(find.text('Other device'));
       await tester.tap(find.text('Other device'));
-      await tester.ensureVisible(find.text('Save folder'));
-      await tester.tap(find.text('Save folder'));
+      await tester.ensureVisible(find.text('Save'));
+      await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
       expect(backend.calls.where((call) => call.$1 == 'saveShare').single.$2, {
         'expected_revision': 3,
@@ -294,9 +292,7 @@ void main() {
       expect(find.textContaining('Folder access expired'), findsWidgets);
       expect(
         tester
-            .widget<FilledButton>(
-              find.widgetWithText(FilledButton, 'Save folder'),
-            )
+            .widget<FilledButton>(find.widgetWithText(FilledButton, 'Save'))
             .onPressed,
         isNull,
       );
@@ -306,9 +302,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(
         tester
-            .widget<FilledButton>(
-              find.widgetWithText(FilledButton, 'Save folder'),
-            )
+            .widget<FilledButton>(find.widgetWithText(FilledButton, 'Save'))
             .onPressed,
         isNull,
       );
@@ -330,8 +324,8 @@ void main() {
       };
       await tester.tap(find.text('Choose folder'));
       await tester.pumpAndSettle();
-      await tester.ensureVisible(find.text('Save folder'));
-      await tester.tap(find.text('Save folder'));
+      await tester.ensureVisible(find.text('Save'));
+      await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
       expect(
         backend.shares.singleWhere(

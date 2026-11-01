@@ -364,35 +364,34 @@ void main() {
     await tester.pump();
   });
 
-  testWidgets(
-    'Android Files opens a native-picker sheet instead of CLI instructions',
-    (tester) async {
-      final backend = _AndroidFilesBackend();
-      await tester.pumpWidget(WispnetApp(backend: backend));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
-      expect(
-        find.descendant(
-          of: find.byKey(const ValueKey('local-sector')),
-          matching: find.text('files'),
-        ),
-        findsNothing,
-      );
-      await tester.tap(
-        find.descendant(
-          of: find.byKey(const ValueKey('remote-sector')),
-          matching: find.text('files'),
-        ),
-      );
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
-      expect(find.byKey(const ValueKey('file-pick')), findsOneWidget);
-      expect(find.textContaining('wispnet files put'), findsNothing);
-      expect(find.byType(FileDropArea), findsNothing);
-      await tester.pumpWidget(const SizedBox());
-      await tester.pump();
-    },
-  );
+  testWidgets('Android Files offers native picking alongside the CLI example', (
+    tester,
+  ) async {
+    final backend = _AndroidFilesBackend();
+    await tester.pumpWidget(WispnetApp(backend: backend));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('local-sector')),
+        matching: find.text('files'),
+      ),
+      findsNothing,
+    );
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(const ValueKey('remote-sector')),
+        matching: find.text('files'),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byKey(const ValueKey('file-pick')), findsOneWidget);
+    expect(find.byType(FileSendCommand), findsOneWidget);
+    expect(find.byType(FileDropArea), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+  });
 
   testWidgets('Android Files never starts a picker while offline', (
     tester,

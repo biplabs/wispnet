@@ -102,6 +102,14 @@ pub enum Mutation {
         #[serde(default)]
         kind: Option<ServiceKind>,
     },
+    /// Atomically edit a folder's name, location and grants, preserving its mode.
+    EditFolder {
+        expected_revision: u64,
+        id: String,
+        new_id: String,
+        root: PathBuf,
+        allow: Vec<EndpointId>,
+    },
     /// Pause serving without removing the binding, folders, or remote grants.
     SetServiceEnabled {
         expected_revision: u64,
@@ -151,6 +159,9 @@ impl Mutation {
                 expected_revision, ..
             }
             | Self::EditService {
+                expected_revision, ..
+            }
+            | Self::EditFolder {
                 expected_revision, ..
             }
             | Self::SetServiceEnabled {
@@ -953,6 +964,47 @@ pub(crate) fn apply_mutation(
                     [peer.to_string()],
                 )?;
             }
+        }
+        Mutation::EditFolder {
+            id,
+            new_id,
+            root,
+            allow,
+            ..
+        } => {
+            if !valid_service_id(&new_id) || matches!(new_id.as_str(), "shell" | "files") {
+                return Err(ControlError::Invalid);
+            }
+            let spelling = tx
+                .query_row("SELECT kind FROM host_services WHERE id=?1", [&id], |r| {
+                    r.get::<_, String>(0)
+                })
+                .optional()?;
+            let (kind, table) = match spelling.as_deref() {
+                Some("file_inbox") => (ServiceKind::FileInbox, "host_file_inboxes"),
+                Some("file_share") => (ServiceKind::FileShare, "host_file_shares"),
+                _ => return Err(ControlError::Invalid),
+            };
+            if id != new_id {
+                if tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM host_services WHERE id=?1)",
+                    [&new_id],
+                    |r| r.get::<_, bool>(0),
+                )? {
+                    return Err(ControlError::Conflict);
+                }
+                tx.execute("INSERT INTO host_services(id,backend,incarnation,kind,enabled) SELECT ?2,backend,lower(hex(randomblob(32))),kind,enabled FROM host_services WHERE id=?1", params![id,new_id])?;
+                tx.execute(
+                    &format!("UPDATE {table} SET service=?2 WHERE service=?1"),
+                    params![id, new_id],
+                )?;
+                tx.execute(
+                    "UPDATE host_grants SET service=?2 WHERE service=?1",
+                    params![id, new_id],
+                )?;
+                tx.execute("DELETE FROM host_services WHERE id=?1", [&id])?;
+            }
+            apply_folder_service(tx, new_id, root, allow, kind)?;
         }
         Mutation::FileShare {
             id, root, allow, ..

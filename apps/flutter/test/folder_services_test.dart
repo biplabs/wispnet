@@ -14,6 +14,7 @@ import 'android_file_shares_test.dart' as fixture;
 
 class FolderBackend extends fixture.AndroidSharesBackend {
   bool desktop = false, remote = false;
+  String pickedDesktopFolder = '/chosen/inbox';
   final inboxes = <Map<String, dynamic>>[
     {
       'id': 'training-data',
@@ -134,7 +135,7 @@ class FolderBackend extends fixture.AndroidSharesBackend {
         return {'revision': ++revision};
       case 'pickFolder':
         calls.add((method, Map.of(arguments)));
-        return {'path': '/chosen/inbox'};
+        return {'path': pickedDesktopFolder};
       case 'snapshot':
         final snapshot = await super.invoke(method, arguments);
         return {
@@ -229,7 +230,7 @@ void main() {
   });
 
   testWidgets(
-    'desktop Add folder creates a named Inbox with explicit per-folder grants',
+    'desktop Receive files tab creates a named Inbox with explicit per-folder grants',
     (tester) async {
       final backend = FolderBackend();
       await fixture.mount(
@@ -241,24 +242,23 @@ void main() {
           onChanged: () {},
         ),
       );
-      expect(find.text('Receive files'), findsNothing);
+      expect(find.widgetWithText(Tab, 'Receive files'), findsNothing);
       expect(find.text('Add read-only file share'), findsNothing);
-      expect(find.text('Inbox'), findsNWidgets(2));
-      await tester.tap(find.text('Add folder'));
+      expect(find.text('Receive files'), findsNWidgets(2));
+      await tester.tap(find.byKey(const ValueKey('share-service')));
       await tester.pumpAndSettle();
-      expect(find.text('Receive files'), findsOneWidget);
+      expect(find.widgetWithText(Tab, 'Receive files'), findsOneWidget);
       await tester.enterText(
         find.byKey(const ValueKey('share-name')),
         'checkpoints-incoming',
       );
-      await tester.enterText(
-        find.byKey(const ValueKey('share-root')),
-        '/srv/checkpoints-incoming',
-      );
+      backend.pickedDesktopFolder = '/srv/checkpoints-incoming';
+      await tester.tap(find.text('Choose folder'));
+      await tester.pumpAndSettle();
       await tester.ensureVisible(find.text('Other device').last);
       await tester.tap(find.text('Other device').last);
-      await tester.ensureVisible(find.text('Save folder'));
-      await tester.tap(find.text('Save folder'));
+      await tester.ensureVisible(find.text('Save'));
+      await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
       final operation = backend.calls
           .where((call) => call.$1 == 'desktopRequest')
@@ -296,7 +296,7 @@ void main() {
       await tester.tap(find.text('My laptop'));
       await chooseMode(tester, 'Share files');
       expect(find.text('Receiving folder'), findsNothing);
-      expect(find.text('No folder selected'), findsOneWidget);
+      expect(find.byKey(const ValueKey('share-selected-folder')), findsNothing);
       expect(
         tester
             .widget<WispToggleListTile>(
@@ -307,16 +307,14 @@ void main() {
       );
       expect(
         tester
-            .widget<FilledButton>(
-              find.widgetWithText(FilledButton, 'Save folder'),
-            )
+            .widget<FilledButton>(find.widgetWithText(FilledButton, 'Save'))
             .onPressed,
         isNull,
       );
       await tester.tap(find.text('Choose folder'));
       await tester.pumpAndSettle();
-      await tester.ensureVisible(find.text('Save folder'));
-      await tester.tap(find.text('Save folder'));
+      await tester.ensureVisible(find.text('Save'));
+      await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
       expect(
         backend.calls.where((call) => call.$1 == 'pickReceivingFolder'),
@@ -349,13 +347,13 @@ void main() {
       await tester.tap(find.byTooltip('Folder and access for predictions'));
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('folder-mode')), findsNothing);
-      expect(find.text('Devices allowed to send files'), findsOneWidget);
+      expect(find.text('Permission'), findsOneWidget);
       await tester.ensureVisible(find.text('Other device'));
       await tester.tap(find.text('Other device'));
       await tester.ensureVisible(find.text('My laptop'));
       await tester.tap(find.text('My laptop'));
-      await tester.ensureVisible(find.text('Save folder'));
-      await tester.tap(find.text('Save folder'));
+      await tester.ensureVisible(find.text('Save'));
+      await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
       expect(backend.calls.where((call) => call.$1 == 'saveInbox').single.$2, {
         'expected_revision': 3,
@@ -391,8 +389,8 @@ void main() {
     );
     await tester.tap(find.byTooltip('Folder and access for files'));
     await tester.pumpAndSettle();
-    await tester.ensureVisible(find.text('Save folder'));
-    await tester.tap(find.text('Save folder'));
+    await tester.ensureVisible(find.text('Save'));
+    await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
     expect(
       backend.calls.where((call) => call.$1 == 'saveInbox').single.$2['id'],
@@ -406,7 +404,7 @@ void main() {
   ) async {
     final backend = FolderBackend()..remote = true;
     await app(tester, backend);
-    expect(find.text('Inbox'), findsNWidgets(2));
+    expect(find.text('Receive files'), findsNWidgets(2));
     await tester.tap(find.text('predictions'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Choose files'));
@@ -452,6 +450,7 @@ void main() {
             .$2['service'],
         'predictions',
       );
+      await tester.ensureVisible(find.byTooltip('Close'));
       await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       await drop;

@@ -857,14 +857,41 @@ class _SettingsFormState extends State<SettingsForm> {
 
   String get mcpAddress => Uri.parse(address).replace(path: '/mcp').toString();
 
-  Future<void> openAddress() async {
-    if (opening || address.isEmpty) return;
+  Widget localAddressRow(
+    String url,
+    String label,
+    String linkKey,
+    String copyKey,
+  ) => Row(
+    children: [
+      Expanded(
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: WispLink(
+            key: ValueKey(linkKey),
+            text: url,
+            tooltip: 'Open $label URL in browser',
+            onTap: opening || saving ? null : () => openAddress(url),
+          ),
+        ),
+      ),
+      WispCopyButton(
+        key: ValueKey(copyKey),
+        text: url,
+        tooltip: 'Copy $label URL',
+        message: '$label URL copied',
+      ),
+    ],
+  );
+
+  Future<void> openAddress(String url) async {
+    if (opening || url.isEmpty) return;
     setState(() {
       opening = true;
       error = null;
     });
     try {
-      await widget.backend.invoke('launch', {'url': browserAddress});
+      await widget.backend.invoke('launch', {'url': url});
     } catch (e) {
       if (mounted) setState(() => error = failureMessage(e));
     } finally {
@@ -978,14 +1005,11 @@ class _SettingsFormState extends State<SettingsForm> {
           style: TextStyle(color: WispColors.muted),
         ),
         const SizedBox(height: 8),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: WispLink(
-            key: const ValueKey('settings-address'),
-            text: browserAddress,
-            tooltip: 'Open registry JSON in browser',
-            onTap: opening || saving ? null : openAddress,
-          ),
+        localAddressRow(
+          browserAddress,
+          'registry',
+          'settings-address',
+          'settings-registry-copy',
         ),
         const SizedBox(height: 16),
         const Text('MCP (Model Context Protocol)'),
@@ -995,16 +1019,11 @@ class _SettingsFormState extends State<SettingsForm> {
           style: TextStyle(color: WispColors.muted),
         ),
         const SizedBox(height: 8),
-        Row(
-          children: [
-            Expanded(child: SelectableText(mcpAddress)),
-            WispCopyButton(
-              key: const ValueKey('settings-mcp-copy'),
-              text: mcpAddress,
-              tooltip: 'Copy MCP URL',
-              message: 'MCP URL copied',
-            ),
-          ],
+        localAddressRow(
+          mcpAddress,
+          'MCP',
+          'settings-mcp-address',
+          'settings-mcp-copy',
         ),
       ],
     ],

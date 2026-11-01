@@ -130,7 +130,7 @@ class _AndroidFileSharesState extends State<AndroidFileShares> {
     ) async {
       if (shares.any((s) => s['id'] == id && s['id'] != existingId)) {
         throw const FormatException(
-          'This folder name already exists. Choose a different name.',
+          'This service ID already exists. Choose a different ID.',
         );
       }
       await widget.backend.invoke(
@@ -230,7 +230,9 @@ class _AndroidFileSharesState extends State<AndroidFileShares> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 WispBadge(
-                  label: isInboxService(share) ? 'Inbox' : 'Shared folder',
+                  label: isInboxService(share)
+                      ? 'Receive files'
+                      : 'Share files',
                   color: WispColors.cyan,
                 ),
                 const SizedBox(height: 4),

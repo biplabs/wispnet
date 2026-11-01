@@ -286,24 +286,21 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Add folder'));
+      await tester.tap(find.byKey(const ValueKey('share-service')));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('folder-mode')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Share files').last);
+      await tester.tap(find.widgetWithText(Tab, 'Share files'));
       await tester.pumpAndSettle();
       await tester.enterText(
         find.byKey(const ValueKey('share-name')),
         'checkpoints',
       );
-      await tester.enterText(
-        find.byKey(const ValueKey('share-root')),
-        '/training/checkpoints',
-      );
+      backend.selectedFolder = '/training/checkpoints';
+      await tester.tap(find.text('Choose folder'));
+      await tester.pumpAndSettle();
       await tester.ensureVisible(find.text('Training host'));
       await tester.tap(find.text('Training host'));
-      await tester.ensureVisible(find.text('Save folder'));
-      await tester.tap(find.text('Save folder'));
+      await tester.ensureVisible(find.text('Save'));
+      await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
       final operation = backend.calls
           .where((c) => c.$1 == 'desktopRequest')
@@ -634,8 +631,8 @@ void main() {
     );
     await tester.tap(find.text('Laptop'));
     await tester.tap(find.text('Other device'));
-    await tester.ensureVisible(find.text('Save read-only share'));
-    await tester.tap(find.text('Save read-only share'));
+    await tester.ensureVisible(find.text('Save'));
+    await tester.tap(find.text('Save'));
     await tester.pump();
     expect(saved, {
       'id': 'checkpoints',

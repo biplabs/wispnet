@@ -62,6 +62,7 @@ class WispServiceItem extends StatelessWidget {
           ? null
           : () => onToggle!(!enabled),
       actions: [
+        ...actions,
         if (onToggle != null)
           Tooltip(
             message: '${enabled ? 'Turn off' : 'Turn on'} $title',
@@ -71,7 +72,6 @@ class WispServiceItem extends StatelessWidget {
               onChanged: busy ? null : onToggle,
             ),
           ),
-        ...actions,
         if (onSettings != null)
           WispSettingsButton(
             tooltip: settingsTooltip ?? 'Settings for $title',
