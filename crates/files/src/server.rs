@@ -21,7 +21,7 @@ use std::{
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite},
-    sync::{Semaphore, mpsc},
+    sync::{Semaphore, mpsc, watch},
 };
 
 /// Resource ceilings apply to incomplete uploads; committed artifacts belong to
@@ -48,6 +48,11 @@ impl Default for Limits {
 /// Implementations must be idempotent by transfer_id and never replace unrelated
 /// files. The private staging root identifies the owner-selected destination.
 pub trait Publisher: Send + Sync {
+    /// Optional platform folder capabilities, independent from inbox publication.
+    /// Returning a source disables native-path fallback for every share request.
+    fn share_source(&self) -> Option<&dyn crate::ShareSource> {
+        None
+    }
     fn publish(
         &self,
         publication: Publication<'_>,
@@ -68,6 +73,7 @@ pub struct FileService(Arc<Inner>);
 struct Inner {
     publisher: Option<Arc<dyn Publisher>>,
     enabled: AtomicBool,
+    share_stops: watch::Sender<()>,
     directory: File,
     state: PathBuf,
     limits: Limits,
@@ -233,6 +239,7 @@ impl FileService {
         Ok(Self(Arc::new(Inner {
             publisher,
             enabled: AtomicBool::new(true),
+            share_stops: watch::channel(()).0,
             directory,
             state: state_dir,
             limits,
@@ -243,6 +250,9 @@ impl FileService {
     }
     pub fn set_enabled(&self, enabled: bool) {
         self.0.enabled.store(enabled, Ordering::Release);
+        if !enabled {
+            self.0.share_stops.send_replace(());
+        }
     }
     /// Read-only shares have independent service grants, enforced by the tunnel.
     pub async fn serve_share(
@@ -253,6 +263,7 @@ impl FileService {
         reader: impl AsyncRead + Unpin,
         writer: impl AsyncWrite + Unpin,
     ) -> io::Result<()> {
+        let mut stops = self.0.share_stops.subscribe();
         if !self.0.enabled.load(Ordering::Acquire) {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -266,7 +277,11 @@ impl FileService {
                 "Private Files state cannot be shared",
             ));
         }
-        crate::share::serve(root, reader, writer, self.0.bulk.clone()).await
+        tokio::select! {
+            biased;
+            _ = stops.changed() => Err(io::Error::new(io::ErrorKind::Interrupted, "File sharing stopped")),
+            result = crate::share::serve(root, reader, writer, self.0.bulk.clone(), self.0.publisher.clone()) => result,
+        }
     }
     /// Called by the node's maintenance timer, including while no peers connect.
     pub async fn cleanup_expired(&self) -> io::Result<()> {
@@ -1255,7 +1270,7 @@ impl FileService {
     }
 }
 
-async fn queue_requests(
+pub(super) async fn queue_requests(
     mut reader: impl AsyncRead + Unpin,
     sender: mpsc::Sender<Request>,
     outstanding: Arc<AtomicUsize>,

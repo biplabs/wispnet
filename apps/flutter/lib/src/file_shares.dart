@@ -2,11 +2,17 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'backend.dart';
 import 'file_transfer.dart';
-import 'sheets.dart';
 import '../ui.dart';
+
+String _shareFailure(Object error) => error is FormatException
+    ? error.message
+    : error is PlatformException
+    ? error.message ?? error.code
+    : error.toString();
 
 class SharedFileDownload {
   SharedFileDownload({required this.request, required this.name});
@@ -55,7 +61,7 @@ class SharedFileDownloads extends ChangeNotifier {
       }
     } catch (error) {
       job.status = {'state': 'failed'};
-      job.failure = failureMessage(error);
+      job.failure = _shareFailure(error);
     }
     _changed();
     if (!_disposed && jobs.any((job) => !job.finished)) {
@@ -114,8 +120,7 @@ class SharedFileDownloads extends ChangeNotifier {
           if (_missingHandle(job, error)) continue;
           // Preserve the handle: an interrupted owner connection does not mean
           // the native job stopped, and must never start a second download.
-          job.failure =
-              'Waiting for the local device: ${failureMessage(error)}';
+          job.failure = 'Waiting for the local device: ${_shareFailure(error)}';
         }
       }
       _changed();
@@ -144,13 +149,13 @@ class SharedFileDownloads extends ChangeNotifier {
         _changed();
         return;
       }
-      job.failure = failureMessage(error);
+      job.failure = _shareFailure(error);
     }
     _changed();
   }
 
   bool _missingHandle(SharedFileDownload job, Object error) {
-    if (!failureMessage(error).toLowerCase().contains('handle unavailable')) {
+    if (!_shareFailure(error).toLowerCase().contains('handle unavailable')) {
       return false;
     }
     job.status = {
@@ -233,7 +238,7 @@ class _SharedFilesBrowserState extends State<SharedFilesBrowser> {
       });
     } catch (error) {
       if (mounted && requestGeneration == generation) {
-        setState(() => failure = failureMessage(error));
+        setState(() => failure = _shareFailure(error));
       }
     } finally {
       if (mounted && requestGeneration == generation) {
@@ -278,7 +283,7 @@ class _SharedFilesBrowserState extends State<SharedFilesBrowser> {
       );
       await widget.downloads.start(job);
     } catch (error) {
-      if (mounted) setState(() => failure = failureMessage(error));
+      if (mounted) setState(() => failure = _shareFailure(error));
     } finally {
       if (mounted) setState(() => choosing = false);
     }
@@ -467,6 +472,10 @@ class FileShareEditor extends StatefulWidget {
     this.id = '',
     this.root = '',
     this.allow = const [],
+    this.android = false,
+    this.folderLabel = '',
+    this.folderAvailable = true,
+    this.onRemove,
   });
   final WispnetBackend backend;
   final List<Map<String, dynamic>> clients;
@@ -474,6 +483,9 @@ class FileShareEditor extends StatefulWidget {
   onSave;
   final String id, root;
   final List<String> allow;
+  final bool android, folderAvailable;
+  final String folderLabel;
+  final Future<bool> Function()? onRemove;
   @override
   State<FileShareEditor> createState() => _FileShareEditorState();
 }
@@ -482,6 +494,8 @@ class _FileShareEditorState extends State<FileShareEditor> {
   late final id = TextEditingController(text: widget.id);
   late final root = TextEditingController(text: widget.root);
   late final allowed = widget.allow.toSet();
+  late String folderLabel = widget.folderLabel;
+  late bool folderAvailable = widget.folderAvailable;
   bool busy = false;
   String? failure;
 
@@ -493,16 +507,25 @@ class _FileShareEditorState extends State<FileShareEditor> {
   }
 
   Future<void> pick() async {
-    setState(() => busy = true);
+    setState(() {
+      busy = true;
+      failure = null;
+    });
     try {
-      final result = await widget.backend.invoke('pickFolder', {
-        'title': 'Choose a read-only shared folder',
-      });
-      if (mounted && result['path'] is String) {
-        root.text = result['path'] as String;
+      final result = await widget.backend.invoke(
+        widget.android ? 'pickShareFolder' : 'pickFolder',
+        {'title': 'Choose a read-only shared folder'},
+      );
+      final selection = result[widget.android ? 'folder' : 'path'];
+      if (mounted && selection is String && selection.isNotEmpty) {
+        setState(() {
+          root.text = selection;
+          folderLabel = result['label'] as String? ?? 'Shared folder';
+          folderAvailable = true;
+        });
       }
     } catch (error) {
-      if (mounted) setState(() => failure = failureMessage(error));
+      if (mounted) setState(() => failure = _shareFailure(error));
     } finally {
       if (mounted) setState(() => busy = false);
     }
@@ -521,15 +544,31 @@ class _FileShareEditorState extends State<FileShareEditor> {
           'Enter a share name using lowercase letters, numbers, dots, hyphens or underscores. “files” and “shell” are reserved.',
         );
       }
-      if (!root.text.trim().startsWith('/')) {
+      if (widget.android
+          ? root.text.isEmpty || !folderAvailable
+          : !root.text.trim().startsWith('/')) {
         throw const FormatException(
-          'Choose an existing folder or enter its absolute path.',
+          'Choose an existing shared folder before saving.',
         );
       }
       await widget.onSave(name, root.text.trim(), allowed.toList());
       if (mounted) Navigator.pop(context);
     } catch (error) {
-      if (mounted) setState(() => failure = failureMessage(error));
+      if (mounted) setState(() => failure = _shareFailure(error));
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<void> remove() async {
+    setState(() {
+      busy = true;
+      failure = null;
+    });
+    try {
+      if (await widget.onRemove!() && mounted) Navigator.pop(context);
+    } catch (error) {
+      if (mounted) setState(() => failure = _shareFailure(error));
     } finally {
       if (mounted) setState(() => busy = false);
     }
@@ -553,15 +592,35 @@ class _FileShareEditorState extends State<FileShareEditor> {
         ),
       ),
       const SizedBox(height: 12),
-      TextField(
-        key: const ValueKey('share-root'),
-        controller: root,
-        enabled: !busy,
-        decoration: const InputDecoration(
-          labelText: 'Folder path',
-          hintText: '/workspace/checkpoints',
+      if (!widget.android)
+        TextField(
+          key: const ValueKey('share-root'),
+          controller: root,
+          enabled: !busy,
+          decoration: const InputDecoration(
+            labelText: 'Folder path',
+            hintText: '/workspace/checkpoints',
+          ),
         ),
-      ),
+      if (widget.android)
+        WispListItem(
+          key: const ValueKey('share-selected-folder'),
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.folder_outlined, color: WispColors.cyan),
+          title: Text(
+            root.text.isEmpty
+                ? 'No folder selected'
+                : folderLabel.isEmpty
+                ? 'Shared folder'
+                : folderLabel,
+          ),
+          subtitle: !folderAvailable && root.text.isNotEmpty
+              ? const Text(
+                  'Folder access expired or is unavailable. Choose the folder again.',
+                  style: TextStyle(color: WispColors.error),
+                )
+              : const Text('Only this folder and its contents are shared.'),
+        ),
       const SizedBox(height: 8),
       OutlinedButton.icon(
         onPressed: busy ? null : pick,
@@ -584,7 +643,8 @@ class _FileShareEditorState extends State<FileShareEditor> {
           title: Text(client['name'] as String),
           subtitle: Text(client['peer'] as String),
           value: allowed.contains(client['peer']),
-          onChanged: busy
+          onChanged:
+              busy || widget.android && (root.text.isEmpty || !folderAvailable)
               ? null
               : (value) => setState(() {
                   if (value!) {
@@ -598,9 +658,20 @@ class _FileShareEditorState extends State<FileShareEditor> {
         Text(failure!, style: const TextStyle(color: WispColors.error)),
       const SizedBox(height: 12),
       FilledButton(
-        onPressed: busy ? null : save,
+        onPressed:
+            busy || widget.android && (root.text.isEmpty || !folderAvailable)
+            ? null
+            : save,
         child: const Text('Save read-only share'),
       ),
+      if (widget.onRemove != null) ...[
+        const SizedBox(height: 12),
+        OutlinedButton(
+          onPressed: busy ? null : remove,
+          style: wispDangerButtonStyle(),
+          child: const Text('Remove share'),
+        ),
+      ],
     ],
   );
 }

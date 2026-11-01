@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'backend.dart';
+import 'android_file_shares.dart';
 import '../ui.dart';
 
 String failureMessage(Object error) {
@@ -1265,6 +1266,7 @@ class _AndroidLocalServicesState extends State<AndroidLocalServices> {
         ),
       if (error != null)
         Text(error!, style: const TextStyle(color: WispColors.error)),
+      AndroidFileShares(backend: widget.backend, onChanged: widget.onChanged),
     ],
   );
 }

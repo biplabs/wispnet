@@ -7,6 +7,7 @@ mod server;
 mod share;
 pub use protocol::*;
 pub use server::{FileService, Limits, Publication, Publisher};
+pub use share::ShareSource;
 
 use sha2::{Digest, Sha256};
 use std::{

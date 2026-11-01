@@ -233,6 +233,7 @@ impl Client {
         )
         .map_err(|e| e.to_string())?;
         files.set_enabled(!platform_storage);
+        let client_files = files::Files::with_local(files.clone());
         let host = wispnet_agent::tunnel::TunnelHost::bind_host_with_files(
             &key,
             &config,
@@ -243,7 +244,7 @@ impl Client {
         .map_err(|e| e.to_string())?;
         Ok(Arc::new(Self {
             shells: shell::Shells::default(),
-            files: files::Files::default(),
+            files: client_files,
             endpoint: host.endpoint().clone(),
             key,
             config,
@@ -424,12 +425,37 @@ impl Client {
                     "service":snapshot.services.iter().find(|s| s.id == "files")}),
                 )
             }
-            "local_files_configure" | "local_service_enabled" => {
+            "local_shares_status" => {
+                let snapshot = self
+                    .local_authority
+                    .as_ref()
+                    .ok_or("Local host unavailable")?
+                    .snapshot()
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok(
+                    json!({"revision": snapshot.revision, "clients": snapshot.clients,
+                    "shares": snapshot.services.iter().filter(|service| service.kind == wispnet_core::host::ServiceKind::FileShare).collect::<Vec<_>>(),
+                    "roots": snapshot.file_shares}),
+                )
+            }
+            "local_files_configure"
+            | "local_service_enabled"
+            | "local_share_configure"
+            | "local_share_remove" => {
                 let directory = self.state.clone();
                 let own = self.endpoint.id();
+                let remove_share = (value["op"] == "local_share_remove")
+                    .then(|| argument(value, "id").map(str::to_owned))
+                    .transpose()?;
                 let operation = if value["op"] == "local_service_enabled" {
                     json!({"op":"set_service_enabled", "expected_revision":value["expected_revision"],
                         "id":value["id"], "incarnation":value["incarnation"], "enabled":value["enabled"]})
+                } else if value["op"] == "local_share_configure" {
+                    json!({"op":"file_share", "expected_revision":value["expected_revision"],
+                        "id":value["id"],"root":value["root"],"allow":value["allow"]})
+                } else if value["op"] == "local_share_remove" {
+                    json!({"op":"remove", "expected_revision":value["expected_revision"], "id":value["id"]})
                 } else {
                     json!({"op":"files","expected_revision":value["expected_revision"],"exports":value["exports"],"allow":value["allow"]})
                 };
@@ -438,6 +464,19 @@ impl Client {
                 let revision = tokio::task::spawn_blocking(move || {
                     let (mut store, owner) = wispnet_registry::host::owner_store(&directory, own)
                         .map_err(|e| e.to_string())?;
+                    if let Some(id) = remove_share
+                        && !store
+                            .host_snapshot(own)
+                            .map_err(|e| e.to_string())?
+                            .services
+                            .iter()
+                            .any(|service| {
+                                service.id == id
+                                    && service.kind == wispnet_core::host::ServiceKind::FileShare
+                            })
+                    {
+                        return Err("Read-only share unavailable".into());
+                    }
                     store
                         .host_mutate(own, &owner, operation)
                         .map_err(|e| e.to_string())

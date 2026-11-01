@@ -186,6 +186,11 @@ impl Default for Files {
     }
 }
 impl Files {
+    pub(crate) fn with_local(manager: FileService) -> Self {
+        let files = Self::default();
+        let _ = files.local.set(manager);
+        files
+    }
     pub(crate) fn cancel_host(&self, host: Option<EndpointId>) {
         for job in self.jobs.lock().unwrap_or_else(|e| e.into_inner()).values() {
             if host.is_none_or(|host| job.host == host) {

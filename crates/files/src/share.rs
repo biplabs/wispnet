@@ -1,7 +1,7 @@
 //! Read-only shares use distinct services and grants from incoming Files.
 use crate::{
     ErrorCode, FileInfo, MAX_CHUNK, MAX_METADATA, Request, Response, ShareEntry, encode_hash,
-    read_request, write_response,
+    write_response,
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -13,14 +13,26 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite},
-    sync::Semaphore,
+    sync::{Semaphore, mpsc},
 };
+
+/// A platform-owned read-only folder capability. Implementations must resolve
+/// every path within the selected folder, preserve stable versions across range
+/// reads, and observe cancellation during storage work. File bytes remain binary.
+pub trait ShareSource: Send + Sync {
+    fn request(
+        &self,
+        root: &Path,
+        request: &Request,
+        cancel: Arc<AtomicBool>,
+    ) -> std::result::Result<Response, ErrorCode>;
+}
 
 const PAGE_ENTRIES: usize = 32;
 const MAX_DIRECTORY_ENTRIES: usize = 100_000;
@@ -268,6 +280,145 @@ fn read(
     }
     Ok(Response::Data { offset, data })
 }
+fn validate_request(request: &Request) -> Result<()> {
+    match request {
+        Request::ShareList { path, cursor } => {
+            parts(path)?;
+            if let Some(cursor) = cursor
+                && (cursor.is_empty() || parts(cursor)?.len() != 1)
+            {
+                return Err(ErrorCode::InvalidArgument);
+            }
+        }
+        Request::ShareStat { path } => {
+            if parts(path)?.is_empty() {
+                return Err(ErrorCode::PathDenied);
+            }
+        }
+        Request::ShareReadRange {
+            path,
+            expected_version,
+            max_bytes,
+            ..
+        } => {
+            if parts(path)?.is_empty() {
+                return Err(ErrorCode::PathDenied);
+            }
+            if *max_bytes == 0
+                || *max_bytes > MAX_CHUNK as u64
+                || expected_version.is_empty()
+                || expected_version.len() > 4096
+            {
+                return Err(ErrorCode::InvalidArgument);
+            }
+        }
+        _ => return Err(ErrorCode::PermissionDenied),
+    }
+    Ok(())
+}
+fn validate_response(request: &Request, response: Response) -> Result<Response> {
+    if serde_json::to_vec(&response)
+        .map_err(|_| ErrorCode::Unavailable)?
+        .len()
+        > MAX_METADATA
+    {
+        return Err(ErrorCode::ResourceLimit);
+    }
+    match (request, &response) {
+        (_, Response::Error { code, .. }) => return Err(*code),
+        (
+            Request::ShareList { path, cursor },
+            Response::Entries {
+                entries,
+                next_cursor,
+            },
+        ) => {
+            if entries.len() > PAGE_ENTRIES
+                || !entries.windows(2).all(|pair| pair[0].name < pair[1].name)
+            {
+                return Err(ErrorCode::Unavailable);
+            }
+            for entry in entries {
+                if parts(&entry.name)?.len() != 1 || parts(&entry.path)?.is_empty() {
+                    return Err(ErrorCode::PathDenied);
+                }
+                let expected = if path.is_empty() {
+                    entry.name.clone()
+                } else {
+                    format!("{path}/{}", entry.name)
+                };
+                if entry.path != expected
+                    || cursor.as_ref().is_some_and(|cursor| &entry.name <= cursor)
+                {
+                    return Err(ErrorCode::PathDenied);
+                }
+            }
+            if let Some(next) = next_cursor
+                && entries.last().is_none_or(|entry| &entry.name != next)
+            {
+                return Err(ErrorCode::Unavailable);
+            }
+        }
+        (Request::ShareStat { path }, Response::File { file }) => {
+            if &file.path != path
+                || file.size_bytes > (1u64 << 40)
+                || file.sha256.len() != 64
+                || !file
+                    .sha256
+                    .bytes()
+                    .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+                || file.file_version.is_empty()
+                || file.file_version.len() > 4096
+            {
+                return Err(ErrorCode::Unavailable);
+            }
+        }
+        (
+            Request::ShareReadRange {
+                offset, max_bytes, ..
+            },
+            Response::Data {
+                offset: actual,
+                data,
+            },
+        ) => {
+            if offset != actual || data.len() > *max_bytes as usize {
+                return Err(ErrorCode::Unavailable);
+            }
+        }
+        _ => return Err(ErrorCode::PermissionDenied),
+    }
+    Ok(response)
+}
+fn dispatch(
+    root: &Path,
+    request: Request,
+    cancel: Arc<AtomicBool>,
+    publisher: Option<&dyn crate::Publisher>,
+) -> Result<Response> {
+    validate_request(&request)?;
+    if cancel.load(Ordering::Acquire) {
+        return Err(ErrorCode::Unavailable);
+    }
+    if let Some(source) = publisher.and_then(|publisher| publisher.share_source()) {
+        // The native path is an owner-selected private marker directory only.
+        // Its contents are never used as a fallback for an unknown capability.
+        crate::server::open_directory(root).map_err(io_code)?;
+        return validate_response(&request, source.request(root, &request, cancel)?);
+    }
+    match request {
+        Request::ShareList { path, cursor } => list(root, &path, cursor, &cancel),
+        Request::ShareStat { path } => stat(root, &path, &cancel),
+        Request::ShareReadRange {
+            path,
+            expected_version,
+            offset,
+            max_bytes,
+        } => read(root, &path, &expected_version, offset, max_bytes, &cancel),
+        _ => Err(ErrorCode::PermissionDenied),
+    }
+}
+
 struct Cancel(Arc<AtomicBool>);
 impl Drop for Cancel {
     fn drop(&mut self) {
@@ -279,54 +430,67 @@ pub(super) async fn serve(
     mut reader: impl AsyncRead + Unpin,
     mut writer: impl AsyncWrite + Unpin,
     bulk: Arc<Semaphore>,
+    publisher: Option<Arc<dyn crate::Publisher>>,
 ) -> io::Result<()> {
     let cancel = Arc::new(AtomicBool::new(false));
     let _guard = Cancel(cancel.clone());
-    loop {
-        let Some(request) =
-            tokio::time::timeout(Duration::from_secs(300), read_request(&mut reader))
+    let (sender, mut receiver) = mpsc::channel(8);
+    let outstanding = Arc::new(AtomicUsize::new(0));
+    // Continue reading while the source hashes/reads. A reset or disconnect
+    // cancels the blocking platform callback immediately, without waiting for
+    // a large checkpoint hash to finish. Active work extends idle framing time.
+    let read = async {
+        crate::server::queue_requests(
+            &mut reader,
+            sender,
+            outstanding.clone(),
+            Duration::from_secs(300),
+        )
+        .await?;
+        // Files clients keep their request direction open while awaiting work.
+        // EOF with pending storage work is a disconnected/cancelled requester.
+        if outstanding.load(Ordering::Acquire) > 0 {
+            cancel.store(true, Ordering::Release);
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "File share requester closed",
+            ));
+        }
+        Ok(())
+    };
+    let process = async {
+        while let Some(request) = receiver.recv().await {
+            let permit = bulk
+                .clone()
+                .acquire_owned()
                 .await
-                .map_err(|_| {
-                    io::Error::new(io::ErrorKind::TimedOut, "File share idle timeout")
-                })??
-        else {
-            return Ok(());
-        };
-        let _permit = bulk
-            .clone()
-            .acquire_owned()
+                .map_err(|_| io::Error::other("File share unavailable"))?;
+            let root = root.clone();
+            let cancel = cancel.clone();
+            let publisher = publisher.clone();
+            let response = tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                dispatch(&root, request, cancel, publisher.as_deref())
+            })
             .await
             .map_err(|_| io::Error::other("File share unavailable"))?;
-        let root = root.clone();
-        let cancel = cancel.clone();
-        let response = tokio::task::spawn_blocking(move || {
-            let _permit = _permit;
-            match request {
-                Request::ShareList { path, cursor } => list(&root, &path, cursor, &cancel),
-                Request::ShareStat { path } => stat(&root, &path, &cancel),
-                Request::ShareReadRange {
-                    path,
-                    expected_version,
-                    offset,
-                    max_bytes,
-                } => read(&root, &path, &expected_version, offset, max_bytes, &cancel),
-                _ => Err(ErrorCode::PermissionDenied),
-            }
-        })
-        .await
-        .map_err(|_| io::Error::other("File share unavailable"))?;
-        let response = response.unwrap_or_else(|code| Response::Error {
-            code,
-            message: "File share request failed".into(),
-            expected_offset: None,
-        });
-        tokio::time::timeout(
-            Duration::from_secs(300),
-            write_response(&mut writer, &response),
-        )
-        .await
-        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "File share write timeout"))??;
-    }
+            let response = response.unwrap_or_else(|code| Response::Error {
+                code,
+                message: "File share request failed".into(),
+                expected_offset: None,
+            });
+            tokio::time::timeout(
+                Duration::from_secs(300),
+                write_response(&mut writer, &response),
+            )
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "File share write timeout"))??;
+            outstanding.fetch_sub(1, Ordering::AcqRel);
+        }
+        Ok::<(), io::Error>(())
+    };
+    tokio::try_join!(read, process)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -533,5 +697,354 @@ mod tests {
         drop(client);
         task.await.unwrap();
         assert!(!root.path().join("injected").exists());
+    }
+}
+
+#[cfg(test)]
+mod provider_tests {
+    use super::*;
+    use crate::{
+        FileService, Limits, Publication, Publisher, read_response, sha256, write_request,
+    };
+    use std::sync::atomic::AtomicUsize;
+
+    struct Provider {
+        calls: AtomicUsize,
+        wait: bool,
+        entered: AtomicBool,
+        stopped: AtomicBool,
+    }
+    impl Provider {
+        fn new(wait: bool) -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+                wait,
+                entered: AtomicBool::new(false),
+                stopped: AtomicBool::new(false),
+            }
+        }
+    }
+    impl Publisher for Provider {
+        fn share_source(&self) -> Option<&dyn ShareSource> {
+            Some(self)
+        }
+        fn publish(&self, _: Publication<'_>, _: File, _: Arc<AtomicBool>) -> io::Result<()> {
+            Err(io::Error::other("Not an inbox adapter"))
+        }
+    }
+    impl ShareSource for Provider {
+        fn request(
+            &self,
+            root: &Path,
+            request: &Request,
+            cancel: Arc<AtomicBool>,
+        ) -> Result<Response> {
+            self.calls.fetch_add(1, Ordering::AcqRel);
+            if root.file_name().and_then(|name| name.to_str()) != Some("capability") {
+                return Err(ErrorCode::PermissionDenied);
+            }
+            if self.wait {
+                self.entered.store(true, Ordering::Release);
+                while !cancel.load(Ordering::Acquire) {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                self.stopped.store(true, Ordering::Release);
+                return Err(ErrorCode::Unavailable);
+            }
+            match request {
+                Request::ShareList { .. } => Ok(Response::Entries {
+                    entries: vec![ShareEntry {
+                        name: "remote.pt".into(),
+                        path: "remote.pt".into(),
+                        is_dir: false,
+                        size_bytes: 7,
+                    }],
+                    next_cursor: None,
+                }),
+                Request::ShareStat { path } => Ok(Response::File {
+                    file: FileInfo {
+                        path: path.clone(),
+                        size_bytes: 7,
+                        sha256: sha256(b"weights"),
+                        file_version: "provider-version".into(),
+                    },
+                }),
+                Request::ShareReadRange {
+                    expected_version,
+                    offset,
+                    max_bytes,
+                    ..
+                } => {
+                    if expected_version != "provider-version" {
+                        return Err(ErrorCode::StaleVersion);
+                    }
+                    let bytes = b"weights";
+                    if *offset > bytes.len() as u64 {
+                        return Err(ErrorCode::InvalidOffset);
+                    }
+                    let end = (*offset + *max_bytes).min(bytes.len() as u64) as usize;
+                    Ok(Response::Data {
+                        offset: *offset,
+                        data: bytes[*offset as usize..end].to_vec(),
+                    })
+                }
+                _ => panic!("non-share operation reached source"),
+            }
+        }
+    }
+    #[test]
+    fn provider_boundary_filters_paths_operations_versions_and_native_fallback() {
+        let parent = tempfile::tempdir().unwrap();
+        let marker = parent.path().join("capability");
+        std::fs::create_dir(&marker).unwrap();
+        let unknown = parent.path().join("unknown");
+        std::fs::create_dir(&unknown).unwrap();
+        std::fs::write(unknown.join("private"), b"must not fall back").unwrap();
+        let provider = Provider::new(false);
+        let cancel = Arc::new(AtomicBool::new(false));
+        for request in [
+            Request::Workspaces,
+            Request::FileStat {
+                workspace: "".into(),
+                path: "private".into(),
+            },
+            Request::ShareStat {
+                path: "../private".into(),
+            },
+            Request::ShareReadRange {
+                path: "remote.pt".into(),
+                expected_version: "version".into(),
+                offset: 0,
+                max_bytes: MAX_CHUNK as u64 + 1,
+            },
+        ] {
+            assert!(dispatch(&marker, request, cancel.clone(), Some(&provider)).is_err());
+        }
+        assert_eq!(provider.calls.load(Ordering::Acquire), 0);
+        assert_eq!(
+            dispatch(
+                &unknown,
+                Request::ShareStat {
+                    path: "private".into()
+                },
+                cancel.clone(),
+                Some(&provider)
+            )
+            .unwrap_err(),
+            ErrorCode::PermissionDenied
+        );
+        assert!(
+            matches!(dispatch(&marker,Request::ShareStat { path:"remote.pt".into() },cancel.clone(),Some(&provider)).unwrap(),Response::File { file } if file.sha256==sha256(b"weights"))
+        );
+        assert!(
+            matches!(dispatch(&marker,Request::ShareReadRange { path:"remote.pt".into(),expected_version:"provider-version".into(),offset:1,max_bytes:3 },cancel.clone(),Some(&provider)).unwrap(),Response::Data { offset:1,data } if data==b"eig")
+        );
+        assert_eq!(
+            dispatch(
+                &marker,
+                Request::ShareReadRange {
+                    path: "remote.pt".into(),
+                    expected_version: "changed".into(),
+                    offset: 0,
+                    max_bytes: 3
+                },
+                cancel,
+                Some(&provider)
+            )
+            .unwrap_err(),
+            ErrorCode::StaleVersion
+        );
+    }
+    #[test]
+    fn provider_responses_cannot_cross_paths_or_exceed_requested_binary_range() {
+        let request = Request::ShareList {
+            path: "nested".into(),
+            cursor: None,
+        };
+        assert!(
+            validate_response(
+                &request,
+                Response::Entries {
+                    entries: vec![ShareEntry {
+                        name: "private".into(),
+                        path: "../private".into(),
+                        is_dir: false,
+                        size_bytes: 1
+                    }],
+                    next_cursor: None
+                }
+            )
+            .is_err()
+        );
+        let request = Request::ShareReadRange {
+            path: "model".into(),
+            expected_version: "v".into(),
+            offset: 2,
+            max_bytes: 1,
+        };
+        assert!(
+            validate_response(
+                &request,
+                Response::Data {
+                    offset: 2,
+                    data: vec![1, 2]
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            validate_response(
+                &request,
+                Response::Data {
+                    offset: 3,
+                    data: vec![1]
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            validate_response(
+                &request,
+                Response::Entries {
+                    entries: vec![],
+                    next_cursor: None
+                }
+            )
+            .is_err()
+        );
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn provider_reads_use_binary_streams_and_disconnect_cancels_storage_work() {
+        let parent = tempfile::tempdir().unwrap();
+        let marker = parent.path().join("capability");
+        std::fs::create_dir(&marker).unwrap();
+        let provider = Arc::new(Provider::new(false));
+        let service = FileService::with_publisher(
+            parent.path().join("state"),
+            Limits::default(),
+            Some(provider),
+        )
+        .unwrap();
+        let (mut client, server) = tokio::io::duplex(MAX_CHUNK * 2);
+        let (reader, writer) = tokio::io::split(server);
+        let root = marker.clone();
+        let task = tokio::spawn(async move {
+            service
+                .serve_share("peer", "inc", root, reader, writer)
+                .await
+                .unwrap();
+        });
+        write_request(
+            &mut client,
+            &Request::ShareReadRange {
+                path: "remote.pt".into(),
+                expected_version: "provider-version".into(),
+                offset: 0,
+                max_bytes: 7,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(read_response(&mut client).await.unwrap(),Some(Response::Data { offset:0,data }) if data==b"weights")
+        );
+        drop(client);
+        task.await.unwrap();
+        let provider = Arc::new(Provider::new(true));
+        let service = FileService::with_publisher(
+            parent.path().join("state-2"),
+            Limits::default(),
+            Some(provider.clone()),
+        )
+        .unwrap();
+        let (mut client, server) = tokio::io::duplex(8192);
+        let (reader, writer) = tokio::io::split(server);
+        let task = tokio::spawn(async move {
+            service
+                .serve_share("peer", "inc", marker, reader, writer)
+                .await
+        });
+        write_request(
+            &mut client,
+            &Request::ShareStat {
+                path: "remote.pt".into(),
+            },
+        )
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !provider.entered.load(Ordering::Acquire) {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
+        drop(client);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), task)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_err()
+        );
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !provider.stopped.load(Ordering::Acquire) {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn going_offline_cancels_active_provider_hash_even_when_reenabled_immediately() {
+        let parent = tempfile::tempdir().unwrap();
+        let marker = parent.path().join("capability");
+        std::fs::create_dir(&marker).unwrap();
+        let provider = Arc::new(Provider::new(true));
+        let service = FileService::with_publisher(
+            parent.path().join("state"),
+            Limits::default(),
+            Some(provider.clone()),
+        )
+        .unwrap();
+        let active = service.clone();
+        let (mut client, server) = tokio::io::duplex(8192);
+        let (reader, writer) = tokio::io::split(server);
+        let task = tokio::spawn(async move {
+            active
+                .serve_share("peer", "inc", marker, reader, writer)
+                .await
+        });
+        write_request(
+            &mut client,
+            &Request::ShareStat {
+                path: "remote.pt".into(),
+            },
+        )
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !provider.entered.load(Ordering::Acquire) {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
+        service.set_enabled(false);
+        service.set_enabled(true);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), task)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_err()
+        );
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !provider.stopped.load(Ordering::Acquire) {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
     }
 }

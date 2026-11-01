@@ -86,6 +86,8 @@ JNI_METHODS = {
     ('putFileDescriptor', '(Ljava/lang/String;I)Ljava/lang/String;'): True,
     ('publicationCancelled', '(Ljava/lang/String;)Z'): True,
     ('publishReceivedFile', '(Ljava/lang/String;I)Ljava/lang/String;'): False,
+    ('shareSourceRequest', '(Ljava/lang/String;)[B'): False,
+    ('shareSourceCancelled', '(Ljava/lang/String;)Z'): True,
 }
 
 def dex_jni_methods(data):

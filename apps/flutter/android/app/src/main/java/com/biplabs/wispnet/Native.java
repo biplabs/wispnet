@@ -37,6 +37,19 @@ public final class Native {
  private static volatile Context receivingContext;
  static volatile boolean receivingOnline;
  static native boolean publicationCancelled(String transfer);
+ static native boolean shareSourceCancelled(String operation);
+ static byte[] shareSourceRequest(String request) {
+  try {
+   JSONObject envelope = new JSONObject(request);
+   String operation = envelope.getString("cancel_id");
+   if (receivingContext == null) throw new SecurityException("Shared folder unavailable");
+   return new AndroidShares(receivingContext).request(envelope, () -> shareSourceCancelled(operation));
+  } catch (Exception unavailable) {
+   // The provider adapter normally returns typed frames. Empty replies fail
+   // closed in native code if Java cannot even decode the callback envelope.
+   return new byte[0];
+  }
+ }
  static String publishReceivedFile(String request, int descriptor) {
   try {
    if (receivingContext == null) return "denied";

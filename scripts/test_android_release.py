@@ -82,25 +82,25 @@ class JniReleaseChecks(unittest.TestCase):
     def dex(self, omitted=(), renamed=False, static=True, body=True, signature=True):
         # Small DEX table fixture. References stay present when definitions are
         # omitted, reproducing the difference between strings and callable ABI.
-        names = ['call', 'publicationCancelled', 'publishReceivedFile', 'putFileDescriptor']
-        strings = ['Lcom/biplabs/wispnet/Native;', 'Ljava/lang/String;', 'I', 'Z', *names]
-        if renamed: strings[6] = 'renamedByR8'
-        data = bytearray(112 + len(strings)*4 + 4*4 + 3*12 + 4*8 + 32)
+        names = ['call', 'publicationCancelled', 'publishReceivedFile', 'putFileDescriptor', 'shareSourceRequest', 'shareSourceCancelled']
+        strings = ['Lcom/biplabs/wispnet/Native;', 'Ljava/lang/String;', 'I', 'Z', '[B', *names]
+        if renamed: strings[7] = 'renamedByR8'
+        data = bytearray(112 + len(strings)*4 + 5*4 + 4*12 + 6*8 + 32)
         data[:8] = b'dex\n035\0'
         strings_off = 112; types_off = strings_off + len(strings)*4
-        protos_off = types_off + 16; methods_off = protos_off + 36; classes_off = methods_off + 32
-        for at, size, offset in [(56,len(strings),strings_off),(64,4,types_off),(72,3,protos_off),(88,4,methods_off),(96,1,classes_off)]:
+        protos_off = types_off + 20; methods_off = protos_off + 48; classes_off = methods_off + 48
+        for at, size, offset in [(56,len(strings),strings_off),(64,5,types_off),(72,4,protos_off),(88,6,methods_off),(96,1,classes_off)]:
             struct.pack_into('<II',data,at,size,offset)
         for index, text in enumerate(strings):
             struct.pack_into('<I',data,strings_off+index*4,len(data))
             data.extend(bytes([len(text)]) + text.encode() + b'\0')
-        for index in range(4): struct.pack_into('<I',data,types_off+index*4,index)
-        for index, (result, parameters) in enumerate([(1,[1]),(3,[1]),(1,[1,2])]):
+        for index in range(5): struct.pack_into('<I',data,types_off+index*4,index)
+        for index, (result, parameters) in enumerate([(1,[1]),(3,[1]),(1,[1,2]),(4,[1])]):
             while len(data)%4: data.append(0)
             offset = len(data); data.extend(struct.pack('<I',len(parameters)))
             for parameter in parameters: data.extend(struct.pack('<H',parameter))
             struct.pack_into('<III',data,protos_off+index*12,0,3 if index==2 and not signature else result,offset)
-        for index, proto in enumerate([0,1,2,2]): struct.pack_into('<HHI',data,methods_off+index*8,0,proto,4+index)
+        for index, proto in enumerate([0,1,2,2,3,1]): struct.pack_into('<HHI',data,methods_off+index*8,0,proto,5+index)
         struct.pack_into('<I',data,classes_off+24,len(data))
         definitions = [i for i,name in enumerate(names) if name not in omitted]
         data.extend(bytes([0,0,len(definitions),0])); previous = 0
@@ -109,7 +109,7 @@ class JniReleaseChecks(unittest.TestCase):
             while value>=128: encoded.append((value&127)|128); value>>=7
             encoded.append(value); return encoded
         for index in definitions:
-            java = index==2
+            java = index in (2,4)
             flags = (8 if static or not java else 0) | (0 if java else 256)
             data.extend(uleb(index-previous)+uleb(flags)+uleb(1 if java and body else 0)); previous=index
         return bytes(data)
@@ -124,7 +124,7 @@ class JniReleaseChecks(unittest.TestCase):
             self.verify(self.dex(),entry)
 
     def test_removed_callbacks_fail_even_when_method_references_remain(self):
-        for missing in [('publishReceivedFile',),('publicationCancelled',),('call',),('putFileDescriptor',)]:
+        for missing in [('publishReceivedFile',),('publicationCancelled',),('call',),('putFileDescriptor',),('shareSourceRequest',),('shareSourceCancelled',)]:
             with self.subTest(missing=missing), self.assertRaisesRegex(ValueError,missing[0]):
                 self.verify(self.dex(omitted=missing))
 

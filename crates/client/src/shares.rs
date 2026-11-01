@@ -813,6 +813,137 @@ fn valid_share_target(target: &FileTarget) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct PlatformSource;
+    impl wispnet_files::Publisher for PlatformSource {
+        fn share_source(&self) -> Option<&dyn wispnet_files::ShareSource> {
+            Some(self)
+        }
+        fn publish(
+            &self,
+            _publication: wispnet_files::Publication<'_>,
+            _source: File,
+            _cancel: Arc<std::sync::atomic::AtomicBool>,
+        ) -> io::Result<()> {
+            Err(io::ErrorKind::PermissionDenied.into())
+        }
+    }
+    impl wispnet_files::ShareSource for PlatformSource {
+        fn request(
+            &self,
+            _root: &Path,
+            request: &Request,
+            cancel: Arc<std::sync::atomic::AtomicBool>,
+        ) -> std::result::Result<Response, wispnet_files::ErrorCode> {
+            use wispnet_files::{ErrorCode, ShareEntry};
+            if cancel.load(std::sync::atomic::Ordering::Acquire) {
+                return Err(ErrorCode::Unavailable);
+            }
+            let content = b"platform-provided bytes";
+            match request {
+                Request::ShareList { path, .. } if path.is_empty() => Ok(Response::Entries {
+                    entries: vec![ShareEntry {
+                        name: "source.bin".into(),
+                        path: "source.bin".into(),
+                        is_dir: false,
+                        size_bytes: content.len() as u64,
+                    }],
+                    next_cursor: None,
+                }),
+                Request::ShareStat { path } if path == "source.bin" => Ok(Response::File {
+                    file: FileInfo {
+                        path: path.clone(),
+                        size_bytes: content.len() as u64,
+                        sha256: wispnet_files::sha256(content),
+                        file_version: "platform-version".into(),
+                    },
+                }),
+                Request::ShareReadRange {
+                    path,
+                    expected_version,
+                    offset,
+                    max_bytes,
+                } if path == "source.bin" && expected_version == "platform-version" => {
+                    let start = (*offset as usize).min(content.len());
+                    let end = (start + *max_bytes as usize).min(content.len());
+                    Ok(Response::Data {
+                        offset: *offset,
+                        data: content[start..end].to_vec(),
+                    })
+                }
+                _ => Err(ErrorCode::PermissionDenied),
+            }
+        }
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn local_platform_shares_use_the_provider_for_listing_and_downloads() {
+        let state = tempfile::tempdir().unwrap();
+        let marker = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let key = wispnet_core::identity::SecretKey::generate();
+        let own = key.public();
+        let config = serde_json::from_value(json!({"bind_addr":"127.0.0.1:0"})).unwrap();
+        let client = Client::new_peer_with_publisher(
+            key,
+            state.path().to_owned(),
+            config,
+            Some(Arc::new(PlatformSource)),
+        )
+        .await
+        .unwrap();
+        client._host.as_ref().unwrap().set_files_enabled(true);
+        let authority = client.local_authority.as_ref().unwrap();
+        let snapshot = authority.snapshot().await.unwrap();
+        let (mut store, owner) = wispnet_registry::host::owner_store(state.path(), own).unwrap();
+        store
+            .host_mutate(
+                own,
+                &owner,
+                wispnet_registry::host::Mutation::FileShare {
+                    expected_revision: snapshot.revision,
+                    id: "source".into(),
+                    root: marker.path().to_owned(),
+                    allow: vec![],
+                },
+            )
+            .unwrap();
+        let service = authority
+            .snapshot()
+            .await
+            .unwrap()
+            .services
+            .into_iter()
+            .find(|s| s.id == "source")
+            .unwrap();
+        let target = FileTarget {
+            host: own,
+            service: service.id,
+            incarnation: service.incarnation,
+        };
+        assert!(std::fs::read_dir(marker.path()).unwrap().next().is_none());
+        assert_eq!(
+            client
+                .list_shared_files(target.clone(), "", None)
+                .await
+                .unwrap()
+                .entries[0]
+                .name,
+            "source.bin"
+        );
+        let output = destination.path().join("chosen.bin");
+        client
+            .get_file(target, "source.bin", &output, TransferOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(output).unwrap(), b"platform-provided bytes");
+        let status = client
+            .command(&json!({"op":"local_shares_status"}))
+            .await
+            .unwrap();
+        assert_eq!(status["shares"][0]["id"], "source");
+        assert!(client.command(&json!({"op":"local_share_remove","id":"files","expected_revision":status["revision"]})).await.unwrap_err().contains("Read-only share"));
+        client.endpoint.close().await;
+    }
     #[test]
     fn publication_refuses_a_replaced_or_changed_verified_partial() {
         let root = tempfile::tempdir().unwrap();

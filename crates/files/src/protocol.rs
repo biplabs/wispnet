@@ -229,6 +229,31 @@ pub async fn read_response(reader: &mut (impl AsyncRead + Unpin)) -> io::Result<
     Ok(Some(response))
 }
 
+/// Decode one bounded platform-source response, including its binary payload.
+/// Platform adapters must check the received allocation size before decoding.
+pub fn decode_response_frame(frame: &[u8]) -> io::Result<Response> {
+    if frame.len() < 8 || frame.len() > MAX_CHUNK + MAX_METADATA + 8 {
+        return Err(invalid());
+    }
+    let metadata_len = u32::from_be_bytes(frame[..4].try_into().map_err(|_| invalid())?) as usize;
+    let data_len = u32::from_be_bytes(frame[4..8].try_into().map_err(|_| invalid())?) as usize;
+    if metadata_len == 0
+        || metadata_len > MAX_METADATA
+        || data_len > MAX_CHUNK
+        || frame.len() != 8 + metadata_len + data_len
+    {
+        return Err(invalid());
+    }
+    let mut response =
+        serde_json::from_slice(&frame[8..8 + metadata_len]).map_err(|_| invalid())?;
+    match &mut response {
+        Response::Data { data, .. } => *data = frame[8 + metadata_len..].to_vec(),
+        _ if data_len > 0 => return Err(invalid()),
+        _ => {}
+    }
+    Ok(response)
+}
+
 pub async fn write_response(
     writer: &mut (impl AsyncWrite + Unpin),
     response: &Response,
@@ -247,6 +272,28 @@ pub async fn write_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn platform_frames_keep_binary_payloads_bounded_and_reject_malformed_sizes() {
+        let response = Response::Data {
+            offset: 9,
+            data: vec![0, 255, 128],
+        };
+        let mut frame = vec![];
+        write_response(&mut frame, &response).await.unwrap();
+        assert_eq!(decode_response_frame(&frame).unwrap(), response);
+        assert!(decode_response_frame(&frame[..frame.len() - 1]).is_err());
+        let mut wrong = frame.clone();
+        wrong[..4].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert!(decode_response_frame(&wrong).is_err());
+        let metadata = br#"{"type":"aborted"}"#;
+        let mut wrong = vec![];
+        wrong.extend_from_slice(&(metadata.len() as u32).to_be_bytes());
+        wrong.extend_from_slice(&1u32.to_be_bytes());
+        wrong.extend_from_slice(metadata);
+        wrong.push(1);
+        assert!(decode_response_frame(&wrong).is_err());
+        assert!(decode_response_frame(&[0; 7]).is_err());
+    }
     #[tokio::test]
     async fn binary_payload_is_bounded_and_never_json_encoded() {
         let request = Request::UploadWrite {

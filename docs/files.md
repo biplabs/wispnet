@@ -189,7 +189,15 @@ copy, and success is reported only after it closes. The verified staging copy
 is removed after publication. Downloads and cancellation remain in the Android
 network process if the UI is recreated; after a network-process restart,
 select the same source and destination to recover durable transfer state.
-Creating source shares in the app is currently a desktop owner workflow.
+On Android, open **Settings → Local services → Add read-only folder share**. Choose a
+folder with Android's system picker, then select the paired devices allowed to
+browse and download that share. Each share has its own device list; receiving
+files through the inbox is configured independently. Wispnet persists only the
+selected folder's read permission and streams requested files through Android's
+document APIs, without copying the folder or requesting broad storage access.
+Removing a share does not delete its files. If Android or the document provider
+withdraws access, select the folder again. Shares are served by the foreground
+network process while Wispnet is online, including when the UI is closed.
 
 The CLI downloads one regular file per `files get`. It resumes by default;
 repeat the command after interruption or use the app's **Resume download**.

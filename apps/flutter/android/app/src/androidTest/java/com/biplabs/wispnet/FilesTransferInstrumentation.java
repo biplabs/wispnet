@@ -53,6 +53,7 @@ public final class FilesTransferInstrumentation extends Instrumentation {
   } finally { if (bridge != null) bridge.close(); }
  }
  @Override public void onStart() {
+  if ("true".equals(arguments.getString("sourceShares"))) { new AndroidSharesChecks(this, arguments).run(); return; }
   if ("true".equals(arguments.getString("shareSetup"))) { shareSetup(); return; }
   if ("true".equals(arguments.getString("receiving"))) { new AndroidReceivingChecks(this, arguments).run(); return; }
   Bundle result = new Bundle(); JSONObject report = new JSONObject();

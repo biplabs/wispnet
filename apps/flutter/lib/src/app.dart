@@ -12,6 +12,7 @@ import 'desktop_settings.dart';
 import 'terminal_sheet.dart';
 import 'file_transfer.dart';
 import 'file_shares.dart';
+import 'android_file_shares.dart';
 
 class WispnetApp extends StatelessWidget {
   const WispnetApp({super.key, required this.backend});
@@ -784,8 +785,16 @@ class _WispHomeState extends State<WispHome>
     if (snapshot['desktop'] != true) {
       await showWispSheet<void>(
         context,
-        title: 'File inbox',
-        child: AndroidReceivingSettings(backend: backend),
+        title: service['kind'] == 'file_share'
+            ? '${service['id']} share'
+            : 'File inbox',
+        child: service['kind'] == 'file_share'
+            ? AndroidFileShares(
+                backend: backend,
+                serviceId: service['id'] as String,
+                onChanged: () => unawaited(poll()),
+              )
+            : AndroidReceivingSettings(backend: backend),
       );
       return;
     }

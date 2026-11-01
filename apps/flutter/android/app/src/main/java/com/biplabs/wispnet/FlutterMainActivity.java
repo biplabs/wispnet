@@ -25,6 +25,7 @@ public final class FlutterMainActivity extends FlutterActivity {
  private MethodChannel.Result fileResult;
  private MethodChannel.Result folderResult;
  private boolean downloadFolder;
+ private boolean shareFolder;
  private CancellationSignal fileCancellation;
  private String invitation, invitationError, serviceLink;
  private final java.util.ArrayDeque<Intent> sharedFiles = new java.util.ArrayDeque<>();
@@ -73,12 +74,13 @@ public final class FlutterMainActivity extends FlutterActivity {
     return;
    }
    if ("scanQr".equals(call.method) || "importQr".equals(call.method)) { startQr(call.method, result); return; }
-   if ("pickReceivingFolder".equals(call.method) || "pickDownloadFolder".equals(call.method)) {
+   if ("pickReceivingFolder".equals(call.method) || "pickDownloadFolder".equals(call.method) || "pickShareFolder".equals(call.method)) {
     if (folderResult != null || fileResult != null || qrResult != null) { result.error("picker_busy", "A picker is already in progress", null); return; }
     folderResult = result;
     downloadFolder = "pickDownloadFolder".equals(call.method);
+    shareFolder = "pickShareFolder".equals(call.method);
     try { startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
-      .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+      .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | (shareFolder ? 0 : Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
         | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION), 105); }
     catch (Exception failure) { folderResult = null; result.error("folder_unavailable", "Android's folder picker is unavailable", null); }
     return;
@@ -170,14 +172,15 @@ public final class FlutterMainActivity extends FlutterActivity {
     folderResult = null; result.success("{}"); return;
    }
    Uri tree = data.getData();
-   int flags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+   int flags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | (shareFolder ? 0 : Intent.FLAG_GRANT_WRITE_URI_PERMISSION));
+   String prepareFolder = shareFolder ? "prepareShareFolder" : downloadFolder ? "prepareDownloadFolder" : "prepareReceivingFolder";
    work.execute(() -> {
     try {
      getContentResolver().takePersistableUriPermission(tree, flags);
-     String reply = network.request(downloadFolder ? "prepareDownloadFolder" : "prepareReceivingFolder", new JSONObject().put("uri", tree.toString())).toString();
+     String reply = network.request(prepareFolder, new JSONObject().put("uri", tree.toString())).toString();
      runOnUiThread(() -> { if (folderResult != result) return; folderResult = null; result.success(reply); });
     } catch (Exception failure) {
-     runOnUiThread(() -> { if (folderResult != result) return; folderResult = null; result.error("folder_invalid", "Cannot use this folder. Choose a writable folder and allow access.", null); });
+     runOnUiThread(() -> { if (folderResult != result) return; folderResult = null; result.error("folder_invalid", "Cannot use this folder. Choose a folder and allow access.", null); });
     }
    });
    return;

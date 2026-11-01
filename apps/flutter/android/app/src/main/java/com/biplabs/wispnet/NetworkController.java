@@ -21,13 +21,26 @@ final class NetworkController extends ContextWrapper {
   HostStore store = new HostStore(this);
   switch (method) {
    case "setServiceEnabled": {
-    if (!"files".equals(args.getString("service")) || !(args.get("enabled") instanceof Boolean)) throw new Exception("Invalid local service");
+    String id = args.getString("service");
+    if (!(args.get("enabled") instanceof Boolean)) throw new Exception("Invalid local service");
     JSONObject status = Native.command("local_files_status");
+    if (!"files".equals(id)) {
+     JSONObject shares = Native.command("local_shares_status"); boolean found = false;
+     JSONArray rows = shares.getJSONArray("shares");
+     for (int index=0;index<rows.length();index++) if (id.equals(rows.getJSONObject(index).getString("id"))) found = true;
+     if (!found) throw new Exception("Read-only share unavailable");
+     if (args.getBoolean("enabled")) new AndroidShares(this).requireAvailable(id);
+     status = shares;
+    }
     return Native.request(new JSONObject().put("op", "local_service_enabled")
-     .put("id", "files").put("incarnation", args.getString("incarnation"))
+     .put("id", id).put("incarnation", args.getString("incarnation"))
      .put("enabled", args.getBoolean("enabled")).put("expected_revision", status.getLong("revision")));
    }
    case "receivingStatus": return new AndroidReceiving(this).status();
+   case "sharesStatus": return new AndroidShares(this).status();
+   case "prepareShareFolder": return new AndroidShares(this).prepare(android.net.Uri.parse(args.getString("uri")));
+   case "saveShare": return new AndroidShares(this).configure(args);
+   case "removeShare": return new AndroidShares(this).remove(args);
    case "prepareReceivingFolder": return new AndroidReceiving(this).prepare(android.net.Uri.parse(args.getString("uri")));
    case "prepareDownloadFolder": return downloads.prepare(android.net.Uri.parse(args.getString("uri")));
    case "shareList": return downloads.list(args);
@@ -57,8 +70,11 @@ final class NetworkController extends ContextWrapper {
     JSONObject hosts = store.all();
     String own = Native.command("identity").getString("peer");
     JSONObject receiving = Native.command("local_files_status");
+    JSONArray localServices = new JSONArray().put(receiving.getJSONObject("service"));
+    JSONArray sourceShares = new AndroidShares(this).status().getJSONArray("shares");
+    for (int index=0;index<sourceShares.length();index++) localServices.put(sourceShares.getJSONObject(index));
     hosts.put(own, new JSONObject().put("name", DeviceProfile.name(this)).put("local", true)
-     .put("state", "available").put("catalog", new JSONObject().put("services", new JSONArray().put(receiving.getJSONObject("service")))));
+     .put("state", "available").put("catalog", new JSONObject().put("services", localServices)));
     return new JSONObject().put("hosts", hosts).put("name", DeviceProfile.name(this))
      .put("share_downloads", downloads.snapshots())
      .put("network_pid", android.os.Process.myPid()).put("peer", Native.command("identity").getString("peer")).put("enabled", service.enabled)
