@@ -625,16 +625,13 @@ class _FileSendSheetState extends State<FileSendSheet> {
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      Text(
-        '${widget.desktop ? 'Drop' : 'Choose'} files to send to this device. Existing files are kept; interrupted transfers can resume.',
-      ),
-      const SizedBox(height: 16),
       if (widget.desktop)
         FileDropArea(
           key: const ValueKey('file-drop-zone'),
           onFiles: addFiles,
           child: Container(
-            constraints: const BoxConstraints(minHeight: 96),
+            width: double.infinity,
+            constraints: const BoxConstraints(minHeight: 112),
             padding: const EdgeInsets.all(18),
             decoration: BoxDecoration(
               color: WispColors.tile,

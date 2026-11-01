@@ -1008,6 +1008,29 @@ class _WispHomeState extends State<WispHome>
         ),
         physics: const AlwaysScrollableScrollPhysics(),
         children: [
+          if (snapshot['desktop'] != true)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  sectionHeading('LOCAL SERVICES', []),
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    key: const ValueKey('local-receive-files'),
+                    onPressed: busy
+                        ? null
+                        : () => showWispSheet<void>(
+                            context,
+                            title: 'Files access',
+                            child: AndroidReceivingSettings(backend: backend),
+                          ),
+                    icon: const Icon(Icons.folder_outlined),
+                    label: const Text('Receive files'),
+                  ),
+                ],
+              ),
+            ),
           if (local.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(bottom: 24),
