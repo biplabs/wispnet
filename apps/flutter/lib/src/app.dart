@@ -797,6 +797,8 @@ class _WispHomeState extends State<WispHome>
           ? 'Share files'
           : service['kind'] == 'shell'
           ? 'Shell'
+          : service['kind'] == 'http'
+          ? 'Http'
           : service['kind'].toString().toUpperCase(),
       child: DesktopSettings(
         backend: backend,

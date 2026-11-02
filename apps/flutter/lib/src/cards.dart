@@ -225,6 +225,10 @@ class MachineCard extends StatelessWidget {
         ? 'Share files'
         : isInboxService(service)
         ? 'Receive files'
+        : service['kind'] == 'shell'
+        ? 'Shell'
+        : service['kind'] == 'http'
+        ? 'Http'
         : (service['kind'] as String).toUpperCase();
     return WispServiceItem(
       title: service['id'] as String,
@@ -263,10 +267,7 @@ class MachineCard extends StatelessWidget {
         runSpacing: 4,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
-          if (isFolderService(service))
-            WispBadge(label: subtitle, color: WispColors.cyan)
-          else
-            Text(subtitle),
+          WispBadge(label: subtitle, color: WispColors.cyan),
           if (!enabled) const Text('Off', style: TextStyle(fontSize: 11)),
           if (publicEnabled)
             Tooltip(

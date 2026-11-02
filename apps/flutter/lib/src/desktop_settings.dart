@@ -864,6 +864,8 @@ class _DesktopSettingsState extends State<DesktopSettings> {
             ? 'Share files'
             : service['kind'] == 'shell'
             ? 'Shell'
+            : service['kind'] == 'http'
+            ? 'Http'
             : service['kind'].toString().toUpperCase(),
         color: WispColors.cyan,
       ),
