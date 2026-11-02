@@ -7,7 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wispnet/src/backend.dart';
 import 'package:wispnet/src/app.dart';
-import 'package:wispnet/src/desktop_settings.dart';
+import 'package:wispnet/src/service_settings.dart';
 import 'package:wispnet/src/file_shares.dart';
 import 'package:wispnet/ui.dart';
 
@@ -276,7 +276,7 @@ void main() {
           theme: wispTheme(),
           home: Scaffold(
             body: SingleChildScrollView(
-              child: DesktopSettings(
+              child: ServiceSettings(
                 backend: backend,
                 onAccess: () {},
                 onChanged: () {},

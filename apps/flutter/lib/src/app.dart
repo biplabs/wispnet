@@ -8,11 +8,10 @@ import 'space.dart';
 import '../ui.dart';
 import 'sheets.dart';
 import 'cards.dart';
-import 'desktop_settings.dart';
+import 'service_settings.dart';
 import 'terminal_sheet.dart';
 import 'file_transfer.dart';
 import 'file_shares.dart';
-import 'android_file_shares.dart';
 
 class WispnetApp extends StatelessWidget {
   const WispnetApp({super.key, required this.backend});
@@ -396,7 +395,7 @@ class _WispHomeState extends State<WispHome>
           ),
           const SizedBox(height: 12),
           const Text(
-            'Replace /local/file with the file to send and filename with its name. This computer chooses where received files are saved.',
+            'Replace /local/file with the file to send and filename with its name. This device chooses where received files are saved.',
           ),
           const SizedBox(height: 16),
           const Text('Send a file'),
@@ -599,9 +598,6 @@ class _WispHomeState extends State<WispHome>
         backend: backend,
         machine: machine,
         service: service,
-        android:
-            snapshot['desktop'] != true &&
-            Theme.of(context).platform == TargetPlatform.android,
         canResolve: online && machine.canOpen(service),
       ),
     );
@@ -718,28 +714,16 @@ class _WispHomeState extends State<WispHome>
     String section = 'My services',
     bool servicesOnly = false,
   }) async {
-    if (snapshot['desktop'] != true) {
-      if (servicesOnly) {
-        await showWispSheet<void>(
-          context,
-          title: 'Local services',
-          child: AndroidLocalServices(
-            backend: backend,
-            onChanged: () {
-              unawaited(poll());
-            },
-          ),
-        );
-        await poll();
-      } else {
-        await settings();
-      }
+    if (snapshot['desktop'] != true && !servicesOnly) {
+      await settings();
       return;
     }
     await showWispSheet<void>(
       context,
       title: servicesOnly ? 'Local services' : 'Settings',
-      child: DesktopSettings(
+      child: ServiceSettings(
+        android: snapshot['desktop'] != true,
+        host: snapshot['peer'] as String? ?? '',
         backend: backend,
         initialSection: section,
         servicesOnly: servicesOnly,
@@ -775,20 +759,6 @@ class _WispHomeState extends State<WispHome>
   }
 
   Future<void> localServiceSettings(Map<String, dynamic> service) async {
-    if (snapshot['desktop'] != true) {
-      await showWispSheet<void>(
-        context,
-        title: isInboxService(service) ? 'Receive files' : 'Share files',
-        child: service['kind'] != 'files' && isFolderService(service)
-            ? AndroidFileShares(
-                backend: backend,
-                serviceId: service['id'] as String,
-                onChanged: () => unawaited(poll()),
-              )
-            : AndroidReceivingSettings(backend: backend),
-      );
-      return;
-    }
     await showWispSheet<void>(
       context,
       title: isInboxService(service)
@@ -800,7 +770,9 @@ class _WispHomeState extends State<WispHome>
           : service['kind'] == 'http'
           ? 'Http'
           : service['kind'].toString().toUpperCase(),
-      child: DesktopSettings(
+      child: ServiceSettings(
+        android: snapshot['desktop'] != true,
+        host: snapshot['peer'] as String? ?? '',
         backend: backend,
         servicesOnly: true,
         serviceId: service['id'] as String,
@@ -892,9 +864,7 @@ class _WispHomeState extends State<WispHome>
     stateColor: stateColor(machine),
     busy: busy,
     onManage: () => machineSettings(machine),
-    onOpen: (service) => local && snapshot['desktop'] != true
-        ? localServiceSettings(service)
-        : open(machine, service),
+    onOpen: (service) => open(machine, service),
     onLinks: (service) => serviceLinks(machine, service),
     onSettings: local ? localServiceSettings : null,
     onToggle: local ? setServiceEnabled : null,

@@ -6,12 +6,13 @@ import 'package:flutter/services.dart';
 import 'backend.dart';
 import 'sheets.dart';
 import 'file_shares.dart';
-import 'file_transfer.dart';
+import 'local_service_details.dart';
+import 'service_settings_adapter.dart';
 import '../ui.dart';
 
-/// Owner workflows share the same sheets as Android; no permanent navigation rail.
-class DesktopSettings extends StatefulWidget {
-  const DesktopSettings({
+/// Shared owner service pages with platform-specific backend capabilities.
+class ServiceSettings extends StatefulWidget {
+  const ServiceSettings({
     super.key,
     required this.backend,
     required this.onAccess,
@@ -19,17 +20,25 @@ class DesktopSettings extends StatefulWidget {
     this.initialSection = 'My services',
     this.servicesOnly = false,
     this.serviceId,
+    this.android = false,
+    this.host = '',
   });
   final String initialSection;
-  final bool servicesOnly;
+  final bool servicesOnly, android;
+  final String host;
   final String? serviceId;
   final WispnetBackend backend;
   final VoidCallback onAccess, onChanged;
   @override
-  State<DesktopSettings> createState() => _DesktopSettingsState();
+  State<ServiceSettings> createState() => _ServiceSettingsState();
 }
 
-class _DesktopSettingsState extends State<DesktopSettings> {
+class _ServiceSettingsState extends State<ServiceSettings> {
+  late final ServiceSettingsAdapter adapter = ServiceSettingsAdapter(
+    backend: widget.backend,
+    android: widget.android,
+    host: widget.host,
+  );
   Map<String, dynamic>? status;
   List<dynamic> operations = [];
   late String section = widget.initialSection;
@@ -70,10 +79,10 @@ class _DesktopSettingsState extends State<DesktopSettings> {
 
   Future<void> load() async {
     try {
-      final next = await widget.backend.invoke('desktopStatus');
-      final journal = await widget.backend.invoke('desktopData', {
-        'op': 'operations',
-      });
+      final next = await adapter.status();
+      final journal = widget.android
+          ? <String, dynamic>{'value': <dynamic>[]}
+          : await widget.backend.invoke('desktopData', {'op': 'operations'});
       var address = '';
       String? addressError;
       final selected = (next['host']['services'] as List)
@@ -133,10 +142,8 @@ class _DesktopSettingsState extends State<DesktopSettings> {
     await widget.backend.invoke('desktopRequest', {'payload': payload});
   }
 
-  Future<void> mutate(Map<String, dynamic> operation, int revision) => request({
-    'op': 'mutate',
-    'operation': {...operation, 'expected_revision': revision},
-  });
+  Future<void> mutate(Map<String, dynamic> operation, int revision) =>
+      adapter.mutate(operation, revision);
   Future<void> confirm(
     String title,
     String detail,
@@ -232,11 +239,13 @@ class _DesktopSettingsState extends State<DesktopSettings> {
     );
   }
 
-  Future<void> editFiles(Map<String, dynamic> service) => showWispSheet<void>(
-    context,
-    title: 'File inbox',
-    child: filesEditor(service),
-  );
+  Future<void> editFiles(Map<String, dynamic> service) => widget.android
+      ? editShare(service)
+      : showWispSheet<void>(
+          context,
+          title: 'File inbox',
+          child: filesEditor(service),
+        );
 
   Widget filesEditor(Map<String, dynamic> service) {
     final revision = status!['host']['revision'] as int;
@@ -390,9 +399,7 @@ class _DesktopSettingsState extends State<DesktopSettings> {
   Widget shareEditor([Map<String, dynamic>? service]) {
     final revision = status!['host']['revision'] as int;
     final name = service?['id'] as String? ?? '';
-    final mode = service == null || service['kind'] == 'file_inbox'
-        ? 'inbox'
-        : 'share';
+    final mode = service == null || isInboxService(service) ? 'inbox' : 'share';
     final roots =
         status!['host'][mode == 'inbox' ? 'file_inboxes' : 'file_shares']
             as Map? ??
@@ -422,6 +429,9 @@ class _DesktopSettingsState extends State<DesktopSettings> {
     return FileShareEditor(
       backend: widget.backend,
       clients: List<Map<String, dynamic>>.of(clients),
+      android: widget.android,
+      folderLabel: service?['label'] as String? ?? '',
+      folderAvailable: service?['available'] != false,
       id: name,
       root: roots[name] as String? ?? '',
       allow: (service?['allow'] as List? ?? []).cast<String>(),
@@ -430,22 +440,54 @@ class _DesktopSettingsState extends State<DesktopSettings> {
       mode: mode,
       onSave: (id, root, allow) => save(mode, id, root, allow),
       onSaveFolder: save,
+      onRemove: service == null
+          ? null
+          : () async {
+              final confirmed = await showWispSheet<bool>(
+                context,
+                title: 'Remove folder?',
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'Remove “$name” from Wispnet? Files on this device will be kept.',
+                    ),
+                    const SizedBox(height: 16),
+                    FilledButton(
+                      key: const ValueKey('confirm-remove-share'),
+                      onPressed: () => Navigator.pop(context, true),
+                      style: wispDangerButtonStyle(),
+                      child: const Text('Remove folder'),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: const Text('Keep folder'),
+                    ),
+                  ],
+                ),
+              );
+              if (confirmed != true) return false;
+              await mutate({'op': 'remove', 'id': name}, revision);
+              return true;
+            },
     );
   }
 
   Future<void> editService([Map<String, dynamic>? service]) async {
     final current = status!;
     final originalId = service?['id'] as String?;
-    final id = TextEditingController(text: originalId);
+    late final id = TextEditingController(text: originalId);
     final endpoint = Uri.parse(
       'tcp://${service?['backend'] ?? '127.0.0.1:8080'}',
     );
-    final portField = TextEditingController(text: endpoint.port.toString());
+    late final portField = TextEditingController(
+      text: endpoint.port.toString(),
+    );
     var kind = service?['kind'] as String? ?? 'http';
     var renamed = false;
     final allowed = (service?['allow'] as List? ?? []).cast<String>().toSet();
     final devices = List<Map<String, dynamic>>.of(clients);
-    final customForm = _ActionForm(
+    late final customForm = _ActionForm(
       controllers: [id, portField],
       builder: (context, submit, working, failure) => StatefulBuilder(
         builder: (context, update) => Column(
@@ -556,6 +598,7 @@ class _DesktopSettingsState extends State<DesktopSettings> {
       key: ValueKey('create-folder-$mode'),
       backend: widget.backend,
       clients: devices,
+      android: widget.android,
       folderService: true,
       mode: mode,
       onSave: (name, root, allow) async {
@@ -578,7 +621,16 @@ class _DesktopSettingsState extends State<DesktopSettings> {
       child: service != null
           ? customForm
           : _ServiceCreationTabs(
-              children: [folderForm('inbox'), folderForm('share'), customForm],
+              labels: [
+                'Receive files',
+                'Share files',
+                if (!widget.android) 'Custom',
+              ],
+              children: [
+                folderForm('inbox'),
+                folderForm('share'),
+                if (!widget.android) customForm,
+              ],
             ),
     );
     widget.onChanged();
@@ -857,29 +909,44 @@ class _DesktopSettingsState extends State<DesktopSettings> {
     kind: service['kind'] as String,
     subtitle: Align(
       alignment: Alignment.centerLeft,
-      child: WispBadge(
-        label: isInboxService(service)
-            ? 'Receive files'
-            : service['kind'] == 'file_share'
-            ? 'Share files'
-            : service['kind'] == 'shell'
-            ? 'Shell'
-            : service['kind'] == 'http'
-            ? 'Http'
-            : service['kind'].toString().toUpperCase(),
-        color: WispColors.cyan,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          WispBadge(
+            label: isInboxService(service)
+                ? 'Receive files'
+                : service['kind'] == 'file_share'
+                ? 'Share files'
+                : service['kind'] == 'shell'
+                ? 'Shell'
+                : service['kind'] == 'http'
+                ? 'Http'
+                : service['kind'].toString().toUpperCase(),
+            color: WispColors.cyan,
+          ),
+          if (service['available'] == false) ...[
+            const SizedBox(height: 4),
+            const Text(
+              'Folder access expired or is unavailable. Choose the folder again.',
+              style: TextStyle(color: WispColors.error),
+            ),
+          ],
+        ],
       ),
     ),
     enabled: service['enabled'] != false,
     busy: busy,
     toggleKey: ValueKey('local-service-toggle-${service['id']}'),
-    onToggle: (value) => run(() async {
-      await widget.backend.invoke('setServiceEnabled', {
-        'service': service['id'],
-        'incarnation': service['incarnation'],
-        'enabled': value,
-      });
-    }),
+    onToggle: service['available'] == false && service['enabled'] == false
+        ? null
+        : (value) => run(() async {
+            await widget.backend.invoke('setServiceEnabled', {
+              'service': service['id'],
+              'incarnation': service['incarnation'],
+              'enabled': value,
+            });
+          }),
     settingsTooltip: service['kind'] == 'shell'
         ? 'Shell access'
         : service['kind'] == 'files'
@@ -904,7 +971,7 @@ class _DesktopSettingsState extends State<DesktopSettings> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (!widget.servicesOnly) ...[
+        if (!widget.servicesOnly && !widget.android) ...[
           action('Device and browser settings', widget.onAccess),
           action('Pair this machine', () => run(invite)),
           const SizedBox(height: 12),
@@ -957,94 +1024,63 @@ class _DesktopSettingsState extends State<DesktopSettings> {
           for (final s in services.where((s) => s['id'] == widget.serviceId))
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
-              child: WispPanel(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      s['id'] as String,
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
+              child: LocalServiceDetails(
+                id: s['id'] as String,
+                kind: s['kind'] as String,
+                host: status!['host']['host'] as String,
+                busy: busy,
+                notices: [
+                  if (s['available'] == false)
+                    const Text(
+                      'Folder access expired or is unavailable. Choose the folder again.',
+                      style: TextStyle(color: WispColors.error),
                     ),
-                    const SizedBox(height: 8),
-                    if (s['kind'] == 'shell') ...[
-                      const Text(
-                        'Open Shell on this computer from a paired device with Shell access, or run this command on a paired computer.',
-                      ),
-                      const SizedBox(height: 12),
-                      WispCommandBlock(
-                        command: 'wispnet shell ${status!['host']['host']}',
-                        copyText: 'wispnet shell ${status!['host']['host']}',
-                      ),
-                    ] else if (isInboxService(s)) ...[
-                      const Text(
-                        'Send files from a paired device with Files access. This computer chooses where received files are saved. Replace /local/file with the file to send and filename with its name.',
-                      ),
-                      const SizedBox(height: 12),
-                      FileSendCommand(
-                        host: status!['host']['host'] as String,
-                        service: s['id'] as String,
-                      ),
-                    ] else if (s['kind'] == 'file_share')
-                      const Text(
-                        'Open this folder from a paired device with access to browse and download its shared files.',
-                      )
-                    else if (localUrl.isNotEmpty)
-                      addressLink(localUrl),
-                    if (s['kind'] == 'http' &&
-                        publication(s)?['enabled'] == true &&
-                        publication(s)?['url'] is String)
-                      addressLink(
-                        publication(s)!['url'] as String,
-                        publicService: s['id'] as String,
-                      ),
-                    const SizedBox(height: 10),
-                    ...[
-                      action(
-                        'Edit',
-                        () => run(
-                          () => s['kind'] == 'shell'
-                              ? editShell(s)
-                              : s['kind'] == 'files'
-                              ? editFiles(s)
-                              : isFolderService(s)
-                              ? editShare(s)
-                              : editService(s),
-                        ),
-                      ),
-                      action(
-                        'Remove service',
-                        () => run(
-                          () => confirm(
-                            'Remove service?',
-                            s['kind'] == 'shell' || s['kind'] == 'files'
-                                ? 'Disable “${s['id']}” on this machine? Paired devices will lose access. This built-in service can be enabled again from its card.'
-                                : isFolderService(s)
-                                ? 'Remove “${s['id']}” from Wispnet? Files on this computer will be kept.'
-                                : 'Remove “${s['id']}” from this machine’s shared services? Paired devices will lose Wispnet access, and its public URL will stop working. This does not stop or delete the underlying application.',
-                            () => mutate({
-                              'op': s['kind'] == 'shell' || s['kind'] == 'files'
-                                  ? 'set_service_enabled'
-                                  : 'remove',
-                              'id': s['id'],
-                              if (s['kind'] == 'shell' ||
-                                  s['kind'] == 'files') ...{
-                                'incarnation': s['incarnation'],
-                                'enabled': false,
-                              },
-                            }, status!['host']['revision'] as int),
-                            danger: true,
-                            confirmLabel: 'Remove service',
-                          ),
-                        ),
-                        danger: true,
-                      ),
-                    ],
-                    if (s['kind'] == 'http') ..._public(s),
-                  ],
+                ],
+                links: [
+                  if (!isFolderService(s) &&
+                      s['kind'] != 'shell' &&
+                      localUrl.isNotEmpty)
+                    addressLink(localUrl),
+                  if (s['kind'] == 'http' &&
+                      publication(s)?['enabled'] == true &&
+                      publication(s)?['url'] is String)
+                    addressLink(
+                      publication(s)!['url'] as String,
+                      publicService: s['id'] as String,
+                    ),
+                ],
+                onEdit: () => run(
+                  () => s['kind'] == 'shell'
+                      ? editShell(s)
+                      : s['kind'] == 'files'
+                      ? editFiles(s)
+                      : isFolderService(s)
+                      ? editShare(s)
+                      : editService(s),
                 ),
+                onRemove: () => run(
+                  () => confirm(
+                    'Remove service?',
+                    s['kind'] == 'shell' || s['kind'] == 'files'
+                        ? 'Disable “${s['id']}” on this device? Paired devices will lose access. This built-in service can be enabled again from its card.'
+                        : isFolderService(s)
+                        ? 'Remove “${s['id']}” from Wispnet? Files on this device will be kept.'
+                        : 'Remove “${s['id']}” from this machine’s shared services? Paired devices will lose Wispnet access, and its public URL will stop working. This does not stop or delete the underlying application.',
+                    () => mutate({
+                      'op': s['kind'] == 'shell' || s['kind'] == 'files'
+                          ? 'set_service_enabled'
+                          : 'remove',
+                      'id': s['id'],
+                      if (s['kind'] == 'shell' || s['kind'] == 'files') ...{
+                        'incarnation': s['incarnation'],
+                        'enabled': false,
+                      },
+                    }, status!['host']['revision'] as int),
+                    danger: true,
+                    confirmLabel: 'Remove service',
+                  ),
+                ),
+                extraActions: [if (s['kind'] == 'http') ..._public(s)],
               ),
             ),
         ] else if (section == 'Devices') ...[
@@ -1408,8 +1444,12 @@ class _QrPainter extends CustomPainter {
 
 /// Keep each draft separate while switching between service types.
 class _ServiceCreationTabs extends StatefulWidget {
-  const _ServiceCreationTabs({required this.children});
+  const _ServiceCreationTabs({
+    required this.children,
+    this.labels = const ['Receive files', 'Share files', 'Custom'],
+  }) : assert(children.length == labels.length);
   final List<Widget> children;
+  final List<String> labels;
 
   @override
   State<_ServiceCreationTabs> createState() => _ServiceCreationTabsState();
@@ -1420,7 +1460,7 @@ class _ServiceCreationTabsState extends State<_ServiceCreationTabs> {
 
   @override
   Widget build(BuildContext context) => DefaultTabController(
-    length: 3,
+    length: widget.children.length,
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -1432,10 +1472,9 @@ class _ServiceCreationTabsState extends State<_ServiceCreationTabs> {
           labelColor: WispColors.cyan,
           unselectedLabelColor: WispColors.muted,
           indicatorColor: WispColors.cyan,
-          tabs: const [
-            Tab(child: Text('Receive files', textAlign: TextAlign.center)),
-            Tab(child: Text('Share files', textAlign: TextAlign.center)),
-            Tab(text: 'Custom'),
+          tabs: [
+            for (final label in widget.labels)
+              Tab(child: Text(label, textAlign: TextAlign.center)),
           ],
         ),
         const SizedBox(height: 20),

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:wispnet/src/desktop_settings.dart';
+import 'package:wispnet/src/service_settings.dart';
 import 'package:wispnet/ui.dart';
 
 import 'android_file_shares_test.dart' as fixture;
@@ -61,7 +61,7 @@ class ServiceListBackend extends folders.FolderBackend {
 Future<void> owner(WidgetTester tester, ServiceListBackend backend) =>
     fixture.mount(
       tester,
-      DesktopSettings(
+      ServiceSettings(
         backend: backend,
         servicesOnly: true,
         onAccess: () {},
@@ -229,7 +229,7 @@ void main() {
               onPressed: () => showWispSheet<void>(
                 context,
                 title: 'Local services',
-                child: DesktopSettings(
+                child: ServiceSettings(
                   backend: backend,
                   servicesOnly: true,
                   onAccess: () {},
@@ -392,7 +392,7 @@ void main() {
               onPressed: () => showWispSheet<void>(
                 context,
                 title: id,
-                child: DesktopSettings(
+                child: ServiceSettings(
                   backend: backend,
                   servicesOnly: true,
                   serviceId: id,
@@ -412,7 +412,7 @@ void main() {
         expect(find.text('Save'), findsNothing);
         await tester.tap(find.text('Edit'));
         await tester.pumpAndSettle();
-        expect(find.text('Remove folder'), findsNothing);
+        expect(find.text('Remove folder'), findsOneWidget);
         backend.pickedDesktopFolder = '/srv/updated-folder';
         await tester.tap(find.text('Choose folder'));
         await tester.pumpAndSettle();
@@ -447,6 +447,63 @@ void main() {
       }
     },
   );
+  for (final id in ['predictions', 'datasets']) {
+    testWidgets('desktop folder editor removal confirms only $id', (
+      tester,
+    ) async {
+      final backend = ServiceListBackend();
+      await owner(tester, backend);
+      final gear = find.byTooltip('Folders and access for $id');
+      await tester.ensureVisible(gear);
+      await tester.tap(gear);
+      await tester.pumpAndSettle();
+
+      Future<void> openRemoval() async {
+        final remove = find.widgetWithText(OutlinedButton, 'Remove folder');
+        await tester.ensureVisible(remove);
+        await tester.tap(remove);
+        await tester.pumpAndSettle();
+        expect(find.text('Remove folder?'), findsOneWidget);
+        expect(find.textContaining('“$id”'), findsOneWidget);
+      }
+
+      await openRemoval();
+      await tester.ensureVisible(find.text('Keep folder'));
+      await tester.tap(find.text('Keep folder'));
+      await tester.pumpAndSettle();
+      expect(
+        backend.calls.where((call) => call.$1 == 'desktopRequest'),
+        isEmpty,
+      );
+      expect(find.byKey(const ValueKey('share-name')), findsOneWidget);
+      await openRemoval();
+      final confirm = find.widgetWithText(FilledButton, 'Remove folder');
+      await tester.ensureVisible(confirm);
+      await tester.tap(confirm);
+      await tester.pumpAndSettle();
+      expect(
+        backend.calls
+            .where((call) => call.$1 == 'desktopRequest')
+            .single
+            .$2['payload']['operation'],
+        {'op': 'remove', 'id': id, 'expected_revision': 3},
+      );
+      expect(find.byKey(const ValueKey('share-name')), findsNothing);
+      expect(
+        [
+          ...backend.inboxes,
+          ...backend.shares,
+        ].where((folder) => folder['id'] == id),
+        isEmpty,
+      );
+      expect(backend.inboxes.first['id'], 'training-data');
+      expect(backend.inboxes.first['allow'], [fixture.laptop]);
+      expect(backend.shares.first['id'], 'checkpoints');
+      expect(backend.shares.first['allow'], [fixture.laptop]);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    });
+  }
   testWidgets('folder picker suggests a name and preserves a custom name', (
     tester,
   ) async {

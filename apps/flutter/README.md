@@ -1,8 +1,37 @@
 # Wispnet Flutter UI
 
-Android and Linux desktop use the same Flutter home screen, fonts, machine/service
-cards, launch animation, pairing, and settings sheets. Desktop uses the wider
-service-card grid already shared with Android; there is no persistent sidebar.
+Desktop is the UI standard for every platform. Android and desktop use the same
+Flutter pages for the home screen, paired machines, machine settings, pairing,
+device settings, service links, service management, folder editors, sending files,
+browsing shared files, and transfer progress. Responsive layouts adapt that page
+to the available width; do not create parallel mobile pages.
+
+`ServiceSettings` is the shared service-management page. Its backend adapter maps
+Android's folder operations onto the same status and mutation interface used by
+desktop. Service types and controls are omitted only where the platform lacks
+the corresponding capability.
+
+The remaining platform exceptions have specific native requirements:
+
+- Android currently exposes folder services. Its native adapter does not implement
+  desktop Shell or HTTP/TCP hosting, public links, or desktop owner operations.
+  Those creation tabs and owner tools are absent on Android.
+- Android folder access uses the Storage Access Framework, persistent URI grants,
+  and human-readable folder labels. Desktop uses native filesystem paths. Android
+  folder services keep their existing IDs because its native API cannot rename
+  a service atomically.
+- Android pairing offers camera scanning and QR-image import through native
+  activities; the desktop adapter provides pairing-code input. Both use the same
+  pairing form.
+- Android's remote terminal uses the native Termux terminal view for IME text
+  composition, soft-keyboard integration, and its persistent native workspace.
+  Desktop uses the embedded Flutter terminal and can launch an external terminal.
+- The Android diagnostic page is available through its native connection-test
+  adapter. The desktop adapter does not implement that diagnostic operation.
+- File selection and download destinations use the platform picker. Desktop also
+  accepts file drops; Android also accepts files shared by another app. Transfers,
+  browsing, and progress use shared pages.
+
 Local service switches pause Wispnet serving, including public links, Shell, and
 Files. Pausing closes active connections and keeps device grants and folder
 settings for re-enabling. The switch state survives a node restart.

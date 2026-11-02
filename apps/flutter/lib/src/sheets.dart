@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'backend.dart';
-import 'android_file_shares.dart';
 import '../ui.dart';
 
 String failureMessage(Object error) {
@@ -659,13 +658,12 @@ class ServiceLinks extends StatefulWidget {
     required this.backend,
     required this.machine,
     required this.service,
-    required this.android,
     required this.canResolve,
   });
   final WispnetBackend backend;
   final Machine machine;
   final Map<String, dynamic> service;
-  final bool android, canResolve;
+  final bool canResolve;
   @override
   State<ServiceLinks> createState() => _ServiceLinksState();
 }
@@ -783,13 +781,12 @@ class _ServiceLinksState extends State<ServiceLinks> {
             ),
           ),
         if (localUrl == null) const SizedBox(height: 12),
-        if (widget.android)
-          option(
-            'Wispnet URL',
-            'wispnet://${widget.machine.id}/${widget.service['id']}',
-            'Copy Wispnet link',
-            description: 'Stays the same across devices, even if their local ports differ. Use this for a consistent link to the service.',
-          ),
+        option(
+          'Wispnet URL',
+          'wispnet://${widget.machine.id}/${widget.service['id']}',
+          'Copy Wispnet link',
+          description: 'Stays the same across devices, even if their local ports differ. Use this for a consistent link to the service.',
+        ),
         if (publication?['enabled'] == true &&
             publicUrl != null &&
             publicUrl.isNotEmpty)
@@ -1028,194 +1025,4 @@ class _SettingsFormState extends State<SettingsForm> {
       ],
     ],
   );
-}
-
-class AndroidReceivingSettings extends StatefulWidget {
-  const AndroidReceivingSettings({super.key, required this.backend});
-  final WispnetBackend backend;
-  @override
-  State<AndroidReceivingSettings> createState() =>
-      _AndroidReceivingSettingsState();
-}
-
-class _AndroidReceivingSettingsState extends State<AndroidReceivingSettings> {
-  bool busy = true, available = false, online = false;
-  String folder = '', label = '';
-  String? error;
-  int? revision;
-  List<Map<String, dynamic>> clients = [];
-  final allow = <String>{};
-  @override
-  void initState() {
-    super.initState();
-    load();
-  }
-
-  String describe(Object e) =>
-      e is PlatformException ? e.message ?? e.code : e.toString();
-  Future<void> load() async {
-    setState(() {
-      busy = true;
-      error = null;
-    });
-    try {
-      final result = await widget.backend.invoke('receivingStatus');
-      if (!mounted) return;
-      setState(() {
-        revision = result['revision'] as int;
-        folder = result['folder'] as String? ?? '';
-        label = result['label'] as String? ?? '';
-        available = result['available'] == true;
-        online = result['online'] == true;
-        clients = (result['clients'] as List).cast<Map<String, dynamic>>();
-        allow
-          ..clear()
-          ..addAll((result['allow'] as List).cast<String>());
-      });
-    } catch (e) {
-      if (mounted) setState(() => error = describe(e));
-    } finally {
-      if (mounted) setState(() => busy = false);
-    }
-  }
-
-  Future<void> pick() async {
-    setState(() {
-      busy = true;
-      error = null;
-    });
-    try {
-      final result = await widget.backend.invoke('pickReceivingFolder');
-      if (!mounted || result['folder'] == null) {
-        return;
-      }
-      setState(() {
-        folder = result['folder'] as String;
-        label = result['label'] as String;
-        available = true;
-      });
-      await save();
-    } catch (e) {
-      if (mounted) setState(() => error = describe(e));
-    } finally {
-      if (mounted) setState(() => busy = false);
-    }
-  }
-
-  Future<void> save() async {
-    setState(() {
-      busy = true;
-      error = null;
-    });
-    try {
-      await widget.backend.invoke('saveReceiving', {
-        'expected_revision': revision,
-        'folder': folder,
-        'allow': allow.toList(),
-      });
-      if (mounted) await load();
-    } catch (e) {
-      if (mounted) {
-        await load();
-        if (mounted) setState(() => error = describe(e));
-      }
-    } finally {
-      if (mounted) setState(() => busy = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => PopScope(
-    canPop: !busy,
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const Text(
-          'Choose a folder on this device. Selected devices can send files without confirming each transfer. Your receiving location stays private.',
-        ),
-        const SizedBox(height: 12),
-        WispListItem(
-          contentPadding: EdgeInsets.zero,
-          leading: const Icon(Icons.folder_outlined, color: WispColors.cyan),
-          title: Text(label.isEmpty ? 'Choose receiving folder' : label),
-          subtitle: folder.isNotEmpty && !available
-              ? const Text('Folder access needs to be renewed')
-              : null,
-          onTap: busy ? null : pick,
-          actions: [
-            if (folder.isNotEmpty)
-              IconButton(
-                key: const ValueKey('receiving-folder-remove'),
-                tooltip: 'Remove receiving folder',
-                onPressed: busy || revision == null
-                    ? null
-                    : () async {
-                        setState(() {
-                          folder = '';
-                          label = '';
-                          available = false;
-                          allow.clear();
-                        });
-                        await save();
-                      },
-                icon: const Icon(Icons.delete_outline),
-              ),
-            WispSettingsButton(
-              key: const ValueKey('receiving-folder-picker'),
-              tooltip: 'Change receiving folder',
-              onPressed: busy ? null : pick,
-            ),
-          ],
-        ),
-        if (!online)
-          const Text(
-            'Go online to receive files. Your folder and permissions will be saved.',
-          ),
-        if (clients.isEmpty && !busy)
-          const Text('Pair a device first to grant it Files access.'),
-        for (final client in clients)
-          WispToggleListTile(
-            key: ValueKey('receiving-allow-${client['peer']}'),
-            contentPadding: EdgeInsets.zero,
-            title: Text(client['name'] as String),
-            subtitle: Text((client['peer'] as String).substring(0, 8)),
-            value: allow.contains(client['peer']),
-            onChanged: busy || revision == null || !available
-                ? null
-                : (checked) async {
-                    setState(() {
-                      if (checked == true) {
-                        allow.add(client['peer'] as String);
-                      } else {
-                        allow.remove(client['peer']);
-                      }
-                    });
-                    await save();
-                  },
-          ),
-        if (error != null)
-          Text(error!, style: const TextStyle(color: WispColors.error)),
-        if (busy) const LinearProgressIndicator(),
-      ],
-    ),
-  );
-}
-
-/// Lists built-in modules separately from their folder and access settings.
-class AndroidLocalServices extends StatefulWidget {
-  const AndroidLocalServices({
-    super.key,
-    required this.backend,
-    required this.onChanged,
-  });
-  final WispnetBackend backend;
-  final VoidCallback onChanged;
-  @override
-  State<AndroidLocalServices> createState() => _AndroidLocalServicesState();
-}
-
-class _AndroidLocalServicesState extends State<AndroidLocalServices> {
-  @override
-  Widget build(BuildContext context) =>
-      AndroidFileShares(backend: widget.backend, onChanged: widget.onChanged);
 }

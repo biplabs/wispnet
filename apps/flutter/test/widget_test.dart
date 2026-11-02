@@ -10,9 +10,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:wispnet/src/app.dart';
 import 'package:wispnet/src/backend.dart';
 import 'package:wispnet/src/cards.dart';
+import 'package:wispnet/src/file_shares.dart';
 import 'package:wispnet/src/space.dart';
-import 'package:wispnet/src/desktop_settings.dart';
-import 'package:wispnet/src/sheets.dart';
+import 'package:wispnet/src/service_settings.dart';
 import 'package:wispnet/src/terminal_sheet.dart';
 import 'package:wispnet/ui.dart';
 
@@ -1531,7 +1531,7 @@ void main() {
         'allow': [peer],
       },
     });
-    expect(find.byType(DesktopSettings), findsNothing);
+    expect(find.byType(ServiceSettings), findsNothing);
     expect(
       find.byTooltip('Settings for renamed-web on hibreak'),
       findsOneWidget,
@@ -1723,7 +1723,7 @@ void main() {
           theme: wispTheme(),
           home: Scaffold(
             body: SingleChildScrollView(
-              child: DesktopSettings(
+              child: ServiceSettings(
                 backend: backend,
                 onAccess: () {},
                 onChanged: () {},
@@ -1771,7 +1771,7 @@ void main() {
     await tester.tap(find.text('Local services'));
     await tester.pumpAndSettle();
     final files = find.descendant(
-      of: find.byType(DesktopSettings),
+      of: find.byType(ServiceSettings),
       matching: find.byWidgetPredicate(
         (w) => w is WispServiceItem && w.title == 'files',
       ),
@@ -1822,7 +1822,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(
       find.descendant(
-        of: find.byType(DesktopSettings),
+        of: find.byType(ServiceSettings),
         matching: find.text('files'),
       ),
     );
@@ -1845,9 +1845,9 @@ void main() {
       await tester.tap(find.text('Local services'));
       await tester.pumpAndSettle();
       expect(find.text('Local services'), findsOneWidget);
-      expect(find.byType(AndroidReceivingSettings), findsNothing);
+      expect(find.byType(ServiceSettings), findsOneWidget);
       final files = find.descendant(
-        of: find.byType(AndroidLocalServices),
+        of: find.byType(ServiceSettings),
         matching: find.byWidgetPredicate(
           (w) => w is WispServiceItem && w.title == 'incoming',
         ),
@@ -1862,7 +1862,7 @@ void main() {
       );
       final gear = find.descendant(
         of: files,
-        matching: find.byTooltip('Folder and access for incoming'),
+        matching: find.byTooltip('Folders and access for incoming'),
       );
       expect(
         tester.getRect(folder).right,
@@ -1982,7 +1982,7 @@ void main() {
       expect(find.textContaining('127.0.0.1:8080'), findsNothing);
       expect(
         find.descendant(
-          of: find.byType(DesktopSettings),
+          of: find.byType(ServiceSettings),
           matching: find.textContaining('Public ·'),
         ),
         findsNothing,
@@ -2161,7 +2161,7 @@ void main() {
     },
   );
   testWidgets(
-    'desktop link popup shows local and public URLs without an Android option',
+    'desktop link popup uses the same local, Wispnet and public options as mobile',
     (tester) async {
       final backend = DesktopFake();
       backend.status['public_access']['services'] = [
@@ -2178,7 +2178,16 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('http://shared-web.localhost:18000/'), findsOneWidget);
       expect(find.text('https://shared-web.wispnet.test/'), findsOneWidget);
-      expect(find.byTooltip('Copy Wispnet link'), findsNothing);
+      expect(find.byTooltip('Copy Wispnet link'), findsOneWidget);
+      expect(find.text('wispnet://${'d' * 64}/web'), findsOneWidget);
+      expect(
+        tester.getRect(find.text('Local URL')).top,
+        lessThan(tester.getRect(find.text('Wispnet URL')).top),
+      );
+      expect(
+        tester.getRect(find.text('Wispnet URL')).top,
+        lessThan(tester.getRect(find.text('Public URL').last).top),
+      );
       expect(
         backend.calls.where((c) => ['open', 'launch'].contains(c.$1)),
         isEmpty,
@@ -2796,6 +2805,71 @@ void main() {
     });
     await close(tester);
   });
+  for (final android in [false, true]) {
+    for (final inbox in [false, true]) {
+      testWidgets(
+        '${android ? 'Android' : 'desktop'} local ${inbox ? 'inbox' : 'share'} card uses the common open page',
+        (tester) async {
+          final backend = android ? AndroidLocalFake() : DesktopFake();
+          final id = inbox ? 'incoming' : 'documents';
+          if (!android || !inbox) {
+            (backend.status['host']['services'] as List).add({
+              'id': id,
+              'kind': inbox ? 'file_inbox' : 'file_share',
+              'incarnation': incarnation,
+              'enabled': true,
+              'allow': <String>[],
+            });
+          }
+          await mount(
+            tester,
+            backend,
+            size: android ? const Size(360, 780) : const Size(1000, 1000),
+          );
+          final card = find.descendant(
+            of: find.byKey(const ValueKey('local-sector')),
+            matching: find.text(id),
+          );
+          await tester.ensureVisible(card);
+          await tester.tap(card);
+          await tester.pumpAndSettle();
+          expect(find.byType(ServiceSettings), findsNothing);
+          if (inbox) {
+            expect(find.text('Send files to hibreak'), findsOneWidget);
+            expect(
+              find.text(
+                "wispnet files put ${'d' * 64} incoming /local/file filename",
+              ),
+              findsOneWidget,
+            );
+            expect(find.byType(SharedFilesBrowser), findsNothing);
+          } else {
+            expect(find.byType(SharedFilesBrowser), findsOneWidget);
+            expect(find.text('documents on hibreak'), findsOneWidget);
+            expect(
+              backend.calls.where((call) => call.$1 == 'shareList').single.$2,
+              {
+                'host': 'd' * 64,
+                'service': 'documents',
+                'incarnation': incarnation,
+                'path': '',
+              },
+            );
+          }
+          expect(
+            backend.calls.where(
+              (call) => call.$1 == 'open' || call.$1 == 'launch',
+            ),
+            isEmpty,
+          );
+          expect(backend.ownerCalls, isEmpty);
+          expect(tester.takeException(), isNull);
+          await close(tester);
+        },
+      );
+    }
+  }
+
   testWidgets('files card shows a send command without launching a browser', (
     tester,
   ) async {

@@ -5,10 +5,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:wispnet/src/android_file_shares.dart';
+import 'package:wispnet/src/service_settings.dart';
 import 'package:wispnet/src/app.dart';
 import 'package:wispnet/src/backend.dart';
-import 'package:wispnet/src/sheets.dart';
+import 'package:wispnet/src/file_shares.dart';
 import 'package:wispnet/ui.dart';
 
 final own = 'a' * 64;
@@ -187,13 +187,22 @@ void main() {
       final backend = AndroidSharesBackend();
       await mount(
         tester,
-        AndroidFileShares(backend: backend, onChanged: () {}),
+        ServiceSettings(
+          backend: backend,
+          android: true,
+          host: own,
+          servicesOnly: true,
+          onAccess: () {},
+          onChanged: () {},
+        ),
       );
-      await tester.tap(find.byKey(const ValueKey('add-android-share')));
+      await tester.tap(find.byKey(const ValueKey('share-service')));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('folder-mode')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Share files').last);
+      expect(find.widgetWithText(Tab, 'Receive files'), findsOneWidget);
+      expect(find.widgetWithText(Tab, 'Share files'), findsOneWidget);
+      expect(find.widgetWithText(Tab, 'Custom'), findsNothing);
+      expect(find.byKey(const ValueKey('folder-mode')), findsNothing);
+      await tester.tap(find.widgetWithText(Tab, 'Share files'));
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('share-root')), findsNothing);
       await tester.enterText(
@@ -239,9 +248,16 @@ void main() {
       final backend = AndroidSharesBackend();
       await mount(
         tester,
-        AndroidFileShares(backend: backend, onChanged: () {}),
+        ServiceSettings(
+          backend: backend,
+          android: true,
+          host: own,
+          servicesOnly: true,
+          onAccess: () {},
+          onChanged: () {},
+        ),
       );
-      await tester.tap(find.byTooltip('Folder and access for checkpoints'));
+      await tester.tap(find.byTooltip('Folders and access for checkpoints'));
       await tester.pumpAndSettle();
       expect(
         find.descendant(
@@ -283,13 +299,21 @@ void main() {
       backend.shares.first['enabled'] = false;
       await mount(
         tester,
-        AndroidFileShares(backend: backend, onChanged: () {}),
+        ServiceSettings(
+          backend: backend,
+          android: true,
+          host: own,
+          servicesOnly: true,
+          onAccess: () {},
+          onChanged: () {},
+        ),
       );
-      final row = find.byKey(const ValueKey('android-share-checkpoints'));
+      final row = find.byKey(const ValueKey('local-service-checkpoints'));
       expect(tester.widget<WispServiceItem>(row).onToggle, isNull);
-      await tester.tap(find.byTooltip('Folder and access for checkpoints'));
+      expect(find.textContaining('Folder access expired'), findsOneWidget);
+      await tester.tap(find.byTooltip('Folders and access for checkpoints'));
       await tester.pumpAndSettle();
-      expect(find.textContaining('Folder access expired'), findsWidgets);
+      expect(find.text('Folder unavailable. Choose it again.'), findsOneWidget);
       expect(
         tester
             .widget<FilledButton>(find.widgetWithText(FilledButton, 'Save'))
@@ -343,9 +367,16 @@ void main() {
       final backend = AndroidSharesBackend();
       await mount(
         tester,
-        AndroidFileShares(backend: backend, onChanged: () {}),
+        ServiceSettings(
+          backend: backend,
+          android: true,
+          host: own,
+          servicesOnly: true,
+          onAccess: () {},
+          onChanged: () {},
+        ),
       );
-      await tester.tap(find.byTooltip('Folder and access for checkpoints'));
+      await tester.tap(find.byTooltip('Folders and access for checkpoints'));
       await tester.pumpAndSettle();
       await tester.ensureVisible(find.text('Remove folder'));
       await tester.tap(find.text('Remove folder'));
@@ -373,7 +404,14 @@ void main() {
       final backend = AndroidSharesBackend();
       await mount(
         tester,
-        AndroidFileShares(backend: backend, onChanged: () {}),
+        ServiceSettings(
+          backend: backend,
+          android: true,
+          host: own,
+          servicesOnly: true,
+          onAccess: () {},
+          onChanged: () {},
+        ),
       );
       await tester.tap(find.text('checkpoints'));
       await tester.pumpAndSettle();
@@ -413,8 +451,8 @@ void main() {
         find.byTooltip('Settings for checkpoints on Android phone'),
       );
       await tester.pumpAndSettle();
-      expect(find.byType(AndroidFileShares), findsOneWidget);
-      expect(find.byType(AndroidReceivingSettings), findsNothing);
+      expect(find.byType(ServiceSettings), findsOneWidget);
+      expect(find.byType(FileShareEditor), findsNothing);
       expect(find.text('Datasets folder'), findsNothing);
       await tester.pumpWidget(const SizedBox());
     },
@@ -430,10 +468,17 @@ void main() {
       final backend = AndroidSharesBackend();
       await mount(
         tester,
-        AndroidFileShares(backend: backend, onChanged: () {}),
+        ServiceSettings(
+          backend: backend,
+          android: true,
+          host: own,
+          servicesOnly: true,
+          onAccess: () {},
+          onChanged: () {},
+        ),
       );
       await capture(tester, 'android-owner-folder-shares');
-      await tester.tap(find.byTooltip('Folder and access for checkpoints'));
+      await tester.tap(find.byTooltip('Folders and access for checkpoints'));
       await tester.pumpAndSettle();
       await capture(tester, 'android-owner-folder-editor');
       expect(find.byKey(const ValueKey('share-root')), findsNothing);
