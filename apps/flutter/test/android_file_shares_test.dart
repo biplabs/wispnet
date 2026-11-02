@@ -238,7 +238,6 @@ void main() {
           android: true,
           host: own,
           servicesOnly: true,
-          onAccess: () {},
           onChanged: () {},
         ),
       );
@@ -299,7 +298,6 @@ void main() {
           android: true,
           host: own,
           servicesOnly: true,
-          onAccess: () {},
           onChanged: () {},
         ),
       );
@@ -351,7 +349,6 @@ void main() {
           android: true,
           host: own,
           servicesOnly: true,
-          onAccess: () {},
           onChanged: () {},
         ),
       );
@@ -419,7 +416,6 @@ void main() {
           android: true,
           host: own,
           servicesOnly: true,
-          onAccess: () {},
           onChanged: () {},
         ),
       );
@@ -456,7 +452,6 @@ void main() {
           android: true,
           host: own,
           servicesOnly: true,
-          onAccess: () {},
           onChanged: () {},
         ),
       );
@@ -520,7 +515,6 @@ void main() {
           android: true,
           host: own,
           servicesOnly: true,
-          onAccess: () {},
           onChanged: () {},
         ),
       );

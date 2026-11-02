@@ -162,6 +162,14 @@ class _WispBottomSheetRoute<T> extends ModalBottomSheetRoute<T> {
   }
 }
 
+/// Whether an async completion still belongs to the visible page.
+///
+/// A dismissed route can remain mounted during its exit animation. Callers must
+/// check this before popping after awaiting work, so they cannot pop the page
+/// underneath a sheet that the user already closed.
+bool wispPageIsCurrent(BuildContext context) =>
+    ModalRoute.of(context)?.isCurrent ?? true;
+
 Future<T?> showWispSheet<T>(
   BuildContext context, {
   required String title,
@@ -172,6 +180,7 @@ Future<T?> showWispSheet<T>(
 }) {
   final navigator = Navigator.of(context);
   final localizations = MaterialLocalizations.of(context);
+  final nested = ModalRoute.of(context) is _WispBottomSheetRoute;
   return navigator.push(
     _WispBottomSheetRoute<T>(
       isScrollControlled: true,
@@ -206,6 +215,14 @@ Future<T?> showWispSheet<T>(
             if (showHeader) ...[
               Row(
                 children: [
+                  if (nested) ...[
+                    IconButton(
+                      tooltip: 'Back',
+                      onPressed: () => Navigator.maybePop(context),
+                      icon: const Icon(Icons.arrow_back, size: 20),
+                    ),
+                    const SizedBox(width: 4),
+                  ],
                   Expanded(
                     child: Text(
                       title,
@@ -217,14 +234,18 @@ Future<T?> showWispSheet<T>(
                   ),
                   IconButton(
                     tooltip: 'Close',
-                    onPressed: () => Navigator.pop(context),
+                    onPressed: () => navigator.popUntil(
+                      (route) => route is! _WispBottomSheetRoute,
+                    ),
                     icon: const Icon(Icons.close, size: 20),
                   ),
                 ],
               ),
               const SizedBox(height: 12),
             ],
-            if (scrollable) child else Flexible(child: child),
+            Flexible(
+              child: scrollable ? SingleChildScrollView(child: child) : child,
+            ),
           ],
         );
         return Padding(
@@ -244,9 +265,7 @@ Future<T?> showWispSheet<T>(
               padding: showHeader
                   ? const EdgeInsets.fromLTRB(20, 12, 20, 24)
                   : const EdgeInsets.fromLTRB(12, 8, 12, 10),
-              child: scrollable
-                  ? SingleChildScrollView(child: content)
-                  : content,
+              child: content,
             ),
           ),
         );

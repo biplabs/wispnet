@@ -615,7 +615,6 @@ void main() {
           android: true,
           host: fixture.own,
           servicesOnly: true,
-          onAccess: () {},
           onChanged: () {},
         ),
       );
@@ -662,12 +661,7 @@ void main() {
       final backend = FolderBackend();
       await fixture.mount(
         tester,
-        ServiceSettings(
-          backend: backend,
-          servicesOnly: true,
-          onAccess: () {},
-          onChanged: () {},
-        ),
+        ServiceSettings(backend: backend, servicesOnly: true, onChanged: () {}),
       );
       expect(find.widgetWithText(Tab, 'Receive files'), findsNothing);
       expect(find.text('Add read-only file share'), findsNothing);
@@ -713,7 +707,6 @@ void main() {
           android: true,
           host: fixture.own,
           servicesOnly: true,
-          onAccess: () {},
           onChanged: () {},
         ),
       );
@@ -781,7 +774,6 @@ void main() {
           android: true,
           host: fixture.own,
           servicesOnly: true,
-          onAccess: () {},
           onChanged: () {},
         ),
       );
@@ -832,7 +824,6 @@ void main() {
         android: true,
         host: fixture.own,
         servicesOnly: true,
-        onAccess: () {},
         onChanged: () {},
       ),
     );
@@ -957,7 +948,6 @@ void main() {
         android: true,
         host: fixture.own,
         servicesOnly: true,
-        onAccess: () {},
         onChanged: () {},
       ),
     );

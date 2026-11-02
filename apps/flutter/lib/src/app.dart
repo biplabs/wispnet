@@ -549,99 +549,136 @@ class _WispHomeState extends State<WispHome>
     );
   }
 
-  Future<void> pair({String? code}) async {
+  Future<void> pair({String? code, BuildContext? from}) async {
     if (pairingSheet) return;
     pairingSheet = true;
     await showWispSheet<void>(
-      context,
+      from ?? context,
       title: 'Pair a machine',
-      child: PairingForm(
-        backend: backend,
-        initialCode: code,
-        onPaired: () {
-          Navigator.pop(context);
-          notice('Pending owner approval');
-          unawaited(poll());
-        },
+      child: Builder(
+        builder: (pageContext) => PairingForm(
+          backend: backend,
+          initialCode: code,
+          onPaired: () {
+            if (!pageContext.mounted || !wispPageIsCurrent(pageContext)) return;
+            Navigator.pop(pageContext);
+            notice('Pending owner approval');
+            unawaited(poll());
+          },
+        ),
       ),
     );
     pairingSheet = false;
   }
 
   Future<void> manage() async {
-    final remotes = machines.where((m) => m.data['local'] != true).toList();
+    var remotes = machines.where((m) => m.data['local'] != true).toList();
+    var pendingRequests = snapshot['pendingRequests'] as int? ?? 0;
     if (remotes.isEmpty) {
       await pair();
       return;
     }
-    void edit(Machine machine) {
-      Navigator.pop(context);
-      machineSettings(machine);
-    }
-
     await showWispSheet<void>(
       context,
       title: 'Paired machines',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if ((snapshot['pendingRequests'] as int? ?? 0) > 0)
-            OutlinedButton(
-              onPressed: () {
-                Navigator.pop(context);
-                deviceSettings(section: 'Pairing requests');
-              },
-              child: Text(
-                'Review ${snapshot['pendingRequests']} pairing requests',
-              ),
-            ),
-          for (final machine in remotes)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: WispPanel(
-                padding: EdgeInsets.zero,
-                child: WispListItem(
-                  leading: const Icon(Icons.computer, color: WispColors.cyan),
-                  title: Text('${machine.name} · ${shortId(machine.id)}'),
-                  titleStyle: const TextStyle(fontWeight: FontWeight.bold),
-                  subtitle: Text(
-                    machine.status,
-                    style: TextStyle(color: stateColor(machine)),
-                  ),
-                  onTap: () => edit(machine),
-                  actions: [
-                    WispSettingsButton(
-                      tooltip: 'Settings for ${machine.name}',
-                      onPressed: () => edit(machine),
-                    ),
-                  ],
+      child: StatefulBuilder(
+        builder: (pageContext, update) {
+          Future<void> openPage(Future<void> page) async {
+            await page;
+            if (!pageContext.mounted || !wispPageIsCurrent(pageContext)) return;
+            try {
+              final next = await backend.invoke('snapshot');
+              if (!pageContext.mounted || !wispPageIsCurrent(pageContext)) {
+                return;
+              }
+              final records = (next['hosts'] as Map).cast<String, dynamic>();
+              final order = next['order'] as Map? ?? {};
+              update(() {
+                remotes = orderedIds(records.keys, order['machines'] as List?)
+                    .map(
+                      (id) => Machine(
+                        id,
+                        (records[id] as Map).cast<String, dynamic>(),
+                      ),
+                    )
+                    .where((machine) => machine.data['local'] != true)
+                    .toList();
+                pendingRequests = next['pendingRequests'] as int? ?? 0;
+              });
+            } catch (error) {
+              notice('Cannot refresh paired machines: ${message(error)}');
+            }
+          }
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (pendingRequests > 0)
+                OutlinedButton(
+                  onPressed: () {
+                    openPage(
+                      deviceSettings(
+                        section: 'Pairing requests',
+                        from: pageContext,
+                      ),
+                    );
+                  },
+                  child: Text('Review $pendingRequests pairing requests'),
                 ),
+              for (final machine in remotes)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: WispPanel(
+                    padding: EdgeInsets.zero,
+                    child: WispListItem(
+                      leading: const Icon(
+                        Icons.computer,
+                        color: WispColors.cyan,
+                      ),
+                      title: Text('${machine.name} · ${shortId(machine.id)}'),
+                      titleStyle: const TextStyle(fontWeight: FontWeight.bold),
+                      subtitle: Text(
+                        machine.status,
+                        style: TextStyle(color: stateColor(machine)),
+                      ),
+                      onTap: () =>
+                          openPage(machineSettings(machine, from: pageContext)),
+                      actions: [
+                        WispSettingsButton(
+                          tooltip: 'Settings for ${machine.name}',
+                          onPressed: () => openPage(
+                            machineSettings(machine, from: pageContext),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              FilledButton(
+                onPressed: () {
+                  openPage(pair(from: pageContext));
+                },
+                child: const Text('+ Pair another machine'),
               ),
-            ),
-          FilledButton(
-            onPressed: () {
-              Navigator.pop(context);
-              pair();
-            },
-            child: const Text('+ Pair another machine'),
-          ),
-          const SizedBox(height: 16),
-          SelectableText(
-            'Host ID\n${snapshot['peer'] ?? ''}',
-            style: const TextStyle(fontSize: 12, color: WispColors.muted),
-          ),
-        ],
+              const SizedBox(height: 16),
+              SelectableText(
+                'Host ID\n${snapshot['peer'] ?? ''}',
+                style: const TextStyle(fontSize: 12, color: WispColors.muted),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
 
-  Future<void> machineSettings(Machine machine) async {
+  Future<void> machineSettings(Machine machine, {BuildContext? from}) async {
     if (machine.data['local'] == true) {
-      await deviceSettings(servicesOnly: true);
+      await deviceSettings(servicesOnly: true, from: from);
       return;
     }
     await showWispSheet<void>(
-      context,
+      from ?? context,
       title: machine.name,
       child: MachineSettings(
         machine: machine,
@@ -655,19 +692,19 @@ class _WispHomeState extends State<WispHome>
   }
 
   Future<void> deviceSettings({
-    String section = 'My services',
+    String section = 'Devices',
     bool servicesOnly = false,
+    BuildContext? from,
   }) async {
     await showWispSheet<void>(
-      context,
-      title: servicesOnly ? 'Local services' : 'Settings',
+      from ?? context,
+      title: servicesOnly ? 'Local services' : 'Device access and pairing',
       child: ServiceSettings(
         android: snapshot['desktop'] != true,
         host: snapshot['peer'] as String? ?? '',
         backend: backend,
         initialSection: section,
         servicesOnly: servicesOnly,
-        onAccess: () => settings(),
         onChanged: () {
           unawaited(poll());
           unawaited(refresh());
@@ -716,7 +753,6 @@ class _WispHomeState extends State<WispHome>
         backend: backend,
         servicesOnly: true,
         serviceId: service['id'] as String,
-        onAccess: settings,
         onChanged: () {
           unawaited(poll());
           unawaited(refresh());
@@ -731,22 +767,23 @@ class _WispHomeState extends State<WispHome>
     await showWispSheet<void>(
       context,
       title: 'Settings',
-      child: SettingsForm(
-        backend: backend,
-        deviceName: snapshot['name'] as String? ?? '',
-        onLocalServices: () {
-          Navigator.pop(context);
-          deviceSettings(servicesOnly: true);
-        },
-        onOwnerTools: () {
-          Navigator.pop(context);
-          deviceSettings(section: 'Devices');
-        },
-        onSaved: () {
-          Navigator.pop(context);
-          notice('Settings saved');
-          unawaited(poll());
-        },
+      child: Builder(
+        builder: (pageContext) => SettingsForm(
+          backend: backend,
+          deviceName: snapshot['name'] as String? ?? '',
+          onLocalServices: () {
+            deviceSettings(servicesOnly: true, from: pageContext);
+          },
+          onOwnerTools: () {
+            deviceSettings(section: 'Devices', from: pageContext);
+          },
+          onSaved: () {
+            if (!pageContext.mounted || !wispPageIsCurrent(pageContext)) return;
+            Navigator.pop(pageContext);
+            notice('Settings saved');
+            unawaited(poll());
+          },
+        ),
       ),
     );
   }

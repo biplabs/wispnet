@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -26,12 +28,50 @@ class OwnerFeaturesBackend extends fixture.DesktopFake {
   }
 }
 
-Future<void> mountOwner(WidgetTester tester, OwnerFeaturesBackend backend) =>
-    fixture.mount(
-      tester,
-      backend,
-      size: backend.android ? const Size(390, 844) : const Size(1000, 850),
-    );
+class DeferredOwnerBackend extends OwnerFeaturesBackend {
+  DeferredOwnerBackend(super.android);
+  final submitted = Completer<void>();
+  final completed = Completer<void>();
+
+  @override
+  Future<Map<String, dynamic>> invoke(
+    String method, [
+    Map<String, dynamic> arguments = const {},
+  ]) async {
+    if (method == 'ownerRequest' &&
+        arguments['payload']?['operation']?['op'] == 'approve_invitation') {
+      submitted.complete();
+      await completed.future;
+    }
+    return super.invoke(method, arguments);
+  }
+}
+
+Future<void> tapHeader(WidgetTester tester, String tooltip) async {
+  final button = find.byTooltip(tooltip).last;
+  await tester.ensureVisible(button);
+  await tester.tap(button);
+  await tester.pumpAndSettle();
+}
+
+Future<void> openInvitation(WidgetTester tester) async {
+  final button = find.widgetWithText(OutlinedButton, 'Pair this machine');
+  await tester.ensureVisible(button);
+  await tester.tap(button);
+  await tester.pumpAndSettle();
+  expect(find.byKey(const ValueKey('pairing-qr')), findsOneWidget);
+}
+
+Future<void> mountOwner(
+  WidgetTester tester,
+  OwnerFeaturesBackend backend, {
+  bool disableAnimations = true,
+}) => fixture.mount(
+  tester,
+  backend,
+  disableAnimations: disableAnimations,
+  size: backend.android ? const Size(390, 844) : const Size(1000, 850),
+);
 
 Future<void> openOwnerTools(WidgetTester tester) async {
   await tester.tap(find.byTooltip('Settings'));
@@ -55,6 +95,187 @@ void main() {
   });
   for (final android in [false, true]) {
     final platform = android ? 'Android' : 'desktop';
+    testWidgets(
+      '$platform owner title is specific, Back returns to Settings and X closes the popup',
+      (tester) async {
+        final backend = OwnerFeaturesBackend(android);
+        await mountOwner(tester, backend);
+        await openOwnerTools(tester);
+        expect(
+          find.text('Device access and pairing').hitTestable(),
+          findsOneWidget,
+        );
+        expect(find.text('Device and browser settings'), findsNothing);
+        final selector = tester.widget<DropdownButton<String>>(
+          find.byType(DropdownButton<String>),
+        );
+        expect(selector.items!.map((item) => item.value), [
+          'Devices',
+          'Pairing requests',
+          'Owner operations',
+        ]);
+        await tapHeader(tester, 'Back');
+        expect(find.text('Settings'), findsOneWidget);
+        expect(find.widgetWithText(TextField, 'Device ID'), findsOneWidget);
+        expect(find.widgetWithText(TextField, 'Wispnet port'), findsOneWidget);
+        expect(find.byType(ServiceSettings), findsNothing);
+
+        final tools = find.text('Device access and pairing');
+        await tester.ensureVisible(tools);
+        await tester.tap(tools);
+        await tester.pumpAndSettle();
+        await tapHeader(tester, 'Close');
+        expect(find.byType(ServiceSettings), findsNothing);
+        expect(find.widgetWithText(TextField, 'Device ID'), findsNothing);
+        expect(find.byTooltip('Settings').hitTestable(), findsOneWidget);
+        await tester.tap(find.byTooltip('Settings'));
+        await tester.pumpAndSettle();
+        expect(find.byTooltip('Back'), findsNothing);
+        expect(tester.takeException(), isNull);
+        await fixture.close(tester);
+      },
+    );
+
+    testWidgets(
+      '$platform invitation Back follows the popup history and X closes every page',
+      (tester) async {
+        final backend = OwnerFeaturesBackend(android);
+        await mountOwner(tester, backend);
+        await openOwnerTools(tester);
+        await openInvitation(tester);
+        await tapHeader(tester, 'Back');
+        expect(
+          find.text('Device access and pairing').hitTestable(),
+          findsOneWidget,
+        );
+        expect(find.text('Existing device'), findsOneWidget);
+        await tapHeader(tester, 'Back');
+        expect(find.text('Settings'), findsOneWidget);
+        final tools = find.text('Device access and pairing');
+        await tester.ensureVisible(tools);
+        await tester.tap(tools);
+        await tester.pumpAndSettle();
+        await openInvitation(tester);
+        await tapHeader(tester, 'Close');
+        expect(find.byKey(const ValueKey('pairing-qr')), findsNothing);
+        expect(find.byType(ServiceSettings), findsNothing);
+        expect(find.widgetWithText(TextField, 'Device ID'), findsNothing);
+        expect(find.byTooltip('Settings').hitTestable(), findsOneWidget);
+        expect(tester.takeException(), isNull);
+        await fixture.close(tester);
+      },
+    );
+
+    testWidgets('$platform paired-machine pages preserve Manage for Back', (
+      tester,
+    ) async {
+      final backend = OwnerFeaturesBackend(android);
+      await mountOwner(tester, backend);
+      await tester.tap(
+        find.widgetWithText(OutlinedButton, 'Manage · 1 requests'),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Settings for j-strix'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Device ID\nj-strix'), findsOneWidget);
+      await tapHeader(tester, 'Back');
+      expect(find.text('Paired machines').hitTestable(), findsOneWidget);
+      final pair = find.widgetWithText(FilledButton, '+ Pair another machine');
+      await tester.ensureVisible(pair);
+      await tester.tap(pair);
+      await tester.pumpAndSettle();
+      expect(find.text('Pair a machine').hitTestable(), findsOneWidget);
+      await tapHeader(tester, 'Back');
+      expect(find.text('Paired machines').hitTestable(), findsOneWidget);
+      await tester.tap(find.byTooltip('Settings for j-strix'));
+      await tester.pumpAndSettle();
+      await tapHeader(tester, 'Close');
+      expect(find.text('Paired machines'), findsNothing);
+      expect(find.textContaining('Device ID\nj-strix'), findsNothing);
+      expect(find.byTooltip('Settings').hitTestable(), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await fixture.close(tester);
+    });
+
+    testWidgets(
+      '$platform removing a machine refreshes the preserved Manage page',
+      (tester) async {
+        final backend = OwnerFeaturesBackend(android);
+        await mountOwner(tester, backend);
+        await tester.tap(
+          find.widgetWithText(OutlinedButton, 'Manage · 1 requests'),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.byTooltip('Settings for j-strix'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.widgetWithText(OutlinedButton, 'Remove'));
+        await tester.pumpAndSettle();
+        final confirm = find.widgetWithText(FilledButton, 'Remove machine');
+        await tester.ensureVisible(confirm);
+        await tester.tap(confirm);
+        await tester.pumpAndSettle();
+        expect(backend.paired, isFalse);
+        final removals = backend.calls
+            .where((call) => call.$1 == 'removeHost')
+            .toList();
+        expect(removals, hasLength(1));
+        expect(removals.single.$2, {'host': fixture.peer});
+        expect(find.text('Paired machines').hitTestable(), findsOneWidget);
+        expect(find.byTooltip('Settings for j-strix'), findsNothing);
+        expect(find.text('j-strix · aaaaaaaa'), findsNothing);
+        expect(find.textContaining('Device ID\nj-strix'), findsNothing);
+        expect(
+          find.widgetWithText(FilledButton, '+ Pair another machine'),
+          findsOneWidget,
+        );
+        await tapHeader(tester, 'Close');
+        expect(find.text('Paired machines'), findsNothing);
+        expect(find.byTooltip('Settings').hitTestable(), findsOneWidget);
+        expect(tester.takeException(), isNull);
+        await fixture.close(tester);
+      },
+    );
+
+    testWidgets(
+      '$platform closing a pending approval does not pop home when it completes',
+      (tester) async {
+        final backend = DeferredOwnerBackend(android);
+        await mountOwner(tester, backend);
+        await openOwnerTools(tester);
+        await tester.tap(find.byType(DropdownButton<String>));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Pairing requests (1)').last);
+        await tester.pumpAndSettle();
+        final approve = find.widgetWithText(OutlinedButton, 'Approve device');
+        await tester.ensureVisible(approve);
+        await tester.tap(approve);
+        await tester.pumpAndSettle();
+        final confirm = find.widgetWithText(FilledButton, 'Approve device');
+        await tester.ensureVisible(confirm);
+        await tester.tap(confirm);
+        await tester.pump();
+        expect(backend.submitted.isCompleted, isTrue);
+        final confirmation = tester.element(confirm);
+        final close = find.byTooltip('Close').last;
+        await tester.ensureVisible(close);
+        await tester.tap(close);
+        // Resolve while the dismissed sheets are still mounted for their exit
+        // animation. A late success must not pop the underlying app route.
+        expect(confirmation.mounted, isTrue);
+        backend.completed.complete();
+        await tester.pumpAndSettle();
+        expect(backend.ownerCalls, hasLength(1));
+        expect(find.byType(ServiceSettings), findsNothing);
+        expect(find.widgetWithText(TextField, 'Device ID'), findsNothing);
+        expect(find.byTooltip('Settings').hitTestable(), findsOneWidget);
+        await tester.tap(find.byTooltip('Settings'));
+        await tester.pumpAndSettle();
+        expect(find.text('Settings'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+        await fixture.close(tester);
+      },
+    );
+
     testWidgets(
       '$platform owner entry opens the shared Devices page and issues a pairing QR',
       (tester) async {
@@ -125,8 +346,10 @@ void main() {
           }
           await tester.ensureVisible(find.text('Existing device'));
           await tester.tap(find.text('Existing device'));
-          await tester.ensureVisible(find.widgetWithText(FilledButton, 'Save'));
-          await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+          await tester.ensureVisible(
+            find.widgetWithText(FilledButton, 'Save').last,
+          );
+          await tester.tap(find.widgetWithText(FilledButton, 'Save').last);
           await tester.pumpAndSettle();
           expect(backend.ownerCalls.single, {
             'op': 'mutate',

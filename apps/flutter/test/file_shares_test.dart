@@ -278,7 +278,7 @@ void main() {
             body: SingleChildScrollView(
               child: ServiceSettings(
                 backend: backend,
-                onAccess: () {},
+                servicesOnly: true,
                 onChanged: () {},
               ),
             ),

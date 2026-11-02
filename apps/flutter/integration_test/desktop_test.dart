@@ -37,8 +37,12 @@ void main() {
       final httpServiceId = services.first['id'] as String;
       final key = GlobalKey();
       Future<void> waitFor(Finder finder) async {
-        for (var n = 0; n < 150 && finder.evaluate().isEmpty; n++) {
-          await tester.pump(const Duration(milliseconds: 200));
+        final deadline = DateTime.now().add(const Duration(seconds: 30));
+        while (finder.evaluate().isEmpty && DateTime.now().isBefore(deadline)) {
+          await tester.pump(const Duration(milliseconds: 100));
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 100)),
+          );
         }
         expect(finder, findsWidgets);
       }
@@ -108,7 +112,7 @@ void main() {
         await capture('remove-machine-confirmation');
         await tester.tap(find.text('Cancel'));
         await tester.pump(const Duration(milliseconds: 500));
-        await tester.tap(find.byTooltip('Close'));
+        await tester.tap(find.byTooltip('Close').last);
         await tester.pump(const Duration(milliseconds: 500));
         await tester.tap(
           find
@@ -128,20 +132,21 @@ void main() {
         await tester.tap(find.text('Pairing Code'));
         await tester.pump(const Duration(milliseconds: 300));
         await capture('pairing-code');
-        await tester.tap(find.byTooltip('Close'));
+        await tester.tap(find.byTooltip('Close').last);
         await tester.pump(const Duration(milliseconds: 500));
-        await tester.tap(
-          find.descendant(
-            of: find.byKey(const ValueKey('local-sector')),
-            matching: find.text('Manage'),
-          ),
-        );
-        await waitFor(find.text('Add a new service'));
-        expect(find.text('Pair this machine'), findsOneWidget);
+        await tester.tap(find.byTooltip('Settings'));
+        await waitFor(find.text('Local services'));
+        await tester.ensureVisible(find.text('Local services'));
+        await tester.tap(find.text('Local services'));
+        await waitFor(find.byKey(const ValueKey('share-service')));
+        expect(find.text('Pair this machine'), findsNothing);
         expect(find.text('Remove service'), findsNothing);
         expect(find.text('Enable public access'), findsNothing);
         await capture('local-services');
-        await tester.tap(find.text('Add a new service'));
+        await tester.ensureVisible(find.byKey(const ValueKey('share-service')));
+        await tester.tap(find.byKey(const ValueKey('share-service')));
+        await waitFor(find.widgetWithText(Tab, 'Custom'));
+        await tester.tap(find.widgetWithText(Tab, 'Custom'));
         await waitFor(find.widgetWithText(TextField, 'Service ID'));
         await tester.enterText(
           find.widgetWithText(TextField, 'Service ID'),
@@ -172,9 +177,19 @@ void main() {
           'Protocol',
         );
         await capture('add-service-form');
-        await tester.tap(find.byTooltip('Close').last);
+        await tester.tap(find.byTooltip('Back').last);
         await tester.pump(const Duration(milliseconds: 500));
-
+        expect(find.byKey(const ValueKey('share-service')), findsOneWidget);
+        await tester.tap(find.byTooltip('Back').last);
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.ensureVisible(find.text('Device access and pairing'));
+        await tester.tap(find.text('Device access and pairing'));
+        await waitFor(find.text('Pair this machine'));
+        expect(
+          find.text('Device access and pairing').hitTestable(),
+          findsOneWidget,
+        );
+        expect(find.text('Device and browser settings'), findsNothing);
         await tester.tap(find.text('Pair this machine'));
         await waitFor(find.byKey(const ValueKey('pairing-qr')));
         expect(find.text('Copy pairing code'), findsNothing);
@@ -191,9 +206,13 @@ void main() {
           startsWith('wispnet1:'),
         );
         await capture('pair-this-machine-code');
-        await tester.tap(find.byTooltip('Close').last);
+        await tester.tap(find.byTooltip('Back').last);
         await tester.pump(const Duration(milliseconds: 500));
-        await tester.tap(find.byTooltip('Close'));
+        expect(find.text('Pair this machine'), findsOneWidget);
+        await tester.tap(find.byTooltip('Back').last);
+        await tester.pump(const Duration(milliseconds: 500));
+        expect(find.widgetWithText(TextField, 'Wispnet port'), findsOneWidget);
+        await tester.tap(find.byTooltip('Close').last);
         await tester.pump(const Duration(milliseconds: 500));
         final serviceSettings = find.descendant(
           of: find.byKey(const ValueKey('local-sector')),
@@ -209,7 +228,7 @@ void main() {
         await tester.ensureVisible(serviceSettings);
         await tester.tap(serviceSettings);
         await waitFor(find.text('Remove service'));
-        expect(find.text('Add a new service'), findsNothing);
+        expect(find.byKey(const ValueKey('share-service')), findsNothing);
         await capture('local-service-controls');
         expect(find.textContaining('127.0.0.1:'), findsNothing);
         backend.launched = null;
@@ -292,7 +311,7 @@ void main() {
         await tester.tap(find.text('Cancel'));
         await tester.pump(const Duration(milliseconds: 500));
         expect(find.text('Device and browser settings'), findsNothing);
-        await tester.tap(find.byTooltip('Close'));
+        await tester.tap(find.byTooltip('Close').last);
         for (
           var i = 0;
           i < 15 && find.byTooltip('Close').evaluate().isNotEmpty;
@@ -314,6 +333,9 @@ void main() {
           isNotEmpty,
         );
         await capture('browser-settings');
+        await tester.ensureVisible(
+          find.byKey(const ValueKey('settings-address')),
+        );
         await tester.tap(find.byKey(const ValueKey('settings-address')));
         for (var i = 0; i < 100 && backend.launched == null; i++) {
           await tester.pump(const Duration(milliseconds: 100));

@@ -606,7 +606,7 @@ class _FileShareEditorState extends State<FileShareEditor> {
       } else {
         await widget.onSave(name, root.text.trim(), allowed.toList());
       }
-      if (mounted) Navigator.pop(context);
+      if (mounted && wispPageIsCurrent(context)) Navigator.pop(context);
     } catch (error) {
       if (mounted) setState(() => failure = _shareFailure(error));
     } finally {
@@ -620,7 +620,9 @@ class _FileShareEditorState extends State<FileShareEditor> {
       failure = null;
     });
     try {
-      if (await widget.onRemove!() && mounted) Navigator.pop(context);
+      if (await widget.onRemove!() && mounted && wispPageIsCurrent(context)) {
+        Navigator.pop(context);
+      }
     } catch (error) {
       if (mounted) setState(() => failure = _shareFailure(error));
     } finally {

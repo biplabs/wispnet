@@ -15,9 +15,8 @@ class ServiceSettings extends StatefulWidget {
   const ServiceSettings({
     super.key,
     required this.backend,
-    required this.onAccess,
     required this.onChanged,
-    this.initialSection = 'My services',
+    this.initialSection = 'Devices',
     this.servicesOnly = false,
     this.serviceId,
     this.android = false,
@@ -28,7 +27,7 @@ class ServiceSettings extends StatefulWidget {
   final String host;
   final String? serviceId;
   final WispnetBackend backend;
-  final VoidCallback onAccess, onChanged;
+  final VoidCallback onChanged;
   @override
   State<ServiceSettings> createState() => _ServiceSettingsState();
 }
@@ -41,7 +40,9 @@ class _ServiceSettingsState extends State<ServiceSettings> {
   );
   Map<String, dynamic>? status;
   List<dynamic> operations = [];
-  late String section = widget.initialSection;
+  late String section = widget.servicesOnly
+      ? 'My services'
+      : widget.initialSection;
   String? error;
   String localUrl = '';
   bool busy = false, openingAddress = false;
@@ -411,7 +412,10 @@ class _ServiceSettingsState extends State<ServiceSettings> {
       title: service == null ? 'Add folder' : 'Edit ${service['id']} folder',
       child: shareEditor(service, onRenamed: () => renamed = true),
     );
-    if (renamed && widget.serviceId != null && mounted) {
+    if (renamed &&
+        widget.serviceId != null &&
+        mounted &&
+        wispPageIsCurrent(context)) {
       Navigator.pop(context);
     }
   }
@@ -651,7 +655,10 @@ class _ServiceSettingsState extends State<ServiceSettings> {
             ),
     );
     widget.onChanged();
-    if (renamed && widget.serviceId != null && mounted) {
+    if (renamed &&
+        widget.serviceId != null &&
+        mounted &&
+        wispPageIsCurrent(context)) {
       // Return to the refreshed directory rather than leaving settings pointed
       // at the old service ID.
       Navigator.pop(context);
@@ -786,7 +793,9 @@ class _ServiceSettingsState extends State<ServiceSettings> {
                   ),
                   subtitle: Text(
                     target['owner_access'] as String? ??
-                        (target['ssh'] == null ? 'This device' : 'SSH owner access'),
+                        (target['ssh'] == null
+                            ? 'This device'
+                            : 'SSH owner access'),
                   ),
                   value: selected.contains(target['host']),
                   onChanged: plan != null || working
@@ -993,30 +1002,21 @@ class _ServiceSettingsState extends State<ServiceSettings> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (!widget.servicesOnly) ...[
-          action('Device and browser settings', widget.onAccess),
           action('Pair this machine', () => run(invite)),
           const SizedBox(height: 12),
           DropdownButton<String>(
             isExpanded: true,
             value: section,
-            items:
-                [
-                      'My services',
-                      'Devices',
-                      'Pairing requests',
-                      'Owner operations',
-                    ]
-                    .map(
-                      (s) => DropdownMenuItem(
-                        value: s,
-                        child: Text(
-                          s == 'Pairing requests'
-                              ? '$s (${requests.length})'
-                              : s,
-                        ),
-                      ),
-                    )
-                    .toList(),
+            items: ['Devices', 'Pairing requests', 'Owner operations']
+                .map(
+                  (s) => DropdownMenuItem(
+                    value: s,
+                    child: Text(
+                      s == 'Pairing requests' ? '$s (${requests.length})' : s,
+                    ),
+                  ),
+                )
+                .toList(),
             onChanged: busy ? null : (v) => setState(() => section = v!),
           ),
         ],
@@ -1269,7 +1269,7 @@ class _ActionFormState extends State<_ActionForm> {
     });
     try {
       await action();
-      if (mounted) Navigator.pop(context);
+      if (mounted && wispPageIsCurrent(context)) Navigator.pop(context);
     } catch (e) {
       if (mounted) setState(() => error = failureMessage(e));
     } finally {

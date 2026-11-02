@@ -44,6 +44,12 @@ folder settings and grants for re-enabling. Switch state survives a node restart
 Device settings opens Local services and Device access and pairing; the latter
 includes invitation approval, device access, and owner-operation history.
 
+Popup navigation uses a pinned header: Back returns to the previous page and
+preserves its draft, while X dismisses the entire popup flow. Save and Cancel
+return from the current form. Device access and pairing has its own title and
+only its device, pairing-request, and owner-operation sections; device and browser
+configuration stays in Settings, and service management stays in Local services.
+
 The macOS runner and installer use these widgets too, but require native build
 and runtime validation on a Mac. Windows/iOS node adapters are not implemented.
 

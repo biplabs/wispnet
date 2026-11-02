@@ -54,7 +54,9 @@ class _QrCameraSheetState extends State<QrCameraSheet>
             bytes,
             processingTimeout: const Duration(seconds: 1),
           );
-          if (mounted && current == generation) Navigator.pop(context, code);
+          if (mounted && current == generation && wispPageIsCurrent(context)) {
+            Navigator.pop(context, code);
+          }
           return;
         } on FormatException {
           // Keep looking while the user aligns a pairing QR with the camera.

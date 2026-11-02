@@ -61,12 +61,7 @@ class ServiceListBackend extends folders.FolderBackend {
 Future<void> owner(WidgetTester tester, ServiceListBackend backend) =>
     fixture.mount(
       tester,
-      ServiceSettings(
-        backend: backend,
-        servicesOnly: true,
-        onAccess: () {},
-        onChanged: () {},
-      ),
+      ServiceSettings(backend: backend, servicesOnly: true, onChanged: () {}),
     );
 
 void main() {
@@ -175,10 +170,7 @@ void main() {
             .text,
         'database',
       );
-      expect(
-        backend.calls.where((call) => call.$1 == 'ownerRequest'),
-        isEmpty,
-      );
+      expect(backend.calls.where((call) => call.$1 == 'ownerRequest'), isEmpty);
       await tester.pumpWidget(const SizedBox());
     },
   );
@@ -232,7 +224,6 @@ void main() {
                 child: ServiceSettings(
                   backend: backend,
                   servicesOnly: true,
-                  onAccess: () {},
                   onChanged: () {},
                 ),
               ),
@@ -396,7 +387,6 @@ void main() {
                   backend: backend,
                   servicesOnly: true,
                   serviceId: id,
-                  onAccess: () {},
                   onChanged: () {},
                 ),
               ),
@@ -471,10 +461,7 @@ void main() {
       await tester.ensureVisible(find.text('Keep folder'));
       await tester.tap(find.text('Keep folder'));
       await tester.pumpAndSettle();
-      expect(
-        backend.calls.where((call) => call.$1 == 'ownerRequest'),
-        isEmpty,
-      );
+      expect(backend.calls.where((call) => call.$1 == 'ownerRequest'), isEmpty);
       expect(find.byKey(const ValueKey('share-name')), findsOneWidget);
       await openRemoval();
       final confirm = find.widgetWithText(FilledButton, 'Remove folder');

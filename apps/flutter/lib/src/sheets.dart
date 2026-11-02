@@ -130,7 +130,7 @@ class _PairingFormState extends State<PairingForm> {
     });
     try {
       await widget.backend.invoke('pair', {'code': normalized()});
-      if (mounted) widget.onPaired();
+      if (mounted && wispPageIsCurrent(context)) widget.onPaired();
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -162,7 +162,7 @@ class _PairingFormState extends State<PairingForm> {
               ),
             }
           : await widget.backend.invoke(method);
-      if (!mounted) return;
+      if (!mounted || !wispPageIsCurrent(context)) return;
       final scanned = result['code'] as String?;
       if (scanned == null) {
         setState(() {
@@ -334,7 +334,7 @@ class _MachineSettingsState extends State<MachineSettings> {
     try {
       await widget.backend.invoke(method, {'host': widget.machine.id});
       widget.onChanged();
-      if (mounted) Navigator.pop(context);
+      if (mounted && wispPageIsCurrent(context)) Navigator.pop(context);
     } catch (e) {
       if (mounted) setState(() => error = failureMessage(e));
     } finally {
