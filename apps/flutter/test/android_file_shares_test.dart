@@ -52,6 +52,13 @@ class AndroidSharesBackend implements WispnetBackend {
   ]) async {
     calls.add((method, Map.of(arguments)));
     switch (method) {
+      case 'ownerStatus':
+        return ownerStatusFromFolders(
+          await invoke('folderServicesStatus'),
+          own,
+        );
+      case 'ownerData':
+        return {'value': []};
       case 'folderServicesStatus':
         return {
           'revision': revision,
@@ -68,15 +75,18 @@ class AndroidSharesBackend implements WispnetBackend {
       case 'saveShare':
         expect(arguments['expected_revision'], revision);
         final id = arguments['id'];
+        final newId = arguments['new_id'] ?? id;
         final existing = shares.where((share) => share['id'] == id).firstOrNull;
         final updated = {
           ...?existing,
-          'id': id,
+          'id': newId,
           'folder': arguments['folder'],
           'allow': List.of(arguments['allow'] as List),
           'available': true,
-          'enabled': true,
-          'incarnation': incarnation,
+          'enabled': existing?['enabled'] ?? true,
+          'incarnation': newId == id
+              ? (existing?['incarnation'] ?? incarnation)
+              : '9' * 64,
           'label': arguments['folder'] == selection['folder']
               ? selection['label']
               : existing?['label'] ?? 'Shared folder',
@@ -133,6 +143,42 @@ class AndroidSharesBackend implements WispnetBackend {
         throw StateError('Unexpected Android operation $method');
     }
   }
+}
+
+Map<String, dynamic> ownerStatusFromFolders(
+  Map<String, dynamic> folders,
+  String host,
+) {
+  final inboxes = [
+    for (final row in folders['inboxes'] as List? ?? [])
+      {
+        ...(row as Map).cast<String, dynamic>(),
+        'kind': row['kind'] ?? 'file_inbox',
+      },
+  ];
+  final shares = [
+    for (final row in folders['shares'] as List? ?? [])
+      {...(row as Map).cast<String, dynamic>(), 'kind': 'file_share'},
+  ];
+  return {
+    'host': {
+      'host': host,
+      'revision': folders['revision'],
+      'clients': folders['clients'],
+      'services': [...inboxes, ...shares],
+      'file_inboxes': {for (final row in inboxes) row['id']: row['folder']},
+      'file_shares': {for (final row in shares) row['id']: row['folder']},
+      'file_exports':
+          folders['file_exports'] ??
+          {
+            for (final row in inboxes)
+              if (row['kind'] == 'files') 'incoming': row['folder'],
+          },
+    },
+    'invitations': [],
+    'connected_peers': {},
+    'recent_peers': {},
+  };
 }
 
 Future<void> mount(WidgetTester tester, Widget child) async {
@@ -200,7 +246,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.widgetWithText(Tab, 'Receive files'), findsOneWidget);
       expect(find.widgetWithText(Tab, 'Share files'), findsOneWidget);
-      expect(find.widgetWithText(Tab, 'Custom'), findsNothing);
+      expect(find.widgetWithText(Tab, 'Custom'), findsOneWidget);
       expect(find.byKey(const ValueKey('folder-mode')), findsNothing);
       await tester.tap(find.widgetWithText(Tab, 'Share files'));
       await tester.pumpAndSettle();
@@ -278,6 +324,7 @@ void main() {
       expect(backend.calls.where((call) => call.$1 == 'saveShare').single.$2, {
         'expected_revision': 3,
         'id': 'checkpoints',
+        'new_id': 'checkpoints',
         'folder': 'opaque-checkpoints',
         'allow': [other],
       });

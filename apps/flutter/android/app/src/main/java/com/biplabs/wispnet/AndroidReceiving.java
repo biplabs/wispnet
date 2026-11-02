@@ -78,16 +78,19 @@ final class AndroidReceiving {
  }
 
  JSONObject configure(JSONObject args) throws Exception {
-  String root = args.getString("folder");
   JSONArray allow = args.getJSONArray("allow");
-  if (!root.isEmpty()) {
-   if (!roots.contains(root)) throw new SecurityException("Choose a receiving folder first.");
-   // Revalidate the persisted grant and provider before granting senders access.
-   prepare(Uri.parse(new JSONObject(roots.getString(root, "{}")).getString("uri")));
+  JSONObject exports = args.optJSONObject("exports");
+  if (exports == null) {
+   String root = args.getString("folder");
+   exports = root.isEmpty() ? new JSONObject() : new JSONObject().put("incoming", root);
   }
+  // Keep all configured roots on a grant-only save. A newly selected folder
+  // replaces them explicitly in the form; root markers and URI grants survive.
+  for (java.util.Iterator<String> names=exports.keys();names.hasNext();)
+   validateInboxRoot(exports.getString(names.next()));
   return Native.request(new JSONObject().put("op", "local_files_configure")
       .put("expected_revision", args.getLong("expected_revision"))
-      .put("exports", root.isEmpty() ? new JSONObject() : new JSONObject().put("incoming", root))
+      .put("exports", exports)
       .put("allow", allow));
  }
 
@@ -109,7 +112,7 @@ final class AndroidReceiving {
    rows.put(describeInbox(status.getJSONObject("legacy_service"),root));
   }
   return new JSONObject().put("revision",status.getLong("revision"))
-      .put("clients",status.getJSONArray("clients")).put("inboxes",rows);
+      .put("clients",status.getJSONArray("clients")).put("inboxes",rows).put("file_exports",legacy);
  }
  private JSONObject describeInbox(JSONObject service,String root) throws Exception {
   JSONObject row = new JSONObject(service.toString());
@@ -124,11 +127,17 @@ final class AndroidReceiving {
   prepare(Uri.parse(new JSONObject(roots.getString(root,"{}")).getString("uri")));
  }
  JSONObject configureInbox(JSONObject args) throws Exception {
-  if ("files".equals(args.getString("id"))) return configure(args);
+  if ("files".equals(args.getString("id"))) {
+   if (args.has("new_id") && !"files".equals(args.getString("new_id")))
+    throw new SecurityException("The built-in Files service cannot be renamed.");
+   return configure(args);
+  }
   String root=args.getString("folder");validateInboxRoot(root);
-  return Native.request(new JSONObject().put("op","local_inbox_configure")
+  JSONObject request = new JSONObject().put("op","local_inbox_configure")
       .put("expected_revision",args.getLong("expected_revision")).put("id",args.getString("id"))
-      .put("root",root).put("allow",args.getJSONArray("allow")));
+      .put("root",root).put("allow",args.getJSONArray("allow"));
+  if (args.has("new_id")) request.put("new_id",args.getString("new_id"));
+  return Native.request(request);
  }
  JSONObject removeInbox(JSONObject args) throws Exception {
   String id=args.getString("id");

@@ -165,10 +165,14 @@ async fn relay_dns_ip_replacement_recovers_without_endpoint_or_policy_reset() {
     let builder = configured_builder(host_key.secret_key(), Some(&config))
         .unwrap()
         .dns_resolver(dns.resolver());
-    let host =
-        TunnelHost::bind_builder(&config, Services::host(authority.clone()).unwrap(), builder)
-            .await
-            .unwrap();
+    let host = TunnelHost::bind_builder(
+        &config,
+        Services::host(authority.clone()).unwrap(),
+        builder,
+        true,
+    )
+    .await
+    .unwrap();
     let client = configured_builder(client_key.secret_key(), Some(&config))
         .unwrap()
         .dns_resolver(dns.resolver())
@@ -668,6 +672,7 @@ async fn packet_priority_ignores_discovery_and_latency_and_requires_stable_failb
         &config,
         Services::host(authority.clone()).unwrap(),
         builder(host_key.secret_key()),
+        true,
     )
     .await
     .unwrap();
@@ -838,6 +843,7 @@ async fn different_home_relays_connect_without_first_contact_through_primary() {
         &config,
         Services::host(authority.clone()).unwrap(),
         builder(host_key.secret_key(), host_dns.resolver()),
+        true,
     )
     .await
     .unwrap();
@@ -1199,6 +1205,7 @@ async fn parallel_relays_prefer_our_data_path_even_when_backup_is_faster() {
         &config,
         Services::host(authority).unwrap(),
         builder(host_key.secret_key()),
+        true,
     )
     .await
     .unwrap();

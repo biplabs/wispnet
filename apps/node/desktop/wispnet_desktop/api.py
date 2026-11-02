@@ -34,7 +34,9 @@ class NodeAPI:
         if len(payload) > 16384:
             raise ValueError("Request exceeds local API limit")
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-            connection.settimeout(27)
+            # Path diagnostics have a 55-second native observation bound and a
+            # 60-second node budget. Other operations retain their normal bound.
+            connection.settimeout(65 if request.get("op") == "diagnose_connection" else 27)
             connection.connect(str(self.path))
             # Verify the endpoint's OS user as well as the socket's metadata.
             import struct

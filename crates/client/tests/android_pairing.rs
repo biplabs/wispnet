@@ -234,6 +234,15 @@ async fn android_receiver_uses_existing_pairing_owner_grants_and_private_platfor
             phone.command(&operation).await.is_err(),
             "stale owner revision must fail"
         );
+        assert!(desktop.catalog(phone.endpoint.id()).await.is_err());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        phone
+            .command(&json!({"op":"configure_access","settings":{"registry_port":port}}))
+            .await
+            .unwrap();
+        phone.command(&json!({"op":"enable"})).await.unwrap();
         let catalog = desktop.catalog(phone.endpoint.id()).await.unwrap();
         let service = catalog["services"]
             .as_array()
@@ -251,6 +260,7 @@ async fn android_receiver_uses_existing_pairing_owner_grants_and_private_platfor
             service: "files".into(),
             incarnation: service["incarnation"].as_str().unwrap().into(),
         };
+        phone.command(&json!({"op":"stop"})).await.unwrap();
         assert!(
             desktop
                 .put_file(
@@ -264,13 +274,6 @@ async fn android_receiver_uses_existing_pairing_owner_grants_and_private_platfor
                 .is_err(),
             "receiving requires foreground access to be online"
         );
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
-        phone
-            .command(&json!({"op":"configure_access","settings":{"registry_port":port}}))
-            .await
-            .unwrap();
         phone.command(&json!({"op":"enable"})).await.unwrap();
         let uploaded = desktop
             .put_file(
@@ -306,12 +309,15 @@ async fn android_receiver_uses_existing_pairing_owner_grants_and_private_platfor
             )
             .await
             .unwrap();
+        assert!(desktop.catalog(phone.endpoint.id()).await.is_err());
+        phone.command(&json!({"op":"enable"})).await.unwrap();
         assert!(
             desktop.catalog(phone.endpoint.id()).await.unwrap()["services"]
                 .as_array()
                 .unwrap()
                 .is_empty()
         );
+        phone.command(&json!({"op":"stop"})).await.unwrap();
         let own = phone.endpoint.id();
         phone.endpoint.close().await;
         drop(phone);

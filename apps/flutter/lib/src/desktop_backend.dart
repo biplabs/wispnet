@@ -1,10 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 
 import 'backend.dart';
+import 'desktop_qr_camera.dart';
+import 'pairing_qr.dart';
 
 /// Private pipes to the existing owner API adapter. No HTTP management server.
 class DesktopBackend implements WispnetBackend {
@@ -21,6 +24,7 @@ class DesktopBackend implements WispnetBackend {
   Future<void>? _startup;
   final _pending = <int, Completer<Map<String, dynamic>>>{};
   int _sequence = 0;
+  final _qrCamera = DesktopQrCamera();
 
   Future<Process> _start() async {
     final directory = File(Platform.resolvedExecutable).parent;
@@ -91,6 +95,55 @@ class DesktopBackend implements WispnetBackend {
     String method, [
     Map<String, dynamic> arguments = const {},
   ]) async {
+    if (method == 'qrCapabilities') {
+      if (Platform.isMacOS) {
+        return Map<String, dynamic>.from(
+          await shell.invokeMapMethod<String, dynamic>('qrCapabilities') ?? {},
+        );
+      }
+      return {
+        'camera': (await DesktopQrCamera.linuxDevices()).isNotEmpty,
+        'import': true,
+      };
+    }
+    if (method == 'importQr') {
+      final path = await shell.invokeMethod<String>('pickQrImage');
+      if (path == null) return {};
+      final file = File(path);
+      if (await file.length() > pairingQrImageLimit) {
+        throw const FormatException('Choose a QR image smaller than 4 MB.');
+      }
+      final builder = BytesBuilder(copy: false);
+      await for (final bytes in file.openRead(0, pairingQrImageLimit + 1)) {
+        builder.add(bytes);
+      }
+      return {'code': await decodePairingQr(builder.takeBytes())};
+    }
+    if (method == 'startQrCamera') {
+      if (Platform.isMacOS) {
+        await shell.invokeMethod<void>('startQrCamera');
+      } else {
+        await _qrCamera.start();
+      }
+      return {};
+    }
+    if (method == 'qrCameraFrame') {
+      final bytes = Platform.isMacOS
+          ? await shell.invokeMethod<Uint8List>('qrCameraFrame')
+          : await _qrCamera.frame();
+      if (bytes == null) {
+        throw const FormatException('No camera image received.');
+      }
+      return {'bytes': bytes};
+    }
+    if (method == 'stopQrCamera') {
+      if (Platform.isMacOS) {
+        await shell.invokeMethod<void>('stopQrCamera');
+      } else {
+        await _qrCamera.stop();
+      }
+      return {};
+    }
     if (method == 'pickFolder') {
       final path = await shell.invokeMethod<String>('pickFolder', arguments);
       return path == null ? {} : {'path': path};
@@ -148,6 +201,7 @@ class DesktopBackend implements WispnetBackend {
   }
 
   Future<void> close() async {
+    await _qrCamera.stop();
     final process = await _starting;
     if (process != null) {
       await process.stdin.close();

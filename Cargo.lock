@@ -4966,6 +4966,7 @@ dependencies = [
  "hyper-util",
  "iroh",
  "libc",
+ "qrcode",
  "serde",
  "serde_json",
  "sha1",

@@ -80,9 +80,9 @@ class _ServiceSettingsState extends State<ServiceSettings> {
   Future<void> load() async {
     try {
       final next = await adapter.status();
-      final journal = widget.android
-          ? <String, dynamic>{'value': <dynamic>[]}
-          : await widget.backend.invoke('desktopData', {'op': 'operations'});
+      final journal = await widget.backend.invoke('ownerData', {
+        'op': 'operations',
+      });
       var address = '';
       String? addressError;
       final selected = (next['host']['services'] as List)
@@ -139,7 +139,7 @@ class _ServiceSettingsState extends State<ServiceSettings> {
   }
 
   Future<void> request(Map<String, dynamic> payload) async {
-    await widget.backend.invoke('desktopRequest', {'payload': payload});
+    await widget.backend.invoke('ownerRequest', {'payload': payload});
   }
 
   Future<void> mutate(Map<String, dynamic> operation, int revision) =>
@@ -239,13 +239,11 @@ class _ServiceSettingsState extends State<ServiceSettings> {
     );
   }
 
-  Future<void> editFiles(Map<String, dynamic> service) => widget.android
-      ? editShare(service)
-      : showWispSheet<void>(
-          context,
-          title: 'File inbox',
-          child: filesEditor(service),
-        );
+  Future<void> editFiles(Map<String, dynamic> service) => showWispSheet<void>(
+    context,
+    title: 'File inbox',
+    child: filesEditor(service),
+  );
 
   Widget filesEditor(Map<String, dynamic> service) {
     final revision = status!['host']['revision'] as int;
@@ -255,6 +253,8 @@ class _ServiceSettingsState extends State<ServiceSettings> {
       status!['host']['file_exports'] as Map? ?? {},
     );
     var picking = false;
+    var available = service['available'] != false;
+    var folderLabel = service['label'] as String? ?? '';
     String? pickerFailure;
     return _ActionForm(
       builder: (context, submit, working, failure) => StatefulBuilder(
@@ -268,14 +268,16 @@ class _ServiceSettingsState extends State<ServiceSettings> {
               pickerFailure = null;
             });
             try {
-              final response = await widget.backend.invoke('pickFolder', {
-                'initialPath': ?folder,
-              });
+              final response = await widget.backend.invoke(
+                widget.android ? 'pickReceivingFolder' : 'pickFolder',
+                widget.android ? const {} : {'initialPath': ?folder},
+              );
               if (!context.mounted) return;
-              final path = response['path'];
+              final path = response[widget.android ? 'folder' : 'path'];
               if (path == null) return;
               if (path is! String ||
-                  !path.startsWith('/') ||
+                  path.isEmpty ||
+                  !widget.android && !path.startsWith('/') ||
                   path.contains('\u0000')) {
                 throw const FormatException(
                   'Choose an existing receiving folder.',
@@ -283,6 +285,8 @@ class _ServiceSettingsState extends State<ServiceSettings> {
               }
               update(() {
                 exports = {exports.keys.firstOrNull ?? 'incoming': path};
+                folderLabel = response['label'] as String? ?? '';
+                available = true;
               });
             } catch (error) {
               if (context.mounted) {
@@ -297,7 +301,7 @@ class _ServiceSettingsState extends State<ServiceSettings> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const Text(
-                'Choose where this computer receives files. Selected devices can send files without confirming each transfer. The receiving location stays private to this computer.',
+                'Choose where this device receives files. Selected devices can send files without confirming each transfer. The receiving location stays private to this device.',
               ),
               const SizedBox(height: 12),
               if (folder != null)
@@ -309,7 +313,17 @@ class _ServiceSettingsState extends State<ServiceSettings> {
                     color: WispColors.cyan,
                   ),
                   title: const Text('Receiving folder'),
-                  subtitle: Text(folder),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(widget.android ? folderLabel : folder),
+                      if (!available)
+                        const Text(
+                          'Folder unavailable. Choose it again.',
+                          style: TextStyle(color: WispColors.error),
+                        ),
+                    ],
+                  ),
                   actions: [
                     IconButton(
                       tooltip: 'Remove receiving folder',
@@ -317,6 +331,7 @@ class _ServiceSettingsState extends State<ServiceSettings> {
                           ? null
                           : () => update(() {
                               exports.clear();
+                              folderLabel = '';
                               pickerFailure = null;
                             }),
                       icon: const Icon(Icons.delete_outline),
@@ -353,7 +368,7 @@ class _ServiceSettingsState extends State<ServiceSettings> {
                       title: Text(c['name'] as String),
                       subtitle: Text(c['peer'] as String),
                       value: hasFolders && allowed.contains(c['peer']),
-                      onChanged: working || picking || !hasFolders
+                      onChanged: working || picking || !hasFolders || !available
                           ? null
                           : (value) => update(() {
                               if (value!) {
@@ -369,7 +384,7 @@ class _ServiceSettingsState extends State<ServiceSettings> {
               if (failure != null)
                 Text(failure, style: const TextStyle(color: WispColors.error)),
               FilledButton(
-                onPressed: working || picking
+                onPressed: working || picking || hasFolders && !available
                     ? null
                     : () => submit(() async {
                         await mutate({
@@ -389,14 +404,19 @@ class _ServiceSettingsState extends State<ServiceSettings> {
     );
   }
 
-  Future<void> editShare([Map<String, dynamic>? service]) =>
-      showWispSheet<void>(
-        context,
-        title: service == null ? 'Add folder' : 'Edit ${service['id']} folder',
-        child: shareEditor(service),
-      );
+  Future<void> editShare([Map<String, dynamic>? service]) async {
+    var renamed = false;
+    await showWispSheet<void>(
+      context,
+      title: service == null ? 'Add folder' : 'Edit ${service['id']} folder',
+      child: shareEditor(service, onRenamed: () => renamed = true),
+    );
+    if (renamed && widget.serviceId != null && mounted) {
+      Navigator.pop(context);
+    }
+  }
 
-  Widget shareEditor([Map<String, dynamic>? service]) {
+  Widget shareEditor(Map<String, dynamic>? service, {VoidCallback? onRenamed}) {
     final revision = status!['host']['revision'] as int;
     final name = service?['id'] as String? ?? '';
     final mode = service == null || isInboxService(service) ? 'inbox' : 'share';
@@ -424,8 +444,13 @@ class _ServiceSettingsState extends State<ServiceSettings> {
         'root': root,
         'allow': allow,
       }, revision);
+      if (name.isNotEmpty && name != id) onRenamed?.call();
     }
 
+    var folderRoot = roots[name] as String? ?? '';
+    if (widget.android && service != null) {
+      folderRoot = service['folder'] as String? ?? folderRoot;
+    }
     return FileShareEditor(
       backend: widget.backend,
       clients: List<Map<String, dynamic>>.of(clients),
@@ -433,7 +458,7 @@ class _ServiceSettingsState extends State<ServiceSettings> {
       folderLabel: service?['label'] as String? ?? '',
       folderAvailable: service?['available'] != false,
       id: name,
-      root: roots[name] as String? ?? '',
+      root: folderRoot,
       allow: (service?['allow'] as List? ?? []).cast<String>(),
       folderService: true,
       chooseMode: service == null,
@@ -621,16 +646,8 @@ class _ServiceSettingsState extends State<ServiceSettings> {
       child: service != null
           ? customForm
           : _ServiceCreationTabs(
-              labels: [
-                'Receive files',
-                'Share files',
-                if (!widget.android) 'Custom',
-              ],
-              children: [
-                folderForm('inbox'),
-                folderForm('share'),
-                if (!widget.android) customForm,
-              ],
+              labels: ['Receive files', 'Share files', 'Custom'],
+              children: [folderForm('inbox'), folderForm('share'), customForm],
             ),
     );
     widget.onChanged();
@@ -729,7 +746,7 @@ class _ServiceSettingsState extends State<ServiceSettings> {
   }
 
   Future<void> combined(String op) async {
-    final response = await widget.backend.invoke('desktopData', {
+    final response = await widget.backend.invoke('ownerData', {
       'op': 'targets',
     });
     final targets = (response['value'] as List).cast<Map<String, dynamic>>();
@@ -749,7 +766,7 @@ class _ServiceSettingsState extends State<ServiceSettings> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const Text(
-                'Each selected host applies independently using configured SSH owner access. Adding a client grants no services automatically. Offline hosts remain pending.',
+                'Each selected host applies independently using configured owner access. Adding a client grants no services automatically. Offline hosts remain pending.',
               ),
               TextField(
                 controller: peer,
@@ -765,7 +782,11 @@ class _ServiceSettingsState extends State<ServiceSettings> {
               for (final target in targets)
                 WispToggleListTile(
                   title: Text(
-                    '${target['ssh'] ?? 'This host'} · ${target['host']}',
+                    '${target['ssh'] ?? target['name'] ?? 'This host'} · ${target['host']}',
+                  ),
+                  subtitle: Text(
+                    target['owner_access'] as String? ??
+                        (target['ssh'] == null ? 'This device' : 'SSH owner access'),
                   ),
                   value: selected.contains(target['host']),
                   onChanged: plan != null || working
@@ -818,7 +839,7 @@ class _ServiceSettingsState extends State<ServiceSettings> {
                           );
                         } else {
                           submit(() async {
-                            await widget.backend.invoke('desktopData', {
+                            await widget.backend.invoke('ownerData', {
                               'op': 'start',
                               'plan': plan,
                             });
@@ -971,7 +992,7 @@ class _ServiceSettingsState extends State<ServiceSettings> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (!widget.servicesOnly && !widget.android) ...[
+        if (!widget.servicesOnly) ...[
           action('Device and browser settings', widget.onAccess),
           action('Pair this machine', () => run(invite)),
           const SizedBox(height: 12),
@@ -1160,7 +1181,7 @@ class _ServiceSettingsState extends State<ServiceSettings> {
                   SelectableText(op['id'] as String),
                   for (final t in op['targets'] as List)
                     Text(
-                      '${t['ssh'] ?? 'This host'} · ${t['host']} · ${t['state']} · ${t['reason'] ?? ''}${t['revision'] == null ? '' : ' · revision ${t['revision']}'}',
+                      '${t['ssh'] ?? t['name'] ?? 'This host'} · ${t['host']} · ${t['state']} · ${t['reason'] ?? ''}${t['revision'] == null ? '' : ' · revision ${t['revision']}'}',
                     ),
                   if ((op['targets'] as List).any(
                     (t) => t['state'] == 'pending',
@@ -1168,7 +1189,7 @@ class _ServiceSettingsState extends State<ServiceSettings> {
                     action(
                       'Retry pending hosts',
                       () => run(() async {
-                        await widget.backend.invoke('desktopData', {
+                        await widget.backend.invoke('ownerData', {
                           'op': 'retry',
                           'id': op['id'],
                         });
@@ -1286,7 +1307,7 @@ class _InvitationState extends State<_Invitation> {
 
   Future<void> issue() async {
     try {
-      final next = await widget.backend.invoke('desktopRequest', {
+      final next = await widget.backend.invoke('ownerRequest', {
         'payload': {'op': 'invite_qr'},
       });
       if (!mounted) return;
@@ -1304,7 +1325,7 @@ class _InvitationState extends State<_Invitation> {
     if (expired) return;
     try {
       final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-      final status = await widget.backend.invoke('desktopStatus');
+      final status = await widget.backend.invoke('ownerStatus');
       final received = (status['invitations'] as List).any(
         (i) =>
             i['invitation'] == qr!['invitation'] &&

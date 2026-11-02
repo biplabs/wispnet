@@ -21,7 +21,20 @@ class PlatformBackend implements WispnetBackend {
       method,
       jsonEncode(arguments),
     );
-    return jsonDecode(reply ?? '{}') as Map<String, dynamic>;
+    final result = jsonDecode(reply ?? '{}') as Map<String, dynamic>;
+    if (method == 'qrCameraFrame') {
+      final encoded = result.remove('image_b64');
+      if (encoded is! String ||
+          encoded.length > (4 * 1024 * 1024 * 4 ~/ 3) + 4) {
+        throw const FormatException('Invalid camera image.');
+      }
+      final bytes = base64Decode(encoded);
+      if (bytes.isEmpty || bytes.length > 4 * 1024 * 1024) {
+        throw const FormatException('Invalid camera image.');
+      }
+      result['bytes'] = bytes;
+    }
+    return result;
   }
 }
 

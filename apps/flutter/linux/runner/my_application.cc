@@ -13,6 +13,7 @@ struct _MyApplication {
   GtkWidget* status;
   GtkFileChooserNative* folder_picker;
   FlMethodCall* folder_call;
+  gboolean picking_qr_image;
   gboolean background;
   GQueue* links;
 };
@@ -62,11 +63,11 @@ static void folder_picked(GtkNativeDialog* dialog, gint response, gpointer data)
   if (response == GTK_RESPONSE_ACCEPT) {
     g_autofree gchar* selected = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
     g_autofree gchar* path = selected ? realpath(selected, nullptr) : nullptr;
-    if (path && g_file_test(path, G_FILE_TEST_IS_DIR) && g_utf8_validate(path, -1, nullptr)) {
+    if (path && g_file_test(path, self->picking_qr_image ? G_FILE_TEST_IS_REGULAR : G_FILE_TEST_IS_DIR) && g_utf8_validate(path, -1, nullptr)) {
       g_autoptr(FlValue) value = fl_value_new_string(path);
       fl_method_call_respond_success(call, value, nullptr);
     } else {
-      fl_method_call_respond_error(call, "folder_unavailable", "Choose an existing local folder.", nullptr, nullptr);
+      fl_method_call_respond_error(call, "selection_unavailable", self->picking_qr_image ? "Choose an existing QR image." : "Choose an existing local folder.", nullptr, nullptr);
     }
   } else {
     fl_method_call_respond_success(call, nullptr, nullptr);
@@ -75,16 +76,23 @@ static void folder_picked(GtkNativeDialog* dialog, gint response, gpointer data)
   g_object_unref(dialog);
   g_object_unref(self);
 }
-static void pick_folder(MyApplication* self, FlMethodCall* call) {
+static void pick_folder(MyApplication* self, FlMethodCall* call, gboolean qr_image = FALSE) {
   if (self->folder_picker) {
     fl_method_call_respond_error(call, "picker_busy", "A folder picker is already open.", nullptr, nullptr);
     return;
   }
-  self->folder_picker = gtk_file_chooser_native_new("Choose receiving folder", self->window,
-      GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER, "Choose folder", "Cancel");
+  self->picking_qr_image = qr_image;
+  self->folder_picker = gtk_file_chooser_native_new(qr_image ? "Choose pairing QR image" : "Choose receiving folder", self->window,
+      qr_image ? GTK_FILE_CHOOSER_ACTION_OPEN : GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER, qr_image ? "Open image" : "Choose folder", "Cancel");
   GtkFileChooser* chooser = GTK_FILE_CHOOSER(self->folder_picker);
   gtk_file_chooser_set_select_multiple(chooser, FALSE);
   gtk_file_chooser_set_local_only(chooser, TRUE);
+  if (qr_image) {
+    GtkFileFilter* filter = gtk_file_filter_new();
+    gtk_file_filter_set_name(filter, "QR images");
+    gtk_file_filter_add_mime_type(filter, "image/*");
+    gtk_file_chooser_add_filter(chooser, filter);
+  }
   gtk_native_dialog_set_modal(GTK_NATIVE_DIALOG(self->folder_picker), TRUE);
   FlValue* args = fl_method_call_get_args(call);
   FlValue* initial = args && fl_value_get_type(args) == FL_VALUE_TYPE_MAP
@@ -102,6 +110,8 @@ static void shell_call(FlMethodChannel*, FlMethodCall* call, gpointer data) {
   MyApplication* self = MY_APPLICATION(data);
   if (strcmp(fl_method_call_get_name(call), "pickFolder") == 0) {
     pick_folder(self, call);
+  } else if (strcmp(fl_method_call_get_name(call), "pickQrImage") == 0) {
+    pick_folder(self, call, TRUE);
   } else if (strcmp(fl_method_call_get_name(call), "takeLink") == 0) {
     g_autofree gchar* link = static_cast<gchar*>(g_queue_pop_head(self->links));
     g_autoptr(FlValue) value = link ? fl_value_new_string(link) : fl_value_new_null();

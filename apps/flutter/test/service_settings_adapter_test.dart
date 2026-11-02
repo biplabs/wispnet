@@ -3,7 +3,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:wispnet/src/backend.dart';
 import 'package:wispnet/src/service_settings_adapter.dart';
 
+import 'android_file_shares_test.dart' show ownerStatusFromFolders;
+
 class SettingsBackend implements WispnetBackend {
+  bool embedded = true;
   final calls = <(String, Map<String, dynamic>)>[];
   Object? mutationFailure;
   final desktopStatus = <String, dynamic>{
@@ -55,7 +58,11 @@ class SettingsBackend implements WispnetBackend {
     Map<String, dynamic> arguments = const {},
   ]) async {
     calls.add((method, Map.of(arguments)));
-    if (method == 'desktopStatus') return desktopStatus;
+    if (method == 'ownerStatus') {
+      return embedded
+          ? ownerStatusFromFolders(folders, 'phone-host')
+          : desktopStatus;
+    }
     if (method == 'folderServicesStatus') return folders;
     if (mutationFailure case final Object error) throw error;
     return {};
@@ -71,7 +78,7 @@ void main() {
   test(
     'desktop status and mutations retain the native owner protocol',
     () async {
-      final backend = SettingsBackend();
+      final backend = SettingsBackend()..embedded = false;
       final adapter = ServiceSettingsAdapter(backend: backend);
       expect(await adapter.status(), same(backend.desktopStatus));
       await adapter.mutate({
@@ -82,8 +89,8 @@ void main() {
         'expected_revision': -1,
       }, 12);
       expect(backend.calls, [
-        nativeCall('desktopStatus', {}),
-        nativeCall('desktopRequest', {
+        nativeCall('ownerStatus', {}),
+        nativeCall('ownerRequest', {
           'payload': {
             'op': 'mutate',
             'operation': {
@@ -129,11 +136,11 @@ void main() {
         'files': 'opaque-legacy',
       });
       expect(host['file_shares'], {'checkpoints': 'opaque-checkpoints'});
-      expect(host['file_exports'], {'files': 'opaque-legacy'});
+      expect(host['file_exports'], {'incoming': 'opaque-legacy'});
       expect(status['invitations'], isEmpty);
       expect(status['connected_peers'], isEmpty);
       expect(status['recent_peers'], isEmpty);
-      expect(backend.calls, [nativeCall('folderServicesStatus', {})]);
+      expect(backend.calls, [nativeCall('ownerStatus', {})]);
       expect(
         (backend.folders['inboxes'] as List).first.containsKey('kind'),
         isFalse,
@@ -167,7 +174,7 @@ void main() {
           }),
         );
         expect(
-          backend.calls.where((call) => call.$1 == 'folderServicesStatus'),
+          backend.calls.where((call) => call.$1 == 'ownerStatus'),
           hasLength(1),
         );
       },
@@ -195,12 +202,74 @@ void main() {
         nativeCall(method, {
           'expected_revision': 7,
           'id': id,
+          'new_id': id,
           'folder': 'replacement-capability',
           'allow': <String>[],
         }),
       );
     });
   }
+
+  for (final (id, method) in [
+    ('incoming', 'saveInbox'),
+    ('checkpoints', 'saveShare'),
+  ]) {
+    test('Android renames $id atomically using the original ID', () async {
+      final backend = SettingsBackend();
+      final adapter = ServiceSettingsAdapter(backend: backend, android: true);
+      await adapter.status();
+      await adapter.mutate({
+        'op': 'edit_folder',
+        'id': id,
+        'new_id': '$id-renamed',
+        'root': 'unchanged-capability',
+        'allow': ['laptop'],
+      }, 7);
+      expect(
+        backend.calls.last,
+        nativeCall(method, {
+          'expected_revision': 7,
+          'id': id,
+          'new_id': '$id-renamed',
+          'folder': 'unchanged-capability',
+          'allow': ['laptop'],
+        }),
+      );
+    });
+  }
+
+  test('Android legacy Files saves complete exports and clears grants with the last folder', () async {
+    final backend = SettingsBackend();
+    final adapter = ServiceSettingsAdapter(backend: backend, android: true);
+    await adapter.status();
+    final exports = {'incoming': 'opaque-legacy', 'archive': 'opaque-archive'};
+    await adapter.mutate({
+      'op': 'files',
+      'exports': exports,
+      'allow': ['laptop'],
+    }, 7);
+    expect(
+      backend.calls.last,
+      nativeCall('saveReceiving', {
+        'expected_revision': 7,
+        'exports': exports,
+        'allow': ['laptop'],
+      }),
+    );
+    await adapter.mutate({
+      'op': 'files',
+      'exports': <String, String>{},
+      'allow': ['laptop'],
+    }, 7);
+    expect(
+      backend.calls.last,
+      nativeCall('saveReceiving', {
+        'expected_revision': 7,
+        'exports': <String, String>{},
+        'allow': <String>[],
+      }),
+    );
+  });
 
   for (final (id, method) in [
     ('incoming', 'removeInbox'),
@@ -246,30 +315,29 @@ void main() {
     },
   );
 
-  test('Android rejects unsupported operations, renames, duplicate IDs and missing targets', () async {
-    final backend = SettingsBackend();
-    final adapter = ServiceSettingsAdapter(backend: backend, android: true);
-    await adapter.status();
-    for (final operation in <Map<String, dynamic>>[
-      {
-        'op': 'shell',
-        'allow': ['laptop'],
-      },
-      {'op': 'http', 'id': 'web'},
-      {
-        'op': 'files',
-        'exports': {'incoming': 'capability'},
-      },
-      {'op': 'edit_folder', 'id': 'incoming', 'new_id': 'renamed'},
-      {'op': 'file_share', 'id': 'incoming'},
-      {'op': 'file_inbox', 'id': 'checkpoints'},
-      {'op': 'remove', 'id': 'missing'},
-      {'op': 'edit_folder', 'id': 'missing'},
-    ]) {
-      await expectLater(adapter.mutate(operation, 7), throwsFormatException);
-    }
-    expect(backend.calls, [nativeCall('folderServicesStatus', {})]);
-  });
+  test(
+    'Android rejects unsupported operations, duplicate IDs and missing targets',
+    () async {
+      final backend = SettingsBackend();
+      final adapter = ServiceSettingsAdapter(backend: backend, android: true);
+      await adapter.status();
+      for (final operation in <Map<String, dynamic>>[
+        {
+          'op': 'shell',
+          'allow': ['laptop'],
+        },
+        {'op': 'http', 'id': 'web'},
+        {'op': 'edit_folder', 'id': 'incoming', 'new_id': 'checkpoints'},
+        {'op': 'file_share', 'id': 'incoming'},
+        {'op': 'file_inbox', 'id': 'checkpoints'},
+        {'op': 'remove', 'id': 'missing'},
+        {'op': 'edit_folder', 'id': 'missing'},
+      ]) {
+        await expectLater(adapter.mutate(operation, 7), throwsFormatException);
+      }
+      expect(backend.calls, [nativeCall('ownerStatus', {})]);
+    },
+  );
 
   test('Android mutation requires status and does not refresh away an editor revision', () async {
     final backend = SettingsBackend();
@@ -287,8 +355,8 @@ void main() {
       throwsFormatException,
     );
     expect(backend.calls, [
-      nativeCall('folderServicesStatus', {}),
-      nativeCall('folderServicesStatus', {}),
+      nativeCall('ownerStatus', {}),
+      nativeCall('ownerStatus', {}),
     ]);
   });
 
@@ -311,7 +379,7 @@ void main() {
       nativeCall('removeInbox', {'expected_revision': 7, 'id': 'incoming'}),
     );
     expect(
-      backend.calls.where((call) => call.$1 == 'folderServicesStatus'),
+      backend.calls.where((call) => call.$1 == 'ownerStatus'),
       hasLength(1),
     );
   });

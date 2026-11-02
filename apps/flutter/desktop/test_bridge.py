@@ -52,6 +52,38 @@ class BridgeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.bridge.dispatch('setServiceEnabled', dict(service='shell', incarnation=INCARNATION, enabled='false'))
 
+    def test_connection_diagnostics_use_the_shared_probe_and_report_unknown_network_metadata(self):
+        report = dict(initial_path='relay', selected_path='direct', rtt_ms=15)
+        original = self.bridge.api.request
+        def request(**args):
+            if args['op'] == 'diagnose_connection':
+                self.calls.append(args)
+                return report
+            return original(**args)
+        with patch.object(self.bridge.api, 'request', side_effect=request):
+            result = self.bridge.dispatch('connectionDiagnostics', {'host': PEER})
+        self.assertEqual(self.calls[-1], {'op': 'diagnose_connection', 'host': PEER})
+        self.assertIsNone(result['network'])
+        self.assertIsNone(result['vpn'])
+        self.assertIsNone(result['network_changed'])
+        self.assertEqual(result['peers'][0]['report'], report)
+        self.assertEqual(result['peers'][0]['host'], PEER)
+        self.assertNotIn('mutate', [call['op'] for call in self.calls])
+
+    def test_connection_diagnostics_reject_self_and_unpaired_hosts_and_preserve_probe_errors(self):
+        for host in (OWN, 'f' * 64, 'bad'):
+            with self.subTest(host=host), self.assertRaisesRegex(ValueError, 'paired'):
+                self.bridge.dispatch('connectionDiagnostics', {'host': host})
+        original = self.bridge.api.request
+        def request(**args):
+            if args['op'] == 'diagnose_connection':
+                raise module.NodeRejected('Pairing changed')
+            return original(**args)
+        with patch.object(self.bridge.api, 'request', side_effect=request):
+            result = self.bridge.dispatch('connectionDiagnostics', {'host': PEER})
+        self.assertEqual(result['peers'][0]['error'], 'Pairing changed')
+        self.assertNotIn('report', result['peers'][0])
+
     def test_desktop_start_and_exit_control_node_and_propagate_stop_failure(self):
         with patch.object(self.bridge, 'lifecycle') as lifecycle:
             self.bridge.dispatch('startDesktop', {})

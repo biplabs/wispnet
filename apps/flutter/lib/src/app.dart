@@ -60,26 +60,8 @@ class _WispHomeState extends State<WispHome>
       SharedFileDownloads(widget.backend)..addListener(() {
         if (mounted) setState(() {});
       });
-  List<Map<String, dynamic>> get minimizedShells {
-    if (!online) return const [];
-    if (snapshot['desktop'] == true) {
-      return desktopShells.minimizedSnapshots;
-    }
-    final shells = snapshot['shells'];
-    if (shells is List) {
-      return shells
-          .whereType<Map>()
-          .map((e) => e.cast<String, dynamic>())
-          .where((e) => e['minimized'] == true)
-          .toList();
-    }
-    final shell = snapshot['shell'];
-    if (shell is Map) {
-      final data = shell.cast<String, dynamic>();
-      if (data['minimized'] == true) return [data];
-    }
-    return const [];
-  }
+  List<Map<String, dynamic>> get minimizedShells =>
+      online ? desktopShells.minimizedSnapshots : const [];
 
   Map<String, dynamic> get records =>
       (snapshot['hosts'] as Map?)?.cast<String, dynamic>() ?? {};
@@ -175,7 +157,31 @@ class _WispHomeState extends State<WispHome>
         notice(network);
       }
       lastNetwork = network;
-      if (next['desktop'] == true && next['hosts'] is Map) {
+      desktopShells.android = next['desktop'] != true;
+      if (desktopShells.android && next['enabled'] == true) {
+        final saved = next['terminal_layout'] as Map?;
+        desktopShells.restoreLayout(
+          saved?.cast<String, dynamic>() ??
+              {
+                'workspaces': [
+                  for (final shell
+                      in (next['shells'] as List? ??
+                              [if (next['shell'] is Map) next['shell']])
+                          .whereType<Map>())
+                    {
+                      ...shell,
+                      'tabs': [
+                        {
+                          'id': shell['session'] ?? 'main',
+                          'panes': [shell['session'] ?? 'main'],
+                        },
+                      ],
+                    },
+                ],
+              },
+        );
+      }
+      if (next['hosts'] is Map) {
         final validHosts = (next['hosts'] as Map).keys
             .whereType<String>()
             .toSet();
@@ -350,6 +356,7 @@ class _WispHomeState extends State<WispHome>
     );
     if (workspace.tabs.isNotEmpty) {
       workspace.minimized = true;
+      desktopShells.persistLayout();
     }
     if (mounted) setState(() {});
   }
@@ -426,7 +433,7 @@ class _WispHomeState extends State<WispHome>
       await showFiles(machine, service);
       return;
     }
-    if (service['kind'] == 'shell' && snapshot['desktop'] == true) {
+    if (service['kind'] == 'shell') {
       await showDesktopShell(
         host: machine.id,
         hostName: machine.name,
@@ -441,17 +448,6 @@ class _WispHomeState extends State<WispHome>
       notice('Opening ${service['id']}…');
     }
     try {
-      if (service['kind'] == 'shell') {
-        await backend.invoke('openShell', {
-          'host': machine.id,
-          'host_name': machine.name,
-          'service': service['id'],
-          'incarnation': service['incarnation'],
-          'session': 'main',
-        });
-        if (mounted) ScaffoldMessenger.of(context).hideCurrentSnackBar();
-        return;
-      }
       final publication = service['public_access'] as Map?;
       final publicUrl = publication?['url'] as String?;
       final result =
@@ -486,33 +482,13 @@ class _WispHomeState extends State<WispHome>
 
   Future<void> expandShell(Map<String, dynamic> shell) async {
     if (busy || !online) return;
-    if (snapshot['desktop'] == true) {
-      await showDesktopShell(
-        host: shell['host'] as String,
-        hostName: shell['host_name'] as String? ?? 'Shell',
-        service: shell['service'] as String? ?? 'shell',
-        incarnation: shell['incarnation'] as String,
-        session: shell['session'] as String? ?? 'main',
-      );
-      return;
-    }
-    setState(() => busy = true);
-    try {
-      await backend.invoke('openShell', {
-        'host': shell['host'],
-        'host_name': shell['host_name'],
-        'service': shell['service'] ?? 'shell',
-        'incarnation': shell['incarnation'],
-        'session': shell['session'] ?? 'main',
-      });
-    } catch (error) {
-      notice('Cannot open service: ${message(error)}');
-    } finally {
-      if (mounted) {
-        setState(() => busy = false);
-        await poll();
-      }
-    }
+    await showDesktopShell(
+      host: shell['host'] as String,
+      hostName: shell['host_name'] as String? ?? 'Shell',
+      service: shell['service'] as String? ?? 'shell',
+      incarnation: shell['incarnation'] as String,
+      session: shell['session'] as String? ?? 'main',
+    );
   }
 
   Future<void> confirmCloseShell(Map<String, dynamic> shell) async {
@@ -550,40 +526,10 @@ class _WispHomeState extends State<WispHome>
 
   Future<void> closeShell([String? host]) async {
     if (busy) return;
-    if (snapshot['desktop'] == true) {
-      if (host != null && host.isNotEmpty) {
-        desktopShells.closeHost(host, terminate: true);
-      } else {
-        desktopShells.closeAll(terminate: true);
-      }
-      return;
-    }
-    setState(() {
-      final next = {...snapshot};
-      if (host != null && host.isNotEmpty) {
-        final shells = (next['shells'] as List?)
-            ?.whereType<Map>()
-            .where((e) => e['host'] != host)
-            .toList();
-        if (shells != null) next['shells'] = shells;
-        if ((next['shell'] as Map?)?['host'] == host) {
-          next.remove('shell');
-        }
-      } else {
-        next.remove('shell');
-        next.remove('shells');
-      }
-      snapshot = next;
-    });
-    try {
-      await backend.invoke(
-        'closeShell',
-        host != null && host.isNotEmpty ? {'host': host} : const {},
-      );
-    } catch (error) {
-      notice(message(error));
-    } finally {
-      if (mounted) await poll();
+    if (host != null && host.isNotEmpty) {
+      desktopShells.closeHost(host, terminate: true);
+    } else {
+      desktopShells.closeAll(terminate: true);
     }
   }
 
@@ -612,7 +558,6 @@ class _WispHomeState extends State<WispHome>
       child: PairingForm(
         backend: backend,
         initialCode: code,
-        desktop: snapshot['desktop'] == true,
         onPaired: () {
           Navigator.pop(context);
           notice('Pending owner approval');
@@ -640,8 +585,7 @@ class _WispHomeState extends State<WispHome>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (snapshot['desktop'] == true &&
-              (snapshot['pendingRequests'] as int? ?? 0) > 0)
+          if ((snapshot['pendingRequests'] as int? ?? 0) > 0)
             OutlinedButton(
               onPressed: () {
                 Navigator.pop(context);
@@ -692,7 +636,7 @@ class _WispHomeState extends State<WispHome>
   }
 
   Future<void> machineSettings(Machine machine) async {
-    if (snapshot['desktop'] == true && machine.data['local'] == true) {
+    if (machine.data['local'] == true) {
       await deviceSettings(servicesOnly: true);
       return;
     }
@@ -714,10 +658,6 @@ class _WispHomeState extends State<WispHome>
     String section = 'My services',
     bool servicesOnly = false,
   }) async {
-    if (snapshot['desktop'] != true && !servicesOnly) {
-      await settings();
-      return;
-    }
     await showWispSheet<void>(
       context,
       title: servicesOnly ? 'Local services' : 'Settings',
@@ -797,6 +737,10 @@ class _WispHomeState extends State<WispHome>
         onLocalServices: () {
           Navigator.pop(context);
           deviceSettings(servicesOnly: true);
+        },
+        onOwnerTools: () {
+          Navigator.pop(context);
+          deviceSettings(section: 'Devices');
         },
         onSaved: () {
           Navigator.pop(context);
@@ -1205,8 +1149,7 @@ class _WispHomeState extends State<WispHome>
                     onPressed: busy ? null : manage,
                     style: buttonStyle,
                     child: Text(
-                      snapshot['desktop'] == true &&
-                              (snapshot['pendingRequests'] as int? ?? 0) > 0
+                      (snapshot['pendingRequests'] as int? ?? 0) > 0
                           ? 'Manage · ${snapshot['pendingRequests']} requests'
                           : 'Manage',
                     ),

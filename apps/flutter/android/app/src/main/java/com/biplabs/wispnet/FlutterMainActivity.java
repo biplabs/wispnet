@@ -24,6 +24,9 @@ public final class FlutterMainActivity extends FlutterActivity {
  private MethodChannel.Result qrResult;
  private MethodChannel.Result fileResult;
  private MethodChannel.Result folderResult;
+ private AndroidQrCamera qrCamera;
+ private MethodChannel.Result qrCameraPermission;
+ private boolean resumed;
  private boolean downloadFolder;
  private boolean shareFolder;
  private CancellationSignal fileCancellation;
@@ -33,6 +36,7 @@ public final class FlutterMainActivity extends FlutterActivity {
  @Override public void onCreate(Bundle state) {
   super.onCreate(state);
   network = new NetworkBridge(this);
+  qrCamera = new AndroidQrCamera(this);
   if (state != null) {
    java.util.ArrayList<Intent> pending = state.getParcelableArrayList("wispnet.shares", Intent.class);
    if (pending != null) sharedFiles.addAll(pending);
@@ -43,6 +47,8 @@ public final class FlutterMainActivity extends FlutterActivity {
  }
  @Override public void configureFlutterEngine(@NonNull FlutterEngine engine) {
   super.configureFlutterEngine(engine);
+  engine.getPlatformViewsController().getRegistry().registerViewFactory(
+   "app.wispnet/terminal", new com.biplabs.wispnet.shell.FlutterTerminalViewFactory(engine.getDartExecutor().getBinaryMessenger()));
   new MethodChannel(engine.getDartExecutor().getBinaryMessenger(), "app.wispnet/ui").setMethodCallHandler((call, result) -> {
    final JSONObject arguments;
    try { arguments = new JSONObject(call.arguments == null ? "{}" : (String)call.arguments); }
@@ -73,7 +79,19 @@ public final class FlutterMainActivity extends FlutterActivity {
     catch (JSONException failure) { result.error("invitation_invalid", failure.getMessage(), null); }
     return;
    }
-   if ("scanQr".equals(call.method) || "importQr".equals(call.method)) { startQr(call.method, result); return; }
+   if ("qrCapabilities".equals(call.method)) {
+    try { result.success(new JSONObject().put("camera", getPackageManager().hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)).put("import", true).toString()); }
+    catch (JSONException failure) { result.error("qr_unavailable", "Cannot inspect camera support", null); }
+    return;
+   }
+   if ("startQrCamera".equals(call.method)) { startQrCamera(result); return; }
+   if ("qrCameraFrame".equals(call.method)) {
+    qrCamera.frame((bytes, error) -> cameraReply(result, bytes, error)); return;
+   }
+   if ("stopQrCamera".equals(call.method)) {
+    stopQrCamera(); result.success("{}"); return;
+   }
+   if ("importQr".equals(call.method)) { importQr(result); return; }
    if ("pickReceivingFolder".equals(call.method) || "pickDownloadFolder".equals(call.method) || "pickShareFolder".equals(call.method)) {
     if (folderResult != null || fileResult != null || qrResult != null) { result.error("picker_busy", "A picker is already in progress", null); return; }
     folderResult = result;
@@ -86,14 +104,9 @@ public final class FlutterMainActivity extends FlutterActivity {
     return;
    }
    if ("pickFiles".equals(call.method)) { pickFiles(result); return; }
-   if ("openShell".equals(call.method)) {
-    try {
-     String host = arguments.getString("host"), service = arguments.getString("service"), incarnation = arguments.getString("incarnation");
-     if (!host.matches("[0-9a-f]{64}") || !incarnation.matches("[0-9a-f]{64}") || !service.matches("[a-z0-9][a-z0-9._-]{0,63}")) throw new Exception("Invalid shell service");
-     startActivity(new Intent(this, com.biplabs.wispnet.shell.ShellActivity.class)
-      .putExtra("target", arguments.toString()).putExtra("session", arguments.optString("session", "main")));
-     result.success("{}");
-    } catch (Exception failure) { result.error("shell_failed", failure.getMessage(), null); }
+   if (call.method.startsWith("nativeTerminal") || "saveTerminalLayout".equals(call.method)) {
+    try { result.success(com.biplabs.wispnet.shell.FlutterTerminalBridge.dispatch(this, call.method, arguments).toString()); }
+    catch (Exception failure) { result.error("terminal_failed", failure.getMessage(), null); }
     return;
    }
    if ("closeShell".equals(call.method)) {
@@ -123,17 +136,22 @@ public final class FlutterMainActivity extends FlutterActivity {
    executor.execute(() -> {
     try {
      JSONObject reply = network.request(call.method, arguments);
-     if ("removeHost".equals(call.method)) {
-      com.biplabs.wispnet.shell.ShellWorkspace.INSTANCE.closeHost(this, arguments.optString("host"), true);
-     }
      if ("snapshot".equals(call.method)) {
       reply.put("ui_pid", android.os.Process.myPid());
+      reply.put("terminal_layout", com.biplabs.wispnet.shell.FlutterTerminalBridge.savedLayout(this));
       JSONObject shell = com.biplabs.wispnet.shell.ShellWorkspace.INSTANCE.snapshotJson();
       if (shell != null) reply.put("shell", shell);
       JSONArray shells = com.biplabs.wispnet.shell.ShellWorkspace.INSTANCE.snapshotsJson();
       if (shells.length() > 0) reply.put("shells", shells);
      }
-     runOnUiThread(() -> result.success(reply.toString()));
+     runOnUiThread(() -> {
+      try {
+       if ("removeHost".equals(call.method)) {
+        com.biplabs.wispnet.shell.ShellWorkspace.INSTANCE.closeHost(this, arguments.optString("host"), true);
+       }
+       result.success(reply.toString());
+      } catch (Exception failure) { result.error("terminal_failed", failure.getMessage(), null); }
+     });
     } catch (Exception failure) {
      String code = failure instanceof NetworkBridge.Failure ? ((NetworkBridge.Failure)failure).code : "operation_failed";
      runOnUiThread(() -> result.error(code, failure.getMessage(), null));
@@ -141,16 +159,60 @@ public final class FlutterMainActivity extends FlutterActivity {
    });
   });
  }
- private void startQr(String method, MethodChannel.Result result) {
+ private void cameraReply(MethodChannel.Result result, byte[] bytes, Exception error) {
+  if (error != null) { runOnUiThread(() -> result.error("camera_unavailable", error.getMessage(), null)); return; }
+  try {
+   String reply = bytes == null ? "{}" : new JSONObject().put("image_b64", android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)).toString();
+   runOnUiThread(() -> result.success(reply));
+  } catch (Exception failure) { runOnUiThread(() -> result.error("camera_unavailable", "Cannot read camera image. Try again.", null)); }
+ }
+ private void startQrCamera(MethodChannel.Result result) {
+  if (qrCameraPermission != null || qrResult != null || fileResult != null || folderResult != null) {
+   result.error("camera_busy", "A camera or picker is already open.", null); return;
+  }
+  if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+   qrCameraPermission = result;
+   requestPermissions(new String[]{Manifest.permission.CAMERA}, 106);
+   return;
+  }
+  if (!resumed) { result.error("camera_unavailable", "Return to Wispnet to use the camera.", null); return; }
+  qrCamera.start((bytes, error) -> cameraReply(result, bytes, error));
+ }
+ private void stopQrCamera() {
+  if (qrCameraPermission != null) {
+   MethodChannel.Result pending = qrCameraPermission; qrCameraPermission = null;
+   pending.error("camera_closed", "Camera closed.", null);
+  }
+  if (qrCamera != null) qrCamera.close();
+ }
+ @Override public void onRequestPermissionsResult(int request, @NonNull String[] permissions, @NonNull int[] grants) {
+  super.onRequestPermissionsResult(request, permissions, grants);
+  if (request != 106 || qrCameraPermission == null) return;
+  if (grants.length == 0 || grants[0] != PackageManager.PERMISSION_GRANTED) {
+   MethodChannel.Result pending = qrCameraPermission; qrCameraPermission = null;
+   pending.error("camera_denied", "Allow camera access or import a QR image.", null);
+  } else if (resumed) {
+   MethodChannel.Result pending = qrCameraPermission; qrCameraPermission = null;
+   startQrCamera(pending);
+  }
+ }
+ @Override protected void onResume() {
+  super.onResume(); resumed = true;
+  if (qrCameraPermission != null && checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+   MethodChannel.Result pending = qrCameraPermission; qrCameraPermission = null;
+   startQrCamera(pending);
+  }
+ }
+ @Override protected void onPause() {
+  resumed = false;
+  if (qrCamera != null) qrCamera.close();
+  super.onPause();
+ }
+ private void importQr(MethodChannel.Result result) {
   if (folderResult != null || qrResult != null || fileResult != null) { result.error("qr_busy", "A picker is already in progress", null); return; }
   try {
    qrResult = result;
-   if ("importQr".equals(method)) startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE), 103);
-   else {
-    if (!getPackageManager().hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) throw new Exception("No camera available. Import a QR image or paste a pairing code.");
-    com.journeyapps.barcodescanner.ScanOptions options = new com.journeyapps.barcodescanner.ScanOptions().setCaptureActivity(PairingCaptureActivity.class).setDesiredBarcodeFormats(com.journeyapps.barcodescanner.ScanOptions.QR_CODE).setBeepEnabled(false).setBarcodeImageEnabled(false).setTimeout(60000).setPrompt("Scan your computer’s Wispnet QR to pair.");
-    startActivityForResult(options.createScanIntent(this), 102);
-   }
+   startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE), 103);
   } catch (Exception failure) { qrResult = null; result.error("qr_unavailable", failure.getMessage(), null); }
  }
  private void pickFiles(MethodChannel.Result result) {
@@ -208,14 +270,15 @@ public final class FlutterMainActivity extends FlutterActivity {
    });
    return;
   }
-  if ((request != 102 && request != 103) || qrResult == null) return;
+  if (request != 103 || qrResult == null) return;
   MethodChannel.Result result = qrResult; qrResult = null;
   if (resultCode != Activity.RESULT_OK || data == null) { result.success("{}"); return; }
   work.execute(() -> {
    try {
+    Uri uri = data.getData();
+    if (uri == null || !"content".equals(uri.getScheme())) throw new Exception("Invalid QR image");
     String code;
-    if (request == 102) code = data.getStringExtra("SCAN_RESULT");
-    else { Uri uri = data.getData(); if (uri == null || !"content".equals(uri.getScheme())) throw new Exception("Invalid QR image"); try (InputStream input = getContentResolver().openInputStream(uri)) { code = PairingQr.decode(input); } }
+    try (InputStream input = getContentResolver().openInputStream(uri)) { code = PairingQr.decode(input); }
     String reply = new JSONObject().put("code", code).toString(); runOnUiThread(() -> result.success(reply));
    } catch (Exception failure) { runOnUiThread(() -> result.error("qr_invalid", "Cannot read pairing QR image. Paste the pairing code instead.", null)); }
   });
@@ -247,11 +310,13 @@ public final class FlutterMainActivity extends FlutterActivity {
  }
  @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); receiveInvitation(intent); }
  @Override protected void onDestroy() {
+  stopQrCamera();
   if (fileCancellation != null) fileCancellation.cancel();
   if (fileResult != null) { fileResult.error("activity_closed", "File selection interrupted. Select the files again.", null); fileResult = null; }
   if (folderResult != null) { folderResult.error("activity_closed", "Folder selection interrupted. Choose the folder again.", null); folderResult = null; }
   if (qrResult != null) { qrResult.error("activity_closed", "QR request interrupted. Try again.", null); qrResult = null; }
-  com.biplabs.wispnet.shell.ShellWorkspace.INSTANCE.closeAll(this, false);
+  // Native terminal holders retain their network streams across Flutter activity
+  // recreation; platform-view disposal only detaches the viewport and IME.
   network.close(); work.shutdown(); state.shutdown(); super.onDestroy();
  }
 }

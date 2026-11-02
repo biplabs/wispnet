@@ -685,7 +685,7 @@ class _FileShareEditorState extends State<FileShareEditor> {
       WispServiceIdField(
         fieldKey: const ValueKey('share-name'),
         controller: id,
-        enabled: !busy && (!widget.android || widget.id.isEmpty),
+        enabled: !busy,
         hintText: inbox ? 'incoming-datasets' : 'checkpoints',
       ),
       const SizedBox(height: 12),

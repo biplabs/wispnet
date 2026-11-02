@@ -11,9 +11,10 @@ final class NetworkController extends ContextWrapper {
  private final AccessService service;
  private final AndroidFiles files;
  private final AndroidDownloads downloads;
+ private final AndroidOwner owner;
  final ExecutorService work = Executors.newFixedThreadPool(4);
  private static final AtomicBoolean pairing = new AtomicBoolean();
- NetworkController(AccessService service) { super(service); this.service = service; this.files = new AndroidFiles(service); this.downloads = new AndroidDownloads(service); }
+ NetworkController(AccessService service) { super(service); this.service = service; this.files = new AndroidFiles(service); this.downloads = new AndroidDownloads(service); this.owner = new AndroidOwner(service); }
  void close() { files.close(); downloads.close(); work.shutdown(); }
  void cancelFiles() { files.stop(); downloads.stop(); }
  void filesOnline() { files.online(); downloads.online(); }
@@ -23,22 +24,27 @@ final class NetworkController extends ContextWrapper {
    case "setServiceEnabled": {
     String id = args.getString("service");
     if (!(args.get("enabled") instanceof Boolean)) throw new Exception("Invalid local service");
-    JSONObject status = Native.command("local_files_status");
-    if (!"files".equals(id)) {
-     JSONObject folders = folderServicesStatus(); JSONObject selected = null;
-     for (String collection : new String[]{"inboxes","shares"}) {
-      JSONArray rows = folders.getJSONArray(collection);
-      for (int index=0;index<rows.length();index++) if (id.equals(rows.getJSONObject(index).getString("id"))) selected = rows.getJSONObject(index);
-     }
-     if (selected == null) throw new Exception("Folder service unavailable");
-     if (args.getBoolean("enabled") && !selected.getBoolean("available"))
-      throw new Exception("Folder access expired. Choose the folder again.");
-     status = folders;
+    JSONObject status = owner.status(this::folderServicesStatus).getJSONObject("host"), selected = null;
+    JSONArray services = status.getJSONArray("services");
+    for (int index=0;index<services.length();index++) if (id.equals(services.getJSONObject(index).getString("id"))) selected = services.getJSONObject(index);
+    if (selected == null) throw new Exception("Local service unavailable");
+    String kind = selected.getString("kind");
+    if (java.util.Set.of("http","tcp").contains(kind)) {
+     return Native.request(new JSONObject().put("op", "local_owner_mutate").put("operation", new JSONObject()
+       .put("op", "set_service_enabled").put("expected_revision", status.getLong("revision"))
+       .put("id", id).put("incarnation", args.getString("incarnation")).put("enabled", args.getBoolean("enabled"))));
     }
+    if (!java.util.Set.of("files","file_inbox","file_share").contains(kind)) throw new Exception("Local service unavailable");
+    if (args.getBoolean("enabled") && !selected.getBoolean("available"))
+     throw new Exception("Folder access expired. Choose the folder again.");
     return Native.request(new JSONObject().put("op", "local_service_enabled")
      .put("id", id).put("incarnation", args.getString("incarnation"))
      .put("enabled", args.getBoolean("enabled")).put("expected_revision", status.getLong("revision")));
    }
+   case "ownerStatus": return owner.status(this::folderServicesStatus);
+   case "ownerRequest": return owner.request(args.getJSONObject("payload"));
+   case "ownerData": return new JSONObject().put("value", owner.data(args));
+   case "launchPublic": return owner.launchPublic(args);
    case "receivingStatus": return new AndroidReceiving(this).status();
    case "folderServicesStatus": return folderServicesStatus();
    case "saveInbox": return new AndroidReceiving(this).configureInbox(args);
@@ -73,19 +79,23 @@ final class NetworkController extends ContextWrapper {
     JSONObject order = new JSONObject();
     for (java.util.Map.Entry<String, ?> entry : getSharedPreferences("card-order", 0).getAll().entrySet())
      if (entry.getValue() instanceof String) try { order.put(entry.getKey(), new JSONArray((String)entry.getValue())); } catch (JSONException ignored) {}
+    JSONObject owned = owner.status(this::folderServicesStatus);
+    String own = owned.getJSONObject("host").getString("host");
+    JSONArray confirmed = owned.optJSONArray("peer_pins");
+    store.importConfirmed(confirmed == null ? new JSONArray() : confirmed, owned.getJSONObject("host").getJSONArray("clients"), own);
     JSONObject hosts = store.all();
-    String own = Native.command("identity").getString("peer");
-    JSONObject folders = folderServicesStatus();
-    JSONArray localServices = new JSONArray();
-    JSONArray inboxes = folders.getJSONArray("inboxes");
-    for (int index=0;index<inboxes.length();index++) localServices.put(inboxes.getJSONObject(index));
-    JSONArray sourceShares = folders.getJSONArray("shares");
-    for (int index=0;index<sourceShares.length();index++) localServices.put(sourceShares.getJSONObject(index));
+    JSONArray localServices = owned.getJSONObject("host").getJSONArray("services");
+    JSONObject publicAccess = new JSONObject().put("host", own).put("version", 1)
+      .put("services", owned.getJSONObject("public_access").getJSONArray("services"));
+    int pendingRequests = 0; JSONArray invitations = owned.getJSONArray("invitations");
+    for (int index=0;index<invitations.length();index++) if ("pending".equals(invitations.getJSONObject(index).optString("state"))) pendingRequests++;
     hosts.put(own, new JSONObject().put("name", DeviceProfile.name(this)).put("local", true)
-     .put("state", "available").put("catalog", new JSONObject().put("services", localServices)));
+     .put("state", "available").put("catalog", new JSONObject().put("host", own).put("services", localServices))
+     .put("public_access", publicAccess));
     return new JSONObject().put("hosts", hosts).put("name", DeviceProfile.name(this))
+     .put("pendingRequests", pendingRequests)
      .put("share_downloads", downloads.snapshots())
-     .put("network_pid", android.os.Process.myPid()).put("peer", Native.command("identity").getString("peer")).put("enabled", service.enabled)
+     .put("network_pid", android.os.Process.myPid()).put("peer", own).put("enabled", service.enabled)
      .put("network", service.networkStatus).put("relay", Native.command("relay_status").getString("relay"))
      .put("telemetry", Native.command("telemetry")).put("order", order)
      .put("version", getPackageManager().getPackageInfo(getPackageName(), 0).versionName);
@@ -124,8 +134,9 @@ final class NetworkController extends ContextWrapper {
     if (!service.enabled) throw new Exception("Start browser access first");
     String peer = args.getString("host");
     try {
+     boolean local = peer.equals(Native.command("identity").getString("peer"));
      return Native.request(new JSONObject().put("op", "open").put("host", peer)
-      .put("host_name", store.all().getJSONObject(peer).getString("name"))
+      .put("host_name", local ? DeviceProfile.name(this) : store.all().getJSONObject(peer).getString("name"))
       .put("service", args.getString("service")).put("incarnation", args.getString("incarnation")));
     } catch (Exception failure) { store.failed(peer, failure); throw failure; }
    }
@@ -185,7 +196,7 @@ final class NetworkController extends ContextWrapper {
    if (receiving.getLong("revision")==sharing.getLong("revision"))
     return new JSONObject().put("revision",receiving.getLong("revision"))
         .put("clients",receiving.getJSONArray("clients")).put("inboxes",receiving.getJSONArray("inboxes"))
-        .put("shares",sharing.getJSONArray("shares"));
+        .put("shares",sharing.getJSONArray("shares")).put("file_exports",receiving.getJSONObject("file_exports"));
   }
   throw new Exception("Folder permissions changed. Refresh and try again.");
  }

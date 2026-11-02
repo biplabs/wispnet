@@ -6,41 +6,43 @@ device settings, service links, service management, folder editors, sending file
 browsing shared files, and transfer progress. Responsive layouts adapt that page
 to the available width; do not create parallel mobile pages.
 
-`ServiceSettings` is the shared service-management page. Its backend adapter maps
-Android's folder operations onto the same status and mutation interface used by
-desktop. Service types and controls are omitted only where the platform lacks
-the corresponding capability.
+`ServiceSettings` is the shared service-management page, using the same owner
+status/request interface on every platform. Android supports HTTP/TCP services,
+public-link controls, pairing invitations and approval, device grants, and durable
+owner operations as well as provider-backed folders. Folder IDs can be renamed
+atomically without losing their capability, grants, or paused state. The legacy
+Files inbox uses the same staged editor on every platform and preserves existing
+exports during grant-only saves.
 
-The remaining platform exceptions have specific native requirements:
+The remaining differences are native platform integrations, not alternate pages:
 
-- Android currently exposes folder services. Its native adapter does not implement
-  desktop Shell or HTTP/TCP hosting, public links, or desktop owner operations.
-  Those creation tabs and owner tools are absent on Android.
-- Android folder access uses the Storage Access Framework, persistent URI grants,
-  and human-readable folder labels. Desktop uses native filesystem paths. Android
-  folder services keep their existing IDs because its native API cannot rename
-  a service atomically.
-- Android pairing offers camera scanning and QR-image import through native
-  activities; the desktop adapter provides pairing-code input. Both use the same
-  pairing form.
-- Android's remote terminal uses the native Termux terminal view for IME text
-  composition, soft-keyboard integration, and its persistent native workspace.
-  Desktop uses the embedded Flutter terminal and can launch an external terminal.
-- The Android diagnostic page is available through its native connection-test
-  adapter. The desktop adapter does not implement that diagnostic operation.
-- File selection and download destinations use the platform picker. Desktop also
-  accepts file drops; Android also accepts files shared by another app. Transfers,
-  browsing, and progress use shared pages.
+- Android folder access uses its Storage Access Framework, persisted URI grants,
+  and folder labels. Desktop uses native filesystem paths and pickers. An expired
+  provider grant requires reselecting that folder before access can be enabled.
+- Android cannot host the desktop operating-system-account Shell service. Remote
+  Shell access uses the same Flutter terminal page, tabs, splits, input modes and
+  session controls on every platform. Android embeds the Termux renderer and IME
+  input component inside that page; desktop uses the Flutter terminal renderer.
+  Only desktop can hand a session to an installed external terminal application.
+- Pairing uses the same QR and code tabs. QR-image import works everywhere. The
+  camera action depends on actual camera availability. The shared camera page
+  receives frames from Android Camera2, Linux V4L2/FFmpeg, or macOS AVFoundation.
+- Diagnostics uses the same page and probe on every platform. Device-specific
+  network/VPN observations are reported when available; unknown fields remain
+  unavailable rather than being guessed. The device itself is not probed as a
+  remote peer.
+- Touch reordering uses a long press; mouse reordering uses a drag. Desktop also
+  accepts file drops, while Android accepts attachments from the OS share sheet.
+- Owner operations require explicit configured owner access on each target.
+  Desktop uses its configured SSH targets. Android offers this device and paired
+  hosts with an already granted Shell service, checked again when executing the
+  fixed owner command. The same review/confirmation/history page is used; no
+  service grant or owner authority is inferred or added automatically.
 
-Local service switches pause Wispnet serving, including public links, Shell, and
-Files. Pausing closes active connections and keeps device grants and folder
-settings for re-enabling. The switch state survives a node restart.
-
-Local services appear in their own section, without a repeated machine name or
-status badge. Its Manage button opens service sharing and removal. The Remote
-sector has its own pairing management and refresh controls. The device-name gear
-opens desktop owner tools in sheets: service sharing, device grants, incoming
-pairing requests, public links and durable multi-host owner operations.
+Local service switches pause serving and close active connections while keeping
+folder settings and grants for re-enabling. Switch state survives a node restart.
+Device settings opens Local services and Device access and pairing; the latter
+includes invitation approval, device access, and owner-operation history.
 
 The macOS runner and installer use these widgets too, but require native build
 and runtime validation on a Mac. Windows/iOS node adapters are not implemented.
@@ -80,7 +82,7 @@ identity, upload signing variables and release checks. Artifacts live under
 - `lib/src/app.dart`: responsive directory and orchestration.
 - `android/.../FlutterMainActivity.java`: Android platform adapter. Reuses the
   existing `Native`, `HostStore`, `DeviceProfile`, `AccessService`, and bounded QR
-  decoder from the same Android runner; the Rust core is unchanged.
+  decoder from the same Android runner and the shared Rust client/owner core.
 
 The application ID remains `app.wispnet.android`, with the same signing settings,
 Keystore alias, private state paths, preferences, host validation, card ordering,
@@ -128,7 +130,10 @@ and its tests live beside the bridge in `apps/flutter/desktop`.
 
 Linux build prerequisites: Flutter, Clang, CMake, Ninja, pkg-config, GTK 3 and
 Ayatana AppIndicator development libraries. Runtime also requires Python 3.11+
-and xdg-open. macOS uses its existing Python runtime, launch agents and menu bar.
+and xdg-open. Linux camera QR scanning uses FFmpeg with V4L2; the Arch package
+includes FFmpeg as a dependency. Camera availability follows detected hardware,
+and image import remains available without a camera. macOS uses AVFoundation for
+camera capture and its existing Python runtime, launch agents and menu bar.
 
 `integration_test/desktop_test.dart` runs the actual native Linux window against
 an already online node, checks sheets and registry settings, captures review

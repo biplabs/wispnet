@@ -40,7 +40,7 @@ class ServiceListBackend extends folders.FolderBackend {
     String method, [
     Map<String, dynamic> arguments = const {},
   ]) async {
-    if (method == 'desktopStatus') {
+    if (method == 'ownerStatus') {
       final response = await super.invoke(method, arguments);
       (response['host']['services'] as List).insertAll(0, ordinary);
       return response;
@@ -176,7 +176,7 @@ void main() {
         'database',
       );
       expect(
-        backend.calls.where((call) => call.$1 == 'desktopRequest'),
+        backend.calls.where((call) => call.$1 == 'ownerRequest'),
         isEmpty,
       );
       await tester.pumpWidget(const SizedBox());
@@ -336,7 +336,7 @@ void main() {
     await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
     final operation = backend.calls
-        .where((call) => call.$1 == 'desktopRequest')
+        .where((call) => call.$1 == 'ownerRequest')
         .single
         .$2['payload']['operation'];
     expect(operation, {
@@ -434,7 +434,7 @@ void main() {
         await tester.tap(find.text('Save'));
         await tester.pumpAndSettle();
         final saved = backend.calls
-            .where((call) => call.$1 == 'desktopRequest')
+            .where((call) => call.$1 == 'ownerRequest')
             .single
             .$2['payload']['operation'];
         expect(saved['op'], 'edit_folder');
@@ -472,7 +472,7 @@ void main() {
       await tester.tap(find.text('Keep folder'));
       await tester.pumpAndSettle();
       expect(
-        backend.calls.where((call) => call.$1 == 'desktopRequest'),
+        backend.calls.where((call) => call.$1 == 'ownerRequest'),
         isEmpty,
       );
       expect(find.byKey(const ValueKey('share-name')), findsOneWidget);
@@ -483,7 +483,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(
         backend.calls
-            .where((call) => call.$1 == 'desktopRequest')
+            .where((call) => call.$1 == 'ownerRequest')
             .single
             .$2['payload']['operation'],
         {'op': 'remove', 'id': id, 'expected_revision': 3},

@@ -15,6 +15,7 @@ import 'android_file_shares_test.dart' as fixture;
 
 class FolderBackend extends fixture.AndroidSharesBackend {
   bool desktop = false, remote = false;
+  final legacyExports = <String, String>{};
   String pickedDesktopFolder = '/chosen/inbox';
   final inboxes = <Map<String, dynamic>>[
     {
@@ -58,6 +59,12 @@ class FolderBackend extends fixture.AndroidSharesBackend {
         return {
           ...response,
           'inboxes': inboxes.map(Map<String, dynamic>.of).toList(),
+          'file_exports': legacyExports.isNotEmpty
+              ? Map.of(legacyExports)
+              : {
+                  for (final inbox in inboxes)
+                    if (inbox['kind'] == 'files') 'incoming': inbox['folder'],
+                },
         };
       case 'pickReceivingFolder':
         calls.add((method, Map.of(arguments)));
@@ -71,15 +78,41 @@ class FolderBackend extends fixture.AndroidSharesBackend {
         inboxes.removeWhere((inbox) => inbox['id'] == arguments['id']);
         inboxes.add({
           ...?existing,
-          'id': arguments['id'],
-          'kind': 'file_inbox',
+          'id': arguments['new_id'] ?? arguments['id'],
+          'kind': existing?['kind'] ?? 'file_inbox',
           'folder': arguments['folder'],
           'label': existing?['label'] ?? 'Receiving folder',
           'allow': arguments['allow'],
-          'enabled': true,
+          'enabled': existing?['enabled'] ?? true,
           'available': true,
           'incarnation': '3' * 64,
         });
+        return {'revision': ++revision};
+      case 'saveReceiving':
+        calls.add((method, Map.of(arguments)));
+        expect(arguments['expected_revision'], revision);
+        legacyExports
+          ..clear()
+          ..addAll(Map<String, String>.from(arguments['exports'] as Map));
+        final existing = inboxes
+            .where((inbox) => inbox['id'] == 'files')
+            .firstOrNull;
+        inboxes.removeWhere((inbox) => inbox['id'] == 'files');
+        if (legacyExports.isNotEmpty) {
+          inboxes.add({
+            ...?existing,
+            'id': 'files',
+            'kind': 'files',
+            'folder': legacyExports.values.first,
+            'label': legacyExports.values.first == 'opaque-receive'
+                ? 'Receiving folder'
+                : existing?['label'] ?? 'Legacy folder',
+            'allow': List.of(arguments['allow'] as List),
+            'enabled': existing?['enabled'] ?? true,
+            'available': true,
+            'incarnation': existing?['incarnation'] ?? 'f' * 64,
+          });
+        }
         return {'revision': ++revision};
       case 'removeInbox':
         calls.add((method, Map.of(arguments)));
@@ -96,19 +129,20 @@ class FolderBackend extends fixture.AndroidSharesBackend {
           return {};
         }
         return super.invoke(method, arguments);
-      case 'desktopStatus':
+      case 'ownerStatus':
         calls.add((method, Map.of(arguments)));
         return {
           'host': {
             'host': fixture.own,
             'revision': revision,
             'services': [
-              {
-                'id': 'files',
-                'kind': 'files',
-                'allow': [],
-                'incarnation': 'f' * 64,
-              },
+              if (!inboxes.any((inbox) => inbox['id'] == 'files'))
+                {
+                  'id': 'files',
+                  'kind': 'files',
+                  'allow': [],
+                  'incarnation': 'f' * 64,
+                },
               ...inboxes,
               for (final share in shares) {...share, 'kind': 'file_share'},
             ],
@@ -116,7 +150,12 @@ class FolderBackend extends fixture.AndroidSharesBackend {
               {'peer': fixture.laptop, 'name': 'My laptop'},
               {'peer': fixture.other, 'name': 'Other device'},
             ],
-            'file_exports': {},
+            'file_exports': legacyExports.isNotEmpty
+                ? Map.of(legacyExports)
+                : {
+                    for (final inbox in inboxes)
+                      if (inbox['kind'] == 'files') 'incoming': inbox['folder'],
+                  },
             'file_inboxes': {
               for (final inbox in inboxes) inbox['id']: '/srv/${inbox['id']}',
             },
@@ -126,10 +165,10 @@ class FolderBackend extends fixture.AndroidSharesBackend {
           },
           'invitations': [],
         };
-      case 'desktopData':
+      case 'ownerData':
         calls.add((method, Map.of(arguments)));
         return {'value': []};
-      case 'desktopRequest':
+      case 'ownerRequest':
         calls.add((method, Map.of(arguments)));
         final operation = (arguments['payload'] as Map)['operation'] as Map;
         expect(operation['expected_revision'], revision);
@@ -334,7 +373,7 @@ void main() {
             await tester.pumpAndSettle();
             if (desktop) {
               final operation = backend.calls
-                  .where((call) => call.$1 == 'desktopRequest')
+                  .where((call) => call.$1 == 'ownerRequest')
                   .single
                   .$2['payload']['operation'];
               expect(operation, {
@@ -352,6 +391,7 @@ void main() {
                 {
                   'expected_revision': 3,
                   'id': id,
+                  'new_id': id,
                   'folder': inbox ? 'opaque-predictions' : 'opaque-datasets',
                   'allow': [fixture.laptop],
                 },
@@ -375,7 +415,7 @@ void main() {
             final callsBeforeCancel = backend.calls
                 .where(
                   (call) =>
-                      call.$1 == 'desktopRequest' ||
+                      call.$1 == 'ownerRequest' ||
                       call.$1 == 'removeInbox' ||
                       call.$1 == 'removeShare',
                 )
@@ -387,7 +427,7 @@ void main() {
               backend.calls
                   .where(
                     (call) =>
-                        call.$1 == 'desktopRequest' ||
+                        call.$1 == 'ownerRequest' ||
                         call.$1 == 'removeInbox' ||
                         call.$1 == 'removeShare',
                   )
@@ -403,7 +443,7 @@ void main() {
             if (desktop) {
               expect(
                 backend.calls
-                    .where((call) => call.$1 == 'desktopRequest')
+                    .where((call) => call.$1 == 'ownerRequest')
                     .last
                     .$2['payload']['operation'],
                 {'op': 'remove', 'id': id, 'expected_revision': 4},
@@ -470,25 +510,147 @@ void main() {
       expect(inbox['folder'], 'opaque-training');
       expect(inbox['allow'], [fixture.laptop]);
 
-      // Removing the folder inside the editor remains an explicit configuration
-      // removal, separate from pausing this built-in service.
+      // The common built-in editor stages folder removal until Save.
       await tester.ensureVisible(find.text('Edit'));
       await tester.tap(find.text('Edit'));
       await tester.pumpAndSettle();
-      final removeFolder = find.widgetWithText(OutlinedButton, 'Remove folder');
+      final removeFolder = find.byTooltip('Remove receiving folder');
       await tester.ensureVisible(removeFolder);
       await tester.tap(removeFolder);
       await tester.pumpAndSettle();
-      expect(find.text('Remove folder?'), findsOneWidget);
-      final confirmFolder = find.widgetWithText(FilledButton, 'Remove folder');
-      await tester.ensureVisible(confirmFolder);
-      await tester.tap(confirmFolder);
+      expect(
+        backend.inboxes.where((inbox) => inbox['id'] == 'files'),
+        isNotEmpty,
+      );
+      await tester.ensureVisible(find.text('Save'));
+      await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
       expect(
-        backend.calls.where((call) => call.$1 == 'removeInbox').single.$2,
-        {'expected_revision': 4, 'id': 'files'},
+        backend.calls.where((call) => call.$1 == 'saveReceiving').single.$2,
+        {
+          'expected_revision': 4,
+          'exports': <String, String>{},
+          'allow': <String>[],
+        },
       );
       expect(backend.inboxes.where((inbox) => inbox['id'] == 'files'), isEmpty);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  for (final inbox in [true, false]) {
+    testWidgets(
+      'Android ${inbox ? 'inbox' : 'share'} rename keeps its original capability and grants',
+      (tester) async {
+        final backend = FolderBackend();
+        final id = inbox ? 'predictions' : 'datasets';
+        final folders = inbox ? backend.inboxes : backend.shares;
+        final original = folders.singleWhere((folder) => folder['id'] == id);
+        original['enabled'] = false;
+        await app(tester, backend);
+        final gear = find.byTooltip('Settings for $id on Android phone');
+        await tester.ensureVisible(gear);
+        await tester.tap(gear);
+        await tester.pumpAndSettle();
+        await tester.ensureVisible(find.text('Edit'));
+        await tester.tap(find.text('Edit'));
+        await tester.pumpAndSettle();
+        final name = find.byKey(const ValueKey('share-name'));
+        expect(tester.widget<TextField>(name).enabled, isTrue);
+        await tester.enterText(name, 'training-data');
+        await tester.ensureVisible(find.text('Save'));
+        await tester.tap(find.text('Save'));
+        await tester.pumpAndSettle();
+        expect(
+          find.text('This service ID already exists. Choose a different ID.'),
+          findsOneWidget,
+        );
+        expect(
+          backend.calls.where(
+            (call) => call.$1 == 'saveInbox' || call.$1 == 'saveShare',
+          ),
+          isEmpty,
+        );
+        await tester.enterText(name, '$id-renamed');
+        await tester.ensureVisible(find.text('Save'));
+        await tester.tap(find.text('Save'));
+        await tester.pumpAndSettle();
+        final method = inbox ? 'saveInbox' : 'saveShare';
+        expect(backend.calls.where((call) => call.$1 == method).single.$2, {
+          'expected_revision': 3,
+          'id': id,
+          'new_id': '$id-renamed',
+          'folder': inbox ? 'opaque-predictions' : 'opaque-datasets',
+          'allow': [fixture.other],
+        });
+        expect(folders.where((folder) => folder['id'] == id), isEmpty);
+        final renamed = folders.singleWhere(
+          (folder) => folder['id'] == '$id-renamed',
+        );
+        expect(renamed['folder'], original['folder']);
+        expect(renamed['allow'], original['allow']);
+        expect(renamed['enabled'], isFalse);
+        expect(find.byType(LocalServiceDetails), findsNothing);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
+
+  testWidgets(
+    'Android built-in Files uses the common staged multi-export permission editor',
+    (tester) async {
+      final backend = FolderBackend();
+      backend.inboxes.first['id'] = 'files';
+      backend.inboxes.first['kind'] = 'files';
+      backend.legacyExports.addAll({
+        'incoming': 'opaque-training',
+        'archive': 'opaque-archive',
+      });
+      await fixture.mount(
+        tester,
+        ServiceSettings(
+          backend: backend,
+          android: true,
+          host: fixture.own,
+          servicesOnly: true,
+          onAccess: () {},
+          onChanged: () {},
+        ),
+      );
+      await tester.tap(find.byTooltip('File inbox'));
+      await tester.pumpAndSettle();
+      expect(find.text('Receiving folder'), findsOneWidget);
+      expect(find.text('Training data'), findsOneWidget);
+      expect(find.textContaining('opaque-'), findsNothing);
+      expect(find.byType(WispPermissionCard), findsOneWidget);
+      expect(
+        find.text(
+          'Choosing a folder replaces the 2 receiving folders currently configured.',
+        ),
+        findsOneWidget,
+      );
+      await tester.ensureVisible(find.text('Other device'));
+      await tester.tap(find.text('Other device'));
+      expect(
+        backend.calls.where((call) => call.$1 == 'saveReceiving'),
+        isEmpty,
+      );
+      await tester.ensureVisible(find.text('Save'));
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(
+        backend.calls.where((call) => call.$1 == 'saveReceiving').single.$2,
+        {
+          'expected_revision': 3,
+          'exports': {
+            'incoming': 'opaque-training',
+            'archive': 'opaque-archive',
+          },
+          'allow': [fixture.laptop, fixture.other],
+        },
+      );
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
     },
@@ -526,7 +688,7 @@ void main() {
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
       final operation = backend.calls
-          .where((call) => call.$1 == 'desktopRequest')
+          .where((call) => call.$1 == 'ownerRequest')
           .single
           .$2['payload']['operation'];
       expect(operation, {
@@ -637,6 +799,7 @@ void main() {
       expect(backend.calls.where((call) => call.$1 == 'saveInbox').single.$2, {
         'expected_revision': 3,
         'id': 'predictions',
+        'new_id': 'predictions',
         'folder': 'opaque-predictions',
         'allow': [fixture.laptop],
       });
@@ -679,8 +842,12 @@ void main() {
     await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
     expect(
-      backend.calls.where((call) => call.$1 == 'saveInbox').single.$2['id'],
-      'files',
+      backend.calls.where((call) => call.$1 == 'saveReceiving').single.$2,
+      {
+        'expected_revision': 3,
+        'exports': {'incoming': 'opaque-training'},
+        'allow': [fixture.laptop],
+      },
     );
     await tester.pumpWidget(const SizedBox());
   });

@@ -9,6 +9,28 @@ final class HostStore {
  HostStore(Context context){this.context=context.getApplicationContext();prefs=context.getSharedPreferences("hosts",Context.MODE_PRIVATE);}
  JSONObject all()throws JSONException{synchronized(LOCK){JSONObject records=new JSONObject(prefs.getString("records","{}"));for(java.util.Iterator<String> it=records.keys();it.hasNext();){String host=it.next();JSONObject row=records.getJSONObject(host);row.put("name",DeviceProfile.readableId(row.optString("name","device-"+host.substring(0,8))));}return records;}}
  void save(JSONObject records)throws Exception{synchronized(LOCK){if(records.length()>128||!prefs.edit().putString("records",records.toString()).commit())throw new Exception("Cannot save host directory");}}
+ void importConfirmed(JSONArray pins,JSONArray clients,String own)throws Exception{synchronized(LOCK){
+  JSONObject records=all(),merged=mergeConfirmed(records,pins,clients,own);
+  if(merged.length()!=records.length())save(merged);
+ }}
+ /** Only the native mutual-pair bootstrap creates directory entries. A client
+  * approval alone is not confirmation that this device paired with that host. */
+ static JSONObject mergeConfirmed(JSONObject existing,JSONArray pins,JSONArray clients,String own)throws Exception{
+  JSONObject records=new JSONObject(existing.toString());java.util.Map<String,String> names=new java.util.HashMap<>();
+  for(int index=0;index<clients.length();index++){
+   JSONObject client=clients.optJSONObject(index);if(client==null)continue;
+   Object peer=client.opt("peer"),name=client.opt("name");
+   if(peer instanceof String&&((String)peer).matches("[0-9a-f]{64}")&&name instanceof String&&DeviceProfile.valid((String)name))
+    names.putIfAbsent((String)peer,(String)name);
+  }
+  for(int index=0;index<pins.length()&&records.length()<128;index++){
+   Object value=pins.opt(index);if(!(value instanceof String))continue;String peer=(String)value;
+   if(!peer.matches("[0-9a-f]{64}")||peer.equals(own)||records.has(peer))continue;
+   records.put(peer,new JSONObject().put("name",names.getOrDefault(peer,"device-"+peer.substring(0,8)))
+     .put("state","unverified").put("status","Approved host. Refresh services to verify its catalog."));
+  }
+  return records;
+ }
  void paired(String host,String name)throws Exception{synchronized(LOCK){JSONObject records=all();records.put(host,new JSONObject().put("name",DeviceProfile.readableId(name)).put("state","approval_pending").put("status","Pending approval on this host"));save(records);}}
  void deviceId(String host,String id)throws Exception{synchronized(LOCK){
   if(!DeviceProfile.valid(id))throw new Exception("Invalid device ID");

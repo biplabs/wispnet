@@ -66,10 +66,9 @@ android {
 
 kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) } }
 
-// ZXing uses AndroidX at runtime but omits it from the published POM.
+// Android lifecycle annotations and native integration helpers.
 dependencies {
     implementation("androidx.core:core:1.17.0")
-    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     implementation("com.google.zxing:core:3.4.1")
     implementation(platform("androidx.compose:compose-bom:2024.09.03"))
     implementation("androidx.activity:activity-compose:1.9.2")

@@ -3,6 +3,7 @@ pub mod access_settings;
 pub mod files;
 pub mod gateway;
 mod mcp;
+mod owner;
 pub mod public_access;
 mod service_registry;
 mod shell;
@@ -234,11 +235,12 @@ impl Client {
         .map_err(|e| e.to_string())?;
         files.set_enabled(!platform_storage);
         let client_files = files::Files::with_local(files.clone());
-        let host = wispnet_agent::tunnel::TunnelHost::bind_host_with_files(
+        let host = wispnet_agent::tunnel::TunnelHost::bind_host_with_files_enabled(
             &key,
             &config,
             authority.clone(),
             files,
+            !platform_storage,
         )
         .await
         .map_err(|e| e.to_string())?;
@@ -257,6 +259,13 @@ impl Client {
             client_checks: Mutex::new(std::collections::BTreeMap::new()),
             check_slots: Arc::new(tokio::sync::Semaphore::new(4)),
         }))
+    }
+    /// Embedded hosts follow the local access switch. Daemon-owned endpoints
+    /// remain admitted until their owning runtime stops them.
+    pub fn services_enabled(&self) -> bool {
+        self._host
+            .as_ref()
+            .is_none_or(|host| host.services_enabled())
     }
     /// Contact client-only legacy devices while their directory is being refreshed.
     /// No queue, no daemon timer, and at most four probes plus one attempt per 30s.
@@ -405,6 +414,8 @@ impl Client {
     }
     pub async fn command(self: &Arc<Self>, value: &Value) -> Result<Value, String> {
         match argument(value, "op")? {
+            "local_owner_status" | "local_owner_mutate" | "local_owner_invite"
+            | "local_owner_apply" => owner::command(self, value).await,
             "file_workspaces" | "file_put" | "file_status" | "file_cancel" | "file_list"
             | "file_get" => self.files_command(value).await,
             "shell_open" => self.shell_open(value).await,
@@ -462,25 +473,41 @@ impl Client {
             | "local_inbox_remove" => {
                 let directory = self.state.clone();
                 let own = self.endpoint.id();
-                let removing_kind = match value["op"].as_str() {
+                let target_kind = match value["op"].as_str() {
                     Some("local_share_remove") => Some(wispnet_core::host::ServiceKind::FileShare),
                     Some("local_inbox_remove") => Some(wispnet_core::host::ServiceKind::FileInbox),
+                    Some("local_share_configure") if value.get("new_id").is_some() => {
+                        Some(wispnet_core::host::ServiceKind::FileShare)
+                    }
+                    Some("local_inbox_configure") if value.get("new_id").is_some() => {
+                        Some(wispnet_core::host::ServiceKind::FileInbox)
+                    }
                     _ => None,
                 };
-                let removing_id = removing_kind
+                let target_id = target_kind
                     .map(|_| argument(value, "id").map(str::to_owned))
                     .transpose()?;
                 let operation = if value["op"] == "local_service_enabled" {
                     json!({"op":"set_service_enabled", "expected_revision":value["expected_revision"],
                         "id":value["id"], "incarnation":value["incarnation"], "enabled":value["enabled"]})
                 } else if value["op"] == "local_share_configure" {
-                    json!({"op":"file_share", "expected_revision":value["expected_revision"],
-                        "id":value["id"],"root":value["root"],"allow":value["allow"]})
+                    if value.get("new_id").is_some() {
+                        json!({"op":"edit_folder", "expected_revision":value["expected_revision"],
+                            "id":value["id"],"new_id":value["new_id"],"root":value["root"],"allow":value["allow"]})
+                    } else {
+                        json!({"op":"file_share", "expected_revision":value["expected_revision"],
+                            "id":value["id"],"root":value["root"],"allow":value["allow"]})
+                    }
                 } else if value["op"] == "local_share_remove" {
                     json!({"op":"remove", "expected_revision":value["expected_revision"], "id":value["id"]})
                 } else if value["op"] == "local_inbox_configure" {
-                    json!({"op":"file_inbox", "expected_revision":value["expected_revision"],
-                        "id":value["id"],"root":value["root"],"allow":value["allow"]})
+                    if value.get("new_id").is_some() {
+                        json!({"op":"edit_folder", "expected_revision":value["expected_revision"],
+                            "id":value["id"],"new_id":value["new_id"],"root":value["root"],"allow":value["allow"]})
+                    } else {
+                        json!({"op":"file_inbox", "expected_revision":value["expected_revision"],
+                            "id":value["id"],"root":value["root"],"allow":value["allow"]})
+                    }
                 } else if value["op"] == "local_inbox_remove" {
                     json!({"op":"remove", "expected_revision":value["expected_revision"], "id":value["id"]})
                 } else {
@@ -491,13 +518,13 @@ impl Client {
                 let revision = tokio::task::spawn_blocking(move || {
                     let (mut store, owner) = wispnet_registry::host::owner_store(&directory, own)
                         .map_err(|e| e.to_string())?;
-                    if let Some(id) = removing_id
+                    if let Some(id) = target_id
                         && !store
                             .host_snapshot(own)
                             .map_err(|e| e.to_string())?
                             .services
                             .iter()
-                            .any(|service| service.id == id && Some(service.kind) == removing_kind)
+                            .any(|service| service.id == id && Some(service.kind) == target_kind)
                     {
                         return Err("Read-only share unavailable".into());
                     }
@@ -765,6 +792,10 @@ impl Client {
                 let discover = !self.gateway.is_enabled();
                 self.gateway.enable();
                 if let Err(error) = self.gateway.restore(self.clone()).await {
+                    if let Some(host) = &self._host {
+                        host.set_services_enabled(false);
+                    }
+                    self.publications.stop().await;
                     self.gateway.stop().await;
                     return Err(error);
                 }
@@ -774,17 +805,25 @@ impl Client {
                     let _ = self.service_list().await;
                 }
                 if let Some(host) = &self._host {
-                    host.set_files_enabled(true);
+                    host.set_services_enabled(true);
+                }
+                if discover && let Err(error) = self.publications.restore(self.clone()).await {
+                    if let Some(host) = &self._host {
+                        host.set_services_enabled(false);
+                    }
+                    self.gateway.stop().await;
+                    return Err(error);
                 }
                 Ok(json!({"enabled":true}))
             }
             "stop" => {
+                let _guard = self.gateway.settings_lock.lock().await;
                 if let Some(host) = &self._host {
-                    host.set_files_enabled(false);
+                    host.set_services_enabled(false);
                 }
+                self.publications.stop().await;
                 self.shells.close_all().await;
                 self.files.cancel_host(None);
-                let _guard = self.gateway.settings_lock.lock().await;
                 self.gateway.stop().await;
                 Ok(json!({"enabled":false}))
             }

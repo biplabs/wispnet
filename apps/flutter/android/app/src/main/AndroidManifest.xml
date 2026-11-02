@@ -5,7 +5,10 @@
  <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"/>
  <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+ <uses-permission android:name="android.permission.CAMERA"/>
  <uses-feature android:name="android.hardware.camera.any" android:required="false"/>
+ <uses-feature android:name="android.hardware.camera" android:required="false"/>
+ <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
  <application android:enableOnBackInvokedCallback="true" android:name="${applicationName}" android:label="Wispnet" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:theme="@android:style/Theme.Material.NoActionBar" android:allowBackup="false" android:dataExtractionRules="@xml/data_extraction_rules" android:usesCleartextTraffic="true">
   <activity android:name="com.biplabs.wispnet.FlutterMainActivity" android:exported="true" android:launchMode="singleTop" android:theme="@style/LaunchTheme" android:hardwareAccelerated="true" android:windowSoftInputMode="adjustResize" android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode">
    <meta-data android:name="io.flutter.embedding.android.NormalTheme" android:resource="@style/NormalTheme"/>
@@ -14,8 +17,6 @@
    <intent-filter><action android:name="android.intent.action.SEND"/><action android:name="android.intent.action.SEND_MULTIPLE"/><category android:name="android.intent.category.DEFAULT"/><data android:mimeType="*/*"/></intent-filter>
   </activity>
   <meta-data android:name="flutterEmbedding" android:value="2"/>
-  <activity android:name=".PairingCaptureActivity" android:exported="false" android:theme="@style/zxing_CaptureTheme"/>
-  <activity android:name=".shell.ShellActivity" android:exported="false" android:theme="@style/ShellTheme" android:hardwareAccelerated="true" android:windowSoftInputMode="adjustResize" android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout"/>
   <service android:name=".AccessService" android:foregroundServiceType="connectedDevice" android:process=":network" android:exported="false"/>
  </application>
 </manifest>

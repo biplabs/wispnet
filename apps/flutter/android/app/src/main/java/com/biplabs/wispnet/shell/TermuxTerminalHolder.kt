@@ -4,7 +4,6 @@ package com.biplabs.wispnet.shell
 
 import android.content.Context
 import android.graphics.Color
-import android.graphics.Typeface
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -20,16 +19,6 @@ import android.view.inputmethod.InputConnectionWrapper
 import android.view.inputmethod.InputMethodManager
 import android.view.ViewConfiguration
 import android.widget.EditText
-import android.widget.FrameLayout
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.remember
-import androidx.compose.ui.Modifier
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
 import com.biplabs.wispnet.ShellRpc
 import com.termux.terminal.TerminalEmulator
 import com.termux.terminal.TerminalOutput
@@ -49,107 +38,6 @@ data class TransportPathStatus(
     val path: String,
     val latencyMs: Int?,
 )
-
-@Composable
-internal fun WispTermuxTerminalView(
-    modifier: Modifier = Modifier,
-    sessionName: String = "main",
-    active: Boolean = true,
-    target: ShellTarget,
-    rpc: ShellRpc,
-    existingHolder: TermuxTerminalHolder? = null,
-    retainOnDispose: Boolean = false,
-    inputMode: TerminalInputMode = TerminalInputMode.Predictive,
-    onConnectionState: (ConnectionState) -> Unit = {},
-    onConnectionError: (String) -> Unit = {},
-    onTransportPathChanged: (TransportPathStatus?) -> Unit = {},
-    onTitleChanged: (String) -> Unit = {},
-    onTerminalModeChanged: (Boolean, Boolean) -> Unit = { _, _ -> },
-    onSendInputReady: (((String) -> Unit)?) -> Unit = {},
-    onKeyboardRequest: () -> Unit = {},
-) {
-    val lifecycleOwner = LocalLifecycleOwner.current
-    val holder = remember(sessionName, target, rpc, existingHolder) {
-        existingHolder ?: TermuxTerminalHolder(
-            target,
-            rpc,
-            sessionName,
-            inputMode,
-            onConnectionState,
-            onConnectionError,
-            onTransportPathChanged,
-            onTitleChanged,
-            onTerminalModeChanged,
-            onKeyboardRequest,
-        )
-    }
-    holder.updateCallbacks(
-        onConnectionState,
-        onConnectionError,
-        onTransportPathChanged,
-        onTitleChanged,
-        onTerminalModeChanged,
-        onKeyboardRequest,
-    )
-    LaunchedEffect(holder, inputMode) {
-        holder.setInputMode(inputMode)
-    }
-    DisposableEffect(lifecycleOwner, holder) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                holder.reconnectIfDisconnected()
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-        }
-    }
-    DisposableEffect(holder, retainOnDispose) {
-        onSendInputReady { input -> holder.sendInput(input) }
-        onDispose {
-            onSendInputReady(null)
-            if (retainOnDispose) {
-                holder.detachView()
-            } else {
-                holder.close()
-            }
-        }
-    }
-
-    AndroidView(
-        modifier = modifier,
-        factory = { context ->
-            val terminalView = TerminalView(context, null).apply {
-                setBackgroundColor(Color.BLACK)
-                setTextSize(28)
-                setTypeface(Typeface.MONOSPACE)
-                isFocusable = true
-                isFocusableInTouchMode = true
-            }
-            val inputView = TerminalInputEditText(context) { input ->
-                holder.sendInputFromIme(input)
-            }
-            FrameLayout(context).apply {
-                addView(
-                    terminalView,
-                    FrameLayout.LayoutParams(
-                        FrameLayout.LayoutParams.MATCH_PARENT,
-                        FrameLayout.LayoutParams.MATCH_PARENT,
-                    ),
-                )
-                addView(inputView, FrameLayout.LayoutParams(1, 1))
-                holder.attachView(terminalView, inputView)
-            }
-        },
-        update = { container ->
-            val terminalView = container.getChildAt(0) as TerminalView
-            terminalView.alpha = if (active) 1f else 0f
-            terminalView.isEnabled = active
-            holder.setActive(active)
-        },
-    )
-}
 
 internal class TermuxTerminalHolder(
     private val target: ShellTarget,
@@ -214,7 +102,8 @@ internal class TermuxTerminalHolder(
         onKeyboardRequest = onKeyboard
     }
 
-    fun detachView() {
+    fun detachView(detachedView: TerminalView? = null) {
+        if (detachedView != null && view !== detachedView) return
         hideKeyboard()
         view?.let { oldView ->
             layoutListener?.let(oldView::removeOnLayoutChangeListener)
@@ -256,22 +145,7 @@ internal class TermuxTerminalHolder(
             false
         }
 
-        val remoteEmulator = emulator ?: run {
-            val remoteOutput = RemoteTerminalOutput(
-                onWrite = { bytes ->
-                    if (suppressRemoteWrites) return@RemoteTerminalOutput
-                    connection?.sendBytes(bytes)
-                },
-                onTitle = { title -> updateTitle(title) },
-            )
-            TerminalEmulator(
-                remoteOutput,
-                80,
-                24,
-                2000,
-                this,
-            ).also { emulator = it }
-        }
+        val remoteEmulator = ensureEmulator()
         val session = dummySession ?: TerminalSession(
             "/system/bin/sh",
             "/",
@@ -299,6 +173,27 @@ internal class TermuxTerminalHolder(
             syncSizeFromView(newView)
             newView.onScreenUpdated()
         }
+    }
+
+    private fun ensureEmulator(): TerminalEmulator = emulator ?: run {
+            val remoteOutput = RemoteTerminalOutput(
+                onWrite = { bytes ->
+                    if (suppressRemoteWrites) return@RemoteTerminalOutput
+                    connection?.sendBytes(bytes)
+                },
+                onTitle = { title -> updateTitle(title) },
+            )
+            TerminalEmulator(
+                remoteOutput,
+                80,
+                24,
+                2000,
+                this,
+            ).also { emulator = it }
+    }
+
+    fun connectDetached() {
+        if (!closed && connection == null) startConnection(ensureEmulator())
     }
 
     @Synchronized
@@ -443,6 +338,12 @@ internal class TermuxTerminalHolder(
     fun setActive(active: Boolean) {
         val terminalView = view ?: return
         terminalView.isEnabled = active
+        inputView?.isEnabled = active
+        if (!active) {
+            inputView?.clearFocus()
+            terminalView.clearFocus()
+            return
+        }
         if (active && !keyboardAutoShown && inputMode != TerminalInputMode.Line) {
             keyboardAutoShown = true
             showKeyboard()

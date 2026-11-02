@@ -86,6 +86,10 @@ class NodeIntegration(unittest.TestCase):
             try:
                 a, sa, pa, porta, api = host("a")
                 b, sb, pb, portb, bapi = host("b")
+                # The desktop IPC exposes the shared diagnostic, while its
+                # native pairing check still rejects an unpaired target.
+                with self.assertRaisesRegex(module.NodeRejected, "Pair with this host first"):
+                    api.request(op="diagnose_connection", host=pb)
                 # Target acknowledgements are durable and scoped to this owner-local host.
                 _, _, pc, _, capi = host("combined")
                 approval = {

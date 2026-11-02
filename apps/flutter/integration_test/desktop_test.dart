@@ -121,9 +121,13 @@ void main() {
         await waitFor(find.text('+ Pair another machine'));
         await tester.tap(find.text('+ Pair another machine'));
         await waitFor(find.text('Pair a machine'));
-        expect(find.text('Pairing Code'), findsNothing);
-        expect(find.text('QR'), findsNothing);
-        await capture('pairing');
+        expect(find.text('Pairing Code'), findsOneWidget);
+        expect(find.text('QR'), findsOneWidget);
+        expect(find.text('Import QR image'), findsOneWidget);
+        await capture('pairing-qr');
+        await tester.tap(find.text('Pairing Code'));
+        await tester.pump(const Duration(milliseconds: 300));
+        await capture('pairing-code');
         await tester.tap(find.byTooltip('Close'));
         await tester.pump(const Duration(milliseconds: 500));
         await tester.tap(

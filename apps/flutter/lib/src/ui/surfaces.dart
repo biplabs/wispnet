@@ -224,7 +224,7 @@ Future<T?> showWispSheet<T>(
               ),
               const SizedBox(height: 12),
             ],
-            child,
+            if (scrollable) child else Flexible(child: child),
           ],
         );
         return Padding(

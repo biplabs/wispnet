@@ -13,6 +13,7 @@ import 'package:wispnet/src/cards.dart';
 import 'package:wispnet/src/file_shares.dart';
 import 'package:wispnet/src/space.dart';
 import 'package:wispnet/src/service_settings.dart';
+import 'package:wispnet/src/sheets.dart' show ConnectionDiagnostics;
 import 'package:wispnet/src/terminal_sheet.dart';
 import 'package:wispnet/ui.dart';
 
@@ -56,6 +57,51 @@ class AndroidLocalFake extends DesktopFake {
   }
 }
 
+class DesktopDiagnosticFake extends DesktopFake {
+  bool extraRemote = false;
+  String? failureHost;
+
+  @override
+  Future<Map<String, dynamic>> invoke(
+    String method, [
+    Map<String, dynamic> arguments = const {},
+  ]) async {
+    if (method == 'connectionDiagnostics') {
+      calls.add((method, arguments));
+      if (arguments['host'] == failureHost) {
+        throw PlatformException(code: 'unavailable', message: 'Device offline');
+      }
+      return {
+        'network': null,
+        'vpn': null,
+        'network_changed': null,
+        'peers': [
+          {
+            'name': arguments['host'] == peer ? 'j-strix' : 'second-device',
+            'report': {
+              'initial_path': 'relay',
+              'selected_path': 'direct',
+              'rtt_ms': 15,
+              'observation_ms': 10000,
+              'relay_status': 'connected',
+              'reason': 'Direct path verified.',
+            },
+          },
+        ],
+      };
+    }
+    final result = await super.invoke(method, arguments);
+    if (method == 'snapshot' && extraRemote) {
+      (result['hosts'] as Map)['e' * 64] = {
+        'name': 'second-device',
+        'state': 'available',
+        'catalog': {'services': <Map<String, dynamic>>[]},
+      };
+    }
+    return result;
+  }
+}
+
 class FakeBackend implements WispnetBackend {
   FakeBackend({
     this.paired = true,
@@ -86,6 +132,8 @@ class FakeBackend implements WispnetBackend {
   ]) async {
     calls.add((method, arguments));
     switch (method) {
+      case 'qrCapabilities':
+        return {'camera': true, 'import': true};
       case 'snapshot':
         return {
           'name': 'hibreak',
@@ -96,6 +144,13 @@ class FakeBackend implements WispnetBackend {
           'version': '0.1.0',
           'order': {},
           'hosts': {
+            for (final shell in minimizedShells ?? <Map<String, dynamic>>[])
+              if (shell['host'] != peer)
+                shell['host'] as String: {
+                  'name': shell['host_name'],
+                  'state': 'available',
+                  'catalog': {'services': <Map<String, dynamic>>[]},
+                },
             if (paired)
               peer: {
                 'name': 'j-strix',
@@ -228,6 +283,16 @@ class FakeBackend implements WispnetBackend {
           'latency_ms': 9,
           'path': 'direct',
           'events': const [],
+        };
+      case 'nativeTerminalOpen':
+      case 'nativeTerminalReconnect':
+      case 'nativeTerminalStatus':
+        return {
+          'state': 'attached',
+          'latency_ms': 9,
+          'path': 'direct',
+          'echo_enabled': true,
+          'canonical': true,
         };
       case 'shellPoll':
         return {
@@ -371,6 +436,7 @@ class DesktopFake extends FakeBackend {
       if (folderPickerError case final Object error) throw error;
       return {if (pickedFolder != null) 'path': pickedFolder};
     }
+    if (method == 'qrCapabilities') return {'camera': false, 'import': true};
     if (method == 'settings' && arguments['host'] == 'd' * 64) {
       calls.add((method, arguments));
       return {'port': '', 'url': 'http://shared-web.localhost:18000/'};
@@ -384,8 +450,8 @@ class DesktopFake extends FakeBackend {
       status['host']['revision']++;
       return {};
     }
-    if (method == 'desktopStatus') return status;
-    if (method == 'desktopData') {
+    if (method == 'ownerStatus') return status;
+    if (method == 'ownerData') {
       return {
         'value': arguments['op'] == 'targets'
             ? [
@@ -394,7 +460,7 @@ class DesktopFake extends FakeBackend {
             : [],
       };
     }
-    if (method == 'desktopRequest') {
+    if (method == 'ownerRequest') {
       ownerCalls.add(arguments['payload'] as Map<String, dynamic>);
       final operation = arguments['payload']['operation'];
       if (operation?['op'] == 'shell') {
@@ -485,6 +551,23 @@ Future<void> mount(
   double scale = 1,
   bool disableAnimations = true,
 }) async {
+  tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+    SystemChannels.platform_views,
+    (call) async {
+      if (call.method == 'create') return 1;
+      if (call.method == 'resize') {
+        final args = call.arguments as Map;
+        return {'width': args['width'], 'height': args['height']};
+      }
+      return null;
+    },
+  );
+  addTearDown(
+    () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform_views,
+      null,
+    ),
+  );
   tester.view.devicePixelRatio = 1;
   tester.view.physicalSize = size;
   tester.platformDispatcher.accessibilityFeaturesTestValue =
@@ -956,7 +1039,7 @@ void main() {
     }
     await close(tester);
   });
-  testWidgets('desktop pairing opens the code form without a tab selector', (
+  testWidgets('desktop pairing uses the shared QR and code form', (
     tester,
   ) async {
     await mount(tester, DesktopFake(), size: const Size(1000, 850));
@@ -972,8 +1055,12 @@ void main() {
     await tester.tap(find.text('+ Pair another machine'));
     await tester.pumpAndSettle();
     expect(find.text('Pair a machine'), findsOneWidget);
-    expect(find.text('Pairing Code'), findsNothing);
-    expect(find.text('QR'), findsNothing);
+    expect(find.text('Pairing Code'), findsOneWidget);
+    expect(find.text('QR'), findsOneWidget);
+    expect(find.text('Import QR image'), findsOneWidget);
+    expect(find.text('Scan with camera'), findsNothing);
+    await tester.tap(find.text('Pairing Code'));
+    await tester.pumpAndSettle();
     expect(find.byType(TextField), findsOneWidget);
     final pair = find.widgetWithText(FilledButton, 'Pair');
     expect(tester.widget<FilledButton>(pair).onPressed, isNull);
@@ -1080,9 +1167,9 @@ void main() {
     await tester.tap(find.text('Diagnostic'));
     await tester.pumpAndSettle();
     expect(find.widgetWithText(AppBar, 'Diagnostic'), findsOneWidget);
-    expect(find.textContaining('Network: Cellular'), findsOneWidget);
+    expect(find.textContaining('Network type: Cellular'), findsOneWidget);
     expect(find.textContaining('relay → relay'), findsOneWidget);
-    expect(find.textContaining('Phone relay connections'), findsOneWidget);
+    expect(find.textContaining('Device relay connections'), findsOneWidget);
     expect(
       find.textContaining('✓ https://relay.wispnet.app/ · preferred'),
       findsOneWidget,
@@ -1091,7 +1178,10 @@ void main() {
       find.textContaining('✓ https://usw1-1.relay.n0.iroh.link/'),
       findsOneWidget,
     );
-    expect(find.textContaining('Phone discovery observations'), findsOneWidget);
+    expect(
+      find.textContaining('Device discovery observations'),
+      findsOneWidget,
+    );
     expect(find.textContaining('• ? UDP response IPv4'), findsOneWidget);
     expect(
       find.textContaining('Automatic router mapping status unavailable'),
@@ -1188,8 +1278,8 @@ void main() {
     expect(text, contains('✗ Router mapping granted'));
     expect(text, contains('A granted mapping does not prove reachability'));
 
-    expect(text, contains('Phone observations'));
-    expect(text, contains('Target computer observations'));
+    expect(text, contains('Device observations'));
+    expect(text, contains('Remote device observations'));
     expect(text, contains('network report updated during this test'));
     expect(text, contains('cached; no new report observed during this test'));
     expect(text, contains('across all paths (includes relay)'));
@@ -1200,6 +1290,58 @@ void main() {
       text,
       contains('Zero observed paths does not prove no attempts were made'),
     );
+  });
+  testWidgets(
+    'desktop Diagnostic uses the shared page and skips the local device',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final backend = DesktopDiagnosticFake();
+      await mount(tester, backend, size: const Size(1000, 850));
+      await tester.tap(find.byTooltip('Settings'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Diagnostic'));
+      await tester.pumpAndSettle();
+      expect(find.byType(ConnectionDiagnostics), findsOneWidget);
+      expect(
+        find.textContaining('Network type: Unavailable · VPN: ?'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('relay → direct'), findsOneWidget);
+      expect(find.textContaining('Device observations'), findsOneWidget);
+      expect(find.textContaining('Phone'), findsNothing);
+      expect(
+        backend.calls
+            .where((call) => call.$1 == 'connectionDiagnostics')
+            .map((call) => call.$2['host']),
+        [peer],
+      );
+      expect(backend.ownerCalls, isEmpty);
+      await close(tester);
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
+  testWidgets('diagnostics continue after one remote fails', (tester) async {
+    final backend = DesktopDiagnosticFake()
+      ..extraRemote = true
+      ..failureHost = peer;
+    await mount(tester, backend, size: const Size(1000, 850));
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Diagnostic'));
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('Could not verify connection: Device offline'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Direct path verified.'), findsOneWidget);
+    expect(
+      backend.calls
+          .where((call) => call.$1 == 'connectionDiagnostics')
+          .map((call) => call.$2['host']),
+      [peer, 'e' * 64],
+    );
+    await close(tester);
   });
   testWidgets('settings validate before changing native state', (tester) async {
     final backend = FakeBackend();
@@ -2358,27 +2500,34 @@ void main() {
     });
     await close(tester);
   });
-  testWidgets('shell opens the native terminal without a browser handoff', (
-    tester,
-  ) async {
-    final backend = FakeBackend(shellService: true);
-    await mount(tester, backend);
-    await tester.tap(find.text('shell'));
-    await tester.pumpAndSettle();
-    expect(backend.calls.where((c) => c.$1 == 'openShell').single.$2, {
-      'host': peer,
-      'host_name': 'j-strix',
-      'service': 'shell',
-      'incarnation': incarnation,
-      'session': 'main',
-    });
-    expect(
-      backend.calls.where((c) => c.$1 == 'open' || c.$1 == 'launch'),
-      isEmpty,
-    );
-    expect(find.byIcon(Icons.terminal), findsOneWidget);
-    await close(tester);
-  });
+  testWidgets(
+    'Android shell opens the shared Flutter terminal with a native viewport',
+    (tester) async {
+      final backend = FakeBackend(shellService: true);
+      await mount(tester, backend);
+      await tester.tap(find.text('shell'));
+      await tester.pumpAndSettle();
+      expect(
+        backend.calls.where((c) => c.$1 == 'nativeTerminalOpen').single.$2,
+        {
+          'host': peer,
+          'host_name': 'j-strix',
+          'service': 'shell',
+          'incarnation': incarnation,
+          'session': 'main',
+        },
+      );
+      expect(find.byType(DesktopTerminalSheet), findsOneWidget);
+      expect(find.byType(AndroidView), findsOneWidget);
+      expect(find.byTooltip('Open in system terminal'), findsNothing);
+      expect(
+        backend.calls.where((c) => c.$1 == 'open' || c.$1 == 'launch'),
+        isEmpty,
+      );
+      expect(find.byIcon(Icons.terminal), findsOneWidget);
+      await close(tester);
+    },
+  );
   testWidgets(
     'minimized shell docks at the bottom and can be expanded or closed',
     (tester) async {
@@ -2398,24 +2547,33 @@ void main() {
       );
       await mount(tester, backend);
       expect(find.byKey(const ValueKey('shell-dock')), findsOneWidget);
-      expect(find.text('j-strix · wispnet (2)'), findsOneWidget);
+      expect(find.text('j-strix · main'), findsOneWidget);
 
       await tester.tap(find.byKey(const ValueKey('shell-dock-expand')));
       await tester.pumpAndSettle();
-      expect(backend.calls.where((c) => c.$1 == 'openShell').single.$2, {
-        'host': peer,
-        'host_name': 'j-strix',
-        'service': 'shell',
-        'incarnation': incarnation,
-        'session': 'main',
-      });
+      expect(
+        backend.calls.where((c) => c.$1 == 'nativeTerminalOpen').single.$2,
+        {
+          'host': peer,
+          'host_name': 'j-strix',
+          'service': 'shell',
+          'incarnation': incarnation,
+          'session': 'main',
+        },
+      );
+      expect(find.byType(DesktopTerminalSheet), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('desktop-shell-close')));
+      await tester.pumpAndSettle();
 
       await tester.tap(find.byKey(const ValueKey('shell-dock-close')));
       await tester.pumpAndSettle();
       expect(find.text('Close terminal?'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('confirm-close-shell')));
       await tester.pumpAndSettle();
-      expect(backend.calls.where((c) => c.$1 == 'closeShell'), hasLength(1));
+      expect(
+        backend.calls.where((c) => c.$1 == 'nativeTerminalClose'),
+        hasLength(1),
+      );
       expect(find.byKey(const ValueKey('shell-dock')), findsNothing);
       await close(tester);
     },
@@ -2545,18 +2703,26 @@ void main() {
         ],
       );
       await mount(tester, backend);
-      expect(find.text('j-strix · fish (2)'), findsOneWidget);
-      expect(find.text('j-desktop · bash'), findsOneWidget);
+      expect(find.text('j-strix · main'), findsOneWidget);
+      expect(find.text('j-desktop · tab-2'), findsOneWidget);
 
       await tester.tap(find.byKey(ValueKey('shell-dock-close-$secondHost')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('confirm-close-shell')));
       await tester.pumpAndSettle();
-      expect(backend.calls.where((c) => c.$1 == 'closeShell').single.$2, {
-        'host': secondHost,
-      });
-      expect(find.text('j-strix · fish (2)'), findsOneWidget);
-      expect(find.text('j-desktop · bash'), findsNothing);
+      expect(
+        backend.calls.where((c) => c.$1 == 'nativeTerminalClose').single.$2,
+        {
+          'host': secondHost,
+          'host_name': 'j-desktop',
+          'service': 'shell',
+          'incarnation': incarnation,
+          'session': 'tab-2',
+          'terminate': true,
+        },
+      );
+      expect(find.text('j-strix · main'), findsOneWidget);
+      expect(find.text('j-desktop · tab-2'), findsNothing);
       await close(tester);
     },
   );

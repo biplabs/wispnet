@@ -15,52 +15,20 @@ class ServiceSettingsAdapter {
   Map<String, Map<String, dynamic>> _services = {};
 
   Future<Map<String, dynamic>> status() async {
-    if (!android) return backend.invoke('desktopStatus');
-    final result = await backend.invoke('folderServicesStatus');
-    final inboxes = [
-      for (final inbox in result['inboxes'] as List? ?? [])
-        {
-          ...(inbox as Map).cast<String, dynamic>(),
-          'kind': inbox['kind'] ?? 'file_inbox',
-        },
-    ];
-    final shares = [
-      for (final share in result['shares'] as List? ?? [])
-        {...(share as Map).cast<String, dynamic>(), 'kind': 'file_share'},
-    ];
-    final services = [...inboxes, ...shares];
-    _revision = result['revision'] as int;
-    _services = {
-      for (final service in services)
-        service['id'] as String: Map<String, dynamic>.of(service),
-    };
-    return {
-      'host': {
-        'host': host,
-        'revision': _revision,
-        'services': services,
-        'clients': result['clients'] ?? <Map<String, dynamic>>[],
-        'file_inboxes': {
-          for (final inbox in inboxes) inbox['id'] as String: inbox['folder'],
-        },
-        'file_shares': {
-          for (final share in shares) share['id'] as String: share['folder'],
-        },
-        'file_exports': {
-          for (final inbox in inboxes)
-            if (inbox['kind'] == 'files')
-              inbox['id'] as String: inbox['folder'],
-        },
-      },
-      'invitations': <Map<String, dynamic>>[],
-      'connected_peers': <String, dynamic>{},
-      'recent_peers': <String, dynamic>{},
-    };
+    final result = await backend.invoke('ownerStatus');
+    if (android) {
+      _revision = result['host']['revision'] as int;
+      _services = {
+        for (final service in result['host']['services'] as List)
+          service['id'] as String: Map<String, dynamic>.from(service as Map),
+      };
+    }
+    return result;
   }
 
   Future<void> mutate(Map<String, dynamic> operation, int revision) async {
     if (!android) {
-      await backend.invoke('desktopRequest', {
+      await backend.invoke('ownerRequest', {
         'payload': {
           'op': 'mutate',
           'operation': {...operation, 'expected_revision': revision},
@@ -82,15 +50,55 @@ class ServiceSettingsAdapter {
     if (!const [
       'file_inbox',
       'file_share',
+      'files',
       'edit_folder',
       'remove',
       'set_service_enabled',
     ].contains(op)) {
-      throw const FormatException(
-        'This service operation is unavailable on this device.',
-      );
+      if (!const [
+        'approve',
+        'revoke',
+        'approve_invitation',
+        'reject_invitation',
+        'grant_service',
+        'revoke_service',
+        'service',
+        'edit_service',
+      ].contains(op)) {
+        throw const FormatException(
+          'This owner operation is unavailable on this device.',
+        );
+      }
+      await backend.invoke('ownerRequest', {
+        'payload': {
+          'op': 'mutate',
+          'operation': {...operation, 'expected_revision': revision},
+        },
+      });
+      return;
+    }
+    if (op == 'files') {
+      final exports = Map<String, String>.from(operation['exports'] as Map);
+      await backend.invoke('saveReceiving', {
+        'expected_revision': revision,
+        'exports': exports,
+        'allow': exports.isEmpty ? <String>[] : operation['allow'],
+      });
+      return;
     }
     final id = operation['id'] as String;
+    final selected = _services[id];
+    if ((op == 'remove' || op == 'set_service_enabled') &&
+        selected != null &&
+        !isFolderService(selected)) {
+      await backend.invoke('ownerRequest', {
+        'payload': {
+          'op': 'mutate',
+          'operation': {...operation, 'expected_revision': revision},
+        },
+      });
+      return;
+    }
     var kind = op;
     if (op == 'file_inbox' || op == 'file_share') {
       if (_services.containsKey(id)) {
@@ -105,9 +113,10 @@ class ServiceSettingsAdapter {
       }
       kind = service['kind'];
     }
-    if (op == 'edit_folder' && (operation['new_id'] ?? id) != id) {
+    final newId = operation['new_id'] as String? ?? id;
+    if (op == 'edit_folder' && newId != id && _services.containsKey(newId)) {
       throw const FormatException(
-        'Renaming folders is unavailable on this device.',
+        'This service ID already exists. Choose a different ID.',
       );
     }
     switch (op) {
@@ -117,6 +126,7 @@ class ServiceSettingsAdapter {
         await backend.invoke(kind == 'file_share' ? 'saveShare' : 'saveInbox', {
           'expected_revision': revision,
           'id': id,
+          if (op == 'edit_folder') 'new_id': newId,
           'folder': operation['root'],
           'allow': operation['allow'],
         });

@@ -92,9 +92,11 @@ final class AndroidShares {
  JSONObject configure(JSONObject args) throws Exception {
   String marker = args.getString("folder");
   validate(marker);
-  return Native.request(new JSONObject().put("op", "local_share_configure")
+  JSONObject request = new JSONObject().put("op", "local_share_configure")
       .put("expected_revision", args.getLong("expected_revision"))
-      .put("id", args.getString("id")).put("root", marker).put("allow", args.getJSONArray("allow")));
+      .put("id", args.getString("id")).put("root", marker).put("allow", args.getJSONArray("allow"));
+  if (args.has("new_id")) request.put("new_id", args.getString("new_id"));
+  return Native.request(request);
  }
  JSONObject remove(JSONObject args) throws Exception {
   String id = args.getString("id");

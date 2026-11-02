@@ -4,6 +4,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 
 import 'backend.dart';
 import '../ui.dart';
@@ -617,6 +619,7 @@ class DesktopShellPane extends ChangeNotifier {
     required this.service,
     required this.incarnation,
     required this.session,
+    this.android = false,
   }) {
     buffer.onReply = (reply) => unawaited(sendInput(reply));
   }
@@ -627,6 +630,15 @@ class DesktopShellPane extends ChangeNotifier {
   final String service;
   final String incarnation;
   final String session;
+  final bool android;
+
+  Map<String, dynamic> get nativeArguments => {
+    'host': host,
+    'host_name': hostName,
+    'service': service,
+    'incarnation': incarnation,
+    'session': session,
+  };
 
   final TerminalEmulatorBuffer buffer = TerminalEmulatorBuffer();
   final FocusNode focusNode = FocusNode();
@@ -654,6 +666,22 @@ class DesktopShellPane extends ChangeNotifier {
     _replayStarted = false;
     notifyListeners();
     try {
+      if (android) {
+        handle = session;
+        await backend.invoke('nativeTerminalOpen', nativeArguments);
+        if (_closed) return;
+        final reply = await backend.invoke(
+          'nativeTerminalReconnect',
+          nativeArguments,
+        );
+        if (_closed) return;
+        _consumeNative(reply);
+        _pollTimer = Timer.periodic(
+          const Duration(milliseconds: 100),
+          (_) => unawaited(_pollOnce()),
+        );
+        return;
+      }
       final reply = await backend.invoke('shellOpen', {
         'host': host,
         'service': service,
@@ -696,9 +724,16 @@ class DesktopShellPane extends ChangeNotifier {
     if (_closed || _polling || handle == null) return;
     _polling = true;
     try {
-      final reply = await backend.invoke('shellPoll', {'session': handle});
+      final reply = await backend.invoke(
+        android ? 'nativeTerminalStatus' : 'shellPoll',
+        android ? nativeArguments : {'session': handle},
+      );
       if (_closed) return;
-      _consume(reply);
+      if (android) {
+        _consumeNative(reply);
+      } else {
+        _consume(reply);
+      }
     } catch (error) {
       if (_closed) return;
       _pollTimer?.cancel();
@@ -710,6 +745,32 @@ class DesktopShellPane extends ChangeNotifier {
       notifyListeners();
     } finally {
       _polling = false;
+    }
+  }
+
+  void _consumeNative(Map<String, dynamic> reply) {
+    final previous = (
+      state,
+      errorMessage,
+      latencyMs,
+      path,
+      title,
+      echoEnabled,
+      canonical,
+    );
+    state = ShellPaneState.values.firstWhere(
+      (value) => value.name == reply['state'],
+      orElse: () => ShellPaneState.connecting,
+    );
+    errorMessage = reply['error'] as String?;
+    latencyMs = reply['latency_ms'] as int?;
+    path = reply['path'] as String? ?? 'unknown';
+    title = reply['title'] as String?;
+    echoEnabled = reply['echo_enabled'] == true;
+    canonical = reply['canonical'] == true;
+    if (previous !=
+        (state, errorMessage, latencyMs, path, title, echoEnabled, canonical)) {
+      notifyListeners();
     }
   }
 
@@ -795,6 +856,13 @@ class DesktopShellPane extends ChangeNotifier {
   Future<void> sendInput(String data, {bool predictive = false}) async {
     final active = handle;
     if (_closed || active == null || state != ShellPaneState.attached) return;
+    if (android) {
+      await backend.invoke('nativeTerminalInput', {
+        ...nativeArguments,
+        'data': data,
+      });
+      return;
+    }
     final bytes = utf8.encode(data);
     if (predictive &&
         echoEnabled &&
@@ -820,6 +888,7 @@ class DesktopShellPane extends ChangeNotifier {
   }
 
   Future<void> resize(int cols, int rows) async {
+    if (android) return; // Native viewport metrics drive its PTY dimensions.
     final c = cols.clamp(2, 500);
     final r = rows.clamp(2, 300);
     if (c == buffer.cols && r == buffer.rows) return;
@@ -842,6 +911,21 @@ class DesktopShellPane extends ChangeNotifier {
     final old = handle;
     handle = null;
     if (old != null) {
+      if (android) {
+        // Activity/sheet disposal detaches Flutter while the native stream and
+        // IME-independent terminal buffer continue running in the UI process.
+        if (terminate) {
+          unawaited(
+            backend
+                .invoke('nativeTerminalClose', {
+                  ...nativeArguments,
+                  'terminate': true,
+                })
+                .catchError((_) => <String, dynamic>{}),
+          );
+        }
+        return;
+      }
       unawaited(
         backend
             .invoke('shellClose', {'session': old, 'terminate': terminate})
@@ -884,6 +968,7 @@ class HostShellWorkspace extends ChangeNotifier {
     required this.hostName,
     required this.service,
     required this.incarnation,
+    this.android = false,
   });
 
   final WispnetBackend backend;
@@ -891,6 +976,7 @@ class HostShellWorkspace extends ChangeNotifier {
   String hostName;
   final String service;
   String incarnation;
+  final bool android;
   final List<DesktopShellTab> tabs = [];
   late DesktopShellTab selectedTab;
   bool minimized = false;
@@ -918,6 +1004,7 @@ class HostShellWorkspace extends ChangeNotifier {
       service: service,
       incarnation: incarnation,
       session: sessionName,
+      android: android,
     )..addListener(_forwardChange);
     final tab = DesktopShellTab(id: sessionName, initialPane: pane);
     tabs.add(tab);
@@ -944,6 +1031,7 @@ class HostShellWorkspace extends ChangeNotifier {
       service: service,
       incarnation: incarnation,
       session: 'pane-$_counter',
+      android: android,
     )..addListener(_forwardChange);
     tab.panes.add(pane);
     tab.activePane = pane;
@@ -1026,14 +1114,163 @@ class HostShellWorkspace extends ChangeNotifier {
     };
   }
 
+  Map<String, dynamic> layoutJson() => {
+    'host': host,
+    'host_name': hostName,
+    'service': service,
+    'incarnation': incarnation,
+    'minimized': minimized,
+    'selected': selectedTab.id,
+    'tabs': [
+      for (final tab in tabs)
+        {
+          'id': tab.id,
+          'axis': tab.splitAxis.name,
+          'active': tab.activePane.session,
+          'panes': tab.panes.map((pane) => pane.session).toList(),
+        },
+    ],
+  };
+
+  void restoreTabs(List<dynamic> saved, String? selected) {
+    final used = <String>{};
+    for (final entry in saved.whereType<Map>().take(16)) {
+      final sessions = (entry['panes'] as List? ?? [])
+          .whereType<String>()
+          .where((name) => RegExp(r'^[a-z0-9._-]{1,64}$').hasMatch(name))
+          .where(used.add)
+          .take(4)
+          .toList();
+      if (sessions.isEmpty) continue;
+      final panes = [
+        for (final session in sessions)
+          DesktopShellPane(
+            backend: backend,
+            host: host,
+            hostName: hostName,
+            service: service,
+            incarnation: incarnation,
+            session: session,
+            android: android,
+          )..addListener(_forwardChange),
+      ];
+      final tab = DesktopShellTab(
+        id: entry['id'] as String? ?? sessions.first,
+        initialPane: panes.first,
+      );
+      tab.panes.addAll(panes.skip(1));
+      tab.splitAxis = entry['axis'] == 'vertical'
+          ? Axis.vertical
+          : Axis.horizontal;
+      tab.activePane = panes.firstWhere(
+        (pane) => pane.session == entry['active'],
+        orElse: () => panes.first,
+      );
+      tabs.add(tab);
+      for (final session in sessions) {
+        final suffix = int.tryParse(session.split('-').last) ?? 1;
+        _counter = math.max(_counter, suffix);
+      }
+    }
+    if (tabs.isEmpty) return;
+    selectedTab = tabs.firstWhere(
+      (tab) => tab.id == selected,
+      orElse: () => tabs.first,
+    );
+    for (final tab in tabs) {
+      for (final pane in tab.panes) {
+        unawaited(pane.connect());
+      }
+    }
+  }
+
   void _forwardChange() => notifyListeners();
 }
 
 class DesktopShellManager extends ChangeNotifier {
   DesktopShellManager(this.backend);
   final WispnetBackend backend;
+  bool android = false;
   final Map<String, HostShellWorkspace> _workspaces = {};
-  DesktopInputMode inputMode = DesktopInputMode.predictive;
+  DesktopInputMode _inputMode = DesktopInputMode.predictive;
+  bool _restored = false;
+  bool _restoring = false;
+  String? _savedLayout;
+  DesktopInputMode get inputMode => _inputMode;
+  set inputMode(DesktopInputMode value) {
+    _inputMode = value;
+    _changed();
+  }
+
+  Map<String, dynamic> layoutJson() => {
+    'mode': inputMode.name,
+    'workspaces': [
+      for (final workspace in _workspaces.values)
+        if (workspace.tabs.isNotEmpty) workspace.layoutJson(),
+    ],
+  };
+
+  void persistLayout() {
+    if (!android || _restoring) return;
+    final layout = layoutJson();
+    final encoded = jsonEncode(layout);
+    if (encoded == _savedLayout) return;
+    _savedLayout = encoded;
+    unawaited(
+      backend
+          .invoke('saveTerminalLayout', {'layout': layout})
+          .catchError((_) => <String, dynamic>{}),
+    );
+  }
+
+  void _changed() {
+    persistLayout();
+    notifyListeners();
+  }
+
+  void restoreLayout(Map<String, dynamic> layout) {
+    if (!android || _restored) return;
+    _restored = true;
+    _restoring = true;
+    _inputMode = DesktopInputMode.values.firstWhere(
+      (mode) => mode.name == layout['mode'],
+      orElse: () => DesktopInputMode.predictive,
+    );
+    for (final raw
+        in (layout['workspaces'] as List? ?? []).whereType<Map>().take(32)) {
+      final host = raw['host'];
+      final service = raw['service'];
+      final incarnation = raw['incarnation'];
+      if (host is! String ||
+          !RegExp(r'^[0-9a-f]{64}$').hasMatch(host) ||
+          service is! String ||
+          !RegExp(r'^[a-z0-9][a-z0-9._-]{0,63}$').hasMatch(service) ||
+          incarnation is! String ||
+          !RegExp(r'^[0-9a-f]{64}$').hasMatch(incarnation) ||
+          _workspaces.containsKey(host)) {
+        continue;
+      }
+      final workspace = HostShellWorkspace(
+        backend: backend,
+        host: host,
+        hostName: raw['host_name'] as String? ?? 'Computer',
+        service: service,
+        incarnation: incarnation,
+        android: true,
+      );
+      workspace.restoreTabs(
+        raw['tabs'] as List? ?? [],
+        raw['selected'] as String?,
+      );
+      if (workspace.tabs.isEmpty) continue;
+      // Restored pages begin minimized; the native streams retain their buffers.
+      workspace.minimized = true;
+      workspace.addListener(_changed);
+      _workspaces[host] = workspace;
+    }
+    _restoring = false;
+    _changed();
+  }
 
   HostShellWorkspace openHost({
     required String host,
@@ -1050,7 +1287,8 @@ class DesktopShellManager extends ChangeNotifier {
         hostName: hostName,
         service: service,
         incarnation: incarnation,
-      )..addListener(notifyListeners),
+        android: android,
+      )..addListener(_changed),
     );
     workspace.hostName = hostName;
     workspace.incarnation = incarnation;
@@ -1081,9 +1319,9 @@ class DesktopShellManager extends ChangeNotifier {
   void closeHost(String host, {bool terminate = true}) {
     final workspace = _workspaces.remove(host);
     if (workspace != null) {
-      workspace.removeListener(notifyListeners);
+      workspace.removeListener(_changed);
       workspace.closeAll(terminate: terminate);
-      notifyListeners();
+      _changed();
     }
   }
 
@@ -1098,11 +1336,11 @@ class DesktopShellManager extends ChangeNotifier {
 
   void closeAll({bool terminate = true, bool notify = true}) {
     for (final workspace in _workspaces.values) {
-      workspace.removeListener(notifyListeners);
+      workspace.removeListener(_changed);
       workspace.closeAll(terminate: terminate, notify: notify);
     }
     _workspaces.clear();
-    if (notify) notifyListeners();
+    if (notify) _changed();
   }
 }
 
@@ -1127,6 +1365,7 @@ class _DesktopTerminalSheetState extends State<DesktopTerminalSheet> {
   bool _closedExplicitly = false;
   bool _popped = false;
   final TextEditingController _lineController = TextEditingController();
+  final FocusNode _lineFocus = FocusNode();
 
   HostShellWorkspace get workspace => widget.workspace;
 
@@ -1145,8 +1384,10 @@ class _DesktopTerminalSheetState extends State<DesktopTerminalSheet> {
   void dispose() {
     workspace.removeListener(_onWorkspaceChanged);
     _lineController.dispose();
+    _lineFocus.dispose();
     if (!_closedExplicitly && workspace.tabs.isNotEmpty) {
       workspace.minimized = true;
+      widget.manager.persistLayout();
     }
     super.dispose();
   }
@@ -1173,6 +1414,7 @@ class _DesktopTerminalSheetState extends State<DesktopTerminalSheet> {
 
   void _minimize() {
     workspace.minimized = true;
+    widget.manager.persistLayout();
     _closedExplicitly = true;
     _popSheet();
   }
@@ -1229,401 +1471,444 @@ class _DesktopTerminalSheetState extends State<DesktopTerminalSheet> {
       ShellPaneState.exited ||
       ShellPaneState.failed => WispColors.error,
     };
-    final height = (MediaQuery.sizeOf(context).height * 0.78).clamp(
-      360.0,
-      860.0,
+    final screen = MediaQuery.sizeOf(context);
+    final keyboard = MediaQuery.viewInsetsOf(context).bottom;
+    final height = math.min(
+      (screen.height * 0.78).clamp(240.0, 860.0),
+      math.max(
+        160.0,
+        screen.height - keyboard - MediaQuery.paddingOf(context).top - 80,
+      ),
     );
 
-    return SizedBox(
-      height: height,
-      child: Stack(
-        children: [
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // Top header row: [● hostName · 9 ms] ... [Input Mode] [Split V] [Split H] [External] [—] [×]
-              Row(
-                children: [
-                  WispStatusDot(color: dotColor),
-                  const SizedBox(width: 8),
-                  Text(
-                    workspace.hostName,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  Expanded(
-                    child: Text(
-                      statusText.isNotEmpty ? ' · $statusText' : '',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: WispColors.muted,
-                      ),
-                    ),
-                  ),
-                  if (pane.state == ShellPaneState.disconnected ||
-                      pane.state == ShellPaneState.exited ||
-                      pane.state == ShellPaneState.failed) ...[
-                    TextButton(
-                      onPressed: pane.connect,
-                      child: Text(
-                        pane.state == ShellPaneState.exited
-                            ? 'Restart'
-                            : 'Reconnect',
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                  ],
-                  Semantics(
-                    button: true,
-                    label: 'Input mode',
-                    child: InkWell(
-                      key: const ValueKey('desktop-shell-mode-button'),
-                      borderRadius: BorderRadius.circular(14),
-                      onTap: () => setState(() => _modeMenu = !_modeMenu),
-                      child: Container(
-                        height: 28,
-                        padding: const EdgeInsets.symmetric(horizontal: 10),
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: _modeMenu
-                              ? const Color(0xFF1F3666)
-                              : const Color(0xFF142038),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                            color: _modeMenu
-                                ? WispColors.borderActive
-                                : WispColors.border,
-                          ),
-                        ),
-                        child: Text(
-                          widget.manager.inputMode == DesktopInputMode.auto
-                              ? 'Auto · ${effectiveMode.label}'
-                              : widget.manager.inputMode.label,
-                          style: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  _HeaderCircleButton(
-                    key: const ValueKey('desktop-shell-split-vertical'),
-                    tooltip: 'Split side by side',
-                    icon: Icons.vertical_split_outlined,
-                    onTap: () => workspace.splitActivePane(Axis.horizontal),
-                  ),
-                  const SizedBox(width: 6),
-                  _HeaderCircleButton(
-                    key: const ValueKey('desktop-shell-split-horizontal'),
-                    tooltip: 'Split top and bottom',
-                    icon: Icons.horizontal_split_outlined,
-                    onTap: () => workspace.splitActivePane(Axis.vertical),
-                  ),
-                  const SizedBox(width: 6),
-                  _HeaderCircleButton(
-                    key: const ValueKey('desktop-shell-open-external'),
-                    tooltip: 'Open in system terminal',
-                    icon: Icons.open_in_new,
-                    onTap: () => unawaited(widget.onOpenExternal(pane)),
-                  ),
-                  const SizedBox(width: 6),
-                  _HeaderCircleButton(
-                    key: const ValueKey('desktop-shell-close'),
-                    tooltip: 'Minimize',
-                    icon: Icons.remove,
-                    onTap: _minimize,
-                  ),
-                  const SizedBox(width: 6),
-                  _HeaderCircleButton(
-                    key: const ValueKey('desktop-shell-terminate'),
-                    tooltip: 'Close sessions',
-                    icon: Icons.close,
-                    onTap: () => unawaited(_confirmClose()),
-                  ),
-                ],
+    final terminalIdentity = Row(
+      children: [
+        WispStatusDot(color: dotColor),
+        const SizedBox(width: 8),
+        Flexible(
+          child: Text(
+            workspace.hostName,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+          ),
+        ),
+        Expanded(
+          child: Text(
+            statusText.isNotEmpty ? ' · $statusText' : '',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 12, color: WispColors.muted),
+          ),
+        ),
+        if (pane.state == ShellPaneState.disconnected ||
+            pane.state == ShellPaneState.exited ||
+            pane.state == ShellPaneState.failed) ...[
+          TextButton(
+            onPressed: pane.connect,
+            child: Text(
+              pane.state == ShellPaneState.exited ? 'Restart' : 'Reconnect',
+            ),
+          ),
+          const SizedBox(width: 4),
+        ],
+      ],
+    );
+    final terminalControls = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Semantics(
+          button: true,
+          label: 'Input mode',
+          child: InkWell(
+            key: const ValueKey('desktop-shell-mode-button'),
+            borderRadius: BorderRadius.circular(14),
+            onTap: () => setState(() => _modeMenu = !_modeMenu),
+            child: Container(
+              height: 28,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: _modeMenu
+                    ? const Color(0xFF1F3666)
+                    : const Color(0xFF142038),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: _modeMenu
+                      ? WispColors.borderActive
+                      : WispColors.border,
+                ),
               ),
-              const SizedBox(height: 6),
-              // Second row: Tabs for this host + "+" button
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: [
-                    for (final tab in workspace.tabs)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 6),
-                        child: InkWell(
-                          key: ValueKey('desktop-shell-tab-${tab.id}'),
-                          borderRadius: BorderRadius.circular(8),
-                          onTap: () {
-                            setState(() => workspace.selectedTab = tab);
-                            tab.activePane.focusNode.requestFocus();
-                          },
-                          child: Container(
-                            height: 28,
-                            padding: const EdgeInsets.only(left: 10, right: 6),
-                            decoration: BoxDecoration(
-                              color: tab == workspace.selectedTab
-                                  ? const Color(0xFF1F3666)
-                                  : WispColors.panel,
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(
-                                color: tab == workspace.selectedTab
-                                    ? WispColors.borderActive
-                                    : WispColors.border,
-                              ),
+              child: Text(
+                widget.manager.inputMode == DesktopInputMode.auto
+                    ? 'Auto · ${effectiveMode.label}'
+                    : widget.manager.inputMode.label,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 6),
+        _HeaderCircleButton(
+          key: const ValueKey('desktop-shell-split-vertical'),
+          tooltip: 'Split side by side',
+          icon: Icons.vertical_split_outlined,
+          onTap: () => workspace.splitActivePane(Axis.horizontal),
+        ),
+        const SizedBox(width: 6),
+        _HeaderCircleButton(
+          key: const ValueKey('desktop-shell-split-horizontal'),
+          tooltip: 'Split top and bottom',
+          icon: Icons.horizontal_split_outlined,
+          onTap: () => workspace.splitActivePane(Axis.vertical),
+        ),
+        if (!widget.manager.android) ...[
+          const SizedBox(width: 6),
+          _HeaderCircleButton(
+            key: const ValueKey('desktop-shell-open-external'),
+            tooltip: 'Open in system terminal',
+            icon: Icons.open_in_new,
+            onTap: () => unawaited(widget.onOpenExternal(pane)),
+          ),
+        ],
+        const SizedBox(width: 6),
+        _HeaderCircleButton(
+          key: const ValueKey('desktop-shell-close'),
+          tooltip: 'Minimize',
+          icon: Icons.remove,
+          onTap: _minimize,
+        ),
+        const SizedBox(width: 6),
+        _HeaderCircleButton(
+          key: const ValueKey('desktop-shell-terminate'),
+          tooltip: 'Close sessions',
+          icon: Icons.close,
+          onTap: () => unawaited(_confirmClose()),
+        ),
+      ],
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) => SizedBox(
+        height: math.min(height, constraints.maxHeight),
+        child: Stack(
+          children: [
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                LayoutBuilder(
+                  builder: (context, constraints) => constraints.maxWidth < 640
+                      ? Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            terminalIdentity,
+                            const SizedBox(height: 6),
+                            SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: terminalControls,
                             ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  tab.label,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: tab == workspace.selectedTab
-                                        ? FontWeight.w600
-                                        : FontWeight.normal,
-                                    color: tab == workspace.selectedTab
-                                        ? WispColors.text
-                                        : WispColors.muted,
-                                  ),
+                          ],
+                        )
+                      : Row(
+                          children: [
+                            Expanded(child: terminalIdentity),
+                            const SizedBox(width: 6),
+                            terminalControls,
+                          ],
+                        ),
+                ),
+                const SizedBox(height: 6),
+                // Second row: Tabs for this host + "+" button
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      for (final tab in workspace.tabs)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: InkWell(
+                            key: ValueKey('desktop-shell-tab-${tab.id}'),
+                            borderRadius: BorderRadius.circular(8),
+                            onTap: () {
+                              setState(() => workspace.selectedTab = tab);
+                              tab.activePane.focusNode.requestFocus();
+                            },
+                            child: Container(
+                              height: 28,
+                              padding: const EdgeInsets.only(
+                                left: 10,
+                                right: 6,
+                              ),
+                              decoration: BoxDecoration(
+                                color: tab == workspace.selectedTab
+                                    ? const Color(0xFF1F3666)
+                                    : WispColors.panel,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: tab == workspace.selectedTab
+                                      ? WispColors.borderActive
+                                      : WispColors.border,
                                 ),
-                                const SizedBox(width: 6),
-                                InkWell(
-                                  key: ValueKey(
-                                    'desktop-shell-close-tab-${tab.id}',
-                                  ),
-                                  borderRadius: BorderRadius.circular(9),
-                                  onTap: () =>
-                                      workspace.closeTab(tab, terminate: true),
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(2),
-                                    child: Icon(
-                                      Icons.close,
-                                      size: 13,
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    tab.label,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: tab == workspace.selectedTab
+                                          ? FontWeight.w600
+                                          : FontWeight.normal,
                                       color: tab == workspace.selectedTab
                                           ? WispColors.text
                                           : WispColors.muted,
                                     ),
                                   ),
+                                  const SizedBox(width: 6),
+                                  InkWell(
+                                    key: ValueKey(
+                                      'desktop-shell-close-tab-${tab.id}',
+                                    ),
+                                    borderRadius: BorderRadius.circular(9),
+                                    onTap: () => workspace.closeTab(
+                                      tab,
+                                      terminate: true,
+                                    ),
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(2),
+                                      child: Icon(
+                                        Icons.close,
+                                        size: 13,
+                                        color: tab == workspace.selectedTab
+                                            ? WispColors.text
+                                            : WispColors.muted,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      if (workspace.tabs.length < 16)
+                        InkWell(
+                          key: const ValueKey('desktop-shell-new-tab'),
+                          borderRadius: BorderRadius.circular(8),
+                          onTap: workspace.addTab,
+                          child: Container(
+                            width: 28,
+                            height: 28,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: WispColors.panel,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: WispColors.border),
+                            ),
+                            child: const Text(
+                              '+',
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                                color: WispColors.cyan,
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 6),
+                // Split-pane terminal viewport
+                Expanded(
+                  child: _SplitViewport(
+                    workspace: workspace,
+                    tab: workspace.selectedTab,
+                    effectiveMode: effectiveMode,
+                    onKeyboardRequest: _lineFocus.requestFocus,
+                  ),
+                ),
+                if (effectiveMode == DesktopInputMode.line) ...[
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          key: const ValueKey('desktop-shell-line-input'),
+                          controller: _lineController,
+                          focusNode: _lineFocus,
+                          style: const TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 14,
+                          ),
+                          decoration: const InputDecoration(
+                            hintText: 'Enter command…',
+                            isDense: true,
+                          ),
+                          onSubmitted: (value) {
+                            unawaited(pane.sendInput('$value\r'));
+                            _lineController.clear();
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      FilledButton(
+                        onPressed: () {
+                          unawaited(
+                            pane.sendInput('${_lineController.text}\r'),
+                          );
+                          _lineController.clear();
+                        },
+                        child: const Text('Send'),
+                      ),
+                    ],
+                  ),
+                ],
+                const SizedBox(height: 4),
+                // Shortcut keys bar
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      for (final entry in const [
+                        ('Ctrl-C', '\u0003'),
+                        ('Esc', '\u001b'),
+                        ('Tab', '\t'),
+                        ('↑', '\u001b[A'),
+                        ('↓', '\u001b[B'),
+                        ('←', '\u001b[D'),
+                        ('→', '\u001b[C'),
+                      ])
+                        TextButton(
+                          onPressed: pane.state == ShellPaneState.attached
+                              ? () => unawaited(pane.sendInput(entry.$2))
+                              : null,
+                          child: Text(entry.$1),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            if (_modeMenu)
+              Positioned.fill(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => setState(() => _modeMenu = false),
+                  child: Align(
+                    alignment: Alignment.topRight,
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 36),
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 320),
+                        child: WispPanel(
+                          key: const ValueKey('desktop-shell-mode-popover'),
+                          color: WispColors.panel,
+                          radius: 14,
+                          padding: const EdgeInsets.all(10),
+                          child: SingleChildScrollView(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                const Padding(
+                                  padding: EdgeInsets.symmetric(
+                                    horizontal: 4,
+                                    vertical: 2,
+                                  ),
+                                  child: Text(
+                                    'Input mode',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                      color: WispColors.muted,
+                                    ),
+                                  ),
                                 ),
+                                for (final mode in DesktopInputMode.values) ...[
+                                  const SizedBox(height: 6),
+                                  InkWell(
+                                    key: ValueKey(
+                                      'desktop-shell-mode-${mode.name}',
+                                    ),
+                                    borderRadius: BorderRadius.circular(10),
+                                    onTap: () => setState(() {
+                                      widget.manager.inputMode = mode;
+                                      _modeMenu = false;
+                                    }),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                        vertical: 8,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: mode == widget.manager.inputMode
+                                            ? const Color(0xFF1F3666)
+                                            : const Color(0xFF142038),
+                                        borderRadius: BorderRadius.circular(10),
+                                        border: Border.all(
+                                          color:
+                                              mode == widget.manager.inputMode
+                                              ? WispColors.borderActive
+                                              : WispColors.border,
+                                        ),
+                                      ),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            children: [
+                                              Expanded(
+                                                child: Text(
+                                                  mode == DesktopInputMode.auto
+                                                      ? 'Auto (currently ${effectiveMode.label})'
+                                                      : mode.label,
+                                                  style: const TextStyle(
+                                                    fontSize: 13,
+                                                    fontWeight: FontWeight.w600,
+                                                  ),
+                                                ),
+                                              ),
+                                              if (mode ==
+                                                  widget.manager.inputMode)
+                                                const Text(
+                                                  'Active',
+                                                  style: TextStyle(
+                                                    fontSize: 11,
+                                                    fontWeight: FontWeight.bold,
+                                                    color: WispColors.cyan,
+                                                  ),
+                                                ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            mode.summary,
+                                            style: const TextStyle(
+                                              fontSize: 11,
+                                              color: WispColors.muted,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ],
                             ),
                           ),
-                        ),
-                      ),
-                    if (workspace.tabs.length < 16)
-                      InkWell(
-                        key: const ValueKey('desktop-shell-new-tab'),
-                        borderRadius: BorderRadius.circular(8),
-                        onTap: workspace.addTab,
-                        child: Container(
-                          width: 28,
-                          height: 28,
-                          alignment: Alignment.center,
-                          decoration: BoxDecoration(
-                            color: WispColors.panel,
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: WispColors.border),
-                          ),
-                          child: const Text(
-                            '+',
-                            style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.bold,
-                              color: WispColors.cyan,
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 6),
-              // Split-pane terminal viewport
-              Expanded(
-                child: _SplitViewport(
-                  workspace: workspace,
-                  tab: workspace.selectedTab,
-                  effectiveMode: effectiveMode,
-                ),
-              ),
-              if (effectiveMode == DesktopInputMode.line) ...[
-                const SizedBox(height: 6),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        key: const ValueKey('desktop-shell-line-input'),
-                        controller: _lineController,
-                        style: const TextStyle(
-                          fontFamily: 'monospace',
-                          fontSize: 14,
-                        ),
-                        decoration: const InputDecoration(
-                          hintText: 'Enter command…',
-                          isDense: true,
-                        ),
-                        onSubmitted: (value) {
-                          unawaited(pane.sendInput('$value\r'));
-                          _lineController.clear();
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    FilledButton(
-                      onPressed: () {
-                        unawaited(pane.sendInput('${_lineController.text}\r'));
-                        _lineController.clear();
-                      },
-                      child: const Text('Send'),
-                    ),
-                  ],
-                ),
-              ],
-              const SizedBox(height: 4),
-              // Shortcut keys bar
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    for (final entry in const [
-                      ('Ctrl-C', '\u0003'),
-                      ('Esc', '\u001b'),
-                      ('Tab', '\t'),
-                      ('↑', '\u001b[A'),
-                      ('↓', '\u001b[B'),
-                      ('←', '\u001b[D'),
-                      ('→', '\u001b[C'),
-                    ])
-                      TextButton(
-                        onPressed: pane.state == ShellPaneState.attached
-                            ? () => unawaited(pane.sendInput(entry.$2))
-                            : null,
-                        child: Text(entry.$1),
-                      ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          if (_modeMenu)
-            Positioned.fill(
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: () => setState(() => _modeMenu = false),
-                child: Align(
-                  alignment: Alignment.topRight,
-                  child: Padding(
-                    padding: const EdgeInsets.only(top: 36),
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 320),
-                      child: WispPanel(
-                        key: const ValueKey('desktop-shell-mode-popover'),
-                        color: WispColors.panel,
-                        radius: 14,
-                        padding: const EdgeInsets.all(10),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            const Padding(
-                              padding: EdgeInsets.symmetric(
-                                horizontal: 4,
-                                vertical: 2,
-                              ),
-                              child: Text(
-                                'Input mode',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  color: WispColors.muted,
-                                ),
-                              ),
-                            ),
-                            for (final mode in DesktopInputMode.values) ...[
-                              const SizedBox(height: 6),
-                              InkWell(
-                                key: ValueKey(
-                                  'desktop-shell-mode-${mode.name}',
-                                ),
-                                borderRadius: BorderRadius.circular(10),
-                                onTap: () => setState(() {
-                                  widget.manager.inputMode = mode;
-                                  _modeMenu = false;
-                                }),
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 10,
-                                    vertical: 8,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: mode == widget.manager.inputMode
-                                        ? const Color(0xFF1F3666)
-                                        : const Color(0xFF142038),
-                                    borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(
-                                      color: mode == widget.manager.inputMode
-                                          ? WispColors.borderActive
-                                          : WispColors.border,
-                                    ),
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Row(
-                                        children: [
-                                          Expanded(
-                                            child: Text(
-                                              mode == DesktopInputMode.auto
-                                                  ? 'Auto (currently ${effectiveMode.label})'
-                                                  : mode.label,
-                                              style: const TextStyle(
-                                                fontSize: 13,
-                                                fontWeight: FontWeight.w600,
-                                              ),
-                                            ),
-                                          ),
-                                          if (mode == widget.manager.inputMode)
-                                            const Text(
-                                              'Active',
-                                              style: TextStyle(
-                                                fontSize: 11,
-                                                fontWeight: FontWeight.bold,
-                                                color: WispColors.cyan,
-                                              ),
-                                            ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 2),
-                                      Text(
-                                        mode.summary,
-                                        style: const TextStyle(
-                                          fontSize: 11,
-                                          color: WispColors.muted,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ],
                         ),
                       ),
                     ),
                   ),
                 ),
               ),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -1669,11 +1954,13 @@ class _SplitViewport extends StatelessWidget {
     required this.workspace,
     required this.tab,
     required this.effectiveMode,
+    required this.onKeyboardRequest,
   });
 
   final HostShellWorkspace workspace;
   final DesktopShellTab tab;
   final DesktopInputMode effectiveMode;
+  final VoidCallback onKeyboardRequest;
 
   @override
   Widget build(BuildContext context) {
@@ -1693,6 +1980,7 @@ class _SplitViewport extends StatelessWidget {
             focused: panes[i] == tab.activePane,
             showPaneControls: multiple,
             effectiveMode: effectiveMode,
+            onKeyboardRequest: onKeyboardRequest,
             onFocus: () {
               tab.activePane = panes[i];
               panes[i].focusNode.requestFocus();
@@ -1723,6 +2011,7 @@ class _TerminalPaneView extends StatelessWidget {
     required this.focused,
     required this.showPaneControls,
     required this.effectiveMode,
+    required this.onKeyboardRequest,
     required this.onFocus,
     required this.onClose,
   });
@@ -1731,10 +2020,12 @@ class _TerminalPaneView extends StatelessWidget {
   final bool focused;
   final bool showPaneControls;
   final DesktopInputMode effectiveMode;
+  final VoidCallback onKeyboardRequest;
   final VoidCallback onFocus;
   final VoidCallback onClose;
 
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (pane.android) return KeyEventResult.ignored;
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
     }
@@ -1828,36 +2119,45 @@ class _TerminalPaneView extends StatelessWidget {
                     horizontal: 8,
                     vertical: 6,
                   ),
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      const charWidth = 8.4;
-                      const lineHeight = 17.0;
-                      final cols = math.max(
-                        20,
-                        (constraints.maxWidth / charWidth).floor(),
-                      );
-                      final rows = math.max(
-                        5,
-                        (constraints.maxHeight / lineHeight).floor(),
-                      );
-                      if (cols != pane.buffer.cols ||
-                          rows != pane.buffer.rows) {
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                          unawaited(pane.resize(cols, rows));
-                        });
-                      }
-                      return CustomPaint(
-                        painter: _TerminalCanvasPainter(
-                          buffer: pane.buffer,
-                          version: pane.buffer.version,
-                          cursorRow: pane.buffer.cursorRow,
-                          cursorCol: pane.buffer.cursorCol,
-                          showCursor:
-                              focused && pane.state == ShellPaneState.attached,
+                  child: pane.android
+                      ? _NativeTerminalViewport(
+                          pane: pane,
+                          focused: focused,
+                          mode: effectiveMode,
+                          onFocus: onFocus,
+                          onKeyboardRequest: onKeyboardRequest,
+                        )
+                      : LayoutBuilder(
+                          builder: (context, constraints) {
+                            const charWidth = 8.4;
+                            const lineHeight = 17.0;
+                            final cols = math.max(
+                              20,
+                              (constraints.maxWidth / charWidth).floor(),
+                            );
+                            final rows = math.max(
+                              5,
+                              (constraints.maxHeight / lineHeight).floor(),
+                            );
+                            if (cols != pane.buffer.cols ||
+                                rows != pane.buffer.rows) {
+                              WidgetsBinding.instance.addPostFrameCallback((_) {
+                                unawaited(pane.resize(cols, rows));
+                              });
+                            }
+                            return CustomPaint(
+                              painter: _TerminalCanvasPainter(
+                                buffer: pane.buffer,
+                                version: pane.buffer.version,
+                                cursorRow: pane.buffer.cursorRow,
+                                cursorCol: pane.buffer.cursorCol,
+                                showCursor:
+                                    focused &&
+                                    pane.state == ShellPaneState.attached,
+                              ),
+                            );
+                          },
                         ),
-                      );
-                    },
-                  ),
                 ),
               ),
               if (showPaneControls)
@@ -1917,6 +2217,82 @@ class _TerminalPaneView extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Android's terminal renderer and composition-aware IME stay native while all
+/// surrounding controls, tabs, panes and lifecycle decisions are shared.
+class _NativeTerminalViewport extends StatefulWidget {
+  const _NativeTerminalViewport({
+    required this.pane,
+    required this.focused,
+    required this.mode,
+    required this.onFocus,
+    required this.onKeyboardRequest,
+  });
+  final DesktopShellPane pane;
+  final bool focused;
+  final DesktopInputMode mode;
+  final VoidCallback onFocus;
+  final VoidCallback onKeyboardRequest;
+
+  @override
+  State<_NativeTerminalViewport> createState() =>
+      _NativeTerminalViewportState();
+}
+
+class _NativeTerminalViewportState extends State<_NativeTerminalViewport> {
+  MethodChannel? channel;
+
+  Map<String, dynamic> get configuration => {
+    ...widget.pane.nativeArguments,
+    'active': widget.focused,
+    'mode': widget.mode.name,
+  };
+
+  void update() {
+    unawaited(
+      channel?.invokeMethod<void>('update', configuration).catchError((_) {}),
+    );
+  }
+
+  @override
+  void didUpdateWidget(_NativeTerminalViewport oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.focused != widget.focused || oldWidget.mode != widget.mode) {
+      update();
+    }
+  }
+
+  @override
+  void dispose() {
+    channel?.setMethodCallHandler(null);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => ClipRRect(
+    borderRadius: BorderRadius.circular(8),
+    child: AndroidView(
+      viewType: 'app.wispnet/terminal',
+      creationParams: configuration,
+      creationParamsCodec: const StandardMessageCodec(),
+      gestureRecognizers: {
+        Factory<OneSequenceGestureRecognizer>(EagerGestureRecognizer.new),
+      },
+      onPlatformViewCreated: (id) {
+        channel = MethodChannel('app.wispnet/terminal/$id')
+          ..setMethodCallHandler((call) async {
+            if (call.method == 'focus' && mounted) {
+              widget.onFocus();
+            }
+            if (call.method == 'keyboard' && mounted) {
+              widget.onKeyboardRequest();
+            }
+          });
+        update();
+      },
+    ),
+  );
 }
 
 class _TerminalCanvasPainter extends CustomPainter {

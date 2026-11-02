@@ -269,6 +269,7 @@ impl Services {
 pub struct TunnelHost {
     endpoint: Endpoint,
     stop: watch::Sender<bool>,
+    services_enabled: watch::Sender<bool>,
     worker: Option<JoinHandle<()>>,
     counts: ActiveCounts,
     files: Option<wispnet_files::FileService>,
@@ -288,6 +289,7 @@ impl TunnelHost {
             secret,
             config,
             Services::Static(Arc::new(services.to_vec())),
+            true,
         )
         .await
     }
@@ -302,13 +304,23 @@ impl TunnelHost {
         if authority.host() != secret.public() {
             return Err(TunnelError::Transport("host authority identity mismatch"));
         }
-        Self::bind_services(secret, config, Services::host(authority)?).await
+        Self::bind_services(secret, config, Services::host(authority)?, true).await
     }
     pub async fn bind_host_with_files(
         secret: &SecretKey,
         config: &TransportConfig,
         authority: wispnet_registry::host::Authority,
         files: wispnet_files::FileService,
+    ) -> Result<Self, TunnelError> {
+        Self::bind_host_with_files_enabled(secret, config, authority, files, true).await
+    }
+    /// Bind an embedded host with its initial admission state already applied.
+    pub async fn bind_host_with_files_enabled(
+        secret: &SecretKey,
+        config: &TransportConfig,
+        authority: wispnet_registry::host::Authority,
+        files: wispnet_files::FileService,
+        enabled: bool,
     ) -> Result<Self, TunnelError> {
         config
             .validate()
@@ -320,6 +332,7 @@ impl TunnelHost {
             secret,
             config,
             Services::Host(authority, ShellSessions::default(), files),
+            enabled,
         )
         .await
     }
@@ -327,13 +340,21 @@ impl TunnelHost {
         secret: &SecretKey,
         config: &TransportConfig,
         services: Services,
+        enabled: bool,
     ) -> Result<Self, TunnelError> {
-        Self::bind_builder(config, services, configured_builder(secret, Some(config))?).await
+        Self::bind_builder(
+            config,
+            services,
+            configured_builder(secret, Some(config))?,
+            enabled,
+        )
+        .await
     }
     async fn bind_builder(
         config: &TransportConfig,
         services: Services,
         builder: iroh::endpoint::Builder,
+        enabled: bool,
     ) -> Result<Self, TunnelError> {
         let mut alpns = vec![protocol::ALPN.to_vec()];
         if matches!(services, Services::Host(_, _, _)) {
@@ -369,20 +390,26 @@ impl TunnelHost {
             .map_err(|_| TunnelError::Transport("cannot bind Iroh endpoint"))?;
         let counts = ActiveCounts::default();
         let (stop, receiver) = watch::channel(false);
+        let (services_enabled, service_state) = watch::channel(enabled);
         let files = match &services {
             Services::Host(_, _, files) => Some(files.clone()),
             _ => None,
         };
+        if let Some(files) = &files {
+            files.set_enabled(enabled);
+        }
         let worker = tokio::spawn(serve(
             endpoint.clone(),
             config.clone(),
             services,
             counts.clone(),
             receiver,
+            service_state,
         ));
         Ok(Self {
             endpoint,
             stop,
+            services_enabled,
             worker: Some(worker),
             counts,
             files,
@@ -392,6 +419,21 @@ impl TunnelHost {
         if let Some(files) = &self.files {
             files.set_enabled(enabled);
         }
+    }
+    /// Pause admission and terminate existing inbound streams without changing
+    /// owner grants or closing the endpoint used by outbound client sessions.
+    pub fn set_services_enabled(&self, enabled: bool) {
+        self.set_files_enabled(enabled);
+        self.services_enabled.send_if_modified(|current| {
+            if *current == enabled {
+                return false;
+            }
+            *current = enabled;
+            true
+        });
+    }
+    pub fn services_enabled(&self) -> bool {
+        *self.services_enabled.borrow()
     }
     pub fn endpoint(&self) -> &Endpoint {
         &self.endpoint
@@ -427,6 +469,7 @@ async fn serve(
     services: Services,
     counts: ActiveCounts,
     mut stop: watch::Receiver<bool>,
+    mut services_enabled: watch::Receiver<bool>,
 ) {
     let connections = Arc::new(Semaphore::new(config.max_connections));
     let streams = Arc::new(Semaphore::new(config.max_streams));
@@ -439,6 +482,17 @@ async fn serve(
         tokio::select! {
             biased;
             _ = stop.changed() => break,
+            _ = services_enabled.changed() => {
+                // Cancel on either transition, including a rapid off/on pair
+                // coalesced by watch, so no pre-pause connection survives.
+                tasks.abort_all();
+                while tasks.join_next().await.is_some() {}
+                #[cfg(not(target_os = "android"))]
+                if !*services_enabled.borrow()
+                    && let Services::Host(_, sessions, _) = &services {
+                    sessions.retain_scopes(|_| false);
+                }
+            },
             _ = files_cleanup_tick.tick() => {
                 if let Services::Host(_, _, files) = &services
                     && let Ok(permit) = cleanup_slot.clone().try_acquire_owned()
@@ -470,6 +524,7 @@ async fn serve(
             Some(_) = tasks.join_next(), if !tasks.is_empty() => {},
             incoming = endpoint.accept() => {
                 let Some(incoming) = incoming else { break };
+                if !*services_enabled.borrow() { incoming.refuse(); continue; }
                 let Ok(permit) = connections.clone().try_acquire_owned() else { incoming.refuse(); continue };
                 let services = services.clone();
                 let streams = streams.clone();
@@ -485,6 +540,7 @@ async fn serve(
                     let _permit = permit;
                     let _guard = guard;
                     let Ok(Ok(connection)) = timeout(HANDSHAKE_TIMEOUT, incoming).await else { return };
+                    let _close = CloseConnection(connection.clone());
                     // Only the completed transport handshake establishes peer authority.
                     let peer = connection.remote_id();
                     if connection.alpn() == wispnet_core::pairing::ALPN {

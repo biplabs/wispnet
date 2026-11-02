@@ -428,6 +428,29 @@ class Bridge:
             return {}
         if method == 'refreshHost':
             return self.refresh(args['host'])
+        if method == 'connectionDiagnostics':
+            host = args.get('host')
+            if not isinstance(host, str) or not re.fullmatch(r'[0-9a-f]{64}', host):
+                raise ValueError('Choose a paired device to diagnose')
+            status = self.api.request(op='status')
+            paired = {*status.get('peer_pins', []),
+                      *(client['peer'] for client in status['host']['clients'])}
+            if host == status['host']['host'] or host not in paired:
+                raise ValueError('Choose a paired remote device to diagnose')
+            row = {'host': host,
+                   'name': self.preferences.get('device_ids', {}).get(host) or
+                           self.records.get(host, {}).get('name') or
+                           next((client.get('name') for client in status['host']['clients']
+                                 if client['peer'] == host), None) or host[:8]}
+            try:
+                row['report'] = self.api.request(op='diagnose_connection', host=host)
+            except (OSError, ValueError) as error:
+                row['error'] = str(error)
+            # The desktop adapter has no portable network-type/VPN observer.
+            # Report these fields as unavailable rather than inferring them from
+            # the diagnostic path or the operating-system name.
+            return {'network': None, 'vpn': None, 'network_changed': None,
+                    'peers': [row]}
         if method in ('preview', 'pair'):
             code = re.sub(r'\s+', '', args['code'])
             if not code.startswith('wispnet1:') or len(code.encode()) > 8192:
@@ -561,17 +584,15 @@ class Bridge:
                 'id': args['service'], 'incarnation': args['incarnation'],
                 'enabled': args['enabled'],
             })
-        if method == 'desktopStatus':
+        if method in ('desktopStatus', 'ownerStatus'):
             return self.api.request(op='status', refresh_clients=True)
-        if method == 'desktopRequest':
+        if method in ('desktopRequest', 'ownerRequest'):
             payload = args['payload']
             if payload.get('op') not in ('mutate', 'invite_qr', 'configure_public'):
                 raise ValueError('Unsupported owner operation')
             return self.api.request(**payload)
-        if method == 'desktopData':
+        if method in ('desktopData', 'ownerData'):
             return {'value': desktop_data(args, self.config)}
-        if method in ('scanQr', 'importQr'):
-            raise ValueError('Paste a pairing code on desktop; camera scanning is available on Android')
         raise ValueError('Unsupported desktop UI operation')
 
     def rename_device(self, name):

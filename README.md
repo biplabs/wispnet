@@ -133,7 +133,7 @@ to selected paired devices, then open Shell from desktop/Android or run
 session persistence and CLI grant management.
 
 Inboxes and shared folders are named folder services with independent permissions.
-On desktop or Android, use **Local services → Add folder** and choose **Receive
+On desktop or Android, use **Local services → Share a service** and choose **Receive
 files** (Inbox) or **Share files** (Shared folder). Create multiple folders and
 grant each one to selected devices. The CLI provides `wispnet inbox` and
 `wispnet share` for setup, `files put` for inbox uploads, and `files ls|get` for

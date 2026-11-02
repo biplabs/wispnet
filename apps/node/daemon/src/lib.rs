@@ -213,6 +213,7 @@ impl State {
             | "catalog"
             | "host_device_id"
             | "host_public_links"
+            | "diagnose_connection"
             | "set_name"
             | "telemetry"
             | "enable"
@@ -249,8 +250,19 @@ impl State {
         .map_err(|_| "Local owner operation failed".to_owned())?
     }
 }
+fn request_timeout(value: &Value) -> std::time::Duration {
+    // The shared path diagnostic can observe both ends for up to 55 seconds.
+    // Caller-supplied timeout fields never extend ordinary owner operations.
+    std::time::Duration::from_secs(if value["op"] == "diagnose_connection" {
+        60
+    } else {
+        25
+    })
+}
+
 async fn serve(mut stream: UnixStream, state: Arc<State>) {
-    let outcome = tokio::time::timeout(std::time::Duration::from_secs(25), async {
+    let started = std::time::Instant::now();
+    let request = tokio::time::timeout(std::time::Duration::from_secs(25), async {
         if stream.peer_cred()?.uid() != unsafe { libc::geteuid() } {
             return Err(std::io::Error::other("Wrong local user"));
         }
@@ -265,26 +277,35 @@ async fn serve(mut stream: UnixStream, state: Arc<State>) {
             }
             request.push(byte[0]);
         }
-        let result = if request.len() > 16384 {
-            Err("Local request too large".into())
+        if request.len() > 16384 {
+            Err(std::io::Error::other("Local request too large"))
         } else {
-            match serde_json::from_slice(&request) {
-                Ok(value) => state.request(value).await,
-                Err(_) => Err("Invalid local request".into()),
-            }
-        };
-        let response = match result {
-            Ok(result) => json!({"ok":true,"result":result}),
-            Err(error) => json!({"ok":false,"error":error}),
-        };
-        let mut bytes = serde_json::to_vec(&response)?;
-        bytes.push(b'\n');
-        stream.write_all(&bytes).await?;
-        Ok::<_, std::io::Error>(())
+            serde_json::from_slice::<Value>(&request)
+                .map_err(|_| std::io::Error::other("Invalid local request"))
+        }
     })
     .await;
-    let _ = outcome;
+    let result = match request {
+        Ok(Ok(value)) => {
+            let remaining = request_timeout(&value).saturating_sub(started.elapsed());
+            tokio::time::timeout(remaining, state.request(value))
+                .await
+                .unwrap_or_else(|_| Err("Local operation timed out".into()))
+        }
+        Ok(Err(error)) => Err(error.to_string()),
+        Err(_) => Err("Local request timed out".into()),
+    };
+    let response = match result {
+        Ok(result) => json!({"ok":true,"result":result}),
+        Err(error) => json!({"ok":false,"error":error}),
+    };
+    if let Ok(mut bytes) = serde_json::to_vec(&response) {
+        bytes.push(b'\n');
+        let _ =
+            tokio::time::timeout(std::time::Duration::from_secs(5), stream.write_all(&bytes)).await;
+    }
 }
+
 struct SocketPath(PathBuf);
 impl Drop for SocketPath {
     fn drop(&mut self) {
@@ -386,4 +407,23 @@ pub async fn run(
     host.shutdown().await;
     tracing::info!(component = "agent", event = "stopped");
     Ok(())
+}
+
+#[cfg(test)]
+mod request_budget_tests {
+    use super::*;
+
+    #[test]
+    fn only_connection_diagnostics_get_the_full_probe_budget() {
+        assert_eq!(
+            request_timeout(&json!({"op":"diagnose_connection"})),
+            std::time::Duration::from_secs(60),
+        );
+        for operation in ["status", "mutate", "transport_status", "unsupported"] {
+            assert_eq!(
+                request_timeout(&json!({"op":operation,"timeout":600})),
+                std::time::Duration::from_secs(25),
+            );
+        }
+    }
 }

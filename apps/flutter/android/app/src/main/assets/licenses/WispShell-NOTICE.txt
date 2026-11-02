@@ -1,6 +1,6 @@
 Wispnet Android shell terminal
 
-WispTermuxTerminalView.kt is adapted from Biplabs WispShell:
+TermuxTerminalHolder.kt (formerly WispTermuxTerminalView.kt) is adapted from Biplabs WispShell:
 https://github.com/biplabs/wisp_shell
 Source revision: 70283428404a3fa659f2c24343ff6fbb4858dda1
 The imported source retains GNU Affero General Public License version 3.

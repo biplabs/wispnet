@@ -53,6 +53,8 @@ public final class FilesTransferInstrumentation extends Instrumentation {
   } finally { if (bridge != null) bridge.close(); }
  }
  @Override public void onStart() {
+  if ("true".equals(arguments.getString("ownerChecks"))) { new AndroidOwnerChecks(this).run(); return; }
+  if ("true".equals(arguments.getString("cameraChecks"))) { AndroidQrCameraChecks.run(this); return; }
   if ("true".equals(arguments.getString("namedInboxes"))) { new AndroidInboxChecks(this, arguments).run(); return; }
   if ("true".equals(arguments.getString("sourceShares"))) { new AndroidSharesChecks(this, arguments).run(); return; }
   if ("true".equals(arguments.getString("shareSetup"))) { shareSetup(); return; }

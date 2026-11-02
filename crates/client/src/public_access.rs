@@ -195,7 +195,7 @@ impl Publications {
         let saved = load(&client.state, client.endpoint.id())?;
         let states = self.states.lock().await;
         Ok(
-            json!({"gateway":saved.gateway,"services":saved.services.iter().map(|s|json!({"service":s.service,"incarnation":s.incarnation,"enabled":true,"url":saved.gateway.as_ref().map(|g|format!("https://{}/",hostname(&s.name,saved.owner,&s.service,&g.domain))),"state":states.get(&s.service).map(String::as_str).unwrap_or("connecting")})).collect::<Vec<_>>()}),
+            json!({"gateway":saved.gateway,"services":saved.services.iter().map(|s|json!({"service":s.service,"incarnation":s.incarnation,"enabled":true,"url":saved.gateway.as_ref().map(|g|format!("https://{}/",hostname(&s.name,saved.owner,&s.service,&g.domain))),"state":if client.services_enabled() { states.get(&s.service).map(String::as_str).unwrap_or("connecting") } else { "offline" }})).collect::<Vec<_>>()}),
         )
     }
     async fn sync_public_links(&self, client: &Client) -> Result<(), String> {
@@ -216,9 +216,13 @@ impl Publications {
             .iter()
             .filter_map(|s| {
                 let gateway = saved.gateway.as_ref()?;
-                let state = match states.get(&s.service).map(String::as_str) {
-                    Some("online") => "online",
-                    Some("connecting") | None => "connecting",
+                let state = match (
+                    client.services_enabled(),
+                    states.get(&s.service).map(String::as_str),
+                ) {
+                    (false, _) => "offline",
+                    (true, Some("online")) => "online",
+                    (true, Some("connecting") | None) => "connecting",
                     _ => "offline",
                 };
                 Some(wispnet_core::host::PublicLink {
@@ -243,6 +247,10 @@ impl Publications {
         let _ = self.sync_public_links(client).await;
     }
     pub async fn stop(&self) {
+        let _lock = self.lock.lock().await;
+        self.stop_locked().await;
+    }
+    async fn stop_locked(&self) {
         for (_, task) in std::mem::take(&mut *self.workers.lock().await) {
             task.abort();
             let _ = task.await;
@@ -254,6 +262,10 @@ impl Publications {
         self.reconcile_locked(client).await
     }
     async fn reconcile_locked(&self, client: &Client) -> Result<(), String> {
+        if !client.services_enabled() {
+            self.stop_locked().await;
+            return self.sync_public_links(client).await;
+        }
         let mut saved = load(&client.state, client.endpoint.id())?;
         if saved.services.is_empty() {
             return self.sync_public_links(client).await;
@@ -301,7 +313,10 @@ impl Publications {
         self.restart(client).await
     }
     async fn restart(&self, client: Arc<Client>) -> Result<(), String> {
-        self.stop().await;
+        self.stop_locked().await;
+        if !client.services_enabled() {
+            return self.sync_public_links(&client).await;
+        }
         let saved = load(&client.state, client.endpoint.id())?;
         if let Some(gateway) = saved.gateway {
             for publication in saved.services {
@@ -381,7 +396,9 @@ impl Publications {
             }
         }
         save(&client.state, &saved)?;
-        if value["op"] == "configure_public_gateway" {
+        if !client.services_enabled() {
+            self.stop_locked().await;
+        } else if value["op"] == "configure_public_gateway" {
             self.restart(client.clone()).await?;
         } else {
             let id = crate::argument(value, "service")?;
@@ -486,6 +503,9 @@ async fn publish(client: Arc<Client>, gateway: GatewayConfig, publication: Publi
     }
 }
 async fn permitted(client: &Client, publication: &Publication) -> bool {
+    if !client.services_enabled() {
+        return false;
+    }
     let Some(authority) = &client.local_authority else {
         return false;
     };

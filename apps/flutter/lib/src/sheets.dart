@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'backend.dart';
+import 'pairing_qr.dart';
+import 'qr_camera_sheet.dart';
 import '../ui.dart';
 
 String failureMessage(Object error) {
@@ -13,10 +15,10 @@ String failureMessage(Object error) {
       ? error.message ?? error.code
       : error.toString();
   if (error is PlatformException && error.code == 'invitation_denied') {
-    return 'This host did not accept the pairing code. Generate a new code on your computer.';
+    return 'This host did not accept the pairing code. Generate a new code on the other device.';
   }
   if (message.toLowerCase().contains('expired')) {
-    return 'Pairing code expired or invalid. Generate a new code on your computer.';
+    return 'Pairing code expired or invalid. Generate a new code on the other device.';
   }
   return message;
 }
@@ -27,12 +29,10 @@ class PairingForm extends StatefulWidget {
     required this.backend,
     required this.onPaired,
     this.initialCode,
-    this.desktop = false,
   });
   final WispnetBackend backend;
   final VoidCallback onPaired;
   final String? initialCode;
-  final bool desktop;
   @override
   State<PairingForm> createState() => _PairingFormState();
 }
@@ -42,14 +42,29 @@ class _PairingFormState extends State<PairingForm> {
     text: widget.initialCode,
   )..addListener(changed);
   bool busy = false, error = false;
-  late int tab = widget.initialCode == null && !widget.desktop ? 0 : 1;
+  late int tab = widget.initialCode == null ? 0 : 1;
+  bool camera = false;
   String feedback = '';
   Map<String, dynamic>? preview;
   @override
   void initState() {
     super.initState();
+    loadQrCapabilities();
     if (widget.initialCode != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => review());
+    }
+  }
+
+  Future<void> loadQrCapabilities() async {
+    try {
+      final capabilities = await widget.backend.invoke('qrCapabilities');
+      if (mounted) {
+        setState(() {
+          camera = capabilities['camera'] == true;
+        });
+      }
+    } catch (_) {
+      // Image import and pairing-code input remain available without a camera.
     }
   }
 
@@ -90,7 +105,7 @@ class _PairingFormState extends State<PairingForm> {
       if (mounted) {
         setState(() {
           preview = result;
-          feedback = 'Pairing code ready. Request pairing, then approve it on your computer.';
+          feedback = 'Pairing code ready. Request pairing, then approve it on the other device.';
         });
       }
     } catch (e) {
@@ -138,7 +153,15 @@ class _PairingFormState extends State<PairingForm> {
           : 'Choose a pairing QR image…';
     });
     try {
-      final result = await widget.backend.invoke(method);
+      final result = method == 'scanQr'
+          ? {
+              'code': await showWispSheet<String>(
+                context,
+                title: 'Scan pairing QR',
+                child: QrCameraSheet(backend: widget.backend),
+              ),
+            }
+          : await widget.backend.invoke(method);
       if (!mounted) return;
       final scanned = result['code'] as String?;
       if (scanned == null) {
@@ -149,7 +172,7 @@ class _PairingFormState extends State<PairingForm> {
         });
         return;
       }
-      code.text = scanned;
+      code.text = normalizedPairingCode(scanned);
       setState(() {
         busy = false;
         tab = 1;
@@ -172,17 +195,14 @@ class _PairingFormState extends State<PairingForm> {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (!widget.desktop) ...[
+        ...[
           WispPanel(
             radius: 14,
             color: const Color(0xff0d1526),
             padding: const EdgeInsets.all(4),
             child: Row(
               children: [
-                for (final entry in {
-                  if (!widget.desktop) 0: 'QR',
-                  1: 'Pairing Code',
-                }.entries)
+                for (final entry in {0: 'QR', 1: 'Pairing Code'}.entries)
                   Expanded(
                     child: TextButton(
                       onPressed: busy
@@ -209,18 +229,20 @@ class _PairingFormState extends State<PairingForm> {
           const SizedBox(height: 14),
         ],
         if (tab == 0) ...[
-          FilledButton(
-            onPressed: busy ? null : () => qr('scanQr'),
-            child: const Text('Scan with camera'),
-          ),
-          const SizedBox(height: 10),
+          if (camera) ...[
+            FilledButton(
+              onPressed: busy ? null : () => qr('scanQr'),
+              child: const Text('Scan with camera'),
+            ),
+            const SizedBox(height: 10),
+          ],
           OutlinedButton(
             onPressed: busy ? null : () => qr('importQr'),
-            child: const Text('Import from photos'),
+            child: const Text('Import QR image'),
           ),
         ] else ...[
           const Text(
-            'Paste the pairing code from your computer.',
+            'Paste the pairing code from the other device.',
             style: TextStyle(color: WispColors.muted),
           ),
           const SizedBox(height: 12),
@@ -330,7 +352,7 @@ class _MachineSettingsState extends State<MachineSettings> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
-            'Remove ${widget.machine.name} and close its Wispnet access on this computer? This computer will forget the pairing and close its local service routes. The other machine will learn about removal on its next contact. You can pair again later.',
+            'Remove ${widget.machine.name} and close its Wispnet access on this device? This device will forget the pairing and close its local service routes. The other machine will learn about removal on its next contact. You can pair again later.',
           ),
           const SizedBox(height: 16),
           FilledButton(
@@ -517,18 +539,33 @@ class _ConnectionDiagnosticsState extends State<ConnectionDiagnostics> {
     try {
       final snapshot = await widget.backend.invoke('snapshot');
       final hosts = snapshot['hosts'] as Map? ?? {};
-      if (hosts.isEmpty) lines.add('No paired devices to test.');
-      for (final host in hosts.keys) {
+      final remoteHosts = hosts.entries.where(
+        (entry) =>
+            entry.key != snapshot['peer'] &&
+            (entry.value as Map)['local'] != true,
+      );
+      if (remoteHosts.isEmpty) lines.add('No paired devices to test.');
+      for (final entry in remoteHosts) {
+        final host = entry.key;
         if (!mounted) return;
         setState(
           () => report =
               '${lines.join('\n')}\nTesting ${hosts[host]['name']}… (up to 55 seconds)',
         );
-        final result = await widget.backend.invoke('connectionDiagnostics', {
-          'host': host,
-        });
+        Map<String, dynamic> result;
+        try {
+          result = await widget.backend.invoke('connectionDiagnostics', {
+            'host': host,
+          });
+        } catch (error) {
+          lines.add('\n${entry.value['name']}');
+          lines.add(
+            '• ? Could not verify connection: ${failureMessage(error)}',
+          );
+          continue;
+        }
         lines.add(
-          '• Network: ${result['network']} · VPN: ${result['vpn'] == null
+          '• Network type: ${result['network'] ?? "Unavailable"} · VPN: ${result['vpn'] == null
               ? "?"
               : result['vpn'] == true
               ? "✓"
@@ -540,23 +577,27 @@ class _ConnectionDiagnosticsState extends State<ConnectionDiagnostics> {
             lines.add('• ? Could not verify connection: ${peer['error']}');
             continue;
           }
-          final r = peer['report'] as Map;
+          final r = peer['report'];
+          if (r is! Map) {
+            lines.add('• ? Connection report unavailable.');
+            continue;
+          }
           lines.add(
-            '• Path: ${r['initial_path']} → ${r['selected_path']} · RTT: ${r['rtt_ms'] ?? "unavailable"} ms',
+            '• Path: ${r['initial_path'] ?? "unavailable"} → ${r['selected_path'] ?? "unavailable"} · RTT: ${r['rtt_ms'] ?? "unavailable"} ms',
           );
           lines.add(
-            '• Observed for ${r['observation_ms']} ms · relay: ${r['relay_status']}',
+            '• Observed for ${r['observation_ms'] ?? "unavailable"} ms · relay: ${r['relay_status'] ?? "unavailable"}',
           );
-          lines.add('• ${r['reason']}');
+          lines.add('• ${r['reason'] ?? "No path explanation reported."}');
           final transport = r['transport'] as Map?;
           if (transport != null) {
-            lines.add('\nPhone relay connections');
+            lines.add('\nDevice relay connections');
             for (final relay in transport['relays'] as List? ?? []) {
               lines.add(
                 '• ${diagnosticObserved(relay['connected'])} ${relay['url']}${relay['preferred'] == true ? " · preferred" : ""}',
               );
             }
-            lines.add('Phone discovery observations');
+            lines.add('Device discovery observations');
             for (final discovery in transport['discovery'] as List? ?? []) {
               lines.add(
                 '• ${discovery['url']} · IPv4 ${diagnosticObserved(discovery['ipv4'])} · IPv6 ${diagnosticObserved(discovery['ipv6'])}',
@@ -567,7 +608,7 @@ class _ConnectionDiagnosticsState extends State<ConnectionDiagnostics> {
           final mapping = r['router_mapping'] as Map?;
           appendDiagnosticObservation(
             lines,
-            'Phone observations',
+            'Device observations',
             local ??
                 {
                   'network': {'fresh': false, 'report': r['network_report']},
@@ -578,13 +619,13 @@ class _ConnectionDiagnosticsState extends State<ConnectionDiagnostics> {
           if (remote != null) {
             appendDiagnosticObservation(
               lines,
-              'Target computer observations',
+              'Remote device observations',
               remote,
               routerMapping: mapping?['remote'] as Map?,
             );
           } else {
             lines.add(
-              '\n• ? ${r['remote_error'] ?? "Target computer observations unavailable; update the host to collect both ends."}',
+              '\n• ? ${r['remote_error'] ?? "Remote device observations unavailable; update the host to collect both ends."}',
             );
           }
           lines.add(
@@ -803,11 +844,13 @@ class SettingsForm extends StatefulWidget {
     required this.deviceName,
     required this.onSaved,
     this.onLocalServices,
+    this.onOwnerTools,
   });
   final WispnetBackend backend;
   final String deviceName;
   final VoidCallback onSaved;
   final VoidCallback? onLocalServices;
+  final VoidCallback? onOwnerTools;
   @override
   State<SettingsForm> createState() => _SettingsFormState();
 }
@@ -976,23 +1019,29 @@ class _SettingsFormState extends State<SettingsForm> {
           label: const Text('Local services'),
         ),
       ],
-      if (Theme.of(context).platform == TargetPlatform.android) ...[
+      if (widget.onOwnerTools != null) ...[
         const SizedBox(height: 12),
-        OutlinedButton(
-          onPressed: saving
-              ? null
-              : () {
-                  FocusManager.instance.primaryFocus?.unfocus();
-                  Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) =>
-                          ConnectionDiagnostics(backend: widget.backend),
-                    ),
-                  );
-                },
-          child: const Text('Diagnostic'),
+        OutlinedButton.icon(
+          onPressed: saving ? null : widget.onOwnerTools,
+          icon: const Icon(Icons.devices),
+          label: const Text('Device access and pairing'),
         ),
       ],
+      const SizedBox(height: 12),
+      OutlinedButton(
+        onPressed: saving
+            ? null
+            : () {
+                FocusManager.instance.primaryFocus?.unfocus();
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) =>
+                        ConnectionDiagnostics(backend: widget.backend),
+                  ),
+                );
+              },
+        child: const Text('Diagnostic'),
+      ),
       if (address.isNotEmpty) ...[
         const SizedBox(height: 16),
         const Text('Service registry'),

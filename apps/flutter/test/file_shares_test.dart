@@ -61,7 +61,7 @@ class ShareBackend implements WispnetBackend {
       case 'takeLink':
       case 'takeInvitation':
         return {};
-      case 'desktopStatus':
+      case 'ownerStatus':
         return {
           'host': {
             'host': 'f' * 64,
@@ -74,9 +74,9 @@ class ShareBackend implements WispnetBackend {
           },
           'invitations': [],
         };
-      case 'desktopData':
+      case 'ownerData':
         return {'value': []};
-      case 'desktopRequest':
+      case 'ownerRequest':
         return {};
       case 'shareList':
         if (deny) throw const FormatException('PERMISSION_DENIED');
@@ -303,7 +303,7 @@ void main() {
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
       final operation = backend.calls
-          .where((c) => c.$1 == 'desktopRequest')
+          .where((c) => c.$1 == 'ownerRequest')
           .single
           .$2['payload'];
       expect(operation, {
